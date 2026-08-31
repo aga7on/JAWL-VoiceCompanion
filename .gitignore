@@ -1,0 +1,55 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+
+# Models and generated media
+models/
+checkpoints/
+*.safetensors
+*.bin
+*.onnx
+*.pt
+*.pth
+*.wav
+*.mp3
+*.flac
+*.ogg
+audio/
+screenshots/
+
+# Runtime state
+data/
+runtime/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db

@@ -1,0 +1,79 @@
+# Architecture Decisions
+
+## ADR-001 — JAWL is the canonical cognitive core
+
+Status: Accepted
+Date: 2026-08-31
+
+JAWL owns personality, traits, mental states, drives, Heartbeat, ReAct,
+structured memory, goals and tool decisions. It already provides the closest
+match to the desired autonomous lifecycle.
+
+VoiceMem observations may influence JAWL but do not independently define the
+character.
+
+## ADR-002 — VoiceMem runs as a sidecar
+
+Status: Accepted
+Date: 2026-08-31
+
+VoiceMem is isolated behind a local API because it owns streaming audio and
+may require different Python/PyTorch dependencies. This also allows ASR and
+voice models to be replaced without rewriting JAWL.
+
+## ADR-003 — 2D Live2D only for the current product
+
+Status: Accepted
+Date: 2026-08-31
+
+The first avatar target is 2D Live2D. VRM/3D is deferred indefinitely until
+the text, voice, memory and presence contracts are stable. This reduces
+rendering, asset, animation and integration risk.
+
+## ADR-004 — Attention is separate from deep reasoning
+
+Status: Accepted
+Date: 2026-08-31
+
+A lightweight Attention/Presence Engine handles salience, coalescing and
+cooldowns. JAWL Heartbeat/ReAct handles durable thought and final wording.
+This prevents screen sensors and timers from launching expensive full-agent
+cycles.
+
+## ADR-005 — Separate service processes initially
+
+Status: Accepted
+Date: 2026-08-31
+
+JAWL, VoiceMem, TTS and the avatar frontend communicate over loopback APIs.
+This limits dependency conflicts, isolates model crashes and allows later
+replacement of components. A monolithic process may be considered only after
+the contracts are tested.
+
+## ADR-006 — Bounded, auditable memory
+
+Status: Accepted
+Date: 2026-08-31
+
+Memory is split into a small always-in-context layer and larger retrieved
+archives. Facts have lifecycle, provenance, confidence and correction
+history. Users can inspect, edit and forget them.
+
+## ADR-007 — Privacy-first screen awareness
+
+Status: Accepted
+Date: 2026-08-31
+
+Screen vision is opt-in, focused-window-first and rate-limited. Raw frames are
+discarded by default. Descriptions are treated as untrusted input and pass
+through prompt-injection-safe context formatting.
+
+## ADR-008 — Reference projects are patterns, not a second runtime
+
+Status: Accepted
+Date: 2026-08-31
+
+Open-LLM-VTuber, Warashi, Miru, Mana, AniCompanion and Soul of Waifu are used
+for design and implementation patterns. Their complete runtimes are not
+combined with JAWL. Direct Soul of Waifu code reuse is excluded until GPL-3.0
+compatibility is deliberately accepted and reviewed.

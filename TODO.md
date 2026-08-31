@@ -1,0 +1,150 @@
+# TODO — JAWL VoiceCompanion
+
+Legend: `[ ]` pending, `[~]` in progress, `[x]` verified complete, `[!]`
+blocked or requiring a decision.
+
+## Phase 0 — foundation
+
+- [x] Create an isolated development repository.
+- [x] Write agent/contributor rules in `AGENTS.md`.
+- [x] Record repository research and license constraints.
+- [x] Define the initial architecture and ownership boundaries.
+- [x] Limit the avatar target to 2D Live2D.
+- [ ] Add the first implementation branch and test runner.
+- [ ] Decide the project Python package name and service entry points.
+
+## Phase 1 — contracts and text vertical slice
+
+- [ ] Define versioned event schemas.
+- [ ] Define `ResponseEnvelope` validation.
+- [ ] Implement a local JAWL gateway with health and graceful failure.
+- [ ] Implement `TurnArbiter` with user/proactive/background priority lanes.
+- [ ] Add generation IDs and cancellation propagation.
+- [ ] Connect a minimal text chat to a mock avatar frontend.
+- [ ] Render `idle`, `listening`, `thinking`, `speaking` and emotion states.
+- [ ] Add structured logs without secrets or hidden chain-of-thought.
+
+Acceptance criteria:
+
+- A text turn reaches JAWL and returns a validated envelope.
+- A newer user turn cancels the older response.
+- The frontend can reconnect and recover visible state.
+- No audio, model weights or credentials are required to run tests.
+
+## Phase 2 — Russian voice loop
+
+- [ ] Implement microphone input adapter.
+- [ ] Benchmark at least two Russian ASR candidates.
+- [ ] Connect external streaming ASR partials to VoiceMem `feed_partial`.
+- [ ] Deliver final transcript as `USER_FINAL`.
+- [ ] Implement CozyVoice 2 adapter.
+- [ ] Inspect and fix the local CozyVoice wrapper's non-streaming behavior.
+- [ ] Add OmniVoice adapter when its model/API location is confirmed.
+- [ ] Implement sentence chunking and hidden-thought filtering.
+- [ ] Implement ordered parallel TTS queue.
+- [ ] Implement playback cancellation.
+- [ ] Add half-duplex hands-free mode.
+- [ ] Add barge-in capture and interruption classification.
+- [ ] Benchmark first-audio latency and Russian prosody.
+
+Acceptance criteria:
+
+- Russian speech is transcribed reliably in a quiet room and normal desktop
+  conditions.
+- The first sentence starts playing before the entire reply is synthesized.
+- Talking over the character stops playback and does not lose the new turn.
+- TTS failure leaves a usable text-only mode.
+
+## Phase 3 — VoiceMem sidecar and memory
+
+- [ ] Run VoiceMem as a separate local service.
+- [ ] Add request/session correlation IDs.
+- [ ] Add speculative recall and final recall events.
+- [ ] Map VoiceMem affect to JAWL observations, not personality overrides.
+- [ ] Define bounded core memory.
+- [ ] Define archival recall through JAWL Vector/Graph.
+- [ ] Add fact provenance, confidence and epistemic type.
+- [ ] Add `insert`, `patch`, `remove`, `archive` and `supersedes` operations.
+- [ ] Preserve correction history and valid-time fields.
+- [ ] Add background Sleep/Reflection/Consolidation jobs.
+- [ ] Add memory editor and forget controls.
+- [ ] Add tests against hallucinated or unattributed memory writes.
+
+Acceptance criteria:
+
+- The same fact does not create uncontrolled duplicates.
+- A correction invalidates the old value without destroying its history.
+- Core prompt memory stays under a configured hard limit.
+- VoiceMem outage degrades to JAWL text memory without crashing chat.
+
+## Phase 4 — 2D Live2D product UI
+
+- [ ] Select a redistributable Live2D model or document user-supplied assets.
+- [ ] Implement transparent desktop-pet mode.
+- [ ] Add settings for persona, voice, memory, proactivity and privacy.
+- [ ] Add visible listening/screen-observation indicators.
+- [ ] Add lip-sync from audio amplitude.
+- [ ] Add expression capability mapping and fallbacks.
+- [ ] Add first-run setup and component health/doctor panel.
+- [ ] Add performance profiles for low/standard/high modes.
+
+Acceptance criteria:
+
+- The avatar stays responsive while backend work is running.
+- Every model emotion maps to a valid 2D expression or neutral fallback.
+- The app explains missing services and offers text-only degraded mode.
+
+## Phase 5 — screen vision
+
+- [ ] Implement focused-window capture on Windows.
+- [ ] Prefer UI Automation for native app structure.
+- [ ] Add screenshot/OCR fallback for canvas and custom applications.
+- [ ] Add explicit `vision__look` model tool.
+- [ ] Add capture request/response bridge when frontend owns capture.
+- [ ] Add change detection, significance and cooldown.
+- [ ] Add app deny-list and sensitive-window redaction policy.
+- [ ] Discard raw screenshots after analysis by default.
+- [ ] Store only bounded textual observations and metadata.
+
+Acceptance criteria:
+
+- Screen observation is opt-in and visibly indicated.
+- No VLM request occurs for an unchanged screen unless explicitly requested.
+- The avatar does not capture its own window.
+- Raw screenshots are not stored in durable memory by default.
+
+## Phase 6 — presence and autonomy
+
+- [ ] Implement Attention/Presence Engine.
+- [ ] Add salience levels and coalescing.
+- [ ] Add proactive cooldowns and quiet hours.
+- [ ] Add `SPEAK_INTENT` and JAWL final wording path.
+- [ ] Add user activity/focus/fatigue signals.
+- [ ] Add optional daily journal and commitments.
+- [ ] Add gaming mode and resource backoff.
+- [ ] Add a user-adjustable proactivity budget.
+
+Acceptance criteria:
+
+- The character can remain silent when the user is focused.
+- Proactive speech never bypasses DND or the Turn Arbiter.
+- Repeated screen frames cannot produce repeated interruptions.
+- All proactive decisions are inspectable in the event log.
+
+## Phase 7 — tools and hardening
+
+- [ ] Create one tool policy for JAWL, MCP, desktop and browser tools.
+- [ ] Add approval queue with allow-once/always-allow/deny.
+- [ ] Add unified tool-call audit log with secret redaction.
+- [ ] Add bounded tool-result compression.
+- [ ] Add workspace-scoped edit proposals with stale-file checks.
+- [ ] Add restart/recovery tests.
+- [ ] Add packaging and installation documentation.
+
+## Deferred
+
+- [ ] 3D/VRM avatar — deliberately excluded from current scope.
+- [ ] Mobile clients and multi-device sync.
+- [ ] System-audio/video watching mode.
+- [ ] Complex swarm behavior.
+- [ ] Cloud deployment.
