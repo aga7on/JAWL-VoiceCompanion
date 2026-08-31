@@ -6,8 +6,10 @@ import argparse
 from pathlib import Path
 
 from .gateway import TextGateway
+from .browser_adapter import BrowserAdapter
 from .jawl_adapter import JawlTerminalAdapter
 from .hostos_tools import HostOSExecutor
+from .windows_ui import WindowsUIAutomationAdapter
 from .web import create_server
 
 
@@ -48,7 +50,9 @@ def main() -> None:
             host_roots=tuple(args.host_root),
             dry_run=False,
             allowed_executables=frozenset(args.allowed_executable),
+            ui_automation=WindowsUIAutomationAdapter(),
         )
+        hostos_executor.browser = BrowserAdapter(ui_automation=hostos_executor.ui_automation)
     server = create_server(args.host, args.port, args.frontend, gateway, hostos_executor)
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:

@@ -15,7 +15,8 @@ and OS adapters are not connected.
 - Branch: `main`;
 - Baseline commits: `abce27d` (initial workspace), `1820eec` (HostOS/web
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
-  terminal adapter), `bc2f775` (TurnArbiter);
+  terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
+  `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean at the last verification.
 
 ## Completed in this repository
@@ -42,6 +43,13 @@ and OS adapters are not connected.
   cancellation and queue promotion; transport cancellation is still pending.
 - HostOS tool registry now contains bounded filesystem, process and argv
   adapters. Real execution is explicit; default executor mode is dry-run.
+- Optional Windows UIA adapter now provides bounded foreground-tree
+  observation, semantic fingerprints and stale-target checks for control.
+- Browser adapter now supports bounded HTTP(S) navigation and delegates
+  semantic actions to UIA; no browser automation runtime is installed yet.
+- Browser API exposes the tool registry and routes execution requests through
+  the same server-side HostOS policy; browser approval authority is not
+  accepted from request payloads.
 
 ## Reference inventory
 
@@ -83,18 +91,20 @@ and OS adapters are not connected.
 Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
 `tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
 
-Verification: `scripts/run_tests.ps1` passed 24 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 30 tests; `git diff --check`
 reported no whitespace errors.
 
-Known limitation: the web surface is intentionally local and does not yet
-expose the HostOS executor. UI Automation and browser adapters are pending;
-real tool execution is available only through explicit backend construction.
+Known limitation: browser UIA calls and navigation are available through the
+live executor, but coordinate/canvas fallback, approval queue and transport
+cancellation are still pending. The web server's default executor remains
+dry-run; web requests cannot self-approve risky actions.
 
 ## Next action
 
-Exercise the JAWL adapter against the actual local process, connect the
-`TurnArbiter` to gateway cancellation and add a real JAWL health probe. Do not
-download model weights or implement passive screen monitoring yet.
+Add a server-side one-shot approval queue and connect `TurnArbiter` to gateway
+cancellation. Then exercise the JAWL adapter against the actual local
+process. Do not download model weights or implement passive screen monitoring
+yet.
 
 ## State update protocol
 

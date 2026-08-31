@@ -18,3 +18,9 @@
   cancellation and queue promotion.
 - Added the initial HostOS tool registry plus bounded filesystem/process/argv
   adapters, with dry-run as the default and path traversal protection.
+- Added optional Windows UI Automation observation/control with bounded trees,
+  opaque element references and stale-target rejection.
+- Added a dependency-free browser adapter for bounded HTTP(S) navigation and
+  UIA delegation, still protected by HostOS policy and approval.
+- Exposed HostOS tool discovery and policy-checked dry-run execution through
+  the local browser API.

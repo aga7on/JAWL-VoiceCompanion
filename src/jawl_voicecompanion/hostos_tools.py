@@ -71,6 +71,8 @@ class HostOSExecutor:
     dry_run: bool = True
     allow_sensitive: bool = False
     allowed_executables: frozenset[str] = frozenset()
+    ui_automation: Any | None = None
+    browser: Any | None = None
     max_read_chars: int = 100_000
     max_output_chars: int = 20_000
     _processes: dict[int, subprocess.Popen] = field(default_factory=dict, repr=False)
@@ -155,6 +157,28 @@ class HostOSExecutor:
             return self._stop_process(request)
         if request.tool == "shell.exec":
             return self._execute_argv(request)
+        if request.tool == "desktop.observe":
+            if self.ui_automation is None:
+                raise PermissionError("Windows UI Automation adapter is unavailable")
+            return self.ui_automation.observe()
+        if request.tool == "desktop.act":
+            if self.ui_automation is None:
+                raise PermissionError("Windows UI Automation adapter is unavailable")
+            target = dict(request.target or request.arguments)
+            return self.ui_automation.act(
+                str(request.arguments.get("operation", "")),
+                target,
+                request.arguments.get("value"),
+            )
+        if request.tool == "browser.act":
+            if self.browser is None:
+                raise PermissionError("browser adapter is unavailable")
+            target = dict(request.target or request.arguments)
+            return self.browser.act(
+                str(request.arguments.get("operation", "")),
+                target,
+                request.arguments.get("value"),
+            )
         raise PermissionError("tool adapter is not implemented")
 
     def _resolve_path(self, request: ToolRequest) -> Path:

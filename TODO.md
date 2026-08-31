@@ -143,8 +143,10 @@ Acceptance criteria:
   `ROOT`.
 - [x] Route initial filesystem/process/shell tool descriptors through one
   backend policy gate.
-- [ ] Implement Windows UI Automation observation with stale element checks.
+- [x] Implement initial Windows UI Automation observation with stale element
+  checks.
 - [ ] Implement bounded keyboard/mouse/window control and browser actions.
+- [x] Add bounded browser URL actions and UIA delegation behind `browser.act`.
 - [ ] Add level-change events, session tokens and emergency stop.
 - [ ] Add risk classes and per-class confirmation/deny-list policy.
 - [ ] Add exact approval fingerprints for commands and high-risk actions.

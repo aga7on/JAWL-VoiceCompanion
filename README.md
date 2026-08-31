@@ -15,6 +15,30 @@ The project combines:
 Phase 0 — repository and architecture setup. No runtime integration has been
 implemented yet. See [docs/STATE.md](docs/STATE.md) and [TODO.md](TODO.md).
 
+The current Phase 1 slice includes a dependency-free text gateway, local
+browser control plane and initial HostOS tool registry. Real JAWL, voice,
+Live2D and non-dry-run web actions are still being integrated.
+
+## Run the local slice
+
+```powershell
+cd G:\AI\JAWL-VoiceCompanion
+.\scripts\run_tests.ps1
+.\scripts\run_web.ps1
+```
+
+Open `http://127.0.0.1:8765/`. The browser UI starts in HostOS level 0 and
+the default executor is dry-run. To explicitly construct a live executor,
+provide `--hostos-live` and configure the roots/managed executables; the
+approval queue and full production policy are still under development.
+
+To connect the text surface to the local JAWL terminal bridge, pass its
+`terminal.port` file:
+
+```powershell
+.\scripts\run_web.ps1 --jawl-port-file "G:\AI\JAWL-Coding\src\utils\local\data\interfaces\host\terminal\terminal.port"
+```
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -33,6 +57,8 @@ for cancellation and priority.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — accepted architectural decisions;
 - [docs/contracts/events.md](docs/contracts/events.md) — event contract;
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
+
+The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).
 
 ## Planned runtime layout
 
