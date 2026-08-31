@@ -14,7 +14,8 @@ and OS adapters are not connected.
 
 - Branch: `main`;
 - Baseline commits: `abce27d` (initial workspace), `1820eec` (HostOS/web
-  architecture), `81534b2` (Phase 1 mock vertical slice);
+  architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
+  terminal adapter);
 - Working tree: clean at the last verification.
 
 ## Completed in this repository
@@ -57,6 +58,9 @@ and OS adapters are not connected.
   layer; model and integration details must be confirmed before adapter work.
 - JAWL and VoiceMem use different Python environments and should remain
   separate services initially.
+- The JAWL `terminal.port` file currently exists, but its recorded port has no
+  listening loopback socket; the new adapter therefore correctly uses its
+  offline fallback until JAWL is started.
 
 ## Current blockers / decisions needed later
 
