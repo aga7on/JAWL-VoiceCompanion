@@ -38,6 +38,8 @@ and OS adapters are not connected.
   selection using local session/CSRF headers.
 - JAWL terminal adapter understands the local `terminal.port` plus
   `JAWL_HANDSHAKE` JSON-lines protocol and falls back when JAWL is offline.
+- `TurnArbiter` now models one active turn, priority lanes, stale-work
+  cancellation and queue promotion; transport cancellation is still pending.
 
 ## Reference inventory
 
@@ -79,7 +81,7 @@ and OS adapters are not connected.
 Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
 `tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
 
-Verification: `scripts/run_tests.ps1` passed 16 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 19 tests; `git diff --check`
 reported no whitespace errors.
 
 Known limitation: the web surface is intentionally local and the HostOS
@@ -88,9 +90,9 @@ execute commands or connect to JAWL.
 
 ## Next action
 
-Exercise the JAWL adapter against the actual local process, then add
-cancellation/priority behavior around the envelope. Do not download model
-weights or implement passive screen monitoring yet.
+Exercise the JAWL adapter against the actual local process, connect the
+`TurnArbiter` to gateway cancellation and add a real JAWL health probe. Do not
+download model weights or implement passive screen monitoring yet.
 
 ## State update protocol
 

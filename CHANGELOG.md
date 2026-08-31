@@ -14,3 +14,5 @@
   HostOS policy gate, audit metadata and loopback browser control surface.
 - Added a JAWL loopback terminal adapter with mock fallback when the JAWL
   process is offline.
+- Added the priority-aware `TurnArbiter` base for one active turn, stale work
+  cancellation and queue promotion.
