@@ -23,6 +23,7 @@ blocked or requiring a decision.
 - [x] Connect a minimal text chat to a mock avatar frontend.
 - [x] Serve the first local browser control plane for chat, status and
   reconnect recovery.
+- [x] Add a first adapter for JAWL's loopback HostTerminalClient protocol.
 - [ ] Render `idle`, `listening`, `thinking`, `speaking` and emotion states.
 - [ ] Add structured logs without secrets or hidden chain-of-thought.
 

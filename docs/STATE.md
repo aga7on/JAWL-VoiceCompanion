@@ -35,6 +35,8 @@ and OS adapters are not connected.
   emergency stop and redacted metadata-only audit entries.
 - Loopback browser surface supports chat, health/state display and policy-level
   selection using local session/CSRF headers.
+- JAWL terminal adapter understands the local `terminal.port` plus
+  `JAWL_HANDSHAKE` JSON-lines protocol and falls back when JAWL is offline.
 
 ## Reference inventory
 
@@ -73,7 +75,7 @@ and OS adapters are not connected.
 Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
 `tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
 
-Verification: `scripts/run_tests.ps1` passed 14 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 16 tests; `git diff --check`
 reported no whitespace errors.
 
 Known limitation: the web surface is intentionally local and the HostOS
@@ -82,9 +84,9 @@ execute commands or connect to JAWL.
 
 ## Next action
 
-Connect the text gateway to the real JAWL process behind an adapter, preserve
-the existing envelope and add cancellation/priority behavior. Do not download
-model weights or implement passive screen monitoring yet.
+Exercise the JAWL adapter against the actual local process, then add
+cancellation/priority behavior around the envelope. Do not download model
+weights or implement passive screen monitoring yet.
 
 ## State update protocol
 

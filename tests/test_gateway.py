@@ -25,7 +25,15 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(health["status"], "degraded")
         self.assertEqual(health["components"]["hostos"], "policy_only_dry_run")
 
+    def test_real_brain_outage_falls_back_to_usable_text(self):
+        def unavailable(_text):
+            raise ConnectionError("not available")
+
+        gateway = TextGateway(responder=unavailable, brain_name="jawl_terminal")
+        response = gateway.handle_text("Проверь связь")
+        self.assertIn("недоступен", response["text"])
+        self.assertEqual(gateway.health()["components"]["jawl"], "offline_fallback")
+
 
 if __name__ == "__main__":
     unittest.main()
-

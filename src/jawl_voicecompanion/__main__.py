@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .gateway import TextGateway
+from .jawl_adapter import JawlTerminalAdapter
 from .web import create_server
 
 
@@ -13,8 +15,20 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--frontend", type=Path, default=None)
+    parser.add_argument(
+        "--jawl-port-file",
+        type=Path,
+        default=None,
+        help="path to JAWL's terminal.port; omit to use the deterministic mock brain",
+    )
     args = parser.parse_args()
-    server = create_server(args.host, args.port, args.frontend)
+    gateway = TextGateway()
+    if args.jawl_port_file:
+        gateway = TextGateway(
+            responder=JawlTerminalAdapter(args.jawl_port_file),
+            brain_name="jawl_terminal",
+        )
+    server = create_server(args.host, args.port, args.frontend, gateway)
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:
         server.serve_forever()
@@ -26,4 +40,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

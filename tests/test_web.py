@@ -70,9 +70,13 @@ class WebTests(unittest.TestCase):
             headers={"Content-Type": "application/json", **self.session_headers},
             method="POST",
         )
-        with self.assertRaises(Exception) as context:
+        try:
             urlopen(request, timeout=2)
-        self.assertIn("400", str(context.exception))
+        except HTTPError as error:
+            with error:
+                self.assertEqual(error.code, 400)
+        else:
+            self.fail("invalid level should return HTTP 400")
 
     def test_state_change_without_session_is_rejected(self):
         request = Request(
@@ -81,9 +85,13 @@ class WebTests(unittest.TestCase):
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with self.assertRaises(HTTPError) as context:
+        try:
             urlopen(request, timeout=2)
-        self.assertEqual(context.exception.code, 403)
+        except HTTPError as error:
+            with error:
+                self.assertEqual(error.code, 403)
+        else:
+            self.fail("missing session should return HTTP 403")
 
 
 if __name__ == "__main__":

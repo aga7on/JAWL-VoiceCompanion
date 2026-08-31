@@ -48,6 +48,8 @@ class TextGateway:
 
     policy: HostOSPolicy = field(default_factory=HostOSPolicy)
     responder: Callable[[str], str] | None = None
+    brain_name: str = "phase1_mock_brain"
+    _brain_status: str = field(default="mock", init=False, repr=False)
     _turns: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def handle_text(self, text: str, session_id: str = "local") -> dict[str, Any]:
@@ -59,7 +61,12 @@ class TextGateway:
             speak = False
             emotion = {"id": "confused", "intensity": 0.25, "confidence": 1.0}
         else:
-            answer = self.responder(clean) if self.responder else self._mock_response(clean)
+            try:
+                answer = self.responder(clean) if self.responder else self._mock_response(clean)
+                self._brain_status = "connected" if self.responder else "mock"
+            except (ConnectionError, OSError, TimeoutError):
+                self._brain_status = "offline_fallback"
+                answer = "JAWL сейчас недоступен. Я сохранила текстовый fallback и готова продолжить после восстановления связи."
             speak = True
             emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
 
@@ -88,14 +95,20 @@ class TextGateway:
     def health(self) -> dict[str, Any]:
         return {
             "status": "degraded",
-            "mode": "phase1_mock_brain",
+            "mode": self.brain_name,
             "components": {
-                "jawl": "not_connected",
+                "jawl": self._responder_status(),
                 "voicemem": "not_connected",
                 "tts": "not_connected",
                 "hostos": "policy_only_dry_run",
             },
         }
+
+    def _responder_status(self) -> str:
+        if not self.responder:
+            return "not_connected"
+        status = getattr(self.responder, "status", None)
+        return status() if callable(status) else self._brain_status
 
     def state(self) -> dict[str, Any]:
         return {
