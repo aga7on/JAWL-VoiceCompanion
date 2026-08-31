@@ -13,8 +13,8 @@ and OS adapters are not connected.
 ## Git state
 
 - Branch: `main`;
-- Initial commit: `abce27d` (`chore: initialize companion development
-  workspace`);
+- Baseline commits: `abce27d` (initial workspace), `1820eec` (HostOS/web
+  architecture), `81534b2` (Phase 1 mock vertical slice);
 - Working tree: clean at the last verification.
 
 ## Completed in this repository
