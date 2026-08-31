@@ -10,18 +10,18 @@ blocked or requiring a decision.
 - [x] Record repository research and license constraints.
 - [x] Define the initial architecture and ownership boundaries.
 - [x] Limit the avatar target to 2D Live2D.
-- [ ] Add the first implementation branch and test runner.
-- [ ] Decide the project Python package name and service entry points.
+- [x] Add the first implementation branch and test runner.
+- [x] Decide the project Python package name and service entry points.
 
 ## Phase 1 — contracts and text vertical slice
 
-- [ ] Define versioned event schemas.
-- [ ] Define `ResponseEnvelope` validation.
+- [x] Define versioned event schemas.
+- [x] Define `ResponseEnvelope` validation.
 - [ ] Implement a local JAWL gateway with health and graceful failure.
 - [ ] Implement `TurnArbiter` with user/proactive/background priority lanes.
 - [ ] Add generation IDs and cancellation propagation.
-- [ ] Connect a minimal text chat to a mock avatar frontend.
-- [ ] Serve the first local browser control plane for chat, status and
+- [x] Connect a minimal text chat to a mock avatar frontend.
+- [x] Serve the first local browser control plane for chat, status and
   reconnect recovery.
 - [ ] Render `idle`, `listening`, `thinking`, `speaking` and emotion states.
 - [ ] Add structured logs without secrets or hidden chain-of-thought.

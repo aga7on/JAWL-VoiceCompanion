@@ -1,0 +1,9 @@
+[project]
+name = "jawl-voicecompanion"
+version = "0.1.0"
+description = "Local-first Russian AI companion with a 2D avatar and HostOS controls"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+jawl-voicecompanion = "jawl_voicecompanion.__main__:main"

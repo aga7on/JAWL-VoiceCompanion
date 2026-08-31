@@ -10,3 +10,5 @@
   mode with backend policy enforcement.
 - Selected a loopback browser application as the canonical control plane.
 - Added the initial HostOS request/result contract and risk classes.
+- Added a dependency-free Phase 1 text gateway, response validation, dry-run
+  HostOS policy gate, audit metadata and loopback browser control surface.

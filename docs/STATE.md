@@ -4,11 +4,11 @@ Last updated: 2026-08-31
 
 ## Current phase
 
-Phase 0 — foundation and architecture.
+Phase 1 — contracts and text vertical slice (in progress).
 
-Repository state: initial scaffold committed. Runtime code has not been
-integrated. HostOS access policy and browser control-plane design are now
-documented; implementation has not started.
+Repository state: architecture baseline committed. A dependency-free mock
+text/control slice is implemented; real JAWL, VoiceMem, audio, TTS, Live2D
+and OS adapters are not connected.
 
 ## Git state
 
@@ -29,6 +29,12 @@ documented; implementation has not started.
 - HostOS access levels 0–3 accepted, with level 3 available as an explicit
   full-current-user mode.
 - Browser selected as the canonical local control plane.
+- Python package `jawl-voicecompanion` and stdlib-only test runner created.
+- Deterministic mock text gateway returns and validates `ResponseEnvelope`.
+- HostOS policy gate supports access checks, approval-required decisions,
+  emergency stop and redacted metadata-only audit entries.
+- Loopback browser surface supports chat, health/state display and policy-level
+  selection using local session/CSRF headers.
 
 ## Reference inventory
 
@@ -62,11 +68,23 @@ documented; implementation has not started.
   local service;
 - measure actual GPU contention and model residency on the target machine.
 
+## Latest work session
+
+Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
+`tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
+
+Verification: `scripts/run_tests.ps1` passed 14 tests; `git diff --check`
+reported no whitespace errors.
+
+Known limitation: the web surface is intentionally local and the HostOS
+executor is dry-run only. It does not yet launch applications, send input,
+execute commands or connect to JAWL.
+
 ## Next action
 
-Create the Phase 1 project contracts, browser chat/status surface and a
-minimal health-check/test harness. Do not download model weights or implement
-passive screen monitoring yet.
+Connect the text gateway to the real JAWL process behind an adapter, preserve
+the existing envelope and add cancellation/priority behavior. Do not download
+model weights or implement passive screen monitoring yet.
 
 ## State update protocol
 

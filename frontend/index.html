@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JAWL VoiceCompanion</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { max-width: 960px; margin: 0 auto; padding: 24px; background: #15161a; color: #f1f3f5; }
+    main { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+    section { background: #22242b; border: 1px solid #3b3e49; border-radius: 12px; padding: 16px; }
+    #messages { min-height: 260px; max-height: 52vh; overflow: auto; white-space: pre-wrap; }
+    .message { padding: 8px 0; border-bottom: 1px solid #353843; }
+    .meta { color: #aeb4c2; font-size: 0.85rem; }
+    textarea { width: 100%; box-sizing: border-box; margin-top: 12px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 10px; }
+    button, select { margin-top: 8px; padding: 8px 10px; border-radius: 7px; border: 1px solid #656b7b; background: #303440; color: inherit; cursor: pointer; }
+    button.danger { background: #742f38; }
+    code { color: #a9d4ff; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <h1>JAWL VoiceCompanion</h1>
+  <p class="meta">Phase 1 · текстовый контур · HostOS пока в dry-run</p>
+  <main>
+    <section>
+      <h2>Диалог</h2>
+      <div id="messages"></div>
+      <textarea id="input" rows="3" placeholder="Напиши сообщение…"></textarea>
+      <button id="send">Отправить</button>
+    </section>
+    <section>
+      <h2>HostOS</h2>
+      <p>Текущий режим: <strong id="level-name">SANDBOX</strong> (<span id="level">0</span>)</p>
+      <label for="level-select">Уровень доступа</label><br>
+      <select id="level-select">
+        <option value="0">0 · SANDBOX</option>
+        <option value="1">1 · OBSERVER</option>
+        <option value="2">2 · OPERATOR</option>
+        <option value="3">3 · ROOT</option>
+      </select><br>
+      <button id="stop" class="danger">Аварийная остановка</button>
+      <h2>Состояние</h2>
+      <pre id="health">Загрузка…</pre>
+    </section>
+  </main>
+  <script>
+    const messages = document.querySelector('#messages');
+    const input = document.querySelector('#input');
+    const health = document.querySelector('#health');
+    let sessionHeaders = {};
+    function addMessage(who, text) {
+      const item = document.createElement('div');
+      item.className = 'message';
+      item.innerHTML = `<div class="meta">${who}</div><div></div>`;
+      item.lastElementChild.textContent = text;
+      messages.appendChild(item);
+      messages.scrollTop = messages.scrollHeight;
+    }
+    async function refresh() {
+      const [state, status] = await Promise.all([fetch('/api/state'), fetch('/api/health')]);
+      const stateData = await state.json();
+      const statusData = await status.json();
+      document.querySelector('#level').textContent = stateData.policy.active_level;
+      document.querySelector('#level-name').textContent = stateData.policy.active_name;
+      document.querySelector('#level-select').value = stateData.policy.active_level;
+      health.textContent = JSON.stringify(statusData, null, 2);
+    }
+    async function apiPost(path, body) {
+      return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
+    }
+    async function bootstrap() {
+      const response = await fetch('/api/session', {cache: 'no-store'});
+      const data = await response.json();
+      sessionHeaders = {'X-Companion-Session': data.session_token, 'X-Companion-CSRF': data.csrf_token};
+      refresh();
+    }
+    document.querySelector('#send').addEventListener('click', async () => {
+      const text = input.value.trim();
+      if (!text) return;
+      addMessage('Ты', text);
+      input.value = '';
+      const response = await apiPost('/api/chat', {text});
+      const data = await response.json();
+      addMessage('Компаньон', data.text || data.error);
+      refresh();
+    });
+    document.querySelector('#level-select').addEventListener('change', async (event) => {
+      await apiPost('/api/hostos/level', {level: Number(event.target.value)});
+      refresh();
+    });
+    document.querySelector('#stop').addEventListener('click', async () => {
+      await apiPost('/api/emergency-stop', {});
+      refresh();
+    });
+    bootstrap();
+  </script>
+</body>
+</html>
