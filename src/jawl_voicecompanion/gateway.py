@@ -8,6 +8,8 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from .hostos_policy import HostOSPolicy
+from .arbiter import TurnArbiter, TurnPriority
+from .jawl_adapter import JawlTurnCancelled
 
 
 _REQUIRED_ENVELOPE_FIELDS = (
@@ -49,26 +51,43 @@ class TextGateway:
     policy: HostOSPolicy = field(default_factory=HostOSPolicy)
     responder: Callable[[str], str] | None = None
     brain_name: str = "phase1_mock_brain"
+    arbiter: TurnArbiter = field(default_factory=TurnArbiter)
     _brain_status: str = field(default="mock", init=False, repr=False)
     _turns: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def handle_text(self, text: str, session_id: str = "local") -> dict[str, Any]:
         clean = str(text or "").strip()
         response_id = str(uuid4())
-        turn_id = str(uuid4())
+        token = self.arbiter.begin(TurnPriority.USER_FINAL)
+        turn_id = token.turn_id
         if not clean:
             answer = "Я не услышала текст. Попробуй повторить команду."
             speak = False
             emotion = {"id": "confused", "intensity": 0.25, "confidence": 1.0}
         else:
             try:
-                answer = self.responder(clean) if self.responder else self._mock_response(clean)
+                if self.responder:
+                    responder_method = getattr(self.responder, "respond", None)
+                    if callable(responder_method):
+                        answer = responder_method(clean, cancel_event=token.cancel_event)
+                    else:
+                        answer = self.responder(clean)
+                else:
+                    answer = self._mock_response(clean)
                 self._brain_status = "connected" if self.responder else "mock"
+            except JawlTurnCancelled:
+                self._brain_status = "cancelled"
+                answer = "Ответ отменён новым сообщением."
+                speak = False
+                emotion = {"id": "neutral", "intensity": 0.0, "confidence": 1.0}
             except (ConnectionError, OSError, TimeoutError):
                 self._brain_status = "offline_fallback"
                 answer = "JAWL сейчас недоступен. Я сохранила текстовый fallback и готова продолжить после восстановления связи."
-            speak = True
-            emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
+                speak = True
+                emotion = {"id": "concerned", "intensity": 0.35, "confidence": 1.0}
+            else:
+                speak = True
+                emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
 
         envelope = {
             "schema_version": 1,
@@ -87,10 +106,13 @@ class TextGateway:
             "interruptible": True,
             "proactive": False,
         }
-        validate_response_envelope(envelope)
-        self._turns.append({"created_at": _now(), "session_id": session_id, "user": clean, "response": envelope})
-        del self._turns[:-50]
-        return envelope
+        try:
+            validate_response_envelope(envelope)
+            self._turns.append({"created_at": _now(), "session_id": session_id, "user": clean, "response": envelope})
+            del self._turns[:-50]
+            return envelope
+        finally:
+            self.arbiter.complete(token)
 
     def health(self) -> dict[str, Any]:
         return {
@@ -115,6 +137,7 @@ class TextGateway:
             "policy": self.policy.snapshot(),
             "recent_turns": len(self._turns),
             "last_turn": self._turns[-1] if self._turns else None,
+            "turn_arbiter": self.arbiter.state(),
         }
 
     def audit(self) -> list[dict[str, Any]]:

@@ -52,6 +52,8 @@ and OS adapters are not connected.
   accepted from request payloads.
 - ApprovalStore now supports session-bound one-shot decisions, expiration,
   exact request/policy fingerprints and redacted previews.
+- Gateway user turns now receive arbiter generations; a newer user turn signals
+  the JAWL adapter to cancel its pending socket read.
 
 ## Reference inventory
 
@@ -93,7 +95,7 @@ and OS adapters are not connected.
 Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
 `tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
 
-Verification: `scripts/run_tests.ps1` passed 34 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 36 tests; `git diff --check`
 reported no whitespace errors.
 
 Known limitation: browser UIA calls and navigation are available through the
@@ -103,9 +105,9 @@ approval is now server-side but the browser approval UX is still minimal.
 
 ## Next action
 
-Connect `TurnArbiter` to gateway cancellation and exercise the JAWL adapter
-against the actual local process. Then add the browser approval UX and bounded
-screen capture bridge. Do not download model weights yet.
+Exercise the JAWL adapter against the actual local process. Then add the
+browser approval UX and bounded screen capture bridge. TTS/audio cancellation
+remains required before the voice loop.
 
 ## State update protocol
 

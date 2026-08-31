@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from pathlib import Path
+from threading import Event
 
 
 class JawlUnavailable(ConnectionError):
     """Raised when the configured JAWL terminal is not reachable."""
+
+
+class JawlTurnCancelled(ConnectionError):
+    """Raised when a newer turn cancels a pending JAWL response."""
 
 
 class JawlTerminalAdapter:
@@ -39,14 +45,14 @@ class JawlTerminalAdapter:
             return "invalid_port_file"
         return "configured"
 
-    def respond(self, text: str) -> str:
+    def respond(self, text: str, cancel_event: Event | None = None) -> str:
         port = self._read_port()
         payload = (json.dumps({"text": text}, ensure_ascii=False) + "\n").encode("utf-8")
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=self.timeout) as connection:
-                connection.settimeout(self.timeout)
+                connection.settimeout(0.2 if cancel_event is not None else self.timeout)
                 connection.sendall(self.handshake + payload)
-                raw = connection.makefile("rb").readline(65536)
+                raw = self._read_response(connection, cancel_event)
         except (OSError, TimeoutError) as exc:
             self.last_status = "offline"
             raise JawlUnavailable("JAWL terminal is not reachable") from exc
@@ -66,6 +72,25 @@ class JawlTerminalAdapter:
         self.last_status = "connected"
         return answer.strip()
 
+    def _read_response(self, connection: socket.socket, cancel_event: Event | None) -> bytes:
+        deadline = time.monotonic() + self.timeout
+        buffer = bytearray()
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                raise JawlTurnCancelled("JAWL response superseded by a newer turn")
+            try:
+                chunk = connection.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                return bytes(buffer)
+            buffer.extend(chunk)
+            if len(buffer) > 65536:
+                raise JawlUnavailable("JAWL response exceeds the bounded limit")
+            if b"\n" in buffer:
+                return bytes(buffer.split(b"\n", 1)[0])
+        raise JawlUnavailable("JAWL response timed out")
+
     def _read_port(self) -> int:
         try:
             port = int(self.port_file.read_text(encoding="utf-8").strip())
@@ -76,4 +101,3 @@ class JawlTerminalAdapter:
             self.last_status = "invalid_port_file"
             raise JawlUnavailable("JAWL terminal port is invalid")
         return port
-

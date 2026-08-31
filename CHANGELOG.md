@@ -26,3 +26,5 @@
   the local browser API.
 - Added a server-side, session-bound, one-shot approval queue with TTL,
   fingerprints and redacted previews.
+- Connected turn cancellation to the JAWL adapter through per-turn
+  cancellation events and bounded socket reads.

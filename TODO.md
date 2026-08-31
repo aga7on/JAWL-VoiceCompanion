@@ -19,7 +19,8 @@ blocked or requiring a decision.
 - [x] Define `ResponseEnvelope` validation.
 - [ ] Implement a local JAWL gateway with health and graceful failure.
 - [x] Implement `TurnArbiter` with user/proactive/background priority lanes.
-- [ ] Add generation IDs and cancellation propagation.
+- [~] Add generation IDs and cancellation propagation (JAWL transport is
+  covered; TTS/audio cancellation remains).
 - [x] Connect a minimal text chat to a mock avatar frontend.
 - [x] Serve the first local browser control plane for chat, status and
   reconnect recovery.
