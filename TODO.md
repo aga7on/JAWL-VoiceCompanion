@@ -141,7 +141,7 @@ Acceptance criteria:
 
 - [ ] Add HostOS access levels 0 `SANDBOX`, 1 `OBSERVER`, 2 `OPERATOR`, 3
   `ROOT`.
-- [ ] Route filesystem, process, shell, browser and desktop tools through one
+- [x] Route initial filesystem/process/shell tool descriptors through one
   backend policy gate.
 - [ ] Implement Windows UI Automation observation with stale element checks.
 - [ ] Implement bounded keyboard/mouse/window control and browser actions.

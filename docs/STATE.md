@@ -40,6 +40,8 @@ and OS adapters are not connected.
   `JAWL_HANDSHAKE` JSON-lines protocol and falls back when JAWL is offline.
 - `TurnArbiter` now models one active turn, priority lanes, stale-work
   cancellation and queue promotion; transport cancellation is still pending.
+- HostOS tool registry now contains bounded filesystem, process and argv
+  adapters. Real execution is explicit; default executor mode is dry-run.
 
 ## Reference inventory
 
@@ -81,12 +83,12 @@ and OS adapters are not connected.
 Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
 `tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
 
-Verification: `scripts/run_tests.ps1` passed 19 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 24 tests; `git diff --check`
 reported no whitespace errors.
 
-Known limitation: the web surface is intentionally local and the HostOS
-executor is dry-run only. It does not yet launch applications, send input,
-execute commands or connect to JAWL.
+Known limitation: the web surface is intentionally local and does not yet
+expose the HostOS executor. UI Automation and browser adapters are pending;
+real tool execution is available only through explicit backend construction.
 
 ## Next action
 

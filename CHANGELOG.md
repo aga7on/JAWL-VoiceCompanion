@@ -16,3 +16,5 @@
   process is offline.
 - Added the priority-aware `TurnArbiter` base for one active turn, stale work
   cancellation and queue promotion.
+- Added the initial HostOS tool registry plus bounded filesystem/process/argv
+  adapters, with dry-run as the default and path traversal protection.
