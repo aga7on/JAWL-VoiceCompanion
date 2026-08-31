@@ -63,6 +63,18 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(changed["policy"]["active_name"], "OPERATOR")
 
+    def test_hostos_registry_is_visible_and_requests_use_server_policy(self):
+        status, tools = self.get_json("/api/hostos/tools")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(item["name"] == "desktop.act" for item in tools["tools"]))
+        status, result = self.post_json(
+            "/api/hostos/execute",
+            {"request": {"tool": "desktop.act", "risk": "observe", "requested_access_level": 3}},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["result"]["status"], "denied")
+
     def test_invalid_level_is_rejected(self):
         request = Request(
             self.base + "/api/hostos/level",

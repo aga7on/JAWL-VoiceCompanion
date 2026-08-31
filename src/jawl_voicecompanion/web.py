@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from .gateway import TextGateway
+from .hostos_tools import HostOSExecutor
+from .models import ToolRequest
 
 
 MAX_BODY_BYTES = 64 * 1024
@@ -18,9 +20,16 @@ MAX_BODY_BYTES = 64 * 1024
 class CompanionServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
-    def __init__(self, server_address: tuple[str, int], frontend_dir: Path, gateway: TextGateway):
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        frontend_dir: Path,
+        gateway: TextGateway,
+        hostos_executor: HostOSExecutor,
+    ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
+        self.hostos = hostos_executor
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
         super().__init__(server_address, CompanionRequestHandler)
@@ -41,6 +50,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/audit":
             self._json({"events": self.server.gateway.audit()})
+            return
+        if self.path == "/api/hostos/tools":
+            self._json({"dry_run": self.server.hostos.dry_run, "tools": self.server.hostos.list_tools()})
             return
         if self.path in ("/", "/index.html"):
             index_path = self.server.frontend_dir / "index.html"
@@ -63,6 +75,16 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             if self.path == "/api/chat":
                 self._json(self.server.gateway.handle_text(payload.get("text", "")))
+                return
+            if self.path == "/api/hostos/execute":
+                raw_request = payload.get("request", payload)
+                if not isinstance(raw_request, dict):
+                    raise ValueError("request must be an object")
+                request = ToolRequest.from_dict(raw_request)
+                # Browser payloads never provide approval authority. The
+                # approval queue will supply a server-side one-shot token later.
+                result = self.server.hostos.execute(request, has_approval=False)
+                self._json({"ok": result["status"] in {"verified", "dispatched", "degraded"}, "result": result})
                 return
             if self.path == "/api/hostos/level":
                 if "level" not in payload:
@@ -127,6 +149,15 @@ def create_server(
     port: int = 8765,
     frontend_dir: Path | None = None,
     gateway: TextGateway | None = None,
+    hostos_executor: HostOSExecutor | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
-    return CompanionServer((host, port), root, gateway or TextGateway())
+    active_gateway = gateway or TextGateway()
+    active_executor = hostos_executor or HostOSExecutor(
+        policy=active_gateway.policy,
+        sandbox_root=Path(__file__).resolve().parents[2] / "runtime" / "sandbox",
+        workspace_roots=(Path(__file__).resolve().parents[2],),
+        host_roots=(Path(__file__).resolve().parents[2],),
+        dry_run=True,
+    )
+    return CompanionServer((host, port), root, active_gateway, active_executor)
