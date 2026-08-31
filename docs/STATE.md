@@ -6,7 +6,15 @@ Last updated: 2026-08-31
 
 Phase 0 — foundation and architecture.
 
-Repository state: initial scaffold. Runtime code has not been integrated.
+Repository state: initial scaffold committed. Runtime code has not been
+integrated.
+
+## Git state
+
+- Branch: `main`;
+- Initial commit: `abce27d` (`chore: initialize companion development
+  workspace`);
+- Working tree: clean at the last verification.
 
 ## Completed in this repository
 
