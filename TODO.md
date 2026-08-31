@@ -151,7 +151,8 @@ Acceptance criteria:
 - [ ] Add risk classes and per-class confirmation/deny-list policy.
 - [ ] Add exact approval fingerprints for commands and high-risk actions.
 - [ ] Create one tool policy for JAWL, MCP, desktop and browser tools.
-- [ ] Add approval queue with allow-once/always-allow/deny.
+- [x] Add server-side one-shot approval queue with exact request/policy
+  fingerprints and allow-once/deny decisions.
 - [ ] Add unified tool-call audit log with secret redaction.
 - [ ] Add bounded tool-result compression.
 - [ ] Add workspace-scoped edit proposals with stale-file checks.

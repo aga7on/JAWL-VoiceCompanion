@@ -75,6 +75,30 @@ class WebTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["result"]["status"], "denied")
 
+    def test_browser_approval_queue_is_server_side_and_one_shot(self):
+        self.post_json("/api/hostos/level", {"level": 3})
+        request_payload = {
+            "request": {"tool": "shell.exec", "risk": "observe", "arguments": {"argv": ["echo", "hello"]}}
+        }
+        status, pending = self.post_json("/api/hostos/approvals/request", request_payload)
+        self.assertEqual(status, 200)
+        approval_id = pending["result"]["approval_id"]
+        status, approved = self.post_json(f"/api/hostos/approvals/{approval_id}/approve", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(approved["result"]["status"], "approved")
+        status, executed = self.post_json(
+            "/api/hostos/execute",
+            {**request_payload, "approval_id": approval_id},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(executed["result"]["status"], "degraded")
+        status, replay = self.post_json(
+            "/api/hostos/execute",
+            {**request_payload, "approval_id": approval_id},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(replay["result"]["status"], "approval_required")
+
     def test_invalid_level_is_rejected(self):
         request = Request(
             self.base + "/api/hostos/level",
@@ -104,6 +128,15 @@ class WebTests(unittest.TestCase):
                 self.assertEqual(error.code, 403)
         else:
             self.fail("missing session should return HTTP 403")
+
+    def test_approval_list_without_session_is_rejected(self):
+        try:
+            urlopen(self.base + "/api/hostos/approvals", timeout=2)
+        except HTTPError as error:
+            with error:
+                self.assertEqual(error.code, 403)
+        else:
+            self.fail("approval list should return HTTP 403 without a session")
 
 
 if __name__ == "__main__":

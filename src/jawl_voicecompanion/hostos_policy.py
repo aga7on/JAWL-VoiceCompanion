@@ -138,6 +138,10 @@ class HostOSPolicy:
             },
         )
 
+    def record_approval_event(self, event_type: str, approval_id: str, tool: str) -> None:
+        """Record bounded approval metadata without the requested arguments."""
+        self._record(event_type, {"approval_id": approval_id, "tool": tool})
+
     def _record(self, event_type: str, payload: dict[str, Any]) -> None:
         self._audit.append({"created_at": _now(), "type": event_type, "payload": payload})
         del self._audit[:-100]

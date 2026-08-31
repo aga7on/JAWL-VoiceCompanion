@@ -50,6 +50,8 @@ and OS adapters are not connected.
 - Browser API exposes the tool registry and routes execution requests through
   the same server-side HostOS policy; browser approval authority is not
   accepted from request payloads.
+- ApprovalStore now supports session-bound one-shot decisions, expiration,
+  exact request/policy fingerprints and redacted previews.
 
 ## Reference inventory
 
@@ -91,20 +93,19 @@ and OS adapters are not connected.
 Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
 `tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
 
-Verification: `scripts/run_tests.ps1` passed 30 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 34 tests; `git diff --check`
 reported no whitespace errors.
 
 Known limitation: browser UIA calls and navigation are available through the
-live executor, but coordinate/canvas fallback, approval queue and transport
-cancellation are still pending. The web server's default executor remains
-dry-run; web requests cannot self-approve risky actions.
+live executor, but coordinate/canvas fallback and transport cancellation are
+still pending. The web server's default executor remains dry-run; live
+approval is now server-side but the browser approval UX is still minimal.
 
 ## Next action
 
-Add a server-side one-shot approval queue and connect `TurnArbiter` to gateway
-cancellation. Then exercise the JAWL adapter against the actual local
-process. Do not download model weights or implement passive screen monitoring
-yet.
+Connect `TurnArbiter` to gateway cancellation and exercise the JAWL adapter
+against the actual local process. Then add the browser approval UX and bounded
+screen capture bridge. Do not download model weights yet.
 
 ## State update protocol
 

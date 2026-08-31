@@ -24,3 +24,5 @@
   UIA delegation, still protected by HostOS policy and approval.
 - Exposed HostOS tool discovery and policy-checked dry-run execution through
   the local browser API.
+- Added a server-side, session-bound, one-shot approval queue with TTL,
+  fingerprints and redacted previews.

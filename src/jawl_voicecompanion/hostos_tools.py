@@ -97,6 +97,11 @@ class HostOSExecutor:
             for spec in self._specs.values()
         ]
 
+    def canonicalize(self, request: ToolRequest) -> ToolRequest:
+        """Return a request whose risk comes from the registry, not the model."""
+        spec = self._specs.get(request.tool)
+        return replace(request, risk=spec.risk) if spec else request
+
     def execute(self, request: ToolRequest, has_approval: bool = False) -> dict[str, Any]:
         spec = self._specs.get(request.tool)
         if spec is None:
@@ -110,7 +115,7 @@ class HostOSExecutor:
             return self._denied(request, decision)
 
         # Risk is canonical registry data, not a model-controlled field.
-        canonical_request = replace(request, risk=spec.risk)
+        canonical_request = self.canonicalize(request)
         decision = self.policy.authorize(canonical_request, has_approval=has_approval)
         self.policy.record_tool_decision(canonical_request, decision)
         if not decision.allowed:

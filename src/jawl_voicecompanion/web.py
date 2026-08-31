@@ -8,7 +8,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
+from .approvals import ApprovalStore
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .models import ToolRequest
@@ -30,6 +32,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
         self.hostos = hostos_executor
+        self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
         super().__init__(server_address, CompanionRequestHandler)
@@ -53,6 +56,14 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/hostos/tools":
             self._json({"dry_run": self.server.hostos.dry_run, "tools": self.server.hostos.list_tools()})
+            return
+        if self.path == "/api/hostos/approvals":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            self._json({"approvals": self.server.approvals.list(self.server.session_token)})
             return
         if self.path in ("/", "/index.html"):
             index_path = self.server.frontend_dir / "index.html"
@@ -81,10 +92,34 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(raw_request, dict):
                     raise ValueError("request must be an object")
                 request = ToolRequest.from_dict(raw_request)
-                # Browser payloads never provide approval authority. The
-                # approval queue will supply a server-side one-shot token later.
-                result = self.server.hostos.execute(request, has_approval=False)
+                approval_id = payload.get("approval_id")
+                approval = self.server.approvals.consume(
+                    str(approval_id) if approval_id else None,
+                    request,
+                    self.server.session_token,
+                )
+                result = self.server.hostos.execute(request, has_approval=bool(approval["approved"]))
                 self._json({"ok": result["status"] in {"verified", "dispatched", "degraded"}, "result": result})
+                return
+            if self.path == "/api/hostos/approvals/request":
+                raw_request = payload.get("request", payload)
+                if not isinstance(raw_request, dict):
+                    raise ValueError("request must be an object")
+                result = self.server.approvals.request(
+                    ToolRequest.from_dict(raw_request),
+                    self.server.session_token,
+                )
+                self._json({"ok": result["status"] == "approval_required", "result": result})
+                return
+            parts = urlsplit(self.path)
+            prefix = "/api/hostos/approvals/"
+            if parts.path.startswith(prefix) and parts.path.endswith("/approve"):
+                approval_id = parts.path[len(prefix) : -len("/approve")]
+                self._json({"result": self.server.approvals.decide(approval_id, self.server.session_token, True)})
+                return
+            if parts.path.startswith(prefix) and parts.path.endswith("/deny"):
+                approval_id = parts.path[len(prefix) : -len("/deny")]
+                self._json({"result": self.server.approvals.decide(approval_id, self.server.session_token, False)})
                 return
             if self.path == "/api/hostos/level":
                 if "level" not in payload:
