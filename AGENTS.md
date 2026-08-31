@@ -23,6 +23,10 @@ In scope:
 - on-demand and later event-triggered screen vision;
 - Heartbeat, Attention/Presence and Turn Arbiter;
 - local Windows desktop operation;
+- HostOS-style access levels from sandboxed operation to explicitly enabled
+  full user-session access;
+- a loopback web control plane for chat, settings, approvals, memory and
+  audit inspection;
 - opt-in tools with approval and audit logging.
 
 Out of scope for the current project:
@@ -31,7 +35,8 @@ Out of scope for the current project:
 - mobile clients;
 - cloud-hosted backend;
 - copying Soul of Waifu code or assets;
-- making the avatar act as an unrestricted computer-control agent;
+- allowing unrestricted computer control without an explicitly selected
+  HostOS access level and the corresponding policy checks;
 - full-time VLM calls on every screen frame.
 
 ## Source repositories
@@ -92,9 +97,13 @@ believes, remembers or wants.
 7. Screen observation is off by default, focused-window-first, rate-limited,
    redacted where possible and stores descriptions rather than raw frames.
 8. Tool actions must be narrowly scoped, approval-aware and auditable.
+   HostOS access level is enforced by the backend, never by the browser UI
+   or by model-produced text.
 9. Use structured response envelopes. Emotion, speech, gesture and display
    text must not be encoded only in fragile prose conventions.
 10. Do not expose hidden chain-of-thought. Store short internal summaries only.
+11. Bind all local HTTP/WebSocket services to loopback by default. A browser
+    session is a control surface, not an authorization boundary.
 
 ## Documentation and state tracking
 

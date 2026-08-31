@@ -12,7 +12,7 @@
 ## Non-goals for the first version
 
 - 3D avatar;
-- unrestricted computer control;
+- unrestricted computer control by default;
 - VLM inference on every frame;
 - multiple competing personality systems;
 - mobile synchronization.
@@ -121,6 +121,45 @@ The frontend renders:
 
 The frontend never owns canonical memory or personality state.
 
+### Local Web Control Plane
+
+The browser is the main operator interface. It may be used on the same machine
+to chat with the companion, inspect health, change persona and memory settings,
+select HostOS access level, review approvals, stop active work and inspect the
+audit trail. The first implementation may render the avatar in the browser as
+well; a transparent desktop-pet window remains an optional presentation mode,
+not a separate source of truth.
+
+The web UI talks only to a loopback backend. Every action is authorized again
+on the backend against the current policy, session, tool risk and access level.
+The UI cannot grant itself permissions by sending a different level in a
+request.
+
+### HostOS Tool Plane
+
+HostOS is the only layer allowed to create desktop or operating-system side
+effects. JAWL can request a tool, but it cannot directly call `subprocess`,
+Windows input APIs or filesystem primitives. HostOS resolves the request,
+checks policy and returns a bounded, structured result.
+
+The access levels follow the local JAWL HostOS model:
+
+| Level | Name | Capability boundary |
+|---|---|---|
+| 0 | `SANDBOX` | Read/write only inside the companion sandbox; no host control. |
+| 1 | `OBSERVER` | Read host/UI state and screen observations; writes remain sandbox-scoped; no desktop input. |
+| 2 | `OPERATOR` | Work with approved project/workspace files and managed processes; desktop/browser actions are policy- and approval-aware. |
+| 3 | `ROOT` | Full access available to the current Windows user, including host file operations, GUI input and raw shell compatibility tools. |
+
+Level 3 does not mean Windows elevation: the process cannot cross the secure
+desktop or exceed the rights of the user who launched it. It remains a
+deliberate expert mode with a visible indicator, emergency stop, audit log and
+the ability to require confirmation for selected risk classes.
+
+The browser, keyboard/mouse, filesystem, process and shell tools all pass
+through the same policy gate. This prevents a lower-risk tool from becoming a
+side door around the selected HostOS level.
+
 ## Memory ownership
 
 ```text
@@ -197,6 +236,11 @@ Default policy:
 - discard raw screenshots after analysis;
 - store bounded textual descriptions and metadata;
 - deny-list sensitive applications and windows.
+
+Screen observation and screen control are separate permissions. `OBSERVER`
+may inspect bounded UI/screen state when enabled, but cannot click or type.
+`OPERATOR` and `ROOT` may use desktop interaction tools according to the
+current approval policy.
 
 There are two separate paths:
 

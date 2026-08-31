@@ -7,7 +7,8 @@ Last updated: 2026-08-31
 Phase 0 — foundation and architecture.
 
 Repository state: initial scaffold committed. Runtime code has not been
-integrated.
+integrated. HostOS access policy and browser control-plane design are now
+documented; implementation has not started.
 
 ## Git state
 
@@ -25,6 +26,9 @@ integrated.
 - 2D Live2D selected as the only current avatar target.
 - JAWL selected as canonical cognitive core.
 - VoiceMem selected as a separate voice/sensory sidecar.
+- HostOS access levels 0–3 accepted, with level 3 available as an explicit
+  full-current-user mode.
+- Browser selected as the canonical local control plane.
 
 ## Reference inventory
 
@@ -51,6 +55,8 @@ integrated.
 - Choose and benchmark Russian streaming ASR;
 - confirm the OmniVoice model/API location;
 - select the first redistributable or user-supplied Live2D model;
+- decide the first web stack and local session-token mechanism;
+- define the initial HostOS tool registry and risk policy defaults.
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -58,8 +64,9 @@ integrated.
 
 ## Next action
 
-Create the Phase 1 project contracts and a minimal health-check/test harness.
-Do not download model weights or implement passive screen monitoring yet.
+Create the Phase 1 project contracts, browser chat/status surface and a
+minimal health-check/test harness. Do not download model weights or implement
+passive screen monitoring yet.
 
 ## State update protocol
 

@@ -77,3 +77,41 @@ Open-LLM-VTuber, Warashi, Miru, Mana, AniCompanion and Soul of Waifu are used
 for design and implementation patterns. Their complete runtimes are not
 combined with JAWL. Direct Soul of Waifu code reuse is excluded until GPL-3.0
 compatibility is deliberately accepted and reviewed.
+
+## ADR-009 — HostOS levels are a first-class product capability
+
+Status: Accepted
+Date: 2026-08-31
+
+The companion supports the same four conceptual HostOS levels as the local
+JAWL fork: `SANDBOX` (0), `OBSERVER` (1), `OPERATOR` (2) and `ROOT` (3).
+Full access is therefore a supported expert mode, not an accidental loophole
+or a promise that the agent is always unrestricted.
+
+The backend enforces the level on every tool call. The browser UI can select a
+level and display its status but cannot authorize an operation by itself. A
+level change creates an auditable policy event and updates the visible mode
+indicator. Risk-specific confirmations, deny-lists, emergency stop and
+bounded results remain available at every level.
+
+Level 3 grants the rights available to the current Windows user, including
+filesystem, GUI and shell operations; it does not bypass Windows elevation or
+the secure desktop. The implementation must preserve the HostOS properties of
+path-bound checks, stale-target rejection for UI controls, bounded output,
+process-tree cancellation and approval fingerprints where applicable.
+
+## ADR-010 — Browser is the canonical control plane
+
+Status: Accepted
+Date: 2026-08-31
+
+The main settings, chat, approval, memory, health and audit experience is a
+local web application served by the companion backend. This reduces frontend
+duplication and makes the operator state inspectable in one place. The Live2D
+renderer can run in that web UI or in a transparent desktop-pet presentation
+mode while consuming the same backend events.
+
+The service binds to loopback by default. WebSocket origin checks, session
+tokens, CSRF protection for state-changing HTTP requests and a backend policy
+gate are required before exposing any control operation. Remote access is
+deferred and must be designed as a separate authenticated deployment.

@@ -21,6 +21,8 @@ blocked or requiring a decision.
 - [ ] Implement `TurnArbiter` with user/proactive/background priority lanes.
 - [ ] Add generation IDs and cancellation propagation.
 - [ ] Connect a minimal text chat to a mock avatar frontend.
+- [ ] Serve the first local browser control plane for chat, status and
+  reconnect recovery.
 - [ ] Render `idle`, `listening`, `thinking`, `speaking` and emotion states.
 - [ ] Add structured logs without secrets or hidden chain-of-thought.
 
@@ -87,6 +89,9 @@ Acceptance criteria:
 - [ ] Add expression capability mapping and fallbacks.
 - [ ] Add first-run setup and component health/doctor panel.
 - [ ] Add performance profiles for low/standard/high modes.
+- [ ] Render browser control-plane pages for settings, approvals, memory and
+  audit state.
+- [ ] Add visible HostOS access-level indicator and emergency stop.
 
 Acceptance criteria:
 
@@ -133,6 +138,15 @@ Acceptance criteria:
 
 ## Phase 7 — tools and hardening
 
+- [ ] Add HostOS access levels 0 `SANDBOX`, 1 `OBSERVER`, 2 `OPERATOR`, 3
+  `ROOT`.
+- [ ] Route filesystem, process, shell, browser and desktop tools through one
+  backend policy gate.
+- [ ] Implement Windows UI Automation observation with stale element checks.
+- [ ] Implement bounded keyboard/mouse/window control and browser actions.
+- [ ] Add level-change events, session tokens and emergency stop.
+- [ ] Add risk classes and per-class confirmation/deny-list policy.
+- [ ] Add exact approval fingerprints for commands and high-risk actions.
 - [ ] Create one tool policy for JAWL, MCP, desktop and browser tools.
 - [ ] Add approval queue with allow-once/always-allow/deny.
 - [ ] Add unified tool-call audit log with secret redaction.
