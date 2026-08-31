@@ -15,7 +15,7 @@ and OS adapters are not connected.
 - Branch: `main`;
 - Baseline commits: `abce27d` (initial workspace), `1820eec` (HostOS/web
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
-  terminal adapter);
+  terminal adapter), `bc2f775` (TurnArbiter);
 - Working tree: clean at the last verification.
 
 ## Completed in this repository
