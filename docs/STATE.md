@@ -25,7 +25,7 @@ storage.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `751123f` (`feat: add optional Live2D asset bridge`).
+- Latest feature commit: `ba7d165` (`feat: add read-only JAWL web memory bridge`).
 
 ## Completed in this repository
 
