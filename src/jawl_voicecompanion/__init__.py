@@ -7,6 +7,7 @@ from .browser_adapter import BrowserAdapter
 from .approvals import ApprovalStore
 from .models import AccessLevel, RiskClass, ToolRequest
 from .arbiter import TurnArbiter, TurnPriority
+from .screen_adapter import ScreenCaptureAdapter
 
 __all__ = [
     "AccessLevel",
@@ -20,4 +21,5 @@ __all__ = [
     "ToolSpec",
     "TurnArbiter",
     "TurnPriority",
+    "ScreenCaptureAdapter",
 ]

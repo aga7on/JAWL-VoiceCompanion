@@ -7,8 +7,9 @@ Last updated: 2026-09-01
 Phase 1 — contracts and text vertical slice (in progress).
 
 Repository state: architecture baseline committed. A dependency-free mock
-text/control slice is implemented; real JAWL, VoiceMem, audio, TTS, Live2D
-and OS adapters are not connected.
+text/control slice is implemented; real JAWL, VoiceMem, audio, TTS and Live2D
+are not connected, while optional UIA and focused-window OS adapters are
+available only through an explicitly constructed live executor.
 
 ## Git state
 
@@ -41,6 +42,8 @@ and OS adapters are not connected.
   selection using local session/CSRF headers.
 - Dedicated read-only `/avatar` surface renders a transparent OBS-ready
   placeholder, bounded subtitle and response-envelope avatar state.
+- Explicit `screen.observe` adapter provides an opt-in focused-window JPEG
+  snapshot with size bounds, deny-list checks and no disk persistence.
 - JAWL terminal adapter understands the local `terminal.port` plus
   `JAWL_HANDSHAKE` JSON-lines protocol and falls back when JAWL is offline.
 - `TurnArbiter` now models one active turn, priority lanes, stale-work
@@ -89,6 +92,7 @@ and OS adapters are not connected.
 - select the first redistributable or user-supplied Live2D model;
 - finish the browser settings, memory and audit views;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
+- connect the screen snapshot to a VLM description bridge and change detector;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -96,22 +100,23 @@ and OS adapters are not connected.
 
 ## Latest work session
 
-Changed `frontend/index.html`, `frontend/avatar.html`, `src/jawl_voicecompanion/web.py`,
-`tests/test_web.py`, `README.md`, `TODO.md`, `docs/OBS.md`, the architecture
-ADRs and `CHANGELOG.md`.
+Changed `src/jawl_voicecompanion/screen_adapter.py`, `hostos_tools.py`,
+`__main__.py`, package exports and screen/HostOS tests, plus `README.md`,
+`TODO.md`, `docs/contracts/hostos.md` and `CHANGELOG.md`.
 
-Verification: `scripts/run_tests.ps1` passed 36 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 40 tests; `git diff --check`
 reported no whitespace errors.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
-model yet. The web server's default executor remains dry-run; coordinate/
-canvas fallback, screen capture and TTS/audio cancellation are still pending.
-The native always-on-top desktop-pet shell is also deferred.
+model yet. The web server's default executor remains dry-run; the screen
+adapter is snapshot-only and the VLM bridge, passive change detection,
+pixel-level redaction and TTS/audio cancellation are still pending. The
+native always-on-top desktop-pet shell is also deferred.
 
 ## Next action
 
 Exercise the JAWL adapter against the actual local process. Then implement the
-bounded screen-capture/vision bridge and select the first Live2D asset/runtime.
+VLM description/change-detection bridge and select the first Live2D asset/runtime.
 TTS/audio cancellation remains required before the voice loop.
 
 ## State update protocol

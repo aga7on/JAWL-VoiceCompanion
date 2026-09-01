@@ -79,6 +79,38 @@ Possible statuses include `denied`, `approval_required`, `dispatched`,
 `dispatched` must not be reported as `verified` unless a bounded postcondition
 was observed.
 
+## Screen observation result
+
+The initial `screen.observe` adapter is an explicit focused-window snapshot.
+When enabled, its bounded result may contain a transient JPEG for a vision
+adapter:
+
+```json
+{
+  "status": "verified",
+  "source": "focused_window",
+  "captured_at": "2026-09-01T12:00:00+00:00",
+  "window": {
+    "class_name": "ApplicationFrameWindow",
+    "bounds": [0, 0, 1280, 720]
+  },
+  "image": {
+    "media_type": "image/jpeg",
+    "data_base64": "<bounded transient payload>",
+    "width": 1280,
+    "height": 720,
+    "bytes": 420000
+  },
+  "persisted": false
+}
+```
+
+The adapter omits the window title, blocks configured sensitive/companion
+windows before capture, caps dimensions and encoded size, and does not write
+the frame to disk. It is disabled unless the operator explicitly enables the
+screen adapter. Passive change detection and a VLM description bridge are
+separate later layers.
+
 ## Risk classes
 
 The initial classes are:

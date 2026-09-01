@@ -11,6 +11,26 @@ from jawl_voicecompanion.models import AccessLevel, RiskClass, ToolRequest  # no
 
 
 class HostOSToolTests(unittest.TestCase):
+    def test_screen_observation_is_policy_gated_and_uses_adapter(self):
+        class FakeScreen:
+            def observe(self, *, include_image):
+                return {"status": "verified", "include_image": include_image, "persisted": False}
+
+        with tempfile.TemporaryDirectory() as directory:
+            policy = HostOSPolicy(active_level=AccessLevel.OBSERVER)
+            executor = HostOSExecutor(
+                policy=policy,
+                sandbox_root=Path(directory),
+                dry_run=False,
+                screen_capture=FakeScreen(),
+            )
+            result = executor.execute(
+                ToolRequest(tool="screen.observe", risk=RiskClass.OBSERVE)
+            )
+            self.assertEqual(result["status"], "verified")
+            self.assertTrue(result["result"]["include_image"])
+            self.assertFalse(result["result"]["persisted"])
+
     def test_sandbox_read_write_are_real_only_when_explicitly_enabled(self):
         with tempfile.TemporaryDirectory() as directory:
             sandbox = Path(directory) / "sandbox"
@@ -95,4 +115,3 @@ class HostOSToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -9,6 +9,7 @@ from .gateway import TextGateway
 from .browser_adapter import BrowserAdapter
 from .jawl_adapter import JawlTerminalAdapter
 from .hostos_tools import HostOSExecutor
+from .screen_adapter import ScreenCaptureAdapter
 from .windows_ui import WindowsUIAutomationAdapter
 from .web import create_server
 
@@ -28,6 +29,11 @@ def main() -> None:
         "--hostos-live",
         action="store_true",
         help="enable real HostOS adapters; otherwise all tool requests are dry-run",
+    )
+    parser.add_argument(
+        "--screen-enabled",
+        action="store_true",
+        help="explicitly enable focused-window snapshots for screen.observe",
     )
     parser.add_argument("--sandbox-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
@@ -51,6 +57,7 @@ def main() -> None:
             dry_run=False,
             allowed_executables=frozenset(args.allowed_executable),
             ui_automation=WindowsUIAutomationAdapter(),
+            screen_capture=ScreenCaptureAdapter(enabled=args.screen_enabled),
         )
         hostos_executor.browser = BrowserAdapter(ui_automation=hostos_executor.ui_automation)
     server = create_server(args.host, args.port, args.frontend, gateway, hostos_executor)

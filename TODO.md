@@ -108,13 +108,16 @@ Acceptance criteria:
 
 ## Phase 5 — screen vision
 
-- [ ] Implement focused-window capture on Windows.
+- [~] Implement focused-window capture on Windows; the explicit one-shot
+  `screen.observe` adapter is present and disabled by default.
 - [ ] Prefer UI Automation for native app structure.
 - [ ] Add screenshot/OCR fallback for canvas and custom applications.
-- [ ] Add explicit `vision__look` model tool.
+- [~] Add explicit `vision__look` model tool; the HostOS `screen.observe`
+  capture seam exists, while the model bridge is still pending.
 - [ ] Add capture request/response bridge when frontend owns capture.
 - [ ] Add change detection, significance and cooldown.
-- [ ] Add app deny-list and sensitive-window redaction policy.
+- [~] Add app deny-list and sensitive-window redaction policy; title/class
+  blocking is present, while pixel-level redaction remains pending.
 - [ ] Discard raw screenshots after analysis by default.
 - [ ] Store only bounded textual observations and metadata.
 

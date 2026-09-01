@@ -35,6 +35,10 @@ same-origin URL. To explicitly construct a live executor,
 provide `--hostos-live` and configure the roots/managed executables; the
 approval queue and full production policy are still under development.
 
+Focused-window snapshots stay disabled unless `--screen-enabled` is supplied
+alongside `--hostos-live`. The snapshot path is explicit and bounded; it does
+not start a passive capture loop.
+
 To connect the text surface to the local JAWL terminal bridge, pass its
 `terminal.port` file:
 

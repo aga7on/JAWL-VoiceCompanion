@@ -69,6 +69,7 @@ class WebTests(unittest.TestCase):
         status, tools = self.get_json("/api/hostos/tools")
         self.assertEqual(status, 200)
         self.assertTrue(any(item["name"] == "desktop.act" for item in tools["tools"]))
+        self.assertTrue(any(item["name"] == "screen.observe" for item in tools["tools"]))
         status, result = self.post_json(
             "/api/hostos/execute",
             {"request": {"tool": "desktop.act", "risk": "observe", "requested_access_level": 3}},

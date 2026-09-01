@@ -30,3 +30,5 @@
   cancellation events and bounded socket reads.
 - Added a read-only transparent `/avatar` presentation surface for desktop
   capture and OBS, plus a copyable URL in the control panel.
+- Added an explicit, opt-in focused-window `screen.observe` adapter with
+  bounded transient JPEG output and sensitive/companion window blocking.

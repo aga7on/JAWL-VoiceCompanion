@@ -36,6 +36,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("process.stop", RiskClass.PROCESS, "Stop a process owned by this executor.", AccessLevel.OPERATOR, True),
     ToolSpec("shell.exec", RiskClass.SHELL, "Run an explicit argv vector on the host.", AccessLevel.ROOT, True),
     ToolSpec("desktop.observe", RiskClass.OBSERVE, "Read a bounded desktop/UI observation.", AccessLevel.OBSERVER),
+    ToolSpec("screen.observe", RiskClass.OBSERVE, "Capture one bounded focused-window snapshot.", AccessLevel.OBSERVER),
     ToolSpec("desktop.act", RiskClass.INTERACTIVE, "Perform a bounded desktop UI action.", AccessLevel.OPERATOR, True),
     ToolSpec("browser.act", RiskClass.INTERACTIVE, "Perform a bounded browser action.", AccessLevel.OPERATOR, True),
 )
@@ -73,6 +74,7 @@ class HostOSExecutor:
     allowed_executables: frozenset[str] = frozenset()
     ui_automation: Any | None = None
     browser: Any | None = None
+    screen_capture: Any | None = None
     max_read_chars: int = 100_000
     max_output_chars: int = 20_000
     _processes: dict[int, subprocess.Popen] = field(default_factory=dict, repr=False)
@@ -166,6 +168,13 @@ class HostOSExecutor:
             if self.ui_automation is None:
                 raise PermissionError("Windows UI Automation adapter is unavailable")
             return self.ui_automation.observe()
+        if request.tool == "screen.observe":
+            if self.screen_capture is None:
+                raise PermissionError("screen capture adapter is unavailable")
+            include_image = request.arguments.get("include_image", True)
+            if not isinstance(include_image, bool):
+                raise ValueError("include_image must be boolean")
+            return self.screen_capture.observe(include_image=include_image)
         if request.tool == "desktop.act":
             if self.ui_automation is None:
                 raise PermissionError("Windows UI Automation adapter is unavailable")
