@@ -4,6 +4,8 @@
 
 - Emergency stop now terminates tracked managed and shell processes and marks
   an interrupted shell request as `cancelled` instead of leaving it running.
+- Added an HTTP E2E restart/recovery check for owned-process cleanup, fresh
+  safe policy defaults and non-persistent approval state.
 - Added explicit ROOT-only unattended execution for background/heartbeat work:
   level 3 grants current-user capability, while the separate switch disables
   per-action prompts only after operator confirmation; emergency stop and

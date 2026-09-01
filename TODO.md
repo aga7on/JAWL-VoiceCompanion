@@ -231,7 +231,8 @@ Acceptance criteria:
   remains.
 - [ ] Add bounded tool-result compression.
 - [ ] Add workspace-scoped edit proposals with stale-file checks.
-- [ ] Add restart/recovery tests to the full E2E gate.
+- [x] Add restart/recovery tests to the full E2E gate; server shutdown now
+  cleans owned processes and a fresh server starts at safe defaults.
 - [ ] Add packaging and installation documentation.
 
 ## Deferred

@@ -575,6 +575,74 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(any(event["type"] == "ACCESS_LEVEL_CHANGED" for event in audit["events"]))
         self.assertNotIn("e2e-ok", json.dumps(audit, ensure_ascii=False))
 
+    def test_restart_stops_owned_processes_and_starts_safe(self):
+        policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+        executor = HostOSExecutor(
+            policy,
+            Path(self.temp.name) / "recovery-sandbox",
+            dry_run=False,
+            allowed_executables=frozenset({sys.executable}),
+        )
+        recovery = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(policy=policy),
+            hostos_executor=executor,
+        )
+        thread = threading.Thread(target=recovery.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{recovery.server_port}"
+        headers = {
+            "X-Companion-Session": recovery.session_token,
+            "X-Companion-CSRF": recovery.csrf_token,
+        }
+
+        def post(path, payload):
+            request = Request(
+                base + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", **headers},
+                method="POST",
+            )
+            with urlopen(request, timeout=3) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            pending = post(
+                "/api/hostos/approvals/request",
+                {"request": {"tool": "shell.exec", "risk": "shell", "arguments": {"argv": ["echo", "recovery"]}}},
+            )
+            self.assertEqual(pending["result"]["status"], "approval_required")
+            post("/api/hostos/unattended", {"enabled": True})
+            started = post(
+                "/api/hostos/execute",
+                {"request": {
+                    "tool": "process.managed",
+                    "risk": "process",
+                    "arguments": {"executable": sys.executable, "argv": ["-c", "import time; time.sleep(30)"]},
+                }},
+            )
+            pid = started["result"]["result"]["pid"]
+            owned_process = executor._processes[pid]
+            self.assertIsNone(owned_process.poll())
+        finally:
+            recovery.shutdown()
+            recovery.server_close()
+            thread.join(timeout=2)
+
+        self.assertIsNotNone(owned_process.poll())
+        fresh = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+        )
+        try:
+            self.assertEqual(fresh.gateway.policy.snapshot()["active_level"], 0)
+            self.assertFalse(fresh.gateway.policy.snapshot()["unattended"])
+            self.assertEqual(fresh.approvals.list(fresh.session_token), [])
+        finally:
+            fresh.server_close()
+
     def test_jawl_web_memory_and_persona_are_visible_without_secrets(self):
         _, health = self.get_json("/api/health")
         self.assertEqual(health["components"]["jawl_web"], "online")
