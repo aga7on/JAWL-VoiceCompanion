@@ -39,8 +39,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the provider-neutral TTS controls slice.
-- Latest feature commit: `b6ca5a9` (`feat: add provider-neutral TTS controls`).
+- Working tree: clean after the VoiceMem sidecar lifecycle hardening slice.
+- Latest feature commit: `1f94346` (`fix: harden VoiceMem sidecar lifecycle`).
 
 ## Completed in this repository
 
@@ -71,6 +71,9 @@ separate CPU/RAM test completes.
   snapshot with size bounds, deny-list checks and no disk persistence.
 - JAWL terminal adapter understands the local `terminal.port` plus
   `JAWL_HANDSHAKE` JSON-lines protocol and falls back when JAWL is offline.
+- VoiceMem sidecar lifecycle is bounded and observable: an empty audio flush
+  does not initialize the model, failed sessions are evicted for recovery, and
+  `/api/voice/status` reports process state without launch paths or arguments.
 - `TurnArbiter` now models one active turn, priority lanes, stale-work
   cancellation and queue promotion; transport cancellation is still pending.
 - HostOS tool registry now contains bounded filesystem, process and argv
@@ -330,6 +333,11 @@ provider-neutral voice/speed controls and focused concurrency/cancellation
 regression tests. No TTS model is selected in this session; first-audio
 streaming remains pending.
 
+The current VoiceMem follow-up hardens lazy sidecar startup and recovery:
+empty `/api/voice/end` calls do not initialize VoiceMem, a failed stream is
+evicted so the next request can recreate it, and the process lifecycle is
+included in the bounded health response. The full gate covers these paths.
+
 The current HostOS follow-up adds bounded file snapshots and conditional
 workspace writes with stale-file rejection, plus a browser proposal/review and
 one-shot execution surface. A broader diff/transaction editor remains pending.
@@ -356,7 +364,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 124 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 126 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
