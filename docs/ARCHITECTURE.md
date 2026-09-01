@@ -225,11 +225,11 @@ through the same policy gate. This prevents a lower-risk tool from becoming a
 side door around the selected HostOS level.
 
 JAWL already has a native `HostOSClient` and SkillRegistry. The companion
-executor currently covers companion-side browser/control requests; its level
-setting is not yet synchronized with a running JAWL process. Production must
-connect the browser to JAWL's native HostOS authority through one authenticated
-local bridge instead of maintaining two independent policy sources. See
-`docs/contracts/jawl-hostos.md`.
+executor covers companion-side browser/control requests, and the opt-in
+authenticated bridge synchronizes level 0–3 and whole-agent emergency stop
+with native JAWL. Native per-tool approval/unattended state remains owned by
+JAWL until it exposes a matching contract. The companion must not create a
+second JAWL tool registry. See `docs/contracts/jawl-hostos.md`.
 
 ## Memory ownership
 

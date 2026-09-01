@@ -315,12 +315,14 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 112 unit tests and 8 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 115 unit tests and 9 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
-The SSE fix and its focused regression test are preserved in `9363de3`; hidden
+The native HostOS level bridge is preserved in `36cd034`, and native emergency
+stop in `5988861`; the SSE fix and its focused regression test are preserved in
+`9363de3`; hidden
 output filtering, HTTP error cleanup and recovery coverage are preserved in
 `91342b7`; the
 preceding microphone slice is preserved in `36a808c` and the TTS slice in

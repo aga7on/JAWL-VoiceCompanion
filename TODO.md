@@ -224,9 +224,8 @@ Acceptance criteria:
   an explicit ROOT-only unattended mode for heartbeat/background work.
 - [x] Add exact approval fingerprints for commands and high-risk actions.
 - [~] Create one tool policy for JAWL, MCP, desktop and browser tools; the
-  current companion executor and JAWL's native HostOSClient are not yet
-  synchronized; the level bridge is now implemented, while native approval
-  and emergency-stop contracts remain pending.
+  level and whole-agent emergency-stop bridge are implemented; native
+  unattended and per-tool approval state remain separate.
 - [x] Native JAWL level bridge: browser level 0-3 writes the allowlisted
   config, restarts the agent and updates the companion policy after success.
 - [~] Add native JAWL contracts for unattended/approval state and emergency
