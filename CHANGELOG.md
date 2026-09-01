@@ -27,6 +27,10 @@
   still takes precedence when a valid bundle is configured.
 - Added an ephemeral browser-audio amplitude bridge for fallback and Live2D
   lip-sync, with BroadcastChannel fast-path and backend polling fallback.
+- Added an opt-in bounded half-duplex hands-free mode: local RMS silence ends
+  each utterance, rotates the VoiceMem session and keeps capture open. The
+  benchmarked VLM/ASR launchers now point to the transferred
+  `G:\\AI\\VLM-RealTime-Bench` runtime and model files.
 
 - Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
   transient JPEG profile, exposes bounded coordinate-scale metadata and makes

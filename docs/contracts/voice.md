@@ -149,6 +149,13 @@ trigger that requests TTS cancellation once while speech is active; it does
 not promote that signal to `BARGE_IN` or `USER_FINAL`. VoiceMem still decides
 whether the subsequent audio is a valid conversational turn.
 
+The control page also exposes an opt-in `hands-free` mode. It uses a bounded
+local RMS silence gate only to call `/api/voice/end` after roughly 800 ms of
+silence (with a short minimum speech guard), then keeps the microphone open
+under a fresh session ID. The gate does not transcribe, create a user turn or
+replace VoiceMem's own VAD; the checkbox is off by default and the manual
+microphone stop path remains available.
+
 The optional system-audio lifecycle is exposed separately at
 `GET /api/ambient-audio`, `POST /api/ambient-audio/start` and
 `POST /api/ambient-audio/stop`. It requires the browser session/CSRF pair and

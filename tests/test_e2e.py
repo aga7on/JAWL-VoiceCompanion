@@ -625,6 +625,8 @@ class LocalE2ETests(unittest.TestCase):
             self.assertIn(b"attention-dnd", frontend)
             self.assertIn(b"/api/avatar/audio", frontend)
             self.assertIn(b"createMediaElementSource", frontend)
+            self.assertIn(b"hands-free", frontend)
+            self.assertIn(b"finishVoiceUtterance", frontend)
         with urlopen(self.base + "/avatar", timeout=3) as response:
             avatar_html = response.read()
             self.assertIn(b"JAWL Avatar", avatar_html)

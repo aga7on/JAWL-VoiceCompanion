@@ -87,7 +87,8 @@ fallback. The model files remain outside this repository; the local
 ```
 
 It binds Qwen to `http://127.0.0.1:8983/v1` using the benchmarked external
-files and keeps inference on CPU. The full screen integration command is in
+files from `G:\AI\VLM-RealTime-Bench\models` and keeps inference on CPU. The
+full screen integration command is in
 [docs/OBS.md](docs/OBS.md).
 
 To connect the text surface and the read-only inspection panel to JAWL's local
@@ -164,7 +165,8 @@ own streaming ASR/VAD runs in its separate environment. Russian ASR quality,
 AEC and barge-in still require a real-device benchmark.
 
 The selected Qwen3-ASR-0.6B profile can be tested through the optional
-final-utterance bridge. Start its CPU server with
+final-utterance bridge. The default launcher uses the copied benchmark files
+under `G:\AI\VLM-RealTime-Bench\models\qwen3-asr`. Start its CPU server with
 `.\scripts\run_asr_server.ps1`, then add `--asr-url
 "http://127.0.0.1:8984/v1" --asr-model "Qwen3-ASR-0.6B"` to `run_web.ps1`.
 The browser keeps sending small PCM16 chunks, but the Companion buffers one

@@ -65,7 +65,9 @@ Acceptance criteria:
 - [~] Implement latest-request-wins synthesis cancellation; the browser now
   aborts playback/request and calls the explicit cancel route, while barge-in
   integration remains.
-- [ ] Add half-duplex hands-free mode.
+- [~] Add half-duplex hands-free mode; the browser has an opt-in bounded RMS
+  silence gate, fresh utterance sessions and automatic `/api/voice/end`, while
+  real-device threshold tuning and full duplex validation remain.
 - [ ] Add a true streaming Qwen3-ASR partial provider if a stable streaming
   contract is confirmed; do not infer it from the batch transcription API.
 - [~] Add barge-in capture and interruption classification; browser RMS
@@ -183,6 +185,8 @@ Acceptance criteria:
 - [x] Add explicit `vision__look` model tool; the HostOS `screen.observe`
   capture seam and Qwen3-VL-2B local `llama-server` path are smoke-tested.
   SmolVLM2-500M remains the speed fallback; continuous watcher tuning remains.
+- [x] Re-test the moved Qwen3-VL-2B and Qwen3-ASR files; record the optional
+  Qwen3.8-27B experiment and keep it out of the continuous watcher.
 - [ ] Add capture request/response bridge when frontend owns capture.
 - [~] Add change detection, significance and cooldown; digest deduplication,
   explicit-look cooldown, bounded `SCREEN_DELTA` production and an

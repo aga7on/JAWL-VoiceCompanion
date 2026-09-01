@@ -1,0 +1,113 @@
+# Local model test record
+
+Last updated: 2026-09-01
+
+These tests use files already present on the workstation. No model weights are
+copied into this repository.
+
+## Selected baseline
+
+| Role | Profile | Decision |
+| --- | --- | --- |
+| Vision and UI grounding | Qwen3-VL-2B Q4_K_M + F16 mmproj | Primary CPU profile |
+| Final ASR bridge | Qwen3-ASR-0.6B Q8_0 + mmproj | Primary audio profile |
+| Streaming ASR/VAD | VoiceMem sidecar | Remains the default streaming owner |
+| Fast text fallback | Bonsai-1.7B | Retained from the benchmark; text-only |
+| TTS | OmniVoice / CozyVoice 2 / other installed candidates | Not selected yet; external comparison is in progress |
+
+## Qwen3-VL-2B from the moved benchmark directory
+
+Paths:
+
+```text
+G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf
+G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf
+G:\AI\VLM-RealTime-Bench\runtime\llama-b10738-cpu\llama-server.exe
+```
+
+The full suite was rerun after the move. It loaded in 1.78 s and reached a
+peak of 4.36 GB RSS:
+
+| Case | Wall time | Image TTFT | Generation |
+| --- | ---: | ---: | ---: |
+| Image | 7.72 s | 1.84 s | 37.5 tok/s |
+| 4-frame Nyan sequence | 9.82 s | 4.45 s | 35.1 tok/s |
+| UI screenshot | 17.04 s | 8.68 s | 32.1 tok/s |
+| Text-only control | 4.51 s | 0.04 s | 40.0 tok/s |
+
+The model identified the illustration and Nyan Cat correctly and returned all
+8 expected UI elements as JSON. Coordinate score: 8/8 found, 2/8 raw hits,
+4/8 hits after affine calibration, calibrated mean error 45.7 px. The model
+therefore remains suitable for explicit look and bounded watcher work, but
+calibration and HostOS postconditions are still mandatory for actions.
+
+## Qwen3-ASR-0.6B from the moved benchmark directory
+
+Paths:
+
+```text
+G:\AI\VLM-RealTime-Bench\models\qwen3-asr\Qwen3-ASR-0.6B-Q8_0.gguf
+G:\AI\VLM-RealTime-Bench\models\qwen3-asr\mmproj-Qwen3-ASR-0.6B-Q8_0.gguf
+```
+
+The benchmark passed on the moved files with 1.48 GB RSS:
+
+| Input | Wall time | RTF |
+| --- | ---: | ---: |
+| 12 s clean English speech | 1.75 s | 0.15 |
+| 30 s Nyan audio | 4.68 s | 0.16 |
+
+The clean speech transcript was exact. The music sample was not treated as
+speech; the model produced humming-like output, which is acceptable for the
+ambient triage boundary but not a music-description model.
+
+The same ASR was tested on local Russian TTS-generated samples. Short welcome
+phrases from Qwen3-TTS and Chatterbox were transcribed correctly. Pushkin
+poem samples were broadly recognized but had word and ending errors, so this
+is evidence for a usable first Russian path, not a real-microphone quality
+claim.
+
+| Source | Audio length | Wall time | Result |
+| --- | ---: | ---: | --- |
+| Qwen3-TTS welcome | 4.72 s | 1.55 s | Correct short phrase |
+| Qwen3-TTS poem | 11.28 s | 2.16 s | Several word errors |
+| Chatterbox welcome | 6.04 s | 1.42 s | Correct short phrase |
+| Chatterbox poem | 10.40 s | 2.30 s | Several word/ending errors |
+
+## Additional installed VLM candidate: Qwen3.8-27B
+
+The workstation also has a Qwen3.8-27B Q4_K_M plus F16 mmproj in the local
+Hugging Face/LM Studio inventory. The mainline b10738 runtime can load it, but
+the CPU profile is not suitable for continuous autonomy:
+
+- approximately 27.15 GB RSS;
+- image TTFT about 15.5 s and generation about 2.8 tok/s;
+- four-frame video took about 53.6 s with 36.95 s image prefill;
+- the UI request took about 165.7 s and reached the token limit before a
+  reliable grounded JSON result.
+
+The server's automatic reasoning mode also returned an empty
+`message.content` for one request while generated reasoning tokens were
+present. Explicit `reasoning=off` produced normal text. This is an important
+provider/parser compatibility trap, but not a reason to make this model the
+baseline.
+
+Decision: keep Qwen3.8 as an optional future on-demand high-quality profile;
+do not use it for the continuous screen watcher, real-time UI control or the
+default autonomous loop.
+
+## Reproduction
+
+The moved benchmark scripts now use the moved ASR directory and the local
+`scripts/prompts.json` path. The relevant checks are:
+
+```powershell
+cd G:\AI\VLM-RealTime-Bench
+python .\scripts\asr_bench.py
+python .\scripts\ui_score.py .\results\qwen3vl-moved_suite.json .\results\qwen3vl-moved_ui_score.json
+```
+
+The Qwen3-VL suite used the repository's `bench2` helper on port 8987. The
+experimental Qwen3.8 runs used ports 8988–8990 and were stopped after each
+test; no model server is intentionally left running by this record.
+

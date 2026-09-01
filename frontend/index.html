@@ -27,6 +27,7 @@
       <h2>Диалог</h2>
       <div id="messages"></div>
       <h2>Doctor</h2>
+      <label><input id="hands-free" type="checkbox"> Hands-free: auto-finish after silence</label>
       <pre id="doctor" class="meta">loading...</pre>
       <textarea id="input" rows="3" placeholder="Напиши сообщение…"></textarea>
       <button id="send">Отправить</button>
@@ -96,6 +97,7 @@
     const health = document.querySelector('#health');
     const ttsVoice = document.querySelector('#tts-voice');
     const ttsSpeed = document.querySelector('#tts-speed');
+    const handsFree = document.querySelector('#hands-free');
     let sessionHeaders = {};
     let voice = null;
     let voiceQueue = Promise.resolve();
@@ -109,6 +111,7 @@
     let avatarAudioPending = null;
     let avatarAudioLastPublishedAt = 0;
     let avatarAudioChannel = null;
+    let voiceSequence = 0;
     try { avatarAudioChannel = new BroadcastChannel('jawl-voicecompanion-avatar'); } catch (_) { /* backend polling remains available */ }
     function addMessage(who, text) {
       const item = document.createElement('div');
@@ -379,9 +382,9 @@
       }
       return btoa(binary);
     }
-    function queueVoiceChunk(samples, sampleRate) {
+    function queueVoiceChunk(samples, sampleRate, sessionId) {
       const payload = {
-        session_id: 'browser-mic', sample_rate: 16000, channels: 1,
+        session_id: sessionId, sample_rate: 16000, channels: 1,
         pcm16_base64: pcm16Base64(downsample(samples, sampleRate, 16000))
       };
       voiceQueue = voiceQueue.then(async () => {
@@ -396,6 +399,40 @@
         document.querySelector('#mic-status').textContent = `Ошибка микрофона: ${error.message}`;
       });
     }
+    function handleVoiceResponses(data) {
+      for (const answer of data.responses || []) {
+        addMessage('Companion', answer.text || answer.error);
+        speak(answer.text);
+      }
+    }
+    async function finishVoiceUtterance(active) {
+      if (!active) return;
+      if (active.finishPromise) return active.finishPromise;
+      active.finalizing = true;
+      active.samples.length = 0;
+      active.finishPromise = (async () => {
+        await voiceQueue;
+        try {
+          const response = await apiPost('/api/voice/end', {session_id: active.sessionId});
+          const data = await response.json();
+          handleVoiceResponses(data);
+          if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem unavailable');
+        } catch (error) {
+          document.querySelector('#mic-status').textContent = `Hands-free finish error: ${error.message}`;
+        } finally {
+          if (voice === active) {
+            active.sessionId = `browser-mic-${Date.now()}-${++voiceSequence}`;
+            active.finalizing = false;
+            active.finishPromise = null;
+            active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0};
+            document.querySelector('#mic-status').textContent = handsFree.checked
+              ? 'Hands-free listening; speak when ready.'
+              : 'Microphone listening; VoiceMem detects phrase boundaries.';
+          }
+        }
+      })();
+      return active.finishPromise;
+    }
     async function stopMicrophone() {
       if (!voice) return;
       const active = voice;
@@ -403,9 +440,16 @@
       active.processor.disconnect();
       active.source.disconnect();
       active.stream.getTracks().forEach(track => track.stop());
+      if (active.finalizing && active.finishPromise) {
+        await active.finishPromise;
+        await active.context.close();
+        document.querySelector('#mic').textContent = 'Microphone on';
+        document.querySelector('#mic-status').textContent = 'Microphone off.';
+        return;
+      }
       await voiceQueue;
       try {
-        const response = await apiPost('/api/voice/end', {session_id: 'browser-mic'});
+        const response = await apiPost('/api/voice/end', {session_id: active.sessionId});
         const data = await response.json();
         for (const answer of data.responses || []) {
           addMessage('Компаньон', answer.text || answer.error);
@@ -417,6 +461,21 @@
       await active.context.close();
       document.querySelector('#mic').textContent = '🎙️ Включить микрофон';
       document.querySelector('#mic-status').textContent = 'Микрофон выключен.';
+    }
+    function updateVoiceVad(active, rms) {
+      if (!handsFree.checked || active.finalizing) return;
+      const now = performance.now();
+      if (rms >= 0.035) {
+        if (!active.vad.speaking) {
+          active.vad.speaking = true;
+          active.vad.startedAt = now;
+        }
+        active.vad.lastSpeechAt = now;
+        return;
+      }
+      if (active.vad.speaking && now - active.vad.lastSpeechAt >= 800 && now - active.vad.startedAt >= 300) {
+        finishVoiceUtterance(active);
+      }
     }
     async function startMicrophone() {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Браузер не поддерживает микрофон');
@@ -432,25 +491,40 @@
       const chunkSize = Math.floor(context.sampleRate * 0.2);
       processor.onaudioprocess = event => {
         const inputSamples = event.inputBuffer.getChannelData(0);
-        if (!bargeInTriggered && (currentAudio || ttsAbort)) {
+        const active = voice;
+        if (!active || active.context !== context) return;
+        let rms = 0;
+        if ((currentAudio || ttsAbort) || handsFree.checked) {
           let energy = 0;
           for (const sample of inputSamples) energy += sample * sample;
-          const rms = Math.sqrt(energy / Math.max(1, inputSamples.length));
+          rms = Math.sqrt(energy / Math.max(1, inputSamples.length));
+        }
+        if (!bargeInTriggered && (currentAudio || ttsAbort)) {
           if (rms >= 0.08) {
             bargeInTriggered = true;
             stopSpeech();
           }
         }
-        samples.push(...inputSamples);
-        while (samples.length >= chunkSize) queueVoiceChunk(samples.splice(0, chunkSize), context.sampleRate);
+        updateVoiceVad(active, rms);
+        if (!active.finalizing) {
+          samples.push(...inputSamples);
+          while (samples.length >= chunkSize) queueVoiceChunk(samples.splice(0, chunkSize), context.sampleRate, active.sessionId);
+        }
       };
       source.connect(processor);
       processor.connect(mute);
       mute.connect(context.destination);
-      voice = {stream, context, source, processor};
+      voice = {
+        stream, context, source, processor, samples, sessionId: `browser-mic-${Date.now()}-${++voiceSequence}`,
+        finalizing: false, finishPromise: null,
+        vad: {speaking: false, lastSpeechAt: 0, startedAt: 0}
+      };
       bargeInTriggered = false;
       document.querySelector('#mic').textContent = '⏹ Выключить микрофон';
       document.querySelector('#mic-status').textContent = 'Микрофон слушает; VoiceMem сам определяет конец фразы.';
+      document.querySelector('#mic-status').textContent = handsFree.checked
+        ? 'Hands-free listening; silence finishes each utterance.'
+        : 'Microphone listening; use the button to finish the utterance.';
     }
     async function bootstrap() {
       const response = await fetch('/api/session', {cache: 'no-store'});
@@ -570,6 +644,13 @@
         document.querySelector('#ambient-audio-status').textContent = `Loopback error: ${error.message}`;
       }
       refresh();
+    });
+    handsFree.addEventListener('change', () => {
+      if (voice && !voice.finalizing) {
+        document.querySelector('#mic-status').textContent = handsFree.checked
+          ? 'Hands-free listening; silence finishes each utterance.'
+          : 'Microphone listening; use the button to finish the utterance.';
+      }
     });
     document.querySelector('#mic').addEventListener('click', async () => {
       try {

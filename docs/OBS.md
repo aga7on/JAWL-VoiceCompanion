@@ -87,7 +87,8 @@ cd G:\AI\JAWL-VoiceCompanion
 .\scripts\run_vision_server.ps1
 ```
 
-The default paths target `C:\Users\ARTEM\vlm-bench`; override `-ServerPath`,
+The default paths target `G:\AI\VLM-RealTime-Bench`: the b10738 CPU runtime
+and the Qwen model pair under its `models` directory. Override `-ServerPath`,
 `-ModelPath` and `-MmprojPath` for another installation. The endpoint is
 `http://127.0.0.1:8983/v1`, and the model alias is `Qwen3-VL-2B`.
 

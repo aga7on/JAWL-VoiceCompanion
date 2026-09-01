@@ -65,6 +65,8 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"/api/tts/cancel", frontend)
             self.assertIn(b"AbortController", frontend)
             self.assertIn(b"bargeInTriggered", frontend)
+            self.assertIn(b"hands-free", frontend)
+            self.assertIn(b"updateVoiceVad", frontend)
             self.assertIn(b"tts-voice", frontend)
             self.assertIn(b"tts-speed", frontend)
             self.assertIn(b"voice: ttsVoice.value.trim()", frontend)
@@ -75,6 +77,12 @@ class WebTests(unittest.TestCase):
             self.assertIn("Выполнить предложение".encode("utf-8"), frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
+        vision_script = (Path(__file__).parents[1] / "scripts" / "run_vision_server.ps1").read_bytes()
+        asr_script = (Path(__file__).parents[1] / "scripts" / "run_asr_server.ps1").read_bytes()
+        self.assertIn(b"VLM-RealTime-Bench\\runtime\\llama-b10738-cpu", vision_script)
+        self.assertIn(b"VLM-RealTime-Bench\\models\\Qwen3-VL-2B", vision_script)
+        self.assertIn(b"VLM-RealTime-Bench\\runtime\\llama-b10738-cpu", asr_script)
+        self.assertIn(b"VLM-RealTime-Bench\\models\\qwen3-asr", asr_script)
 
     def test_doctor_reports_mock_text_mode_without_secrets(self):
         status, doctor = self.get_json("/api/doctor")

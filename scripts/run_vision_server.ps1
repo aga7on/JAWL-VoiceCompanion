@@ -1,7 +1,7 @@
 param(
-    [string]$ServerPath = 'C:\Users\ARTEM\vlm-bench\llamacpp\llama-server.exe',
-    [string]$ModelPath = 'C:\Users\ARTEM\vlm-bench\models\Qwen3-VL-2B-Q4_K_M.gguf',
-    [string]$MmprojPath = 'C:\Users\ARTEM\vlm-bench\models\Qwen3-VL-2B-mmproj-F16.gguf',
+    [string]$ServerPath = 'G:\AI\VLM-RealTime-Bench\runtime\llama-b10738-cpu\llama-server.exe',
+    [string]$ModelPath = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf',
+    [string]$MmprojPath = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf',
     [int]$Port = 8983,
     [int]$Threads = 24,
     [int]$Context = 8192

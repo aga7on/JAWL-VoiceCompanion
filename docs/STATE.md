@@ -159,6 +159,10 @@ workflows, while semantic watcher tuning remains.
 - The browser microphone path converts input to bounded mono PCM16, VoiceMem
   owns streaming ASR/VAD in its separate environment, and only final
   `VOICE_TURN` events reach JAWL. `/api/voice/end` flushes active capture.
+- The browser now has an opt-in half-duplex hands-free boundary: a bounded
+  local RMS silence gate finalizes an utterance through `/api/voice/end`,
+  rotates the session ID and keeps capture open; model VAD and final-turn
+  ownership remain in VoiceMem/Qwen.
 - `TTSService` provides latest-request-wins cancellation; the CozyVoice REST
   adapter splits bounded text into sentences, merges WAV chunks and exposes
   transient audio through `/api/tts/synthesize`. The browser plays it only
@@ -245,8 +249,17 @@ workflows, while semantic watcher tuning remains.
   quality and usable UI grounding after calibration. `SmolVLM2-500M` is the
   low-latency fallback; `Bonsai-1.7B` is text-only and `Qwen3-ASR-0.6B` is
   the leading audio candidate. The VLM files live outside this repository
-  under `C:\Users\ARTEM\vlm-bench\models`; the ASR files remain in the
-  external Hugging Face cache; no weights are copied into source.
+  under `G:\AI\VLM-RealTime-Bench\models`; the matching b10738 CPU runtime is
+  under its `runtime` directory, and no weights are copied into source.
+- The moved-file rerun is recorded in `docs/MODEL-TESTS.md`: Qwen3-VL-2B
+  remains the practical Vision baseline (32–40 tok/s, 4.36 GB peak RSS and
+  45.7 px calibrated UI mean error), while Qwen3.8-27B reaches good image/video
+  descriptions only at roughly 27 GB RSS and 2.8 tok/s. Qwen3.8 is therefore
+  optional on-demand, not a continuous watcher model.
+- Qwen3-ASR-0.6B was rerun from the moved `models/qwen3-asr` directory at
+  RTF 0.15–0.16. It transcribed local Russian TTS welcome phrases correctly;
+  synthetic poem samples still contain word/ending errors, and real Russian
+  microphone validation remains pending.
 - A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
   Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
   the real Windows focused-window capture. It returned a bounded Russian
@@ -478,6 +491,14 @@ isolated ASR consumer are implemented; backend installation and real-device
 capture/ASR quality validation remain pending. The CPU/RAM benchmark is
 complete; triage-worker scheduling and the Qwen3-VL-2B local endpoint
 integration are verified; watcher tuning and production model warmup remain.
+
+The current follow-up added an opt-in half-duplex hands-free boundary to the
+browser microphone path. It uses local RMS silence only for phrase finalization,
+keeps VoiceMem/Qwen as the ASR and final-turn owner, and rotates the session ID
+after each utterance. The moved benchmark directory was revalidated for both
+Qwen3-VL-2B and Qwen3-ASR-0.6B; the installed Qwen3.8-27B experiment is recorded
+as on-demand only because its CPU latency and memory footprint are too high.
+The full gate remains green after these changes.
 
 ## Next action
 
