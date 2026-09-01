@@ -368,10 +368,13 @@ class HostOSExecutor:
             raise ValueError("argv must be a list of strings")
         if len(argv) > 64:
             raise ValueError("argv is too long")
-        name = Path(executable).name.casefold()
-        allowed = {Path(item).name.casefold() for item in self.allowed_executables}
-        if name not in allowed:
-            raise PermissionError("executable is not in the managed allowlist")
+        executable_path = Path(executable).expanduser().resolve(strict=False)
+        allowed = {
+            str(Path(item).expanduser().resolve(strict=False)).casefold()
+            for item in self.allowed_executables
+        }
+        if str(executable_path).casefold() not in allowed:
+            raise PermissionError("executable path is not in the managed allowlist")
         cwd = request.arguments.get("cwd")
         cwd_path = None
         if cwd is not None:
@@ -383,7 +386,7 @@ class HostOSExecutor:
         if os.name == "nt":
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         process = subprocess.Popen(
-            [executable, *argv],
+            [str(executable_path), *argv],
             cwd=str(cwd_path) if cwd_path else None,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -443,6 +446,20 @@ class HostOSExecutor:
             if cancelled:
                 return {"status": "cancelled", "pid": process.pid, "exit_code": process.returncode}
             return {
+                "status": "verified" if process.returncode == 0 else "failed",
+                "exit_code": process.returncode,
+                "stdout": stdout[: self.max_output_chars],
+                "stderr": stderr[: self.max_output_chars],
+                "truncated": len(stdout) > self.max_output_chars or len(stderr) > self.max_output_chars,
+            }
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            finally:
+                stdout, stderr = process.communicate()
+            return {
+                "status": "timeout",
+                "pid": process.pid,
                 "exit_code": process.returncode,
                 "stdout": stdout[: self.max_output_chars],
                 "stderr": stderr[: self.max_output_chars],

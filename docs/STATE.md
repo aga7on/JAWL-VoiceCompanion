@@ -43,8 +43,10 @@ workflows, while semantic watcher tuning remains.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the ephemeral avatar lip-sync validation slice.
-- Latest feature commit: current `HEAD` (`feat: improve reactive 2d avatar fallback`).
+- Working tree: clean after the microphone gate and HostOS hardening slices.
+- Latest feature commits: `7ae1ab1` (microphone gate) and `3cac12e`
+  (closed TTS stream cancellation); the current HostOS status/allow-list slice
+  is pending commit.
 
 ## Completed in this repository
 
@@ -65,6 +67,9 @@ workflows, while semantic watcher tuning remains.
   redacted metadata-only audit entries.
 - HostOS now tracks managed and shell subprocesses; emergency stop terminates
   them and an interrupted shell request returns `cancelled`.
+- HostOS shell execution now reports non-zero exit codes as `failed` and kills
+  an owned process on timeout before returning `timeout`; the unit and HTTP
+  E2E paths assert these postconditions.
 - HTTP E2E now covers shutdown cleanup and safe restart defaults: owned
   processes are stopped, unattended is off, and approvals are in-memory only.
 - Loopback browser surface supports chat, health/state display and policy-level

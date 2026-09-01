@@ -94,6 +94,11 @@ running shell request when its process is terminated.
 `dispatched` must not be reported as `verified` unless a bounded postcondition
 was observed.
 
+`process.managed` accepts only an executable whose normalized absolute path is
+present in the configured allow-list; matching a basename alone is not
+sufficient. `shell.exec` is intentionally a separate ROOT-level explicit
+argv boundary for full-current-user compatibility.
+
 ## Screen observation result
 
 The initial `screen.observe` adapter is an explicit focused-window snapshot.

@@ -276,6 +276,10 @@ Acceptance criteria:
 - [x] Add risk classes and per-class confirmation/deny-list policy, including
   an explicit ROOT-only unattended mode for heartbeat/background work.
 - [x] Add exact approval fingerprints for commands and high-risk actions.
+- [x] Make shell result status match the observed exit condition and terminate
+  owned processes on timeout; covered by unit and HTTP E2E tests.
+- [x] Make managed-process allow-list checks use exact normalized executable
+  paths rather than a basename-only match.
 - [~] Create one tool policy for JAWL, MCP, desktop and browser tools; the
   level and whole-agent emergency-stop bridge are implemented; native
   unattended and per-tool approval state remain separate.

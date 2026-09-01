@@ -761,6 +761,27 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(autonomous["result"]["status"], "verified")
         self.assertIn("e2e-ok", autonomous["result"]["result"]["stdout"])
 
+        failed_request = {
+            "request": {
+                "tool": "shell.exec",
+                "risk": "shell",
+                "arguments": {"argv": [sys.executable, "-c", "raise SystemExit(9)"]},
+            }
+        }
+        _, failed = self.post_json("/api/hostos/execute", failed_request)
+        self.assertEqual(failed["result"]["status"], "failed")
+        self.assertEqual(failed["result"]["result"]["exit_code"], 9)
+
+        timeout_request = {
+            "request": {
+                "tool": "shell.exec",
+                "risk": "shell",
+                "arguments": {"argv": [sys.executable, "-c", "import time; time.sleep(30)"], "timeout_sec": 1},
+            }
+        }
+        _, timed_out = self.post_json("/api/hostos/execute", timeout_request)
+        self.assertEqual(timed_out["result"]["status"], "timeout")
+
         self.post_json("/api/emergency-stop", {})
         _, stopped = self.post_json("/api/hostos/execute", request)
         self.assertEqual(stopped["result"]["status"], "denied")

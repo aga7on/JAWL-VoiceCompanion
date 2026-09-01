@@ -174,6 +174,52 @@ class HostOSToolTests(unittest.TestCase):
             self.assertFalse(worker.is_alive())
             self.assertEqual(result[0]["status"], "cancelled")
 
+    def test_shell_nonzero_exit_is_reported_as_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+            policy.set_unattended(True)
+            executor = HostOSExecutor(policy, Path(directory), dry_run=False)
+            result = executor.execute(ToolRequest(
+                tool="shell.exec",
+                risk=RiskClass.SHELL,
+                arguments={"argv": [sys.executable, "-c", "print('failed'); raise SystemExit(7)"]},
+            ))
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["result"]["exit_code"], 7)
+            self.assertIn("failed", result["result"]["stdout"])
+
+    def test_shell_timeout_kills_the_owned_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+            policy.set_unattended(True)
+            executor = HostOSExecutor(policy, Path(directory), dry_run=False)
+            result = executor.execute(ToolRequest(
+                tool="shell.exec",
+                risk=RiskClass.SHELL,
+                arguments={"argv": [sys.executable, "-c", "import time; time.sleep(30)"], "timeout_sec": 1},
+            ))
+            self.assertEqual(result["status"], "timeout")
+            self.assertEqual(executor._processes, {})
+
+    def test_managed_process_allowlist_matches_the_exact_executable_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+            policy.set_unattended(True)
+            executor = HostOSExecutor(
+                policy,
+                Path(directory),
+                dry_run=False,
+                allowed_executables=frozenset({sys.executable}),
+            )
+            same_name_elsewhere = Path(directory) / Path(sys.executable).name
+            result = executor.execute(ToolRequest(
+                tool="process.managed",
+                risk=RiskClass.PROCESS,
+                arguments={"executable": str(same_name_elsewhere), "argv": []},
+            ))
+            self.assertEqual(result["status"], "denied")
+            self.assertIn("allowlist", result["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
