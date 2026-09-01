@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -5,7 +6,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
-from jawl_voicecompanion.ambient_triage import OllamaTriageProvider  # noqa: E402
+from jawl_voicecompanion.ambient_triage import (  # noqa: E402
+    OllamaTriageProvider,
+    OpenAICompatibleTriageProvider,
+)
 
 
 class _FakeTriage:
@@ -145,6 +149,31 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(body["options"]["num_gpu"], 0)
         self.assertEqual(body["format"]["type"], "object")
         self.assertEqual(body["keep_alive"], 0)
+
+    def test_openai_compatible_provider_uses_schema_and_validates_provenance(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append((request, timeout))
+            return _Response({
+                "choices": [{"message": {"content":
+                    '{"importance":"retain","summary":"Compact observation","topics":["context"],'
+                    '"confidence":0.75,"source":"system_audio","source_event_ids":["compat-1"]}'
+                }}]
+            })
+
+        provider = OpenAICompatibleTriageProvider(
+            "http://127.0.0.1:8981/v1", "Bonsai-1.7B", api_key="test-key", opener=opener,
+        )
+        result = provider.triage([{
+            "event_id": "compat-1",
+            "payload": {"stream": "system_audio", "text": "A bounded observation", "confidence": 0.8},
+        }])
+        self.assertEqual(result["importance"], "retain")
+        self.assertEqual(requests[0][0].full_url, "http://127.0.0.1:8981/v1/chat/completions")
+        self.assertEqual(requests[0][0].get_header("Authorization"), "Bearer test-key")
+        body = json.loads(requests[0][0].data.decode("utf-8"))
+        self.assertEqual(body["response_format"]["type"], "json_schema")
 
 
 if __name__ == "__main__":

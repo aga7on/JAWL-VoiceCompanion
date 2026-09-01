@@ -156,9 +156,84 @@ class OllamaTriageProvider:
         }
 
 
+class OpenAICompatibleTriageProvider:
+    """Delayed JSON-only triage through llama-server or another compatible endpoint."""
+
+    name = "openai_compatible"
+
+    def __init__(
+        self,
+        endpoint: str,
+        model: str,
+        *,
+        api_key: str = "",
+        timeout: float = 120.0,
+        opener: Callable[..., Any] = urlopen,
+    ) -> None:
+        value = str(endpoint or "").strip().rstrip("/")
+        if not value:
+            raise ValueError("ambient triage endpoint is required")
+        self.endpoint = (
+            value if value.endswith("/chat/completions")
+            else f"{value}/chat/completions" if value.endswith("/v1")
+            else f"{value}/v1/chat/completions"
+        )
+        self.model = str(model or "").strip()
+        if not self.model:
+            raise ValueError("ambient triage model is required")
+        self.api_key = str(api_key or "")
+        self.timeout = max(1.0, min(float(timeout), 600.0))
+        self._opener = opener
+
+    def triage(self, observations: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        safe = [OllamaTriageProvider._safe_observation(item) for item in list(observations)[:64]]
+        if not safe:
+            raise AmbientTriageUnavailable("triage batch is empty")
+        event_ids = {item["event_id"] for item in safe}
+        prompt = (
+            "Summarize these ambient observations into one secondary-memory candidate. "
+            "Do not invent facts. If evidence is insufficient, use importance=ignore. "
+            "Return only JSON matching the supplied schema.\n"
+            + json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+        )
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "You are a delayed triage module. Tools are forbidden."},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "temperature": 0,
+            "max_tokens": 400,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "ambient_triage", "strict": True, "schema": TRIAGE_SCHEMA},
+            },
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = Request(self.endpoint, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                          headers=headers, method="POST")
+        try:
+            with self._opener(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            content = payload["choices"][0]["message"]["content"]
+            result = json.loads(content) if isinstance(content, str) else content
+            return validate_triage_result(result, event_ids)
+        except AmbientTriageUnavailable:
+            raise
+        except (HTTPError, URLError, OSError, TimeoutError, UnicodeDecodeError, ValueError,
+                TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
+            raise AmbientTriageUnavailable(
+                f"openai-compatible triage failed: {type(exc).__name__}"
+            ) from exc
+
+
 __all__ = [
     "AmbientTriageProvider",
     "AmbientTriageUnavailable",
+    "OpenAICompatibleTriageProvider",
     "OllamaTriageProvider",
     "TRIAGE_SCHEMA",
     "validate_triage_result",

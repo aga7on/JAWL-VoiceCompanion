@@ -17,7 +17,12 @@ from .tts import CozyVoiceHttpClient, TTSService, TTSUnavailable, TTSCancelled
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 from .jawl_web import JawlWebAdapter, JawlWebChatAdapter, JawlWebUnavailable
 from .ambient_memory import AmbientMemoryBuffer
-from .ambient_triage import AmbientTriageProvider, AmbientTriageUnavailable, OllamaTriageProvider
+from .ambient_triage import (
+    AmbientTriageProvider,
+    AmbientTriageUnavailable,
+    OllamaTriageProvider,
+    OpenAICompatibleTriageProvider,
+)
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioDisabled, AmbientAudioService
 from .asr import ASRUnavailable, ExternalASRService, OpenAICompatibleASRClient
 from .windows_pointer import WindowsPointerAdapter
@@ -58,6 +63,7 @@ __all__ = [
     "AmbientTriageProvider",
     "AmbientTriageUnavailable",
     "OllamaTriageProvider",
+    "OpenAICompatibleTriageProvider",
     "AmbientAudioASRBridge",
     "AmbientAudioDisabled",
     "AmbientAudioService",

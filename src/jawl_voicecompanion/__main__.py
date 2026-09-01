@@ -9,6 +9,7 @@ from pathlib import Path
 from .gateway import TextGateway
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
 from .ambient_memory import AmbientMemoryBuffer
+from .ambient_triage import OpenAICompatibleTriageProvider
 from .asr import ExternalASRService, OpenAICompatibleASRClient
 from .browser_adapter import BrowserAdapter
 from .avatar import AvatarAssetStore
@@ -178,6 +179,18 @@ def main() -> None:
         help="configure explicit Windows system-audio loopback controls (does not start capture)",
     )
     parser.add_argument(
+        "--ambient-triage-url",
+        default=None,
+        help="optional OpenAI-compatible delayed ambient-triage endpoint",
+    )
+    parser.add_argument(
+        "--ambient-triage-model",
+        default=None,
+        help="model name for --ambient-triage-url, for example Bonsai-1.7B",
+    )
+    parser.add_argument("--ambient-triage-api-key-env", default="AMBIENT_TRIAGE_API_KEY")
+    parser.add_argument("--ambient-triage-timeout", type=float, default=120.0)
+    parser.add_argument(
         "--tts-url",
         default=None,
         help="local CozyVoice REST base URL, for example http://127.0.0.1:9888",
@@ -288,7 +301,18 @@ def main() -> None:
         )
     else:
         asr_service = None
-    ambient_memory = AmbientMemoryBuffer(enabled=args.ambient_memory)
+    if args.ambient_triage_url or args.ambient_triage_model:
+        if not args.ambient_triage_url or not args.ambient_triage_model:
+            parser.error("--ambient-triage-url and --ambient-triage-model must be provided together")
+        triage_provider = OpenAICompatibleTriageProvider(
+            args.ambient_triage_url,
+            args.ambient_triage_model,
+            api_key=os.environ.get(args.ambient_triage_api_key_env, ""),
+            timeout=args.ambient_triage_timeout,
+        )
+    else:
+        triage_provider = None
+    ambient_memory = AmbientMemoryBuffer(enabled=args.ambient_memory, triage_provider=triage_provider)
     ambient_audio = None
     if args.ambient_audio:
         if voice_mem is None:

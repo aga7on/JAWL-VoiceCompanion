@@ -114,6 +114,14 @@ Russian ASR and not the Vision model. Bonsai 4B/8B stay available for later
 quality comparisons, but their extra memory and lower throughput do not justify
 placing them in the real-time loop now.
 
+The new OpenAI-compatible triage adapter was then tested against a live local
+Bonsai 1.7B `llama-server`. It returned schema-valid JSON with the expected
+`source_event_ids`, and the server was stopped after the request. The semantic
+decision for a synthetic “test tomorrow” observation was `ignore`, despite a
+high input confidence. This is a valid contract result but a quality warning:
+importance decisions need a calibration set and deterministic policy checks
+before unattended promotion to durable memory.
+
 ## Additional installed VLM candidate: Qwen3.8-27B
 
 The workstation also has a Qwen3.8-27B Q4_K_M plus F16 mmproj in the local

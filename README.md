@@ -186,6 +186,21 @@ user microphone turn.
 Install the optional Windows backend only when this feature is needed:
 `python -m pip install -e ".[system-audio]"`.
 
+Delayed ambient triage is also opt-in. For a local `llama-server` worker, start
+the companion with `--ambient-memory`, `--ambient-triage-url` and
+`--ambient-triage-model`; for example:
+
+```powershell
+.\scripts\run_web.ps1 --ambient-memory `
+  --ambient-triage-url "http://127.0.0.1:8991/v1" `
+  --ambient-triage-model "Ternary-Bonsai-1.7B"
+```
+
+The worker is called only by the explicit `/api/ambient-memory/triage` action,
+receives bounded text metadata rather than raw media or tools, and must return
+the validated JSON schema. Bonsai 1.7B is the first tested profile for this
+delayed role; it is not part of the real-time chat loop.
+
 To enable local CozyVoice REST TTS (start `G:\AI\CozyVoice\rest_api.py`
 separately), add its base URL:
 
