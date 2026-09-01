@@ -285,6 +285,11 @@ workflows, while semantic watcher tuning remains.
   hallucination. VoiceMem's streaming lifecycle/VAD boundary is therefore
   usable, but its bundled recognizer is not a Russian model; Qwen3-ASR stays
   the Russian acoustic candidate until true streaming Russian ASR is tested.
+- New external TTS samples were checked through Qwen3-ASR: TeraTTSv2 produced
+  the strongest current CPU/clarity profile (RTF 0.05–0.06, about 2.56 GB RAM,
+  exact welcome and nearly exact poem), while XTTS-v2 was slower and Pocket-TTS
+  was not intelligible in Russian. TeraTTSv2 is provisional only; prosody,
+  first-audio latency, cancellation and actual avatar-path integration remain.
 - A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
   Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
   the real Windows focused-window capture. It returned a bounded Russian

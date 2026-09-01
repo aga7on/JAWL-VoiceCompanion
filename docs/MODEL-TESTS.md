@@ -1,6 +1,6 @@
 # Local model test record
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 These tests use files already present on the workstation. No model weights are
 copied into this repository.
@@ -13,7 +13,7 @@ copied into this repository.
 | Final ASR bridge | Qwen3-ASR-0.6B Q8_0 + mmproj | Primary audio profile |
 | Streaming ASR/VAD | VoiceMem sidecar | Remains the default streaming owner |
 | Fast text fallback | Bonsai-1.7B | Retained from the benchmark; text-only |
-| TTS | OmniVoice / CozyVoice 2 / other installed candidates | Not selected yet; external comparison is in progress |
+| TTS | TeraTTSv2 (provisional) | Best current CPU/clarity candidate; prosody and adapter validation pending |
 
 ## Qwen3-VL-2B from the moved benchmark directory
 
@@ -73,6 +73,20 @@ claim.
 | Qwen3-TTS poem | 11.28 s | 2.16 s | Several word errors |
 | Chatterbox welcome | 6.04 s | 1.42 s | Correct short phrase |
 | Chatterbox poem | 10.40 s | 2.30 s | Several word/ending errors |
+
+Additional installed TTS candidates were checked with the same local Qwen3-ASR
+recognizer. TeraTTSv2 generated 4.9 s/11.3 s samples at RTF 0.06/0.05 with
+2.56 GB reported RAM; its welcome transcript was exact and the poem was
+essentially exact apart from a small lexical ending error. XTTS-v2 produced an
+exact welcome transcript and a mostly correct poem at RTF about 1.25–1.27 with
+3.27 GB RAM. Pocket-TTS was fast (RTF about 0.2) but its Russian samples were
+not intelligible to the Russian ASR check. These are acoustic intelligibility
+checks, not a subjective prosody or first-audio benchmark.
+
+Decision: treat TeraTTSv2 as the provisional TTS candidate for the next adapter
+experiment. Keep Qwen3-TTS/Chatterbox/XTTS-v2 available until prosody, startup,
+first-audio latency, cancellation and avatar lip-sync are measured through the
+actual Companion path. No TTS model is hard-coded as final yet.
 
 ## VoiceMem bundled streaming ASR/VAD
 
