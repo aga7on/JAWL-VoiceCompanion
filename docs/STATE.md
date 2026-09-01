@@ -40,7 +40,7 @@ separate CPU/RAM test completes.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the browser proposal/review execution slice.
-- Latest feature commit: pending (`feat: add browser proposal review execution`).
+- Latest feature commit: `66e8d57` (`feat: add browser proposal review execution`).
 
 ## Completed in this repository
 
