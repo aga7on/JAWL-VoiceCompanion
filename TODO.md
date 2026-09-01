@@ -40,7 +40,8 @@ Acceptance criteria:
 
 - [ ] Implement microphone input adapter.
 - [ ] Benchmark at least two Russian ASR candidates.
-- [ ] Connect external streaming ASR partials to VoiceMem `feed_partial`.
+- [ ] Connect external streaming ASR partials to the VoiceMem sidecar
+  `feed_partial` contract.
 - [ ] Deliver final transcript as `USER_FINAL`.
 - [ ] Implement CozyVoice 2 adapter.
 - [ ] Inspect and fix the local CozyVoice wrapper's non-streaming behavior.
@@ -62,6 +63,7 @@ Acceptance criteria:
 
 ## Phase 3 — VoiceMem sidecar and memory
 
+- [x] Define a transport-neutral VoiceMem sidecar contract.
 - [ ] Run VoiceMem as a separate local service.
 - [ ] Add request/session correlation IDs.
 - [ ] Add speculative recall and final recall events.

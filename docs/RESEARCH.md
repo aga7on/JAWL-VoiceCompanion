@@ -1,6 +1,6 @@
 # Repository Research
 
-Research snapshot: 2026-08-31. Reference repositories were downloaded as
+Research snapshot: 2026-09-01. Reference repositories were downloaded as
 shallow clones for inspection under `G:\AI\_tmp\companion-repos`.
 
 ## JAWL
@@ -34,6 +34,14 @@ Relevant strengths:
 
 Conclusion: use as a voice and sensory sidecar. Do not allow its right-brain
 profile to become a second canonical personality.
+
+Current integration finding: VoiceMem `0.2.3` exposes the useful lightweight
+boundary `VoiceMem.stream().feed_partial(text, ended=...)`; partial text does
+not require its audio models, and `ended=True` returns a completed `Turn` with
+retrieved memory. Its bundled `web/run.py` is a demo WebSocket application,
+not a stable sidecar protocol with request correlation. The companion should
+therefore put a small loopback adapter/runner around this boundary and keep
+VoiceMem in its own environment.
 
 ## Open-LLM-VTuber
 

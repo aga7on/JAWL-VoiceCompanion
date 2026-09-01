@@ -39,3 +39,5 @@
   execution, emergency stop, screen vision and deduplication.
 - Extended the E2E path through a local JAWL-compatible TCP terminal, covering
   the handshake and JSON-lines response before the result reaches HTTP state.
+- Recorded the concrete VoiceMem `stream.feed_partial` sidecar contract and
+  kept its heavyweight runtime outside the JAWL/web process boundary.

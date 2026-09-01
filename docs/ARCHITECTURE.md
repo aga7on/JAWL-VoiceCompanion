@@ -83,12 +83,18 @@ intent becomes spoken output.
 Owns streaming voice perception and returns structured observations. It may
 perform fast retrieval, but it cannot directly mutate JAWL personality traits.
 
-The adapter must support:
+The adapter must support the stable semantic boundary:
 
 ```text
 feed_partial(text, ended=False)
 feed_partial(text, ended=True)
 ```
+
+The current VoiceMem repository provides this method on `VoiceStream`, but its
+bundled WebSocket demo is not treated as the production protocol. A small
+loopback sidecar runner will own the VoiceMem environment and translate its
+results into `USER_PARTIAL`/`VOICE_TURN` events. The JAWL process receives only
+bounded observations and final user text.
 
 ### Voice Gateway
 

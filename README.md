@@ -66,6 +66,7 @@ for cancellation and priority.
 - [docs/RESEARCH.md](docs/RESEARCH.md) — repository study and findings;
 - [docs/DECISIONS.md](docs/DECISIONS.md) — accepted architectural decisions;
 - [docs/contracts/events.md](docs/contracts/events.md) — event contract;
+- [docs/contracts/voice.md](docs/contracts/voice.md) — VoiceMem sidecar contract;
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
 
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).

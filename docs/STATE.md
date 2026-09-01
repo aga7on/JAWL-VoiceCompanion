@@ -80,6 +80,11 @@ adapters are available only through explicitly constructed/configured paths.
 ## Known local observations
 
 - VoiceMem has an external-ASR integration point through `feed_partial`.
+- VoiceMem `0.2.3` returns a `StreamState` from `feed_partial`; `ended=True`
+  yields a completed `Turn`, while partial text avoids loading audio models.
+- VoiceMem's bundled `web/run.py` is a demo WebSocket and not a stable
+  correlated sidecar API; the transport-neutral contract is now recorded in
+  `docs/contracts/voice.md`.
 - VoiceMem's current default streaming ASR should not be assumed to be the
   final Russian ASR choice; a benchmark is required.
 - CozyVoice has a local REST wrapper, but its current `stream` path should be
@@ -104,6 +109,7 @@ adapters are available only through explicitly constructed/configured paths.
 - harden the initial HostOS session lifecycle and broaden audit coverage.
 - add semantic screen significance scoring and connect `SCREEN_DELTA` to
   Attention/Presence and JAWL's final wording path;
+- implement the minimal VoiceMem sidecar runner against the recorded contract;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
