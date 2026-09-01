@@ -59,7 +59,7 @@ JAWL, VoiceMem, HostOS or the OBS URL.
 - `validation.warnings` — non-fatal setup issues.
 
 When `ready` is false or the runtime throws, `/avatar` keeps the lightweight
-placeholder. Add `?debug=1` to see the reason. This makes an incomplete model
+reactive 2D fallback. Add `?debug=1` to see the reason. This makes an incomplete model
 an explicit degraded state instead of a blank OBS source.
 
 ## Desktop pet launcher

@@ -22,6 +22,9 @@
 - Added a policy-gated `desktop.keyboard` fallback for bounded Unicode text and
   one-to-four-key hotkeys, with foreground-window binding and a separate
   dispatch postcondition.
+- Upgraded the transparent avatar fallback from static geometry to a lightweight
+  reactive 2D face with expression, blink and speaking states; external Live2D
+  still takes precedence when a valid bundle is configured.
 
 - Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
   transient JPEG profile, exposes bounded coordinate-scale metadata and makes

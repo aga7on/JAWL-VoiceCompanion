@@ -623,7 +623,10 @@ class LocalE2ETests(unittest.TestCase):
         with urlopen(self.base + "/", timeout=3) as response:
             self.assertIn(b"attention-dnd", response.read())
         with urlopen(self.base + "/avatar", timeout=3) as response:
-            self.assertIn(b"JAWL Avatar", response.read())
+            avatar_html = response.read()
+            self.assertIn(b"JAWL Avatar", avatar_html)
+            self.assertIn(b'id="mouth"', avatar_html)
+            self.assertIn(b"2D FALLBACK", avatar_html)
         _, avatar_config = self.get_json("/api/avatar/config")
         self.assertTrue(avatar_config["enabled"])
         self.assertTrue(avatar_config["ready"])

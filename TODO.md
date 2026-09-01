@@ -134,9 +134,10 @@ Acceptance criteria:
   the asset-root contract and fatal Moc/texture validation are implemented,
   while a model/license choice is still pending.
 - [x] Add a transparent browser avatar surface and a copyable OBS URL.
-- [~] Replace the dependency-free avatar placeholder with the Live2D runtime;
-  optional runtime/model loading, validation and fallback are implemented, but
-  no licensed model/runtime is installed yet.
+- [~] Replace the dependency-free reactive 2D fallback with the Live2D runtime;
+  the fallback now has reactive face states, while optional runtime/model
+  loading and validation remain available; no licensed model/runtime is
+  installed yet.
 - [~] Add a native always-on-top desktop-pet window around the shared surface;
   `scripts/run_avatar_window.ps1` provides a bounded Edge/Chrome `--app`
   launcher, while true transparent compositing remains pending.

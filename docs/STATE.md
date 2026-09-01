@@ -43,8 +43,8 @@ workflows, while semantic watcher tuning remains.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the calibrated desktop pointer validation slice.
-- Latest feature commit: `8ff0697` (`feat: add calibrated desktop pointer fallback`).
+- Working tree: clean after the reactive 2D avatar validation slice.
+- Latest feature commit: current `HEAD` (`feat: improve reactive 2d avatar fallback`).
 
 ## Completed in this repository
 
@@ -70,7 +70,7 @@ workflows, while semantic watcher tuning remains.
 - Loopback browser surface supports chat, health/state display and policy-level
   selection using local session/CSRF headers.
 - Dedicated read-only `/avatar` surface renders a transparent OBS-ready
-  placeholder, bounded subtitle and response-envelope avatar state.
+  reactive 2D fallback, bounded subtitle and response-envelope avatar state.
 - Explicit `screen.observe` adapter provides an opt-in focused-window JPEG
   snapshot with size bounds, deny-list checks and no disk persistence.
 - JAWL terminal adapter understands the local `terminal.port` plus
@@ -94,6 +94,9 @@ workflows, while semantic watcher tuning remains.
 - The same path now includes `desktop.keyboard` for bounded Unicode text and
   one-to-four-key hotkeys, bound to the observed foreground window and covered
   by injected-backend unit/E2E tests.
+- The transparent avatar fallback now renders a lightweight reactive 2D face
+  with expression, blink and speaking animation. A valid user-supplied Live2D
+  bundle still replaces it; no third-party character asset was copied.
 - Browser adapter now supports bounded HTTP(S) navigation and delegates
   semantic actions to UIA; no browser automation runtime is installed yet.
 - Browser API exposes the tool registry and routes execution requests through
@@ -160,7 +163,7 @@ workflows, while semantic watcher tuning remains.
   controls.
 - The optional Live2D asset bridge serves only an explicitly configured root,
   exposes `/api/avatar/config`, loads a user-provided runtime/model pair and
-  falls back to the placeholder when the bundle is absent or incompatible.
+  falls back to the reactive 2D face when the bundle is absent or incompatible.
 - The avatar bridge validates model `FileReferences` relative to the model
   JSON, reports fatal Moc/texture gaps separately from optional warnings and
   exposes `ready` without leaking local paths.
@@ -460,7 +463,7 @@ preceding microphone slice is preserved in `36a808c` and the TTS slice in
 `a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
-placeholder remains the default. The web server's default executor remains dry-run and no VLM
+reactive 2D fallback remains the default. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; production semantic scoring and JAWL
 final-wording delivery, real custom-app pointer acceptance and pixel-level redaction,
 real-microphone ASR quality,

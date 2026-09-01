@@ -101,8 +101,8 @@ def build_doctor_report(
     avatar = avatar_assets.config() if avatar_assets is not None else {"ready": False}
     avatar_ready = bool(avatar.get("ready"))
     checks.append(_check(
-        "avatar", "ready" if avatar_ready else "placeholder",
-        "Live2D bundle" if avatar_ready else "Transparent placeholder avatar",
+        "avatar", "ready" if avatar_ready else "fallback",
+        "Live2D bundle" if avatar_ready else "Reactive transparent 2D fallback avatar",
         ready=avatar_ready,
         action="Supply a validated user-owned Live2D model/runtime bundle" if not avatar_ready else None,
     ))

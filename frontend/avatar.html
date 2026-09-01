@@ -11,9 +11,15 @@
     #live2d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
     #avatar { position: absolute; left: 50%; bottom: 7%; width: min(46vw, 360px); aspect-ratio: 3 / 4; transform: translateX(-50%); }
     #head { position: absolute; left: 17%; top: 2%; width: 66%; aspect-ratio: 1; border: 4px solid #b8d8ff; border-radius: 50%; background: radial-gradient(circle at 50% 38%, #4a536d 0 18%, #283044 48%, #17202f 100%); box-shadow: 0 0 28px #78aef477; }
-    #head::before, #head::after { content: ''; position: absolute; top: 43%; width: 10px; height: 10px; border-radius: 50%; background: #d8ecff; box-shadow: 0 0 10px #d8ecff; }
-    #head::before { left: 28%; }
-    #head::after { right: 28%; }
+    #head::before { content: ''; position: absolute; left: 24%; top: 14%; width: 52%; height: 16%; border-radius: 50%; background: #b8d8ff33; transform: rotate(-12deg); }
+    .eye { position: absolute; top: 42%; width: 13%; height: 14%; border: 2px solid #d8ecff; border-radius: 50%; background: #eef8ff; box-shadow: 0 0 10px #d8ecff; animation: blink 5.2s infinite; }
+    .eye::after { content: ''; position: absolute; left: 34%; top: 25%; width: 42%; height: 52%; border-radius: 50%; background: #293651; }
+    .eye-left { left: 24%; }
+    .eye-right { right: 24%; }
+    #mouth { position: absolute; left: 38%; top: 64%; width: 24%; height: 8%; border-bottom: 3px solid #d8ecff; border-radius: 0 0 50% 50%; transition: all .18s ease; }
+    .cheek { position: absolute; top: 59%; width: 13%; height: 6%; border-radius: 50%; background: #ff9eb855; opacity: 0; transition: opacity .18s ease; }
+    .cheek-left { left: 13%; }
+    .cheek-right { right: 13%; }
     #body { position: absolute; left: 7%; right: 7%; bottom: 0; height: 58%; border: 4px solid #88baff; border-bottom: 0; border-radius: 48% 48% 0 0; background: linear-gradient(135deg, #273a63, #151b2d 72%); box-shadow: 0 0 30px #5a9dff55; }
     #badge { position: absolute; left: 50%; top: 58%; transform: translate(-50%, -50%); padding: 5px 10px; border: 1px solid #a9d4ff88; border-radius: 999px; background: #121827cc; color: #cde5ff; font-size: clamp(10px, 1.4vw, 14px); letter-spacing: 0.08em; white-space: nowrap; }
     #subtitle { position: absolute; left: 50%; bottom: 1.5%; width: min(92vw, 720px); transform: translateX(-50%); padding: 8px 12px; border: 1px solid #9eb9d766; border-radius: 10px; background: #101522d9; text-align: center; font-size: clamp(12px, 1.8vw, 20px); line-height: 1.3; }
@@ -22,8 +28,19 @@
     .state-listening #head { box-shadow: 0 0 34px #b7e7ffcc; }
     .state-thinking #head { animation: thinking 1.4s ease-in-out infinite; }
     .state-speaking #badge { color: #fff1bc; border-color: #ffe49a; }
+    .state-speaking #mouth { animation: talk .16s ease-in-out infinite alternate; }
     .expression-concerned #head { filter: hue-rotate(295deg) saturate(0.8); }
     .expression-confused #head { filter: hue-rotate(35deg) saturate(1.15); }
+    .expression-happy #mouth { height: 15%; border-bottom-width: 4px; border-radius: 0 0 60% 60%; }
+    .expression-happy .cheek, .expression-surprised .cheek { opacity: 1; }
+    .expression-sad #mouth { top: 70%; border-bottom: 0; border-top: 3px solid #d8ecff; border-radius: 50% 50% 0 0; }
+    .expression-angry .eye { transform: rotate(12deg); }
+    .expression-angry #mouth { width: 30%; left: 35%; border-bottom-color: #ff9eae; }
+    .expression-surprised #mouth { width: 14%; height: 14%; left: 43%; border: 3px solid #d8ecff; border-radius: 50%; }
+    .expression-confused #mouth { transform: rotate(-8deg); }
+    .expression-concerned #mouth { width: 18%; left: 41%; }
+    @keyframes blink { 0%, 46%, 49%, 100% { transform: scaleY(1); } 47%, 48% { transform: scaleY(.08); } }
+    @keyframes talk { from { transform: scaleY(.65); } to { transform: scaleY(1.35); } }
     @keyframes thinking { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
   </style>
 </head>
@@ -31,9 +48,15 @@
   <div id="surface" aria-label="Прозрачная поверхность 2D-компаньона">
     <canvas id="live2d-canvas" class="hidden"></canvas>
     <div id="avatar" class="expression-neutral">
-      <div id="head"></div>
+      <div id="head">
+        <span class="eye eye-left"></span>
+        <span class="eye eye-right"></span>
+        <span class="cheek cheek-left"></span>
+        <span class="cheek cheek-right"></span>
+        <span id="mouth"></span>
+      </div>
       <div id="body"></div>
-      <div id="badge">LIVE2D PLACEHOLDER</div>
+      <div id="badge">2D FALLBACK</div>
     </div>
     <div id="subtitle" role="status"></div>
     <div id="debug" class="hidden"></div>
@@ -97,7 +120,7 @@
       const response = turn.response || {};
       const avatarState = response.avatar || {state: 'idle', expression: 'neutral'};
       const expression = safeExpression(avatarState.expression || response.emotion?.id);
-      avatar.className = `expression-${expression} state-${String(avatarState.state || 'idle').replace(/[^a-z0-9_-]/gi, '')}`;
+      avatar.className = `${live2d ? 'hidden ' : ''}expression-${expression} state-${String(avatarState.state || 'idle').replace(/[^a-z0-9_-]/gi, '')}`;
       subtitle.textContent = response.speak ? String(response.text || '').slice(0, 280) : '';
       if (live2d) {
         try {

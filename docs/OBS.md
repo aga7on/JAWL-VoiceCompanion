@@ -17,7 +17,7 @@ hand.
 3. Set the URL to `/avatar` from the running service.
 4. Enable a transparent page background and choose the canvas size for the
    future Live2D model, for example 800x800.
-5. If the placeholder is too small or too large, adjust the Browser Source
+5. If the 2D fallback is too small or too large, adjust the Browser Source
    dimensions; the surface scales to its source viewport.
 
 The page is read-only. It polls `/api/state`, displays the latest bounded
@@ -31,8 +31,8 @@ Add `?debug=1` temporarily to show state diagnostics in the upper-left corner:
 http://127.0.0.1:8765/avatar?debug=1
 ```
 
-The current visual is a dependency-free placeholder used to verify the
-transparent surface and lifecycle. The next avatar milestone replaces it
+The current visual is a dependency-free reactive 2D fallback used to verify the
+transparent surface, lifecycle and envelope-driven expressions. The next avatar milestone replaces it
 with a redistributable or user-supplied 2D Live2D model without changing the
 OBS URL or backend ownership boundaries.
 
@@ -64,7 +64,7 @@ The backend validates those fatal references relative to the model file and
 reports the result through `/api/avatar/config`; missing optional motion or
 expression files are warnings. The `/avatar` page loads this adapter only
 when the bundle is `ready`. Any missing or incompatible runtime keeps the
-placeholder active; add `?debug=1` to see the fallback reason. Model files are
+the reactive 2D fallback active; add `?debug=1` to see the fallback reason. Model files are
 served read-only from the explicit asset root and are not copied into this
 repository. The complete contract is in [contracts/avatar.md](contracts/avatar.md).
 

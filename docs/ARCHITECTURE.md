@@ -197,7 +197,7 @@ The avatar surface polls `/api/state` and renders the last response's bounded
 text, state and expression. It has no state-changing controls and does not
 receive session credentials. When an explicit asset bundle passes backend
 model validation, a tiny `Live2DCompanionRuntime` adapter replaces only the
-placeholder canvas; otherwise the dependency-free placeholder remains visible.
+reactive 2D fallback; otherwise the dependency-free fallback remains visible.
 JAWL, policy and memory ownership stay in the backend. `?debug=1` enables
 small diagnostics for local troubleshooting.
 
