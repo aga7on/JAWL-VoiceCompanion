@@ -20,7 +20,7 @@ work. Optional UIA, focused-window OS and VLM adapters remain explicit.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `a33f7b9` (`feat: add voicemem sidecar web bridge`).
+- Latest feature commit: `36a808c` (`feat: add browser microphone voice ingress`).
 
 ## Completed in this repository
 
@@ -128,12 +128,13 @@ E2E runner/tests and the related architecture/contracts/documentation in
 `307da25`; extended the JAWL adapter path in `1f1717d`; recorded the
 VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner,
 client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
-and final-turn routing in the current work session.
+and final-turn routing in `36a808c`.
 
 Verification for the current work session:
 `scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 58 tests;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings.
+The working tree is clean after commit `36a808c`.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
 model yet. The web server's default executor remains dry-run and no VLM
