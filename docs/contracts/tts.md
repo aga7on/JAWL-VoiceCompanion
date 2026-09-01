@@ -21,6 +21,8 @@ original text order. The provider boundary is model-neutral: selecting or
 replacing the TTS model does not change this contract. The current endpoint is
 still whole-response, so playback begins only after the merged WAV is ready;
 first-audio streaming remains a separate latency task.
+The browser may provide a bounded provider-specific `voice` identifier and a
+speed from `0.5` to `2.0`; these values do not select or imply a model.
 
 `POST /api/tts/cancel` accepts the authenticated session/CSRF pair and
 invalidates the active synthesis, if any. It is idempotent and returns a

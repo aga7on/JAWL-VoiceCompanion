@@ -39,8 +39,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the browser proposal/review execution slice.
-- Latest feature commit: `66e8d57` (`feat: add browser proposal review execution`).
+- Working tree: clean after the provider-neutral TTS controls slice.
+- Latest feature commit: pending (`feat: add provider-neutral TTS controls`).
 
 ## Completed in this repository
 
@@ -139,7 +139,8 @@ separate CPU/RAM test completes.
 - `TTSService` provides latest-request-wins cancellation; the CozyVoice REST
   adapter splits bounded text into sentences, merges WAV chunks and exposes
   transient audio through `/api/tts/synthesize`. The browser plays it only
-  when the provider is configured.
+  when the provider is configured, with provider-neutral voice and speed
+  controls.
 - The optional Live2D asset bridge serves only an explicitly configured root,
   exposes `/api/avatar/config`, loads a user-provided runtime/model pair and
   falls back to the placeholder when the bundle is absent or incompatible.
@@ -324,9 +325,10 @@ and benchmark protocol with unit coverage;
 Vision/VLM remains model-neutral and paused by explicit decision.
 
 The current TTS follow-up adds bounded parallel sentence requests with
-source-order merge, explicit server cancellation, browser request abort and
-focused concurrency/cancellation regression tests. No TTS model is selected
-in this session; first-audio streaming remains pending.
+source-order merge, explicit server cancellation, browser request abort,
+provider-neutral voice/speed controls and focused concurrency/cancellation
+regression tests. No TTS model is selected in this session; first-audio
+streaming remains pending.
 
 The current HostOS follow-up adds bounded file snapshots and conditional
 workspace writes with stale-file rejection, plus a browser proposal/review and

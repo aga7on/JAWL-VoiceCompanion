@@ -133,7 +133,9 @@ Acceptance criteria:
   `scripts/run_avatar_window.ps1` provides a bounded Edge/Chrome `--app`
   launcher, while true transparent compositing remains pending.
 - [ ] Implement transparent desktop-pet mode.
-- [ ] Add settings for persona, voice, memory, proactivity and privacy.
+- [~] Add settings for persona, voice, memory, proactivity and privacy;
+  provider-neutral TTS voice/speed controls are now present, while durable
+  persona/memory/privacy settings remain tied to their owning services.
 - [~] Add visible listening/screen-observation indicators; the browser now
   exposes ambient-memory consent and system-audio loopback state, while the
   native pet indicator and full screen-capture status remain.

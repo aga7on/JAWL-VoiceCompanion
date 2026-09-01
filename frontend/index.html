@@ -33,6 +33,10 @@
       <button id="mic" type="button">🎙️ Включить микрофон</button>
       <span id="mic-status" class="meta">Микрофон выключен.</span>
       <div id="tts-status" class="meta">TTS выключен.</div>
+      <label for="tts-voice">Голос провайдера (не модель)</label>
+      <input id="tts-voice" type="text" maxlength="120" placeholder="оставить по умолчанию" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
+      <label for="tts-speed">Скорость речи</label>
+      <input id="tts-speed" type="number" min="0.5" max="2" step="0.05" value="1" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
     </section>
     <section>
       <h2>HostOS</h2>
@@ -90,6 +94,8 @@
     const messages = document.querySelector('#messages');
     const input = document.querySelector('#input');
     const health = document.querySelector('#health');
+    const ttsVoice = document.querySelector('#tts-voice');
+    const ttsSpeed = document.querySelector('#tts-speed');
     let sessionHeaders = {};
     let voice = null;
     let voiceQueue = Promise.resolve();
@@ -225,13 +231,15 @@
       if (!ttsConfigured || !text) return;
       await stopSpeech();
       bargeInTriggered = false;
+      const speed = Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1));
+      ttsSpeed.value = speed;
       const controller = new AbortController();
       ttsAbort = controller;
       try {
         const response = await fetch('/api/tts/synthesize', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', ...sessionHeaders},
-          body: JSON.stringify({text}),
+          body: JSON.stringify({text, voice: ttsVoice.value.trim() || null, speed}),
           signal: controller.signal
         });
         if (!response.ok) return;
