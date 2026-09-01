@@ -209,8 +209,17 @@ tuning remain.
   installed or cannot initialize.
 - The external CPU/RAM audio benchmark selected Qwen3-ASR-0.6B for Russian
   speech experiments (RTF 0.13–0.15, about 1.48 GB peak RAM on the supplied
-  samples). It is not yet connected to the streaming VoiceMem bridge or
-  validated on a live microphone.
+  samples). A local `llama-server` `/v1/audio/transcriptions` smoke passed;
+  the bounded final-utterance adapter now forwards its transcript to the
+  VoiceMem `feed_partial(..., ended=True)` boundary. True streaming Qwen
+  partials and live Russian microphone quality remain pending.
+- The temporary OpenAI-compatible chat adapter accepts a configurable URL,
+  model and environment-held key for provider experiments. TokenRouter with
+  `z-ai/glm-5.3-free` reached HTTP 200 during the smoke, but one short request
+  returned an empty `message.content`; this profile is not treated as a
+  JAWL/QWB compatibility proof. The canonical path remains the JAWL web or
+  terminal bridge, where JAWL owns JSON tool/action envelopes, persona,
+  memory and Heartbeat.
 - The operator's 2026-09-01 CPU/RAM benchmark selected
   `Qwen3-VL-2B-Q4_K_M.gguf` with `Qwen3-VL-2B-mmproj-F16.gguf` as the primary
   VLM profile: approximately 28–36 tok/s, 4.1 GB peak RAM, strong image/video

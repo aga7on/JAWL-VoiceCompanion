@@ -409,3 +409,10 @@ The runtime should distinguish:
 
 Each profile needs health, readiness, latency and fallback reporting. Missing
 optional models must result in a degraded mode, not a broken startup.
+
+The current benchmark profile is Qwen3-VL-2B for Vision/UI grounding and
+Qwen3-ASR-0.6B for audio. The latter is available in the Companion as an
+explicit final-utterance adapter while VoiceMem remains the default streaming
+ASR path. A temporary OpenAI-compatible chat URL (currently TokenRouter/GLM
+for testing) is a transport probe only; it does not replace JAWL's JSON action
+envelope, persona, memory or Heartbeat.

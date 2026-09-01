@@ -44,6 +44,9 @@ Acceptance criteria:
 - [x] Implement the bounded browser microphone input adapter and PCM16 sidecar path.
 - [x] Benchmark Russian ASR candidates; the external CPU/RAM comparison
   selected Qwen3-ASR-0.6B, while live microphone integration remains.
+- [x] Add the bounded Qwen3-ASR final-utterance adapter through the local
+  `/v1/audio/transcriptions` contract; streaming Qwen partial ASR remains a
+  separate task.
 - [x] Connect external streaming ASR partials to the VoiceMem sidecar
   `feed_partial` contract.
 - [x] Deliver the VoiceMem final transcript through the JAWL user-turn gateway.
@@ -63,6 +66,8 @@ Acceptance criteria:
   aborts playback/request and calls the explicit cancel route, while barge-in
   integration remains.
 - [ ] Add half-duplex hands-free mode.
+- [ ] Add a true streaming Qwen3-ASR partial provider if a stable streaming
+  contract is confirmed; do not infer it from the batch transcription API.
 - [~] Add barge-in capture and interruption classification; browser RMS
   activity now cancels active speech/generation once, while VoiceMem-based
   classification and full half-duplex behavior remain.

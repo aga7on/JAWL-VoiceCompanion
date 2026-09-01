@@ -44,6 +44,7 @@ def build_doctor_report(
     hostos: Any,
     vision: Any,
     voice_mem: Any | None = None,
+    asr: Any | None = None,
     tts: Any | None = None,
     avatar_assets: Any | None = None,
     ambient_memory: Any | None = None,
@@ -71,6 +72,14 @@ def build_doctor_report(
     checks.append(_check(
         "voicemem", voice_status, "VoiceMem streaming sidecar",
         action="Configure --voicemem-python for voice input" if voice_status == "not_configured" else None,
+    ))
+
+    asr_health = _health(asr)
+    asr_status = str(asr_health.get("status", "degraded"))
+    checks.append(_check(
+        "asr", asr_status, "External final-utterance ASR" if asr is not None else "External ASR is disabled",
+        ready=asr is None or asr_status in {"connected", "online", "ready", "ok"},
+        action="Configure --asr-url and --asr-model for Qwen3-ASR" if asr is None else None,
     ))
 
     speech = _health(tts)

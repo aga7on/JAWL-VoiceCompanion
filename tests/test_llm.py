@@ -1,0 +1,74 @@
+import json
+import sys
+import threading
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
+
+from jawl_voicecompanion.llm import OpenAICompatibleChatClient  # noqa: E402
+
+
+class _Response:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self, _limit):
+        return json.dumps(self.payload).encode("utf-8")
+
+
+class LLMTests(unittest.TestCase):
+    def test_client_normalizes_endpoint_and_removes_hidden_reasoning(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return _Response({
+                "choices": [{"message": {"content": "<think>secret</think><final>Готово.</final>"}}],
+            })
+
+        client = OpenAICompatibleChatClient(
+            "http://127.0.0.1:8000/v1",
+            "z-ai/glm-5.3-free",
+            api_key="test-key",
+            opener=opener,
+        )
+        self.assertEqual(client.respond("Проверь контур"), "Готово.")
+        self.assertEqual(requests[0].full_url, "http://127.0.0.1:8000/v1/chat/completions")
+        self.assertEqual(requests[0].get_header("Authorization"), "Bearer test-key")
+        body = json.loads(requests[0].data.decode("utf-8"))
+        self.assertEqual(body["model"], "z-ai/glm-5.3-free")
+        self.assertEqual(body["messages"][-1]["content"], "Проверь контур")
+
+    def test_client_health_uses_models_endpoint(self):
+        def opener(request, timeout):
+            self.assertEqual(request.full_url, "http://127.0.0.1:8000/v1/models")
+            return _Response({"data": []})
+
+        result = OpenAICompatibleChatClient("http://127.0.0.1:8000/v1", "glm", opener=opener).health()
+        self.assertEqual(result["status"], "online")
+
+    def test_cancelled_request_is_not_sent(self):
+        called = []
+
+        def opener(request, timeout):
+            called.append(True)
+            return _Response({})
+
+        cancel = threading.Event()
+        cancel.set()
+        with self.assertRaisesRegex(Exception, "cancelled"):
+            OpenAICompatibleChatClient("http://127.0.0.1:8000/v1", "glm", opener=opener).respond(
+                "тест", cancel_event=cancel,
+            )
+        self.assertEqual(called, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

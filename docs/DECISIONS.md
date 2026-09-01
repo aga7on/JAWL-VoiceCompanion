@@ -326,3 +326,32 @@ window, `screen.observe` returns only bounded `coordinate_scale` metadata.
 Any future UI action must map coordinates back to the original window and then
 pass the normal stale-target, risk and approval gates; the metadata is never
 an authorization signal.
+
+## ADR-023 - Keep provider experiments outside the JAWL ownership boundary
+
+Status: Accepted
+Date: 2026-09-01
+
+JAWL remains the canonical conversation brain: persona, durable memory,
+Heartbeat and native autonomy are not duplicated in the Companion. A direct
+OpenAI-compatible chat adapter is allowed only as a temporary model/provider
+test path selected through CLI arguments and an environment-held API key. It
+does not claim JAWL state and is mutually exclusive with the JAWL transport
+adapters.
+
+This keeps TokenRouter, a future local LLM, or another provider replaceable.
+Once a model is selected for regular operation, it should be configured in
+JAWL's own provider path rather than making the Companion a second brain.
+
+## ADR-024 - Add Qwen3-ASR as an explicit final-utterance option
+
+Status: Accepted
+Date: 2026-09-01
+
+The supplied CPU/RAM benchmark selects Qwen3-ASR-0.6B as the current audio
+candidate. The local `llama-server` endpoint was verified with multipart
+`/v1/audio/transcriptions`, but that endpoint does not establish a streaming
+partial-ASR contract. Therefore the Companion keeps VoiceMem's streaming path
+as the default and adds Qwen only as an opt-in, bounded final-utterance
+adapter. Audio is held in RAM for one short session, transcribed once on
+explicit end, forwarded as one final VoiceMem partial, and discarded.

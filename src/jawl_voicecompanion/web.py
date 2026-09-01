@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from .approvals import ApprovalStore
 from .ambient_audio import AmbientAudioDisabled, AmbientAudioService
 from .ambient_memory import AmbientMemoryBuffer
+from .asr import ASRUnavailable, ExternalASRService
 from .audit import AuditLog
 from .attention import AttentionPresence
 from .avatar import AvatarAssetStore
@@ -52,6 +53,7 @@ class CompanionServer(ThreadingHTTPServer):
         ambient_audio: AmbientAudioService | None = None,
         jawl_hostos_control: bool = False,
         audit_log: AuditLog | None = None,
+        asr_service: ExternalASRService | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -64,6 +66,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.attention = attention or AttentionPresence()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
         self.ambient_audio = ambient_audio
+        self.asr = asr_service
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
         self.approvals = ApprovalStore(hostos_executor)
@@ -79,6 +82,8 @@ class CompanionServer(ThreadingHTTPServer):
         self.hostos.stop_all()
         if self.voice_mem is not None:
             self.voice_mem.close()
+        if self.asr is not None:
+            self.asr.close()
         if self.tts is not None:
             self.tts.close()
         super().server_close()
@@ -98,6 +103,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 hostos=self.server.hostos,
                 vision=self.server.vision,
                 voice_mem=self.server.voice_mem,
+                asr=self.server.asr,
                 tts=self.server.tts,
                 avatar_assets=self.server.avatar_assets,
                 ambient_memory=self.server.ambient_memory,
@@ -173,13 +179,23 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json(self.server.ambient_audio.state())
             return
         if path == "/api/voice/status":
-            if self.server.voice_mem is None:
+            if self.server.voice_mem is None and self.server.asr is None:
                 self._json({"configured": False, "status": "not_configured"})
                 return
-            try:
-                self._json({"configured": True, **self.server.voice_mem.health()})
-            except VoiceMemUnavailable as exc:
-                self._json({"configured": True, "status": "degraded", "reason": str(exc)})
+            result: dict[str, Any] = {"configured": True}
+            if self.server.voice_mem is not None:
+                try:
+                    voicemem = self.server.voice_mem.health()
+                except VoiceMemUnavailable as exc:
+                    voicemem = {"status": "degraded", "reason": str(exc)}
+                result.update(voicemem)
+                result["voicemem"] = voicemem
+            if self.server.asr is not None:
+                result["asr"] = self.server.asr.health()
+                result["mode"] = "external_final_utterance"
+            else:
+                result["mode"] = "voicemem_streaming"
+            self._json(result)
             return
         if path == "/api/tts/status":
             if self.server.tts is None:
@@ -296,7 +312,16 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 sample_rate = payload.get("sample_rate", 16000)
                 if isinstance(sample_rate, bool) or not isinstance(sample_rate, int):
                     raise ValueError("sample_rate must be an integer")
+                channels = payload.get("channels", 1)
+                if isinstance(channels, bool) or not isinstance(channels, int):
+                    raise ValueError("channels must be an integer")
                 session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+                if self.server.asr is not None:
+                    buffered = self.server.asr.feed_audio(
+                        pcm16, sample_rate=sample_rate, channels=channels, session_id=session_id
+                    )
+                    self._json({"ok": True, "mode": "external_final_utterance", "events": [], "responses": [], "buffer": buffered})
+                    return
                 events = self.server.voice_mem.feed_audio(
                     pcm16, sample_rate=sample_rate, session_id=session_id
                 )
@@ -312,6 +337,23 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+                if self.server.asr is not None:
+                    transcription = self.server.asr.finish(session_id)
+                    if transcription["status"] == "empty":
+                        self._json({"ok": True, "mode": "external_final_utterance", "transcript": "", "events": [], "responses": []})
+                        return
+                    events = self.server.voice_mem.feed_partial(
+                        transcription["text"], ended=True, session_id=session_id
+                    )
+                    responses = self._voice_turn_responses(events, session_id)
+                    self._json({
+                        "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
+                        "mode": "external_final_utterance",
+                        "transcript": transcription["text"],
+                        "events": events,
+                        "responses": responses,
+                    })
+                    return
                 events = self.server.voice_mem.end_audio(session_id=session_id)
                 responses = self._voice_turn_responses(events, session_id)
                 self._json({
@@ -472,6 +514,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
         except VoiceMemUnavailable as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+        except ASRUnavailable as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except AmbientAudioDisabled as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
         except SystemAudioUnavailable as exc:
@@ -563,6 +607,7 @@ def create_server(
     ambient_audio: AmbientAudioService | None = None,
     jawl_hostos_control: bool = False,
     audit_file: Path | None = None,
+    asr_service: ExternalASRService | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -614,6 +659,7 @@ def create_server(
         ambient_audio=ambient_audio,
         jawl_hostos_control=jawl_hostos_control,
         audit_log=audit_log,
+        asr_service=asr_service,
     )
     if watcher is not None:
         watcher.start()

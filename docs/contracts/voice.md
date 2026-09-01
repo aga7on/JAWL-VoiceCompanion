@@ -43,6 +43,24 @@ streaming ASR and VAD choice. A `type=end_audio` request sends bounded silence
 to finish an active phrase when capture is stopped. Audio is not persisted or
 included in output events; chunks are limited to 48 KiB.
 
+## Optional external final ASR
+
+An OpenAI-compatible audio provider may be configured with `--asr-url` and
+`--asr-model`. This mode is intended for Qwen3-ASR-0.6B and similar providers
+that expose `/v1/audio/transcriptions` but do not guarantee streaming partial
+results. While a browser microphone is active, `/api/voice/audio` appends
+bounded PCM16 data to one in-memory session and returns `buffered`; it does
+not call VoiceMem or JAWL for every chunk. On `/api/voice/end`, the provider
+receives one transient WAV, its normalized transcript is passed to
+`VoiceMem.stream.feed_partial(text, ended=True)`, and only the resulting
+`VOICE_TURN` reaches JAWL. The raw WAV is discarded immediately after the
+provider call, including on failure.
+
+The external buffer is limited to eight sessions and 4 MiB per utterance, with
+a 120-second idle TTL. Audio format cannot change within a session. Health
+reports the explicit `final_utterance` mode; it must not be presented as
+real-time partial ASR until a provider with a streaming contract is added.
+
 ## Output events
 
 Partial output:
@@ -121,11 +139,13 @@ ambient event is converted into JAWL `USER_FINAL`, speech or a tool call.
 The repository contains the runner in `services/voicemem_sidecar.py`, the
 stdlib client in `src/jawl_voicecompanion/voicemem_client.py` and the web
 bridges at `/api/voice/partial`, `/api/voice/audio` and `/api/voice/end`.
-The current microphone path is an input adapter; Russian ASR benchmarking,
-AEC and production model warmup remain Phase 2 work. The browser has a bounded
-RMS activity trigger that requests TTS cancellation once while speech is
-active; it does not promote that signal to `BARGE_IN` or `USER_FINAL`. VoiceMem
-still decides whether the subsequent audio is a valid conversational turn.
+The optional external client is in
+`src/jawl_voicecompanion/asr.py`; the current microphone path remains an
+input adapter. Russian ASR quality, AEC, real-device capture and production
+model warmup remain validation work. The browser has a bounded RMS activity
+trigger that requests TTS cancellation once while speech is active; it does
+not promote that signal to `BARGE_IN` or `USER_FINAL`. VoiceMem still decides
+whether the subsequent audio is a valid conversational turn.
 
 The optional system-audio lifecycle is exposed separately at
 `GET /api/ambient-audio`, `POST /api/ambient-audio/start` and

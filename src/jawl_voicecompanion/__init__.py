@@ -19,6 +19,8 @@ from .jawl_web import JawlWebAdapter, JawlWebChatAdapter, JawlWebUnavailable
 from .ambient_memory import AmbientMemoryBuffer
 from .ambient_triage import AmbientTriageProvider, AmbientTriageUnavailable, OllamaTriageProvider
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioDisabled, AmbientAudioService
+from .asr import ASRUnavailable, ExternalASRService, OpenAICompatibleASRClient
+from .llm import LLMUnavailable, OpenAICompatibleChatClient
 from .system_audio import SystemAudioLoopback, SystemAudioUnavailable
 from .audit import AuditLog
 
@@ -57,6 +59,11 @@ __all__ = [
     "AmbientAudioASRBridge",
     "AmbientAudioDisabled",
     "AmbientAudioService",
+    "ASRUnavailable",
+    "ExternalASRService",
+    "OpenAICompatibleASRClient",
+    "LLMUnavailable",
+    "OpenAICompatibleChatClient",
     "SystemAudioLoopback",
     "SystemAudioUnavailable",
     "AuditLog",

@@ -9,11 +9,13 @@ from pathlib import Path
 from .gateway import TextGateway
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
 from .ambient_memory import AmbientMemoryBuffer
+from .asr import ExternalASRService, OpenAICompatibleASRClient
 from .browser_adapter import BrowserAdapter
 from .avatar import AvatarAssetStore
 from .jawl_adapter import JawlTerminalAdapter
 from .jawl_web import JawlWebChatAdapter
 from .hostos_tools import HostOSExecutor
+from .llm import OpenAICompatibleChatClient
 from .screen_adapter import ScreenCaptureAdapter
 from .tts import CozyVoiceHttpClient, TTSService
 from .vision import OpenAICompatibleVisionClient
@@ -51,6 +53,14 @@ def main() -> None:
     )
     parser.add_argument("--jawl-web-timeout", type=float, default=2.0)
     parser.add_argument("--jawl-chat-timeout", type=float, default=120.0)
+    parser.add_argument(
+        "--llm-url",
+        default=None,
+        help="optional OpenAI-compatible chat endpoint; mutually exclusive with JAWL adapters",
+    )
+    parser.add_argument("--llm-model", default=None, help="chat model name for --llm-url")
+    parser.add_argument("--llm-api-key-env", default="LLM_API_KEY")
+    parser.add_argument("--llm-timeout", type=float, default=120.0)
     parser.add_argument(
         "--hostos-live",
         action="store_true",
@@ -143,6 +153,19 @@ def main() -> None:
     parser.add_argument("--voicemem-mode", default="normal")
     parser.add_argument("--voicemem-audio-rate", type=int, default=16000)
     parser.add_argument(
+        "--asr-url",
+        default=None,
+        help="optional OpenAI-compatible final-utterance ASR endpoint; requires --asr-model",
+    )
+    parser.add_argument(
+        "--asr-model",
+        default=None,
+        help="ASR model name for --asr-url, for example Qwen3-ASR-0.6B",
+    )
+    parser.add_argument("--asr-api-key-env", default="ASR_API_KEY")
+    parser.add_argument("--asr-timeout", type=float, default=30.0)
+    parser.add_argument("--asr-max-utterance-bytes", type=int, default=4 * 1024 * 1024)
+    parser.add_argument(
         "--ambient-memory",
         action="store_true",
         help="enable bounded ambient evidence; capture remains stopped until enabled in the browser",
@@ -175,6 +198,8 @@ def main() -> None:
     responder = None
     brain_name = "phase1_mock_brain"
     jawl_web = None
+    if (args.llm_url or args.llm_model) and (args.jawl_web_url or args.jawl_port_file):
+        parser.error("--llm-url/--llm-model cannot be combined with a JAWL adapter")
     if args.jawl_web_url:
         try:
             jawl_web = JawlWebChatAdapter(
@@ -190,6 +215,16 @@ def main() -> None:
     elif args.jawl_port_file:
         responder = JawlTerminalAdapter(args.jawl_port_file)
         brain_name = "jawl_terminal"
+    elif args.llm_url or args.llm_model:
+        if not args.llm_url or not args.llm_model:
+            parser.error("--llm-url and --llm-model must be provided together")
+        responder = OpenAICompatibleChatClient(
+            args.llm_url,
+            args.llm_model,
+            api_key=os.environ.get(args.llm_api_key_env, ""),
+            timeout_seconds=args.llm_timeout,
+        )
+        brain_name = "openai_compatible_chat"
     if args.jawl_hostos_control and not args.jawl_web_url:
         parser.error("--jawl-hostos-control requires --jawl-web-url")
     if args.jawl_hostos_control and not os.environ.get(args.jawl_web_token_env, ""):
@@ -235,6 +270,20 @@ def main() -> None:
         if args.voicemem_python
         else None
     )
+    if args.asr_url or args.asr_model:
+        if not args.asr_url or not args.asr_model:
+            parser.error("--asr-url and --asr-model must be provided together")
+        asr_service = ExternalASRService(
+            OpenAICompatibleASRClient(
+                args.asr_url,
+                args.asr_model,
+                api_key=os.environ.get(args.asr_api_key_env, ""),
+                timeout_seconds=args.asr_timeout,
+            ),
+            max_utterance_bytes=args.asr_max_utterance_bytes,
+        )
+    else:
+        asr_service = None
     ambient_memory = AmbientMemoryBuffer(enabled=args.ambient_memory)
     ambient_audio = None
     if args.ambient_audio:
@@ -268,6 +317,7 @@ def main() -> None:
         jawl_event_dir=args.jawl_event_dir,
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
+        asr_service=asr_service,
         activity_provider=(
             WindowsUserActivity(args.user_activity_idle_seconds).sample
             if args.user_activity else None

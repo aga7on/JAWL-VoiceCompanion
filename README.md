@@ -131,6 +131,21 @@ The public loopback `GET /api/doctor` endpoint provides a bounded first-run
 readiness report for JAWL, VoiceMem, TTS, vision, Live2D and HostOS; missing
 optional services are reported as degraded while text-only chat remains usable.
 
+For temporary main-model experiments, an OpenAI-compatible chat provider can
+be selected without changing the JAWL bridge:
+
+```powershell
+$env:TOKENROUTER_API_KEY = "set-this-only-in-your-shell"
+.\scripts\run_web.ps1 --port 8766 `
+  --llm-url "https://api.tokenrouter.com/v1" `
+  --llm-model "z-ai/glm-5.3-free" `
+  --llm-api-key-env TOKENROUTER_API_KEY
+```
+
+This is a temporary direct brain for model/provider tests. It does not claim
+JAWL's persona, durable memory or Heartbeat; use `--jawl-web-url` for the
+canonical JAWL conversation path.
+
 To enable the external-ASR text bridge through the VoiceMem sidecar, point
 the web process at VoiceMem's Python environment:
 
@@ -144,6 +159,17 @@ has an opt-in microphone button: it sends bounded mono PCM16 chunks to
 `/api/voice/audio`, and `/api/voice/end` flushes an active phrase. VoiceMem's
 own streaming ASR/VAD runs in its separate environment. Russian ASR quality,
 AEC and barge-in still require a real-device benchmark.
+
+The selected Qwen3-ASR-0.6B profile can be tested through the optional
+final-utterance bridge. Start its CPU server with
+`.\scripts\run_asr_server.ps1`, then add `--asr-url
+"http://127.0.0.1:8984/v1" --asr-model "Qwen3-ASR-0.6B"` to `run_web.ps1`.
+The browser keeps sending small PCM16 chunks, but the Companion buffers one
+bounded utterance in RAM and sends it to `/v1/audio/transcriptions` only on
+`/api/voice/end`; the resulting text then enters VoiceMem as one final
+`feed_partial`. This is deliberately a final-utterance mode, not yet
+streaming Qwen partial ASR. Without `--asr-url`, the existing VoiceMem
+streaming path remains active.
 
 System-audio capture is separately opt-in. Configure it with
 `--ambient-audio --voicemem-python <path>`; enable `--ambient-memory` or the
@@ -184,6 +210,7 @@ for cancellation and priority.
 - [docs/contracts/events.md](docs/contracts/events.md) — event contract;
 - [docs/contracts/voice.md](docs/contracts/voice.md) — VoiceMem sidecar contract;
 - [docs/contracts/tts.md](docs/contracts/tts.md) — TTS provider and cancellation contract;
+- [docs/contracts/llm.md](docs/contracts/llm.md) — temporary chat-provider and JAWL/QWB boundary;
 - [docs/contracts/jawl.md](docs/contracts/jawl.md) — read-only JAWL bridge contract;
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
 - [docs/AMBIENT_TRIAGE_BENCHMARK.md](docs/AMBIENT_TRIAGE_BENCHMARK.md) — delayed audio-triage benchmark protocol.

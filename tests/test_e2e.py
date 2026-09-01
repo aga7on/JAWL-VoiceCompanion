@@ -19,6 +19,7 @@ from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
 from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge, AmbientAudioService  # noqa: E402
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
+from jawl_voicecompanion.asr import ExternalASRService, OpenAICompatibleASRClient  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
@@ -81,6 +82,41 @@ class _TTSHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
+class _ASRHandler(BaseHTTPRequestHandler):
+    requests = []
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/health":
+            self.send_error(404)
+            return
+        body = b'{"status":"ok"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/v1/audio/transcriptions":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        _ASRHandler.requests.append(body)
+        response = json.dumps({
+            "type": "transcript.text.done",
+            "text": "language Russian<asr_text>ASR E2E фраза.</asr_text>",
+        }, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
 
     def log_message(self, format, *args):
         return
@@ -982,6 +1018,82 @@ class LocalE2ETests(unittest.TestCase):
         _, flushed = self.post_json("/api/voice/end", {"session_id": "voice-audio-flush"})
         self.assertEqual([event["type"] for event in flushed["events"]], ["VOICE_TURN"])
         self.assertEqual(flushed["responses"][0]["text"], "JAWL E2E: аудио")
+
+    def test_external_asr_final_utterance_reaches_voicemem_and_chat(self):
+        provider = ThreadingHTTPServer(("127.0.0.1", 0), _ASRHandler)
+        _ASRHandler.requests = []
+        threading.Thread(target=provider.serve_forever, daemon=True).start()
+        policy = HostOSPolicy()
+        gateway = TextGateway(policy=policy, responder=self.jawl_adapter, brain_name="e2e_asr")
+        executor = HostOSExecutor(
+            policy,
+            Path(self.temp.name) / "asr-sandbox",
+            workspace_roots=(Path(self.temp.name),),
+            host_roots=(Path(self.temp.name),),
+            dry_run=False,
+        )
+        voice_mem = VoiceMemProcessClient(sys.executable, args=("--test-stub",), timeout_seconds=2)
+        asr = ExternalASRService(OpenAICompatibleASRClient(
+            f"http://127.0.0.1:{provider.server_port}/v1",
+            "Qwen3-ASR-0.6B",
+            timeout_seconds=2,
+        ))
+        server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=gateway,
+            hostos_executor=executor,
+            voice_mem=voice_mem,
+            asr_service=asr,
+        )
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        headers = {
+            "X-Companion-Session": server.session_token,
+            "X-Companion-CSRF": server.csrf_token,
+        }
+
+        def post(path, payload):
+            request = Request(
+                base + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", **headers},
+                method="POST",
+            )
+            with urlopen(request, timeout=3) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+
+        try:
+            _, status = self._get_json_from(base, "/api/voice/status", headers)
+            self.assertEqual(status["mode"], "external_final_utterance")
+            self.assertEqual(status["asr"]["mode"], "final_utterance")
+            _, buffered = post("/api/voice/audio", {
+                "session_id": "external-s1",
+                "sample_rate": 16000,
+                "channels": 1,
+                "pcm16_base64": base64.b64encode(b"\x01\x00" * 1600).decode("ascii"),
+            })
+            self.assertEqual(buffered["mode"], "external_final_utterance")
+            self.assertEqual(buffered["events"], [])
+            self.assertEqual(buffered["buffer"]["bytes"], 3200)
+
+            _, finished = post("/api/voice/end", {"session_id": "external-s1"})
+            self.assertEqual(finished["transcript"], "ASR E2E фраза.")
+            self.assertEqual([event["type"] for event in finished["events"]], ["USER_PARTIAL", "VOICE_TURN"])
+            self.assertEqual(finished["responses"][0]["text"], "JAWL E2E: ASR E2E фраза.")
+            self.assertTrue(_ASRHandler.requests)
+            self.assertIn(b"Qwen3-ASR-0.6B", _ASRHandler.requests[0])
+        finally:
+            server.shutdown()
+            server.server_close()
+            provider.shutdown()
+            provider.server_close()
+
+    @staticmethod
+    def _get_json_from(base, path, headers):
+        request = Request(base + path, headers=headers)
+        with urlopen(request, timeout=3) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
 
     def test_screen_capture_vlm_dedup_and_bounded_screen_delta(self):
         self.post_json("/api/hostos/level", {"level": int(AccessLevel.OBSERVER)})

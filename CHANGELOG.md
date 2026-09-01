@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added an optional OpenAI-compatible chat adapter for temporary model tests;
+  API keys stay in environment variables and JAWL remains the canonical
+  persona, memory, Heartbeat and JSON action owner.
+- Added a Qwen3-ASR-0.6B-compatible CPU server launcher and bounded
+  final-utterance bridge. PCM16 chunks stay in RAM until explicit end, then
+  one transcript enters VoiceMem's final event path; the default VoiceMem
+  streaming path is unchanged.
+
 - Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
   transient JPEG profile, exposes bounded coordinate-scale metadata and makes
   the profile visible through `/api/vision/status`.
