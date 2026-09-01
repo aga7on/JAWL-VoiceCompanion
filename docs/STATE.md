@@ -37,8 +37,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the delayed audio-triage provider slice.
-- Latest feature commit: `9c02550` (`feat: add unattended HostOS execution policy`).
+- Working tree: clean after the HostOS unattended and emergency-stop slices.
+- Latest feature commit: `9444352` (`feat: cancel running HostOS processes on emergency stop`).
 
 ## Completed in this repository
 
@@ -57,6 +57,8 @@ separate CPU/RAM test completes.
 - HostOS policy gate supports access checks, approval-required decisions,
   emergency stop, ROOT-only unattended execution, deny-list checks and
   redacted metadata-only audit entries.
+- HostOS now tracks managed and shell subprocesses; emergency stop terminates
+  them and an interrupted shell request returns `cancelled`.
 - Loopback browser surface supports chat, health/state display and policy-level
   selection using local session/CSRF headers.
 - Dedicated read-only `/avatar` surface renders a transparent OBS-ready
@@ -292,8 +294,14 @@ therefore run while the operator is away without per-action prompts; emergency
 stop and deny-tools/deny-risk policy checks remain authoritative. The browser
 control plane exposes these settings and the policy fingerprint includes them.
 
+The emergency-stop slice tracks live `process.managed` and `shell.exec`
+children, terminates them through the same executor, and covers the race with
+a background shell request in unit tests. Server shutdown also cleans up
+tracked children so a recovery/restart does not leave companion-owned work
+running.
+
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 110 unit tests and 7 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 111 unit tests and 7 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
