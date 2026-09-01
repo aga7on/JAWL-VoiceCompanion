@@ -38,8 +38,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the native JAWL emergency-stop slice.
-- Latest feature commit: `5988861` (`feat: stop native JAWL from emergency control`).
+- Working tree: clean after the browser emergency-stop recovery slice.
+- Latest feature commit: `a11dd21` (`feat: add browser recovery for emergency stop`).
 
 ## Completed in this repository
 
@@ -224,7 +224,8 @@ separate CPU/RAM test completes.
   whether control is enabled. JAWL's native Heartbeat remains autonomous;
   companion unattended and approvals are not falsely reported as native JAWL
   state; bridge emergency-stop also requests native `/api/agent/stop` while
-  retaining the local process cancellation path.
+  retaining the local process cancellation path. The browser recovery route
+  starts native JAWL before clearing the local emergency latch.
 - `G:\AI\OmniVoice` was inspected and contains only a virtual environment; its
   model/API location is an external blocker.
 - The configured JAWL `terminal.port` is currently stale and has no listening
@@ -315,7 +316,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 115 unit tests and 9 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 117 unit tests and 9 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
