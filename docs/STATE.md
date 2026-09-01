@@ -40,7 +40,7 @@ separate CPU/RAM test completes.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the provider-neutral TTS controls slice.
-- Latest feature commit: pending (`feat: add provider-neutral TTS controls`).
+- Latest feature commit: `b6ca5a9` (`feat: add provider-neutral TTS controls`).
 
 ## Completed in this repository
 
