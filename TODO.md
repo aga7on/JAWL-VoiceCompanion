@@ -64,8 +64,11 @@ Acceptance criteria:
 ## Phase 3 — VoiceMem sidecar and memory
 
 - [x] Define a transport-neutral VoiceMem sidecar contract.
-- [ ] Run VoiceMem as a separate local service.
-- [ ] Add request/session correlation IDs.
+- [~] Run VoiceMem as a separate local service; the stdio runner, process
+  client and `/api/voice/partial` bridge are present, while real model startup
+  remains opt-in.
+- [x] Add request/session correlation IDs to the sidecar protocol.
+- [x] Add the bounded JSON-lines runner and degraded-mode responses.
 - [ ] Add speculative recall and final recall events.
 - [ ] Map VoiceMem affect to JAWL observations, not personality overrides.
 - [ ] Define bounded core memory.

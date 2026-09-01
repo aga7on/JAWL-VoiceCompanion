@@ -91,10 +91,11 @@ feed_partial(text, ended=True)
 ```
 
 The current VoiceMem repository provides this method on `VoiceStream`, but its
-bundled WebSocket demo is not treated as the production protocol. A small
-loopback sidecar runner will own the VoiceMem environment and translate its
-results into `USER_PARTIAL`/`VOICE_TURN` events. The JAWL process receives only
-bounded observations and final user text.
+bundled WebSocket demo is not treated as the production protocol. The small
+loopback sidecar runner in `services/voicemem_sidecar.py` owns the VoiceMem
+environment and translates its results into `USER_PARTIAL`/`VOICE_TURN`
+events. The JAWL process receives only bounded observations and final user
+text through `POST /api/voice/partial`.
 
 ### Voice Gateway
 

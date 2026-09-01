@@ -68,6 +68,12 @@ class WebTests(unittest.TestCase):
         self.assertEqual(result["result"]["status"], "degraded")
         self.assertNotIn("image", result["result"])
 
+    def test_voice_status_is_explicit_when_sidecar_is_not_configured(self):
+        status, voice = self.get_json("/api/voice/status")
+        self.assertEqual(status, 200)
+        self.assertFalse(voice["configured"])
+        self.assertEqual(voice["status"], "not_configured")
+
     def test_chat_and_level_change_work(self):
         status, response = self.post_json("/api/chat", {"text": "Привет"})
         self.assertEqual(status, 200)

@@ -41,3 +41,5 @@
   the handshake and JSON-lines response before the result reaches HTTP state.
 - Recorded the concrete VoiceMem `stream.feed_partial` sidecar contract and
   kept its heavyweight runtime outside the JAWL/web process boundary.
+- Added the minimal VoiceMem JSON-lines runner, lazy subprocess client and
+  authenticated `/api/voice/partial` bridge with UTF-8 transport framing.

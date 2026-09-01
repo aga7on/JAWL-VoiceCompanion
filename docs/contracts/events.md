@@ -65,6 +65,20 @@ The VoiceMem gateway's correlated result. It may include transcript, affect,
 speaker and retrieved context. JAWL should consume the final event rather than
 trusting uncorrelated partial messages.
 
+### `VOICE_DEGRADED`
+
+The sidecar or one of its optional dependencies is unavailable. This is a
+bounded diagnostic event; it must not contain credentials, raw audio or a
+provider traceback.
+
+```json
+{
+  "type": "VOICE_DEGRADED",
+  "priority": 4,
+  "payload": {"reason": "voicemem_stream_failed"}
+}
+```
+
 ### `SCREEN_DELTA`
 
 Bounded description of a screen change. The initial producer uses a neutral

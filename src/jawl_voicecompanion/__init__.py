@@ -10,6 +10,7 @@ from .arbiter import TurnArbiter, TurnPriority
 from .screen_adapter import ScreenCaptureAdapter
 from .vision import OpenAICompatibleVisionClient, VisionLookService
 from .presence import ScreenDeltaWatcher
+from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 
 __all__ = [
     "AccessLevel",
@@ -27,4 +28,6 @@ __all__ = [
     "OpenAICompatibleVisionClient",
     "VisionLookService",
     "ScreenDeltaWatcher",
+    "VoiceMemProcessClient",
+    "VoiceMemUnavailable",
 ]

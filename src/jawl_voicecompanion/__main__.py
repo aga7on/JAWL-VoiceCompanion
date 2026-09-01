@@ -11,6 +11,7 @@ from .jawl_adapter import JawlTerminalAdapter
 from .hostos_tools import HostOSExecutor
 from .screen_adapter import ScreenCaptureAdapter
 from .vision import OpenAICompatibleVisionClient
+from .voicemem_client import VoiceMemProcessClient
 from .windows_ui import WindowsUIAutomationAdapter
 from .web import create_server
 
@@ -68,6 +69,18 @@ def main() -> None:
         default=30.0,
         help="vision request timeout in seconds",
     )
+    parser.add_argument(
+        "--voicemem-python",
+        type=Path,
+        default=None,
+        help="Python executable for the optional VoiceMem sidecar",
+    )
+    parser.add_argument(
+        "--voicemem-timeout",
+        type=float,
+        default=5.0,
+        help="VoiceMem sidecar request timeout in seconds",
+    )
     parser.add_argument("--sandbox-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
     parser.add_argument("--host-root", type=Path, action="append", default=[])
@@ -107,6 +120,11 @@ def main() -> None:
         )
     if args.screen_watch and not (args.hostos_live and args.screen_enabled and vision_describer):
         parser.error("--screen-watch requires --hostos-live, --screen-enabled, --vision-url and --vision-model")
+    voice_mem = (
+        VoiceMemProcessClient(args.voicemem_python, timeout_seconds=args.voicemem_timeout)
+        if args.voicemem_python
+        else None
+    )
     server = create_server(
         args.host,
         args.port,
@@ -116,6 +134,7 @@ def main() -> None:
         vision_describer,
         screen_watch=args.screen_watch,
         screen_watch_interval=args.screen_watch_interval,
+        voice_mem=voice_mem,
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:

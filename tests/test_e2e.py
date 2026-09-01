@@ -17,6 +17,7 @@ from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
 from jawl_voicecompanion.models import AccessLevel  # noqa: E402
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
+from jawl_voicecompanion.voicemem_client import VoiceMemProcessClient  # noqa: E402
 from jawl_voicecompanion.web import create_server  # noqa: E402
 
 
@@ -96,6 +97,11 @@ class LocalE2ETests(unittest.TestCase):
             responder=self.jawl_adapter,
             brain_name="e2e_brain",
         )
+        self.voice_mem = VoiceMemProcessClient(
+            sys.executable,
+            args=("--test-stub",),
+            timeout_seconds=2,
+        )
         self.server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
@@ -104,6 +110,7 @@ class LocalE2ETests(unittest.TestCase):
             vision_describer=self.client,
             screen_watch=True,
             screen_watch_interval=2,
+            voice_mem=self.voice_mem,
         )
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -173,6 +180,24 @@ class LocalE2ETests(unittest.TestCase):
         _, stopped = self.post_json("/api/hostos/execute", request)
         self.assertEqual(stopped["result"]["status"], "denied")
         self.assertEqual(stopped["result"]["reason"], "emergency_stop_active")
+
+    def test_voicemem_sidecar_final_reaches_http_chat_state(self):
+        _, status = self.get_json("/api/voice/status")
+        self.assertTrue(status["configured"])
+        self.assertEqual(status["status"], "ready")
+        _, partial = self.post_json("/api/voice/partial", {
+            "session_id": "voice-s1", "text": "покажи", "ended": False,
+        })
+        self.assertTrue(partial["events"], partial)
+        self.assertEqual(partial["events"][0]["type"], "USER_PARTIAL")
+        self.assertEqual(partial["responses"], [])
+        _, final = self.post_json("/api/voice/partial", {
+            "session_id": "voice-s1", "text": "покажи редактор", "ended": True,
+        })
+        self.assertEqual([event["type"] for event in final["events"]], ["USER_PARTIAL", "VOICE_TURN"])
+        self.assertEqual(final["responses"][0]["text"], "JAWL E2E: покажи редактор")
+        _, state = self.get_json("/api/state")
+        self.assertEqual(state["last_turn"]["user"], "покажи редактор")
 
     def test_screen_capture_vlm_dedup_and_bounded_screen_delta(self):
         self.post_json("/api/hostos/level", {"level": int(AccessLevel.OBSERVER)})

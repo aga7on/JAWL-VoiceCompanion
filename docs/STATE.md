@@ -85,6 +85,9 @@ adapters are available only through explicitly constructed/configured paths.
 - VoiceMem's bundled `web/run.py` is a demo WebSocket and not a stable
   correlated sidecar API; the transport-neutral contract is now recorded in
   `docs/contracts/voice.md`.
+- The minimal sidecar runner/client and `/api/voice/partial` bridge are now
+  implemented. The production runner is lazy and returns `VOICE_DEGRADED` if
+  VoiceMem is not installed or cannot initialize.
 - VoiceMem's current default streaming ASR should not be assumed to be the
   final Russian ASR choice; a benchmark is required.
 - CozyVoice has a local REST wrapper, but its current `stream` path should be
@@ -109,7 +112,8 @@ adapters are available only through explicitly constructed/configured paths.
 - harden the initial HostOS session lifecycle and broaden audit coverage.
 - add semantic screen significance scoring and connect `SCREEN_DELTA` to
   Attention/Presence and JAWL's final wording path;
-- implement the minimal VoiceMem sidecar runner against the recorded contract;
+- connect the sidecar final event to real microphone/ASR input and validate
+  production VoiceMem model startup in its own environment;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -120,7 +124,8 @@ adapters are available only through explicitly constructed/configured paths.
 Changed the passive watcher, web API/CLI wiring, vision deduplication,
 E2E runner/tests and the related architecture/contracts/documentation in
 `307da25`; extended the JAWL adapter path in `1f1717d`; recorded the
-VoiceMem sidecar boundary in `91ffc50`.
+VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner/client
+and HTTP bridge in the current uncommitted change.
 
 Verification: `scripts/run_e2e.ps1` passed 2 tests; `scripts/run_tests.ps1`
 passed 49 tests; the stale-port degraded probe returned `status=offline`;

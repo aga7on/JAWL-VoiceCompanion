@@ -16,6 +16,7 @@ from .hostos_tools import HostOSExecutor
 from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
 from .vision import VisionLookService
+from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 
 
 MAX_BODY_BYTES = 64 * 1024
@@ -32,12 +33,14 @@ class CompanionServer(ThreadingHTTPServer):
         hostos_executor: HostOSExecutor,
         vision_service: VisionLookService,
         screen_watcher: ScreenDeltaWatcher | None = None,
+        voice_mem: VoiceMemProcessClient | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
         self.hostos = hostos_executor
         self.vision = vision_service
         self.screen_watcher = screen_watcher
+        self.voice_mem = voice_mem
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -46,6 +49,8 @@ class CompanionServer(ThreadingHTTPServer):
     def server_close(self) -> None:
         if self.screen_watcher is not None:
             self.screen_watcher.stop()
+        if self.voice_mem is not None:
+            self.voice_mem.close()
         super().server_close()
 
 
@@ -84,6 +89,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             events = self.server.screen_watcher.events() if self.server.screen_watcher else []
             self._json({"events": events})
             return
+        if path == "/api/voice/status":
+            if self.server.voice_mem is None:
+                self._json({"configured": False, "status": "not_configured"})
+                return
+            try:
+                self._json({"configured": True, **self.server.voice_mem.health()})
+            except VoiceMemUnavailable as exc:
+                self._json({"configured": True, "status": "degraded", "reason": str(exc)})
+            return
         if path == "/api/hostos/approvals":
             try:
                 self._require_browser_session()
@@ -114,6 +128,28 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             if self.path == "/api/chat":
                 self._json(self.server.gateway.handle_text(payload.get("text", "")))
+                return
+            if self.path == "/api/voice/partial":
+                if self.server.voice_mem is None:
+                    self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                text = payload.get("text", "")
+                ended = payload.get("ended", False)
+                if not isinstance(text, str) or not isinstance(ended, bool):
+                    raise ValueError("text must be string and ended must be boolean")
+                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+                events = self.server.voice_mem.feed_partial(text, ended=ended, session_id=session_id)
+                responses = []
+                for event in events:
+                    if event.get("type") != "VOICE_TURN":
+                        continue
+                    turn_text = event.get("payload", {}).get("text", "")
+                    responses.append(self.server.gateway.handle_text(turn_text, session_id=session_id))
+                self._json({
+                    "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
+                    "events": events,
+                    "responses": responses,
+                })
                 return
             if self.path == "/api/hostos/execute":
                 raw_request = payload.get("request", payload)
@@ -174,6 +210,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+        except VoiceMemUnavailable as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
@@ -228,6 +266,7 @@ def create_server(
     vision_describer: Any | None = None,
     screen_watch: bool = False,
     screen_watch_interval: float = 10.0,
+    voice_mem: VoiceMemProcessClient | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -256,6 +295,7 @@ def create_server(
         active_executor,
         vision_service,
         watcher,
+        voice_mem,
     )
     if watcher is not None:
         watcher.start()

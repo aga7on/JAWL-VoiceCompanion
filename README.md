@@ -49,6 +49,17 @@ To connect the text surface to the local JAWL terminal bridge, pass its
 .\scripts\run_web.ps1 --jawl-port-file "G:\AI\JAWL-Coding\src\utils\local\data\interfaces\host\terminal\terminal.port"
 ```
 
+To enable the external-ASR text bridge through the VoiceMem sidecar, point
+the web process at VoiceMem's Python environment:
+
+```powershell
+.\scripts\run_web.ps1 --voicemem-python "G:\AI\VoiceMem\.venv\Scripts\python.exe"
+```
+
+The sidecar starts lazily. `POST /api/voice/partial` accepts cumulative ASR
+text; only `ended=true` produces a JAWL turn. Microphone capture and a final
+Russian ASR choice are not connected yet.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
