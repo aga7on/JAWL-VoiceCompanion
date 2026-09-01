@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .approvals import ApprovalStore
+from .ambient_memory import AmbientMemoryBuffer
 from .attention import AttentionPresence
 from .avatar import AvatarAssetStore
 from .doctor import build_doctor_report
@@ -44,6 +45,7 @@ class CompanionServer(ThreadingHTTPServer):
         tts_service: TTSService | None = None,
         avatar_assets: AvatarAssetStore | None = None,
         attention: AttentionPresence | None = None,
+        ambient_memory: AmbientMemoryBuffer | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -54,6 +56,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.tts = tts_service
         self.avatar_assets = avatar_assets
         self.attention = attention or AttentionPresence()
+        self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -130,6 +133,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/attention":
             self._json(self.server.attention.state())
+            return
+        if path == "/api/ambient-memory":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            self._json({
+                "state": self.server.ambient_memory.state(),
+                "observations": self.server.ambient_memory.observations(),
+                "episodes": self.server.ambient_memory.episodes(),
+            })
             return
         if path == "/api/voice/status":
             if self.server.voice_mem is None:
@@ -353,6 +368,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("attention settings are required")
                 self._json({"ok": True, "attention": self.server.attention.configure(**values)})
                 return
+            if self.path == "/api/ambient-memory/triage":
+                self._json(self.server.ambient_memory.triage())
+                return
+            if self.path == "/api/ambient-memory/clear":
+                self._json(self.server.ambient_memory.clear())
+                return
+            if self.path == "/api/ambient-memory/config":
+                enabled = payload.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be boolean")
+                self._json({"ok": True, "state": self.server.ambient_memory.set_enabled(enabled)})
+                return
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
@@ -438,6 +465,7 @@ def create_server(
     avatar_assets: AvatarAssetStore | None = None,
     jawl_event_dir: Path | None = None,
     attention: AttentionPresence | None = None,
+    ambient_memory: AmbientMemoryBuffer | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -475,6 +503,7 @@ def create_server(
         tts_service,
         avatar_assets,
         active_attention,
+        ambient_memory=ambient_memory,
     )
     if watcher is not None:
         watcher.start()

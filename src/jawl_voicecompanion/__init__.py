@@ -16,6 +16,7 @@ from .jawl_events import JawlEventFileSink
 from .tts import CozyVoiceHttpClient, TTSService, TTSUnavailable, TTSCancelled
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 from .jawl_web import JawlWebAdapter, JawlWebChatAdapter, JawlWebUnavailable
+from .ambient_memory import AmbientMemoryBuffer
 
 __all__ = [
     "AccessLevel",
@@ -45,4 +46,5 @@ __all__ = [
     "JawlWebAdapter",
     "JawlWebChatAdapter",
     "JawlWebUnavailable",
+    "AmbientMemoryBuffer",
 ]

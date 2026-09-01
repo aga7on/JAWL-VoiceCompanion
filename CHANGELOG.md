@@ -10,6 +10,9 @@
 - Verified the companion event sink against JAWL's actual poller, EventBus and
   EventBridge in an isolated smoke; final model broadcast remains explicit
   `no_broadcast` when the active profile does not call the terminal skill.
+- Added the first default-off ambient-memory runtime slice: bounded normalized
+  audio/visual observations, privacy/TTL/byte limits, deterministic delayed
+  coalescing, authenticated browser inspection and explicit enable/disable.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.

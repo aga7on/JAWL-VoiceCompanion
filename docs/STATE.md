@@ -4,8 +4,8 @@ Last updated: 2026-09-01
 
 ## Current phase
 
-Active workstream: Phase 6 — Presence and autonomy; the screen →
-Attention/Presence slice is in progress.
+Active workstream: Phase 6 — Presence and autonomy; the screen Attention/Presence
+slice and Phase 3 ambient-memory foundation are in progress.
 
 Phase 4 — 2D Live2D product UI (asset/runtime slice in progress).
 
@@ -20,10 +20,12 @@ adapters remain explicit. The companion now has a read-only loopback bridge
 for JAWL Heartbeat, persona and memory counters; it does not duplicate JAWL
 storage. The screen path now has a bounded Attention/Presence gate and an
 optional explicit JAWL event-IPC sink; final production JAWL validation is
-  still pending. The ambient secondary-memory design is documented separately:
-  optional system-audio loopback and visual observations use bounded transient
-  tiers and delayed CPU/RAM triage, while JAWL remains the only owner of
-  promoted memory.
+still pending. The ambient secondary-memory design is documented separately:
+optional system-audio loopback and visual observations use bounded transient
+tiers and delayed CPU/RAM triage, while JAWL remains the only owner of
+promoted memory. The first normalized ambient buffer and authenticated
+browser inspection/configuration path are now implemented; real capture and
+model triage remain opt-in work.
 
 ## Git state
 
@@ -85,6 +87,10 @@ optional explicit JAWL event-IPC sink; final production JAWL validation is
   system audio stays separate from microphone turns, raw audio/frames are
   transient, and delayed triage must produce attributable candidates before
   any JAWL promotion.
+- `AmbientMemoryBuffer` now provides default-off bounded audio/visual event
+  ingestion, private-text suppression, duplicate/TTL/byte limits, deterministic
+  coalescing and `AMBIENT_EPISODE_CANDIDATE` output; `/api/ambient-memory`
+  exposes authenticated inspection, triage, clear and explicit enable/disable.
 - `JawlEventFileSink` atomically writes accepted screen intents to an
   explicitly configured JAWL `.jawl_events` directory in the existing
   `{message, payload}` IPC shape; raw frames and local paths are excluded.
@@ -240,9 +246,13 @@ and `EventBridge` accepted one `JawlEventFileSink` file, consumed it and
 delivered one `HOST_OS_SANDBOX_EVENT` to `Heartbeat.answer_to_event`; the
 spoken final response remains model-dependent and the known `no_broadcast`
 production-profile result is preserved.
+The current implementation adds `AmbientMemoryBuffer` and authenticated
+`/api/ambient-memory` inspection, configuration, triage and clear routes;
+fake audio/visual input is covered end-to-end while Windows capture and model
+triage remain unconnected.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 85 unit tests and 4 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 91 unit tests and 5 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -259,7 +269,8 @@ endpoint is configured by default; production semantic scoring and JAWL
 final-wording delivery, pixel-level redaction, ASR quality benchmarking,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The native always-on-top desktop-pet shell is
-also deferred.
+also deferred. Ambient Windows loopback capture and CPU/RAM model triage are
+not implemented yet.
 
 ## Next action
 
@@ -267,8 +278,9 @@ Validate the web bridge and explicit screen-event IPC against a live
 production JAWL model/tool profile, including final response/broadcast
 behavior. Then benchmark the installed VoiceMem ASR modes on a real Russian
 microphone, validate production model warmup and CozyVoice latency, and choose
-the first user-supplied Live2D model. After that, implement the ambient-memory
-contracts with fake audio/video sources before touching Windows loopback capture.
+the first user-supplied Live2D model. The normalized ambient-memory contracts
+and fake-source path are now in place; next implement a benchmarkable delayed
+triage provider before touching Windows loopback capture.
 
 ## State update protocol
 

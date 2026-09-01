@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
+from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
@@ -326,6 +327,7 @@ class LocalE2ETests(unittest.TestCase):
             tts_service=self.tts,
             avatar_assets=AvatarAssetStore(self.avatar_root),
             jawl_event_dir=self.jawl_event_dir,
+            ambient_memory=AmbientMemoryBuffer(enabled=True),
         )
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -498,6 +500,44 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(overview["status"], "ok")
         self.assertEqual(overview["sources"]["tick"]["step"], 7)
         self.assertNotIn("must-not-cross", json.dumps(overview, ensure_ascii=False))
+
+    def test_ambient_memory_is_delayed_bounded_and_visible(self):
+        now = time.time()
+        self.server.ambient_memory.ingest_system_audio(
+            "В игре появился важный квест.",
+            confidence=0.9,
+            event_id="ambient-audio-e2e",
+            now=now,
+        )
+        self.server.ambient_memory.ingest_visual(
+            "На экране видна цель квеста.",
+            confidence=0.8,
+            event_id="ambient-screen-e2e",
+            now=now + 1,
+        )
+        _, before = self.get_json("/api/ambient-memory")
+        self.assertEqual(before["state"]["observation_count"], 2)
+        self.assertEqual(before["state"]["episode_count"], 0)
+        self.assertFalse(before["observations"][0]["payload"]["raw_audio_persisted"])
+        self.assertFalse(before["observations"][1]["payload"]["raw_frame_persisted"])
+
+        _, triaged = self.post_json("/api/ambient-memory/triage", {})
+        self.assertEqual(triaged["status"], "processed")
+        self.assertEqual(len(triaged["episodes"]), 1)
+        episode = triaged["episodes"][0]
+        self.assertEqual(episode["payload"]["source"], "mixed")
+        self.assertEqual(episode["payload"]["importance"], "promote_candidate")
+        self.assertFalse(episode["payload"]["raw_audio_persisted"])
+        self.assertFalse(episode["payload"]["raw_frame_persisted"])
+        _, after = self.get_json("/api/ambient-memory")
+        self.assertEqual(after["state"]["episode_count"], 1)
+        self.assertEqual(after["episodes"][0]["payload"]["source_event_ids"], [
+            "ambient-audio-e2e", "ambient-screen-e2e",
+        ])
+        self.post_json("/api/ambient-memory/clear", {})
+        _, cleared = self.get_json("/api/ambient-memory")
+        self.assertEqual(cleared["state"]["observation_count"], 0)
+        self.assertEqual(cleared["state"]["episode_count"], 0)
 
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
         _, status = self.get_json("/api/voice/status")

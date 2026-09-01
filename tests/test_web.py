@@ -97,6 +97,23 @@ class WebTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 403)
         context.exception.close()
 
+    def test_ambient_memory_requires_browser_session(self):
+        request = Request(self.base + "/api/ambient-memory")
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+
+    def test_ambient_memory_is_off_until_explicitly_enabled(self):
+        request = Request(self.base + "/api/ambient-memory", headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            initial = json.loads(response.read().decode("utf-8"))
+        self.assertFalse(initial["state"]["enabled"])
+        _, enabled = self.post_json("/api/ambient-memory/config", {"enabled": True})
+        self.assertTrue(enabled["state"]["enabled"])
+        _, disabled = self.post_json("/api/ambient-memory/config", {"enabled": False})
+        self.assertFalse(disabled["state"]["enabled"])
+
     def test_voice_status_is_explicit_when_sidecar_is_not_configured(self):
         status, voice = self.get_json("/api/voice/status")
         self.assertEqual(status, 200)

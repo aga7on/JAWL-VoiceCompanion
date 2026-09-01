@@ -81,12 +81,15 @@ Acceptance criteria:
 - [ ] Map VoiceMem affect to JAWL observations, not personality overrides.
 - [ ] Add opt-in Windows system-audio loopback as a separate ambient stream;
   never mix it with microphone `USER_FINAL` turns.
-- [ ] Add a bounded ambient working buffer with configurable TTL (initial target:
-  about 30 minutes) and no durable raw audio/video by default.
+- [~] Add a bounded ambient working buffer with configurable TTL (initial
+  target: about 30 minutes) and no durable raw audio/video by default; the
+  normalized buffer and authenticated browser controls are implemented, while
+  real capture wiring remains.
 - [ ] Add a deferred CPU/RAM triage worker for ambient audio transcripts and
   visual observations; benchmark available local models before selecting one.
-- [ ] Add importance filtering and coalescing into bounded ambient episodes.
-- [ ] Add provenance, source-app, confidence and retention metadata to ambient
+- [~] Add deterministic importance filtering and coalescing into bounded
+  ambient episodes; model-based triage remains separate.
+- [~] Add provenance, source-app, confidence and retention metadata to ambient
   observations and episode candidates.
 - [ ] Define bounded core memory.
 - [x] Add a read-only JAWL bridge for bounded memory/persona inspection.
@@ -155,9 +158,9 @@ Acceptance criteria:
 - [~] Store only bounded textual observations and metadata; the explicit bridge
   and passive producer keep only an in-memory digest, event ring and bounded
   last description.
-- [ ] Add opt-in ambient video/keyframe observations for secondary memory;
-  discard raw frames after analysis and keep this path separate from explicit
-  `vision__look` and proactive speech.
+- [~] Add opt-in ambient video/keyframe observations for secondary memory; the
+  normalized visual event/buffer path is present, while real keyframe capture
+  remains separate from explicit `vision__look` and proactive speech.
 
 Acceptance criteria:
 
