@@ -29,6 +29,7 @@ function Invoke-CheckedGit {
 Push-Location $companionRoot
 try {
     Invoke-CheckedPython @('-m', 'compileall', '-q', 'src', 'tests')
+    Invoke-CheckedPython @('-m', 'py_compile', 'scripts/teratts_server.py')
     Invoke-CheckedPython @('-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_[!e]*.py', '-v')
     Invoke-CheckedPython @('-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_e2e.py', '-v')
     Invoke-CheckedGit @('diff', '--check')
