@@ -29,6 +29,7 @@ from jawl_voicecompanion.system_audio import SystemAudioLoopback  # noqa: E402
 from jawl_voicecompanion.tts import CozyVoiceHttpClient, TTSService  # noqa: E402
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
 from jawl_voicecompanion.voicemem_client import VoiceMemProcessClient  # noqa: E402
+from jawl_voicecompanion.windows_pointer import WindowsPointerAdapter  # noqa: E402
 from jawl_voicecompanion.web import create_server  # noqa: E402
 
 
@@ -223,6 +224,19 @@ class _FakeScreen:
             },
             "persisted": False,
         }
+
+
+class _FakePointerBackend:
+    def __init__(self):
+        self.calls = []
+        self.position_value = None
+
+    def perform(self, operation, x, y):
+        self.calls.append((operation, x, y))
+        self.position_value = (x, y)
+
+    def position(self):
+        return self.position_value
 
 
 class _AmbientVoiceMem:
@@ -445,6 +459,15 @@ class LocalE2ETests(unittest.TestCase):
         endpoint = f"http://127.0.0.1:{self.provider.server_port}/v1"
         self.client = OpenAICompatibleVisionClient(endpoint, "e2e-vlm")
         self.policy = HostOSPolicy()
+        self.pointer_backend = _FakePointerBackend()
+        self.pointer = WindowsPointerAdapter(
+            foreground_provider=lambda: {
+                "status": "verified",
+                "class_name": "E2ECanvas",
+                "bounds": [100, 200, 1100, 1000],
+            },
+            pointer_backend=self.pointer_backend,
+        )
         self.executor = HostOSExecutor(
             self.policy,
             Path(self.temp.name) / "sandbox",
@@ -452,6 +475,7 @@ class LocalE2ETests(unittest.TestCase):
             host_roots=(Path(self.temp.name),),
             dry_run=False,
             screen_capture=_FakeScreen(),
+            pointer=self.pointer,
         )
         self.gateway = TextGateway(
             policy=self.policy,
@@ -676,6 +700,37 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(audit["events"])
         self.assertTrue(any(event["type"] == "ACCESS_LEVEL_CHANGED" for event in audit["events"]))
         self.assertNotIn("e2e-ok", json.dumps(audit, ensure_ascii=False))
+
+    def test_coordinate_pointer_uses_approval_and_reports_dispatch_postcondition(self):
+        _, level = self.post_json("/api/hostos/level", {"level": int(AccessLevel.OPERATOR)})
+        self.assertEqual(level["policy"]["active_level"], int(AccessLevel.OPERATOR))
+        request = {
+            "request": {
+                "tool": "desktop.pointer",
+                "risk": "observe",
+                "arguments": {"operation": "click"},
+                "target": {
+                    "coordinate_space": "image",
+                    "x": 250,
+                    "y": 200,
+                    "image_width": 500,
+                    "image_height": 400,
+                    "window_class": "E2ECanvas",
+                    "window_bounds": [100, 200, 1100, 1000],
+                },
+            },
+        }
+        _, pending = self.post_json("/api/hostos/approvals/request", request)
+        approval_id = pending["result"]["approval_id"]
+        self.assertEqual(pending["result"]["status"], "approval_required")
+        self.post_json(f"/api/hostos/approvals/{approval_id}/approve", {})
+        _, executed = self.post_json("/api/hostos/execute", {**request, "approval_id": approval_id})
+        result = executed["result"]
+        self.assertEqual(result["status"], "dispatched")
+        self.assertEqual(result["result"]["screen_x"], 601)
+        self.assertEqual(result["result"]["screen_y"], 601)
+        self.assertEqual(result["result"]["postcondition"]["verified"], True)
+        self.assertEqual(self.pointer_backend.calls, [("click", 601, 601)])
 
     def test_restart_stops_owned_processes_and_starts_safe(self):
         policy = HostOSPolicy(active_level=AccessLevel.ROOT)

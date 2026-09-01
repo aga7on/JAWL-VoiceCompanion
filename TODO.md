@@ -173,6 +173,8 @@ Acceptance criteria:
 - [~] Prefer UI Automation for native app structure; bounded semantic context
   is now sent transiently to Vision, while calibrated action grounding and
   canvas/OCR fallback remain pending.
+- [x] Add a bounded calibrated `desktop.pointer` fallback for canvas/custom
+  surfaces with stale foreground-window rejection and cursor postcondition.
 - [ ] Add screenshot/OCR fallback for canvas and custom applications.
 - [x] Add explicit `vision__look` model tool; the HostOS `screen.observe`
   capture seam and Qwen3-VL-2B local `llama-server` path are smoke-tested.

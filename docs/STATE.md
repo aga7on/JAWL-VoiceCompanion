@@ -32,8 +32,9 @@ adapter are now present; no model is selected or loaded by default. The
 operator's CPU/RAM benchmark selected Qwen3-VL-2B as the primary Vision
 candidate, with SmolVLM2-500M as a speed fallback. The local endpoint and
 explicit screen look are now smoke-tested, and the optimized screen watcher
-has produced bounded `SCREEN_DELTA` events; bounded UIA context is now attached
-to explicit Vision requests, while semantic watcher tuning remains.
+has produced bounded `SCREEN_DELTA` events; bounded UIA context and the
+calibrated `desktop.pointer` fallback are now attached to explicit Vision
+workflows, while semantic watcher tuning remains.
 
 ## Git state
 
@@ -86,6 +87,10 @@ to explicit Vision requests, while semantic watcher tuning remains.
   file.
 - Optional Windows UIA adapter now provides bounded foreground-tree
   observation, semantic fingerprints and stale-target checks for control.
+- The custom-surface path now includes a policy-gated `desktop.pointer`
+  adapter. It recalibrates image coordinates against fresh foreground-window
+  bounds and reports cursor placement as a postcondition without claiming
+  that the target application accepted the input.
 - Browser adapter now supports bounded HTTP(S) navigation and delegates
   semantic actions to UIA; no browser automation runtime is installed yet.
 - Browser API exposes the tool registry and routes execution requests through
@@ -449,8 +454,8 @@ integration are verified; watcher tuning and production model warmup remain.
 
 ## Next action
 
-Add calibrated UIA coordinate execution around the bounded Qwen3-VL-2B screen
-path. In parallel, validate Qwen3-ASR/VoiceMem on real
+Validate the calibrated UIA/pointer path against a real custom application and
+the bounded Qwen3-VL-2B screen path. In parallel, validate Qwen3-ASR/VoiceMem on real
 Russian microphone audio, benchmark the selected TTS provider, and connect
 the resulting final voice path to avatar lip-sync without weakening the
 HostOS approval and emergency-stop gates.

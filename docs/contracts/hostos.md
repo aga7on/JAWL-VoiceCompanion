@@ -140,6 +140,34 @@ lived `element_ref`, its `element_sha256`, bounded name/class/control type and
 depth; sensitive elements are omitted. The reference is not authority: a
 later `desktop.act` must still pass HostOS fingerprint revalidation.
 
+For canvas or game surfaces without UI Automation nodes, `desktop.pointer`
+accepts a bounded pointer operation. Image-space targets must include the
+captured image dimensions and exact foreground-window bounds so HostOS can
+recheck the window before converting them to screen coordinates:
+
+```json
+{
+  "tool": "desktop.pointer",
+  "risk": "interactive",
+  "target": {
+    "coordinate_space": "image",
+    "x": 412,
+    "y": 238,
+    "image_width": 960,
+    "image_height": 720,
+    "window_class": "CanvasWindow",
+    "window_bounds": [100, 80, 2020, 1520]
+  },
+  "arguments": {"operation": "click"}
+}
+```
+
+Supported operations are `move`, `click`, `double_click`, `right_click` and
+`middle_click`. The result remains `dispatched` with a separate
+`postcondition.cursor_at_target` check; it does not claim that the application
+accepted the input. Pointer actions use the same interactive approval,
+unattended and emergency-stop policy as other desktop actions.
+
 ## Risk classes
 
 The initial classes are:

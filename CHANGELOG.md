@@ -13,6 +13,9 @@
   benchmark. A live adapter smoke with the benchmark WAV returned the expected
   transcript; Vision also forwards bounded transient UI Automation context
   and includes that context in change detection.
+- Added the policy-gated `desktop.pointer` fallback for canvas/custom apps;
+  image coordinates are recalibrated against fresh foreground bounds and the
+  result distinguishes pointer dispatch from application acceptance.
 
 - Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
   transient JPEG profile, exposes bounded coordinate-scale metadata and makes

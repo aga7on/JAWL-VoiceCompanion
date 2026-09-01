@@ -22,6 +22,7 @@ from .vision import OpenAICompatibleVisionClient
 from .voicemem_client import VoiceMemProcessClient
 from .user_activity import WindowsUserActivity
 from .windows_ui import WindowsUIAutomationAdapter
+from .windows_pointer import WindowsPointerAdapter
 from .web import create_server
 
 
@@ -241,6 +242,7 @@ def main() -> None:
             dry_run=False,
             allowed_executables=frozenset(args.allowed_executable),
             ui_automation=WindowsUIAutomationAdapter(),
+            pointer=WindowsPointerAdapter(),
             screen_capture=ScreenCaptureAdapter(
                 enabled=args.screen_enabled,
                 max_width=args.screen_max_width,

@@ -376,6 +376,12 @@ may inspect bounded UI/screen state when enabled, but cannot click or type.
 `OPERATOR` and `ROOT` may use desktop interaction tools according to the
 current approval policy.
 
+Native controls use the UIA `desktop.act` path. Custom/canvas surfaces use the
+bounded `desktop.pointer` fallback: Vision supplies image coordinates plus the
+frame dimensions and foreground-window bounds, and HostOS rechecks those
+bounds before converting to screen coordinates. Dispatch and application
+acceptance remain separate postconditions.
+
 There are two separate paths:
 
 1. passive sensor path for meaningful screen changes;
