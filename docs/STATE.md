@@ -159,6 +159,11 @@ workflows, while semantic watcher tuning remains.
 - The browser microphone path converts input to bounded mono PCM16, VoiceMem
   owns streaming ASR/VAD in its separate environment, and only final
   `VOICE_TURN` events reach JAWL. `/api/voice/end` flushes active capture.
+- The browser microphone path now has a configurable pre-ASR noise gate with
+  hysteresis, 120 ms bounded pre-roll, three-block release, local noise-floor
+  calibration and RMS/peak visualization. Closed-gate blocks never enter the
+  HTTP audio queue; hardware-level filtering remains dependent on the browser,
+  driver and microphone interface.
 - The browser now has an opt-in half-duplex hands-free boundary: a bounded
   local RMS silence gate finalizes an utterance through `/api/voice/end`,
   rotates the session ID and keeps capture open; model VAD and final-turn

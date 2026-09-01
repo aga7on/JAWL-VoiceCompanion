@@ -75,6 +75,9 @@ Acceptance criteria:
 - [~] Add half-duplex hands-free mode; the browser has an opt-in bounded RMS
   silence gate, fresh utterance sessions and automatic `/api/voice/end`, while
   real-device threshold tuning and full duplex validation remain.
+- [x] Add a configurable pre-ASR microphone noise gate with hysteresis,
+  bounded pre-roll, local noise-floor calibration and RMS/peak visualization;
+  real-device calibration remains pending.
 - [ ] Add a true streaming Qwen3-ASR partial provider if a stable streaming
   contract is confirmed; do not infer it from the batch transcription API.
 - [~] Add barge-in capture and interruption classification; browser RMS

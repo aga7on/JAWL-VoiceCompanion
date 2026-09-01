@@ -164,8 +164,14 @@ The sidecar starts lazily. `POST /api/voice/partial` accepts cumulative ASR
 text; only a final `VOICE_TURN` produces a JAWL turn. The control panel also
 has an opt-in microphone button: it sends bounded mono PCM16 chunks to
 `/api/voice/audio`, and `/api/voice/end` flushes an active phrase. VoiceMem's
-own streaming ASR/VAD runs in its separate environment. Russian ASR quality,
-AEC and barge-in still require a real-device benchmark.
+own streaming ASR/VAD runs in its separate environment. The browser applies a
+configurable local noise gate before that network boundary: closed-gate blocks
+are not sent to ASR, a short pre-roll preserves word onsets, and hysteresis
+plus release avoids chopping syllables. The control page shows RMS/peak levels
+and offers a 1.5-second noise-floor calibration; the setting is kept locally
+in the browser. `getUserMedia` also receives AEC/noise-suppression hints, but
+this is a pre-ASR software gate, not a guaranteed hardware/driver DSP gate.
+Russian ASR quality, AEC and barge-in still require a real-device benchmark.
 
 The selected Qwen3-ASR-0.6B profile can be tested through the optional
 final-utterance bridge. The default launcher uses the copied benchmark files

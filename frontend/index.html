@@ -16,6 +16,12 @@
     button, select { margin-top: 8px; padding: 8px 10px; border-radius: 7px; border: 1px solid #656b7b; background: #303440; color: inherit; cursor: pointer; }
     button.danger { background: #742f38; }
     code { color: #a9d4ff; }
+    .mic-gate { margin-top: 12px; padding: 10px; border: 1px solid #3b3e49; border-radius: 8px; background: #1b1d23; }
+    .mic-gate input[type="range"] { width: 100%; accent-color: #69d18b; }
+    .mic-meter { position: relative; height: 12px; margin: 8px 0 4px; overflow: hidden; border-radius: 99px; background: #101115; border: 1px solid #444957; }
+    #mic-level { height: 100%; width: 0; background: linear-gradient(90deg, #4f9d69, #d6c34f 72%, #e06060); transition: width 80ms linear; }
+    #mic-peak { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: #fff; box-shadow: 0 0 4px #fff; }
+    .mic-gate-row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
     @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -33,6 +39,14 @@
       <button id="send">Отправить</button>
       <button id="mic" type="button">🎙️ Включить микрофон</button>
       <span id="mic-status" class="meta">Микрофон выключен.</span>
+      <div class="mic-gate">
+        <div class="mic-gate-row"><label for="mic-gate">Noise gate до VoiceMem</label><span id="mic-gate-value" class="meta">—</span></div>
+        <input id="mic-gate" type="range" min="0.005" max="0.15" step="0.005" value="0.035">
+        <div class="mic-meter" role="meter" aria-label="Уровень микрофона" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="mic-level"></div><div id="mic-peak"></div></div>
+        <div class="mic-gate-row"><span id="mic-signal" class="meta">Сигнал: —</span><span id="mic-gate-state" class="meta">Gate: closed</span></div>
+        <button id="mic-calibrate" type="button">Автокалибровка шума (1,5 с)</button>
+        <span id="mic-gate-status" class="meta">Порог применяется локально; тишина не отправляется в ASR.</span>
+      </div>
       <div id="tts-status" class="meta">TTS выключен.</div>
       <label for="tts-voice">Голос провайдера (не модель)</label>
       <input id="tts-voice" type="text" maxlength="120" placeholder="оставить по умолчанию" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
@@ -98,6 +112,15 @@
     const ttsVoice = document.querySelector('#tts-voice');
     const ttsSpeed = document.querySelector('#tts-speed');
     const handsFree = document.querySelector('#hands-free');
+    const micGate = document.querySelector('#mic-gate');
+    const micGateValue = document.querySelector('#mic-gate-value');
+    const micMeter = document.querySelector('.mic-meter');
+    const micLevel = document.querySelector('#mic-level');
+    const micPeak = document.querySelector('#mic-peak');
+    const micSignal = document.querySelector('#mic-signal');
+    const micGateState = document.querySelector('#mic-gate-state');
+    const micGateStatus = document.querySelector('#mic-gate-status');
+    const micCalibrate = document.querySelector('#mic-calibrate');
     let sessionHeaders = {};
     let voice = null;
     let voiceQueue = Promise.resolve();
@@ -115,6 +138,8 @@
     let avatarAudioLastPublishedAt = 0;
     let avatarAudioChannel = null;
     let voiceSequence = 0;
+    let micMeterFrame = 0;
+    let micMeterPending = null;
     try { avatarAudioChannel = new BroadcastChannel('jawl-voicecompanion-avatar'); } catch (_) { /* backend polling remains available */ }
     function addMessage(who, text) {
       const item = document.createElement('div');
@@ -123,6 +148,79 @@
       item.lastElementChild.textContent = text;
       messages.appendChild(item);
       messages.scrollTop = messages.scrollHeight;
+    }
+    function clamp(value, low, high) { return Math.max(low, Math.min(high, value)); }
+    function amplitudeDb(value) {
+      return value > 0.00001 ? 20 * Math.log10(value) : -100;
+    }
+    function formatDb(value) {
+      const db = amplitudeDb(value);
+      return `${db <= -99 ? '−∞' : `${Math.round(db)} dBFS`}`;
+    }
+    function gateThreshold() {
+      return clamp(Number(micGate.value) || 0.035, 0.005, 0.15);
+    }
+    function updateMicGateLabel() {
+      const threshold = gateThreshold();
+      micGate.value = threshold.toFixed(3);
+      micGateValue.textContent = `${threshold.toFixed(3)} · ${formatDb(threshold)}`;
+      try { localStorage.setItem('jawl-mic-gate', String(threshold)); } catch (_) { /* private browsing */ }
+      if (voice?.gate) voice.gate.threshold = threshold;
+    }
+    function updateMicMeter(rms, peak, open) {
+      micMeterPending = {rms: clamp(rms, 0, 1), peak: clamp(peak, 0, 1), open};
+      if (micMeterFrame) return;
+      micMeterFrame = requestAnimationFrame(() => {
+        micMeterFrame = 0;
+        const value = micMeterPending;
+        micMeterPending = null;
+        if (!value) return;
+        const toPercent = level => clamp((amplitudeDb(level) + 60) / 60 * 100, 0, 100);
+        const rmsPercent = toPercent(value.rms);
+        const peakPercent = toPercent(value.peak);
+        micLevel.style.width = `${rmsPercent}%`;
+        micPeak.style.left = `${peakPercent}%`;
+        micMeter.setAttribute('aria-valuenow', value.rms.toFixed(3));
+        micSignal.textContent = `Сигнал: RMS ${formatDb(value.rms)} · peak ${formatDb(value.peak)}`;
+        micGateState.textContent = `Gate: ${value.open ? 'open' : 'closed'}`;
+      });
+    }
+    function appendGatePreRoll(gate, inputSamples) {
+      if (inputSamples.length >= gate.preRollLimit) {
+        gate.preRoll = Array.from(inputSamples.slice(inputSamples.length - gate.preRollLimit));
+        return;
+      }
+      for (let i = 0; i < inputSamples.length; i++) gate.preRoll.push(inputSamples[i]);
+      if (gate.preRoll.length > gate.preRollLimit) gate.preRoll.splice(0, gate.preRoll.length - gate.preRollLimit);
+    }
+    function passThroughMicGate(active, inputSamples, rms) {
+      const gate = active.gate;
+      gate.threshold = clamp(Number(gate.threshold) || gateThreshold(), 0.005, 0.15);
+      const closeThreshold = gate.threshold * 0.65;
+      const wasOpen = gate.open;
+      const preRoll = gate.preRoll.slice();
+      const trigger = wasOpen ? closeThreshold : gate.threshold;
+      if (rms >= trigger) {
+        gate.open = true;
+        gate.silentBlocks = 0;
+      } else if (wasOpen) {
+        gate.silentBlocks += 1;
+        if (gate.silentBlocks >= gate.releaseBlocks) gate.open = false;
+      }
+      if (gate.calibration) gate.calibration.push(rms);
+      if (!gate.open && !wasOpen) {
+        appendGatePreRoll(gate, inputSamples);
+        return {samples: [], open: false};
+      }
+      gate.preRoll.length = 0;
+      return {samples: wasOpen ? [] : preRoll, open: gate.open, capture: true};
+    }
+    function finishMicMeter() {
+      micMeterPending = {rms: 0, peak: 0, open: false};
+      micGateState.textContent = 'Gate: closed';
+      micSignal.textContent = 'Сигнал: —';
+      micLevel.style.width = '0%';
+      micPeak.style.left = '0%';
     }
     function beginStreamingMessage(who) {
       const item = document.createElement('div');
@@ -671,6 +769,9 @@
             active.finalizing = false;
             active.finishPromise = null;
             active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0};
+            active.gate.open = false;
+            active.gate.silentBlocks = 0;
+            active.gate.preRoll.length = 0;
             document.querySelector('#mic-status').textContent = handsFree.checked
               ? 'Hands-free listening; speak when ready.'
               : 'Microphone listening; VoiceMem detects phrase boundaries.';
@@ -683,12 +784,15 @@
       if (!voice) return;
       const active = voice;
       voice = null;
+      if (active.gate.calibrationTimer) window.clearTimeout(active.gate.calibrationTimer);
+      active.gate.calibration = null;
       active.processor.disconnect();
       active.source.disconnect();
       active.stream.getTracks().forEach(track => track.stop());
       if (active.finalizing && active.finishPromise) {
         await active.finishPromise;
         await active.context.close();
+        finishMicMeter();
         document.querySelector('#mic').textContent = 'Microphone on';
         document.querySelector('#mic-status').textContent = 'Microphone off.';
         return;
@@ -705,13 +809,14 @@
         document.querySelector('#mic-status').textContent = `Остановка микрофона: ${error.message}`;
       }
       await active.context.close();
+      finishMicMeter();
       document.querySelector('#mic').textContent = '🎙️ Включить микрофон';
       document.querySelector('#mic-status').textContent = 'Микрофон выключен.';
     }
     function updateVoiceVad(active, rms) {
       if (!handsFree.checked || active.finalizing) return;
       const now = performance.now();
-      if (rms >= 0.035) {
+      if (rms >= gateThreshold()) {
         if (!active.vad.speaking) {
           active.vad.speaking = true;
           active.vad.startedAt = now;
@@ -726,7 +831,7 @@
     async function startMicrophone() {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Браузер не поддерживает микрофон');
       const stream = await navigator.mediaDevices.getUserMedia({audio: {
-        channelCount: 1, echoCancellation: true, noiseSuppression: true
+        channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false
       }});
       const context = new AudioContext();
       const source = context.createMediaStreamSource(stream);
@@ -739,20 +844,24 @@
         const inputSamples = event.inputBuffer.getChannelData(0);
         const active = voice;
         if (!active || active.context !== context) return;
-        let rms = 0;
-        if ((currentAudio || ttsAbort || streamSpeechActive) || handsFree.checked) {
-          let energy = 0;
-          for (const sample of inputSamples) energy += sample * sample;
-          rms = Math.sqrt(energy / Math.max(1, inputSamples.length));
+        let energy = 0;
+        let peak = 0;
+        for (const sample of inputSamples) {
+          energy += sample * sample;
+          peak = Math.max(peak, Math.abs(sample));
         }
+        const rms = Math.sqrt(energy / Math.max(1, inputSamples.length));
+        const gated = passThroughMicGate(active, inputSamples, rms);
+        updateMicMeter(rms, peak, gated.open);
         if (!bargeInTriggered && (currentAudio || ttsAbort || streamSpeechActive)) {
           if (rms >= 0.08) {
             bargeInTriggered = true;
             stopSpeech();
           }
         }
-        updateVoiceVad(active, rms);
-        if (!active.finalizing) {
+        updateVoiceVad(active, gated.open ? rms : 0);
+        if (!active.finalizing && gated.capture) {
+          if (gated.samples.length) samples.push(...gated.samples);
           samples.push(...inputSamples);
           while (samples.length >= chunkSize) queueVoiceChunk(samples.splice(0, chunkSize), context.sampleRate, active.sessionId);
         }
@@ -763,15 +872,59 @@
       voice = {
         stream, context, source, processor, samples, sessionId: `browser-mic-${Date.now()}-${++voiceSequence}`,
         finalizing: false, finishPromise: null,
-        vad: {speaking: false, lastSpeechAt: 0, startedAt: 0}
+        vad: {speaking: false, lastSpeechAt: 0, startedAt: 0},
+        gate: {
+          threshold: gateThreshold(), open: false, silentBlocks: 0, releaseBlocks: 3,
+          preRoll: [], preRollLimit: Math.floor(context.sampleRate * 0.12),
+          calibration: null, calibrationTimer: null
+        }
       };
       bargeInTriggered = false;
+      updateMicGateLabel();
+      micGateStatus.textContent = 'Gate активен до сети/ASR; калибровка предполагает тишину.';
       document.querySelector('#mic').textContent = '⏹ Выключить микрофон';
       document.querySelector('#mic-status').textContent = 'Микрофон слушает; VoiceMem сам определяет конец фразы.';
       document.querySelector('#mic-status').textContent = handsFree.checked
         ? 'Hands-free listening; silence finishes each utterance.'
         : 'Microphone listening; use the button to finish the utterance.';
     }
+    function calibrateMicrophoneGate() {
+      const active = voice;
+      if (!active) {
+        micGateStatus.textContent = 'Сначала включите микрофон, затем помолчите 1,5 секунды.';
+        return;
+      }
+      if (active.gate.calibration) return;
+      active.gate.calibration = [];
+      micCalibrate.disabled = true;
+      micGateStatus.textContent = 'Калибровка: молчите 1,5 секунды…';
+      active.gate.calibrationTimer = window.setTimeout(() => {
+        const values = active.gate.calibration || [];
+        active.gate.calibration = null;
+        active.gate.calibrationTimer = null;
+        micCalibrate.disabled = false;
+        if (!values.length || voice !== active) {
+          micGateStatus.textContent = 'Не удалось собрать сигнал для калибровки.';
+          return;
+        }
+        const sorted = values.slice().sort((left, right) => left - right);
+        const noiseFloor = sorted[Math.floor(sorted.length * 0.6)];
+        const threshold = clamp(noiseFloor * 2.4, 0.005, 0.15);
+        micGate.value = threshold.toFixed(3);
+        updateMicGateLabel();
+        active.gate.open = false;
+        active.gate.silentBlocks = 0;
+        active.gate.preRoll.length = 0;
+        micGateStatus.textContent = `Шумовой пол ${formatDb(noiseFloor)}; новый порог ${formatDb(threshold)}.`;
+      }, 1550);
+    }
+    try {
+      const savedGate = Number(localStorage.getItem('jawl-mic-gate'));
+      if (Number.isFinite(savedGate)) micGate.value = clamp(savedGate, 0.005, 0.15).toFixed(3);
+    } catch (_) { /* private browsing */ }
+    updateMicGateLabel();
+    micGate.addEventListener('input', updateMicGateLabel);
+    micCalibrate.addEventListener('click', calibrateMicrophoneGate);
     async function bootstrap() {
       const response = await fetch('/api/session', {cache: 'no-store'});
       const data = await response.json();

@@ -43,6 +43,16 @@ streaming ASR and VAD choice. A `type=end_audio` request sends bounded silence
 to finish an active phrase when capture is stopped. Audio is not persisted or
 included in output events; chunks are limited to 48 KiB.
 
+The browser microphone adapter has a local noise gate before this contract is
+invoked. Its threshold is configurable in the control page as a normalized
+RMS amplitude and is stored only in browser local storage. A closed gate does
+not enqueue or transmit PCM; an opening gate includes at most 120 ms of
+bounded pre-roll, and a three-block release plus hysteresis prevents short
+consonants from being clipped. The page exposes instantaneous RMS, peak hold
+and gate state. `getUserMedia` receives browser AEC/noise-suppression hints,
+but the gate cannot promise hardware-level filtering because that depends on
+the browser, driver and microphone interface.
+
 ## Optional external final ASR
 
 An OpenAI-compatible audio provider may be configured with `--asr-url` and
