@@ -24,9 +24,8 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: the current SSE-close-race fix and state documentation are
-  uncommitted after the final full-gate verification; commit is pending.
-- Latest feature commit: `663fb71` (`feat: add correlated JAWL web chat`).
+- Working tree: clean after the verified SSE-close-race fix commit.
+- Latest feature commit: `9363de3` (`fix: harden JAWL SSE cancellation`).
 
 ## Completed in this repository
 
@@ -207,7 +206,7 @@ HTTP E2E tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
-The working tree has the current SSE fix and state update uncommitted; the
+The SSE fix and its focused regression test are preserved in `9363de3`; the
 preceding microphone slice is preserved in `36a808c` and the TTS slice in
 `a217cec`.
 
@@ -221,7 +220,7 @@ also deferred.
 
 ## Next action
 
-Commit the verified fix. Then validate the web
+Validate the web
 bridge against a live production JAWL model/tool profile, benchmark the
 installed VoiceMem ASR modes on a real Russian microphone and validate
 production model warmup. Then benchmark CozyVoice latency and choose the
