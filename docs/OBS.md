@@ -70,6 +70,34 @@ repository. The complete contract is in [contracts/avatar.md](contracts/avatar.m
 
 ## Explicit screen look
 
+### Local Qwen3-VL-2B endpoint
+
+The supplied CPU/RAM benchmark selected Qwen3-VL-2B Q4_K_M with its matching
+F16 mmproj. Start the provider in a separate terminal; the wrapper binds it
+to loopback, keeps the model on CPU and validates the external model files:
+
+```powershell
+cd G:\AI\JAWL-VoiceCompanion
+.\scripts\run_vision_server.ps1
+```
+
+The default paths target `C:\Users\ARTEM\vlm-bench`; override `-ServerPath`,
+`-ModelPath` and `-MmprojPath` for another installation. The endpoint is
+`http://127.0.0.1:8983/v1`, and the model alias is `Qwen3-VL-2B`.
+
+Then start the companion in a second terminal:
+
+```powershell
+.\scripts\run_web.ps1 --port 8766 --hostos-live --screen-enabled `
+  --vision-url "http://127.0.0.1:8983/v1" --vision-model "Qwen3-VL-2B"
+```
+
+The endpoint was smoke-tested with `/health`, `/v1/models` and the existing
+`OpenAICompatibleVisionClient` against `assets/ui_test.png`. Full-resolution
+screen capture remains bounded: the benchmark showed materially higher
+latency, so the next tuning step is capture resizing plus UIA structure and
+coordinate calibration.
+
 The control panel also exposes an explicit, on-demand vision request. It
 captures the focused window through HostOS and sends the transient JPEG to an
 OpenAI-compatible endpoint only when all three options are configured:

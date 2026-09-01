@@ -5,6 +5,9 @@
 - Added an opt-in Windows activity signal for Attention/Presence; recent user
   input suppresses proactive screen speech, while only bounded idle time and
   foreground class metadata are exposed.
+- Recorded the CPU/RAM Vision benchmark decision: Qwen3-VL-2B is the primary
+  local VLM candidate, SmolVLM2-500M is the speed fallback, Bonsai-1.7B is the
+  text-only CPU profile and Qwen3-ASR-0.6B is the leading audio candidate.
 - Added a `run_web.ps1` port preflight so a port occupied by another service
   fails with an actionable message before the Companion starts.
 - Hardened VoiceMem lifecycle handling: empty flushes stay lazy, failed stream

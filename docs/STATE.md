@@ -28,9 +28,10 @@ tiers and delayed CPU/RAM triage, while JAWL remains the only owner of
 promoted memory. The first normalized ambient buffer and authenticated
 browser inspection/configuration path are now implemented. A strict,
 model-neutral delayed audio-triage contract and optional CPU-first Ollama
-adapter are now present; no model is selected or loaded by default. Vision
-VLM selection and integration are explicitly paused until the operator's
-separate CPU/RAM test completes.
+adapter are now present; no model is selected or loaded by default. The
+operator's CPU/RAM benchmark selected Qwen3-VL-2B as the primary Vision
+candidate, with SmolVLM2-500M as a speed fallback; local endpoint integration
+is the next implementation step.
 
 ## Git state
 
@@ -39,8 +40,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the VoiceMem and launch-guard hardening slices.
-- Latest feature commit: `cd4a7bb` (`fix: guard web port conflicts`).
+- Working tree: clean after the Windows activity and Presence slice.
+- Latest feature commit: `54bc689` (`feat: gate proactive speech on user activity`).
 
 ## Completed in this repository
 
@@ -206,6 +207,13 @@ separate CPU/RAM test completes.
   installed or cannot initialize.
 - VoiceMem's current default streaming ASR should not be assumed to be the
   final Russian ASR choice; a benchmark is required.
+- The operator's 2026-09-01 CPU/RAM benchmark selected
+  `Qwen3-VL-2B-Q4_K_M.gguf` with `Qwen3-VL-2B-mmproj-F16.gguf` as the primary
+  VLM profile: approximately 28–36 tok/s, 4.1 GB peak RAM, strong image/video
+  quality and usable UI grounding after calibration. `SmolVLM2-500M` is the
+  low-latency fallback; `Bonsai-1.7B` is text-only and `Qwen3-ASR-0.6B` is
+  the leading audio candidate. The files live outside this repository under
+  `C:\Users\ARTEM\vlm-bench\models`; no weights are copied into source.
 - The model-neutral REST TTS adapter now uses at most three concurrent
   sentence requests, merges compatible WAV chunks in source order, and
   exposes explicit cancellation. The browser aborts stale playback requests
@@ -280,8 +288,8 @@ separate CPU/RAM test completes.
 - validate the TTS model selected by the external benchmark, measure startup/
   latency and decide whether an actual streaming TTS worker is needed;
 - choose the initial JAWL LLM endpoint/profile;
-- decide whether local VLM runs through the existing QWB endpoint or a new
-  local service;
+- validate the local `llama-server` OpenAI-compatible endpoint with the
+  selected Qwen3-VL-2B model and mmproj;
 - measure actual GPU contention and model residency on the target machine.
 - validate the correlated web bridge against a production JAWL model/tool
   profile that emits user-facing broadcasts and add restart/reconnect recovery
@@ -329,8 +337,9 @@ The current implementation adds `AmbientMemoryBuffer` and authenticated
 fake audio/visual input and the loopback-to-ambient HTTP path are covered
 end-to-end while live Windows permission/startup remains unconnected. Audio
 triage now has a strict provider contract, optional CPU-first Ollama adapter
-and benchmark protocol with unit coverage;
-Vision/VLM remains model-neutral and paused by explicit decision.
+and benchmark protocol with unit coverage. The operator's model benchmark
+now names Qwen3-VL-2B as the primary VLM candidate and leaves model loading
+outside the repository until the local server contract is verified.
 
 The current TTS follow-up adds bounded parallel sentence requests with
 source-order merge, explicit server cancellation, browser request abort,
@@ -346,7 +355,8 @@ included in the bounded health response. The full gate covers these paths.
 The current Presence follow-up adds the opt-in Windows activity signal and
 tests the public attention state through the HTTP E2E watcher path. It does
 not inspect keystrokes, titles or clipboard contents, and it does not select
-or load a VLM.
+or load a VLM; the next step is the separately benchmarked Qwen3-VL-2B
+endpoint.
 
 The launch follow-up adds a PowerShell preflight for the selected web port;
 the observed `426 Upgrade Required` on port `8765` is now diagnosed before the
@@ -378,7 +388,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 126 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 131 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -400,18 +410,17 @@ model warmup are still pending. The desktop-pet launcher is available as a
 bounded always-on-top presentation shell; native transparent compositing is
 still deferred. The system-audio loopback adapter, permission/API wiring and
 isolated ASR consumer are implemented; backend installation and real-device
-capture/ASR quality validation remain pending. The CPU/RAM benchmark and
-triage-worker scheduling are still pending; no VLM model is being selected in
-this workstream.
+capture/ASR quality validation remain pending. The CPU/RAM benchmark is
+complete; triage-worker scheduling and the Qwen3-VL-2B local endpoint
+integration remain pending.
 
 ## Next action
 
-Validate the web bridge and explicit screen-event IPC against a live
-production JAWL model/tool profile, including final response/broadcast
-behavior. In parallel, benchmark audio-triage candidates and the installed
-VoiceMem ASR modes on real Russian audio, then validate the existing isolated
-Windows loopback consumer on the real device. Keep Vision/VLM as a provider
-contract only until the separate model test returns a decision.
+Start and validate the local `llama-server` OpenAI-compatible endpoint with
+Qwen3-VL-2B and its mmproj, then run the existing explicit `vision__look` and
+screen-watcher paths against it. In parallel, benchmark audio-triage
+candidates and the installed VoiceMem ASR modes on real Russian audio, then
+validate the existing isolated Windows loopback consumer on the real device.
 
 ## State update protocol
 

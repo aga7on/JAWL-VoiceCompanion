@@ -291,3 +291,21 @@ windows, but it does not own state, credentials, policy or Live2D rendering.
 OBS uses the same surface directly for transparency. This keeps the core
 lightweight and avoids introducing a second native UI runtime before a real
 Live2D bundle and compositing requirements are validated.
+
+## ADR-021 - Use Qwen3-VL-2B as the primary local Vision profile
+
+Status: Accepted
+Date: 2026-09-01
+
+The operator's CPU/RAM benchmark selected Qwen3-VL-2B Q4_K_M with the
+matching F16 mmproj as the first Vision profile. It produced the best overall
+and UI-automation results in the supplied comparison while remaining within
+the target CPU/RAM envelope. SmolVLM2-500M remains the low-latency fallback
+when response time matters more than video/UI quality.
+
+The model weights are user-owned files outside this repository and are not
+copied or redistributed by the project. The integration target is a local
+loopback `llama-server` OpenAI-compatible endpoint. Full-resolution screen
+capture must remain bounded because the benchmark showed materially higher
+latency; resizing, UIA structure and calibrated coordinates remain part of
+the screen tool contract. This decision does not select a TTS or ASR model.

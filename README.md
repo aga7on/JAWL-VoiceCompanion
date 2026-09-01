@@ -69,6 +69,19 @@ Add `--user-activity` to suppress proactive screen speech while Windows has
 recent user input. The signal is limited to idle time and foreground window
 class; it does not capture keystrokes, window titles or clipboard contents.
 
+The current Vision benchmark profile is Qwen3-VL-2B with its matching mmproj
+as the primary CPU/RAM candidate. SmolVLM2-500M is retained as a low-latency
+fallback. The model files remain outside this repository; the local
+`llama-server` endpoint can be started with the repository wrapper:
+
+```powershell
+.\scripts\run_vision_server.ps1
+```
+
+It binds Qwen to `http://127.0.0.1:8983/v1` using the benchmarked external
+files and keeps inference on CPU. The full screen integration command is in
+[docs/OBS.md](docs/OBS.md).
+
 To connect the text surface and the read-only inspection panel to JAWL's local
 web console, pass its URL:
 
