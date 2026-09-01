@@ -45,6 +45,30 @@ load its local Pixi/Cubism files before creating the model. The wrapper is
 deliberately an asset-level plugin: replacing the renderer does not change
 JAWL, VoiceMem, HostOS or the OBS URL.
 
+## Lip-sync signal
+
+The control page analyses the currently playing TTS element with a browser
+`AnalyserNode` and publishes only a bounded presentation event:
+
+```json
+{
+  "schema_version": 1,
+  "type": "avatar.audio",
+  "amplitude": 0.42,
+  "speaking": true,
+  "timestamp_ms": 1750000000000
+}
+```
+
+The event is sent through `BroadcastChannel` for low latency and through the
+authenticated `POST /api/avatar/audio` route so an OBS/desktop-pet browser
+context can recover it from the `avatar_audio` property in `GET /api/state`.
+The backend keeps only this short-lived scalar signal, expires it after a
+bounded interval and never stores audio. Invalid, out-of-order or stale
+signals are ignored by the avatar. A renderer receives the resulting `0..1`
+value through `setLipSync(amplitude)`; the dependency-free fallback maps it to
+mouth motion.
+
 ## Diagnostics and fallback
 
 ```powershell

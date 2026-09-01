@@ -16,7 +16,7 @@
     .eye::after { content: ''; position: absolute; left: 34%; top: 25%; width: 42%; height: 52%; border-radius: 50%; background: #293651; }
     .eye-left { left: 24%; }
     .eye-right { right: 24%; }
-    #mouth { position: absolute; left: 38%; top: 64%; width: 24%; height: 8%; border-bottom: 3px solid #d8ecff; border-radius: 0 0 50% 50%; transition: all .18s ease; }
+    #mouth { --lip-sync: 0; --mouth-rotation: 0deg; position: absolute; left: 38%; top: 64%; width: 24%; height: 8%; border-bottom: 3px solid #d8ecff; border-radius: 0 0 50% 50%; transform: rotate(var(--mouth-rotation)) scaleY(calc(.88 + var(--lip-sync))); transform-origin: center; transition: all .18s ease; }
     .cheek { position: absolute; top: 59%; width: 13%; height: 6%; border-radius: 50%; background: #ff9eb855; opacity: 0; transition: opacity .18s ease; }
     .cheek-left { left: 13%; }
     .cheek-right { right: 13%; }
@@ -29,6 +29,7 @@
     .state-thinking #head { animation: thinking 1.4s ease-in-out infinite; }
     .state-speaking #badge { color: #fff1bc; border-color: #ffe49a; }
     .state-speaking #mouth { animation: talk .16s ease-in-out infinite alternate; }
+    .state-speaking.lip-sync-active #mouth { animation: none; }
     .expression-concerned #head { filter: hue-rotate(295deg) saturate(0.8); }
     .expression-confused #head { filter: hue-rotate(35deg) saturate(1.15); }
     .expression-happy #mouth { height: 15%; border-bottom-width: 4px; border-radius: 0 0 60% 60%; }
@@ -37,7 +38,7 @@
     .expression-angry .eye { transform: rotate(12deg); }
     .expression-angry #mouth { width: 30%; left: 35%; border-bottom-color: #ff9eae; }
     .expression-surprised #mouth { width: 14%; height: 14%; left: 43%; border: 3px solid #d8ecff; border-radius: 50%; }
-    .expression-confused #mouth { transform: rotate(-8deg); }
+    .expression-confused #mouth { --mouth-rotation: -8deg; }
     .expression-concerned #mouth { width: 18%; left: 41%; }
     @keyframes blink { 0%, 46%, 49%, 100% { transform: scaleY(1); } 47%, 48% { transform: scaleY(.08); } }
     @keyframes talk { from { transform: scaleY(.65); } to { transform: scaleY(1.35); } }
@@ -66,6 +67,7 @@
     const canvas = document.querySelector('#live2d-canvas');
     const subtitle = document.querySelector('#subtitle');
     const debug = document.querySelector('#debug');
+    const mouth = document.querySelector('#mouth');
     const showDebug = new URLSearchParams(window.location.search).get('debug') === '1';
     const expressionFallbacks = {
       neutral: 'neutral', attentive: 'attentive', concerned: 'concerned', confused: 'confused',
@@ -73,6 +75,11 @@
     };
     let live2d = null;
     let live2dError = '';
+    let audioAmplitude = 0;
+    let audioSpeaking = false;
+    let audioTimestamp = 0;
+    let audioReceivedAt = 0;
+    let avatarAudioChannel = null;
     if (showDebug) debug.classList.remove('hidden');
 
     function safeExpression(value) {
@@ -88,6 +95,28 @@
         document.head.appendChild(script);
       });
     }
+    function acceptAudioEvent(event) {
+      if (!event || event.schema_version !== 1 || event.type !== 'avatar.audio') return;
+      const amplitude = Number(event.amplitude);
+      const timestamp = Number(event.timestamp_ms) || 0;
+      if (!Number.isFinite(amplitude) || amplitude < 0 || amplitude > 1 || typeof event.speaking !== 'boolean') return;
+      if (audioTimestamp && (!timestamp || timestamp < audioTimestamp)) return;
+      audioAmplitude = amplitude;
+      audioSpeaking = event.speaking;
+      audioTimestamp = timestamp;
+      audioReceivedAt = performance.now();
+      applyLipSync();
+    }
+    function applyLipSync() {
+      const fresh = audioSpeaking && performance.now() - audioReceivedAt <= 900;
+      const amplitude = fresh ? audioAmplitude : 0;
+      mouth.style.setProperty('--lip-sync', (amplitude * 0.7).toFixed(3));
+      return {fresh, amplitude};
+    }
+    try {
+      avatarAudioChannel = new BroadcastChannel('jawl-voicecompanion-avatar');
+      avatarAudioChannel.onmessage = event => acceptAudioEvent(event.data);
+    } catch (_) { /* /api/state polling remains available */ }
     async function mountLive2D() {
       try {
         const response = await fetch('/api/avatar/config', {cache: 'no-store'});
@@ -120,13 +149,16 @@
       const response = turn.response || {};
       const avatarState = response.avatar || {state: 'idle', expression: 'neutral'};
       const expression = safeExpression(avatarState.expression || response.emotion?.id);
-      avatar.className = `${live2d ? 'hidden ' : ''}expression-${expression} state-${String(avatarState.state || 'idle').replace(/[^a-z0-9_-]/gi, '')}`;
+      const backendAudio = state.avatar_audio;
+      if (backendAudio) acceptAudioEvent({...backendAudio, type: 'avatar.audio'});
+      const lipSync = applyLipSync();
+      avatar.className = `${live2d ? 'hidden ' : ''}expression-${expression} state-${String(avatarState.state || 'idle').replace(/[^a-z0-9_-]/gi, '')}${lipSync.fresh ? ' lip-sync-active' : ''}`;
       subtitle.textContent = response.speak ? String(response.text || '').slice(0, 280) : '';
       if (live2d) {
         try {
           live2d.setExpression?.(expression, Number(response.emotion?.intensity || 0));
           live2d.setMotion?.(String(avatarState.motion || 'idle'));
-          live2d.setLipSync?.(0);
+          live2d.setLipSync?.(lipSync.amplitude);
         } catch (error) {
           live2d.setExpression?.('neutral', 0);
           if (showDebug) debug.textContent = `Live2D neutral fallback · ${error.message}`;

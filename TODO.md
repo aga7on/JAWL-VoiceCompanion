@@ -148,7 +148,10 @@ Acceptance criteria:
 - [~] Add visible listening/screen-observation indicators; the browser now
   exposes ambient-memory consent and system-audio loopback state, while the
   native pet indicator and full screen-capture status remain.
-- [ ] Add lip-sync from audio amplitude.
+- [~] Add lip-sync from audio amplitude; the control page publishes a bounded
+  analyser signal through BroadcastChannel plus the authenticated ephemeral
+  backend bridge, and both fallback/runtime hooks consume it. Final tuning
+  against the selected Live2D model remains.
 - [~] Add expression capability mapping and fallbacks; bounded semantic
   mapping and neutral fallback are implemented, while runtime capability
   discovery remains.

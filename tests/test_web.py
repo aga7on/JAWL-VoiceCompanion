@@ -1,6 +1,7 @@
 import json
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
@@ -67,6 +68,8 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"tts-voice", frontend)
             self.assertIn(b"tts-speed", frontend)
             self.assertIn(b"voice: ttsVoice.value.trim()", frontend)
+            self.assertIn(b"Analyser", frontend)
+            self.assertIn(b"/api/avatar/audio", frontend)
             self.assertIn(b"/api/hostos/approvals/", frontend)
             self.assertIn(b"/execute", frontend)
             self.assertIn("Выполнить предложение".encode("utf-8"), frontend)
@@ -89,6 +92,31 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(session["session_token"])
         self.assertTrue(session["csrf_token"])
+
+    def test_avatar_audio_is_bounded_ephemeral_and_session_bound(self):
+        _, initial = self.get_json("/api/state")
+        self.assertFalse(initial["avatar_audio"]["speaking"])
+        request = Request(
+            self.base + "/api/avatar/audio",
+            data=b'{"amplitude":0.5,"speaking":true,"timestamp_ms":1}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+        _, changed = self.post_json("/api/avatar/audio", {"amplitude": 0.5, "speaking": True, "timestamp_ms": 10})
+        self.assertTrue(changed["avatar_audio"]["speaking"])
+        self.assertEqual(changed["avatar_audio"]["amplitude"], 0.5)
+        _, stale = self.post_json("/api/avatar/audio", {"amplitude": 0.0, "speaking": False, "timestamp_ms": 9})
+        self.assertTrue(stale["avatar_audio"]["speaking"])
+        _, stopped = self.post_json("/api/avatar/audio", {"amplitude": 0.0, "speaking": False, "timestamp_ms": 11})
+        self.assertFalse(stopped["avatar_audio"]["speaking"])
+        self.post_json("/api/avatar/audio", {"amplitude": 0.5, "speaking": True, "timestamp_ms": 12})
+        time.sleep(0.8)
+        _, expired = self.get_json("/api/state")
+        self.assertFalse(expired["avatar_audio"]["speaking"])
 
     def test_vision_status_and_dry_run_look_are_available(self):
         status, vision = self.get_json("/api/vision/status")

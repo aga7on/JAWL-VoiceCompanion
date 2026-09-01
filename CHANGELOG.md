@@ -25,6 +25,8 @@
 - Upgraded the transparent avatar fallback from static geometry to a lightweight
   reactive 2D face with expression, blink and speaking states; external Live2D
   still takes precedence when a valid bundle is configured.
+- Added an ephemeral browser-audio amplitude bridge for fallback and Live2D
+  lip-sync, with BroadcastChannel fast-path and backend polling fallback.
 
 - Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
   transient JPEG profile, exposes bounded coordinate-scale metadata and makes

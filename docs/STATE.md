@@ -43,7 +43,7 @@ workflows, while semantic watcher tuning remains.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the reactive 2D avatar validation slice.
+- Working tree: clean after the ephemeral avatar lip-sync validation slice.
 - Latest feature commit: current `HEAD` (`feat: improve reactive 2d avatar fallback`).
 
 ## Completed in this repository
@@ -97,6 +97,9 @@ workflows, while semantic watcher tuning remains.
 - The transparent avatar fallback now renders a lightweight reactive 2D face
   with expression, blink and speaking animation. A valid user-supplied Live2D
   bundle still replaces it; no third-party character asset was copied.
+- The TTS browser path now derives a bounded amplitude signal with
+  `AnalyserNode`, sends it through a BroadcastChannel and ephemeral backend
+  state, and drives fallback/runtime lip-sync without storing audio.
 - Browser adapter now supports bounded HTTP(S) navigation and delegates
   semantic actions to UIA; no browser automation runtime is installed yet.
 - Browser API exposes the tool registry and routes execution requests through
@@ -449,7 +452,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 149 unit tests and 13 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 150 unit tests and 13 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -466,7 +469,7 @@ Known limitation: no licensed Live2D model/runtime is installed yet; the
 reactive 2D fallback remains the default. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; production semantic scoring and JAWL
 final-wording delivery, real custom-app pointer acceptance and pixel-level redaction,
-real-microphone ASR quality,
+real-microphone ASR quality and final Live2D lip-sync tuning,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The desktop-pet launcher is available as a
 bounded always-on-top presentation shell; native transparent compositing is

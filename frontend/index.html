@@ -103,6 +103,13 @@
     let currentAudio = null;
     let ttsAbort = null;
     let bargeInTriggered = false;
+    let avatarAudioContext = null;
+    let avatarAudioMonitor = null;
+    let avatarAudioPublishTimer = null;
+    let avatarAudioPending = null;
+    let avatarAudioLastPublishedAt = 0;
+    let avatarAudioChannel = null;
+    try { avatarAudioChannel = new BroadcastChannel('jawl-voicecompanion-avatar'); } catch (_) { /* backend polling remains available */ }
     function addMessage(who, text) {
       const item = document.createElement('div');
       item.className = 'message';
@@ -217,7 +224,92 @@
     async function apiPost(path, body) {
       return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
     }
+    function publishAvatarAudio(amplitude, speaking) {
+      const event = {
+        schema_version: 1,
+        type: 'avatar.audio',
+        amplitude: Math.max(0, Math.min(1, Number(amplitude) || 0)),
+        speaking: Boolean(speaking),
+        timestamp_ms: Date.now()
+      };
+      avatarAudioPending = event;
+      try { avatarAudioChannel?.postMessage(event); } catch (_) { /* backend fallback remains available */ }
+      const wait = Math.max(0, 80 - (performance.now() - avatarAudioLastPublishedAt));
+      if (!avatarAudioPublishTimer) {
+        avatarAudioPublishTimer = window.setTimeout(flushAvatarAudio, wait);
+      }
+    }
+    function flushAvatarAudio() {
+      avatarAudioPublishTimer = null;
+      const event = avatarAudioPending;
+      avatarAudioPending = null;
+      if (!event) return;
+      avatarAudioLastPublishedAt = performance.now();
+      if (!Object.keys(sessionHeaders).length) return;
+      fetch('/api/avatar/audio', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', ...sessionHeaders},
+        body: JSON.stringify(event)
+      }).catch(() => { /* avatar presentation must not break text or TTS */ });
+      if (avatarAudioPending && !avatarAudioPublishTimer) {
+        avatarAudioPublishTimer = window.setTimeout(flushAvatarAudio, 80);
+      }
+    }
+    function stopAvatarAudioMonitor() {
+      const monitor = avatarAudioMonitor;
+      avatarAudioMonitor = null;
+      if (monitor) {
+        cancelAnimationFrame(monitor.frame);
+        try { monitor.source.disconnect(); } catch (_) {}
+        try { monitor.analyser.disconnect(); } catch (_) {}
+      }
+      publishAvatarAudio(0, false);
+    }
+    async function startAvatarAudioMonitor(audio) {
+      stopAvatarAudioMonitor();
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        publishAvatarAudio(0, true);
+        return;
+      }
+      try {
+        avatarAudioContext ||= new AudioContextClass();
+        if (avatarAudioContext.state === 'suspended') await avatarAudioContext.resume();
+        if (currentAudio !== audio) return;
+        const source = avatarAudioContext.createMediaElementSource(audio);
+        const analyser = avatarAudioContext.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        analyser.connect(avatarAudioContext.destination);
+        const values = new Uint8Array(analyser.fftSize);
+        const monitor = {audio, source, analyser, frame: 0};
+        avatarAudioMonitor = monitor;
+        const sample = () => {
+          if (avatarAudioMonitor !== monitor || currentAudio !== audio || audio.ended) {
+            if (avatarAudioMonitor === monitor) stopAvatarAudioMonitor();
+            return;
+          }
+          if (audio.paused) {
+            monitor.frame = requestAnimationFrame(sample);
+            return;
+          }
+          analyser.getByteTimeDomainData(values);
+          let energy = 0;
+          for (const value of values) {
+            const normalized = (value - 128) / 128;
+            energy += normalized * normalized;
+          }
+          const rms = Math.sqrt(energy / Math.max(1, values.length));
+          publishAvatarAudio(Math.max(0, Math.min(1, (rms - 0.012) * 7)), true);
+          monitor.frame = requestAnimationFrame(sample);
+        };
+        sample();
+      } catch (_) {
+        publishAvatarAudio(0, true);
+      }
+    }
     async function stopSpeech() {
+      stopAvatarAudioMonitor();
       if (currentAudio) {
         currentAudio.pause();
         currentAudio.currentTime = 0;
@@ -250,7 +342,9 @@
         const url = URL.createObjectURL(await response.blob());
         const audio = new Audio(url);
         currentAudio = audio;
-        audio.onended = () => { URL.revokeObjectURL(url); if (currentAudio === audio) currentAudio = null; };
+        audio.onended = () => { stopAvatarAudioMonitor(); URL.revokeObjectURL(url); if (currentAudio === audio) currentAudio = null; };
+        audio.onerror = () => { stopAvatarAudioMonitor(); URL.revokeObjectURL(url); if (currentAudio === audio) currentAudio = null; };
+        await startAvatarAudioMonitor(audio);
         await audio.play();
       } catch (error) {
         if (error.name === 'AbortError') return;

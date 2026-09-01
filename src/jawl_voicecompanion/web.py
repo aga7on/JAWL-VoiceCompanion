@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import base64
 import secrets
+import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from math import isfinite
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -32,6 +35,7 @@ from .system_audio import SystemAudioUnavailable
 
 
 MAX_BODY_BYTES = 64 * 1024
+AVATAR_AUDIO_STALE_SECONDS = 0.75
 
 
 class CompanionServer(ThreadingHTTPServer):
@@ -72,7 +76,43 @@ class CompanionServer(ThreadingHTTPServer):
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
+        self._avatar_audio_lock = threading.Lock()
+        self._avatar_audio = {
+            "schema_version": 1,
+            "amplitude": 0.0,
+            "speaking": False,
+            "timestamp_ms": 0,
+            "updated_at": 0.0,
+        }
         super().__init__(server_address, CompanionRequestHandler)
+
+    def set_avatar_audio(self, amplitude: float, speaking: bool, timestamp_ms: int) -> dict[str, Any]:
+        """Keep only a short-lived presentation signal; never persist audio."""
+        with self._avatar_audio_lock:
+            if timestamp_ms >= int(self._avatar_audio["timestamp_ms"]):
+                self._avatar_audio.update({
+                    "amplitude": max(0.0, min(1.0, float(amplitude))),
+                    "speaking": bool(speaking),
+                    "timestamp_ms": int(timestamp_ms),
+                    "updated_at": time.monotonic(),
+                })
+            return self._avatar_audio_snapshot_locked()
+
+    def avatar_audio(self) -> dict[str, Any]:
+        with self._avatar_audio_lock:
+            return self._avatar_audio_snapshot_locked()
+
+    def _avatar_audio_snapshot_locked(self) -> dict[str, Any]:
+        snapshot = {
+            "schema_version": 1,
+            "amplitude": float(self._avatar_audio["amplitude"]),
+            "speaking": bool(self._avatar_audio["speaking"]),
+            "timestamp_ms": int(self._avatar_audio["timestamp_ms"]),
+        }
+        if time.monotonic() - float(self._avatar_audio["updated_at"]) > AVATAR_AUDIO_STALE_SECONDS:
+            snapshot["amplitude"] = 0.0
+            snapshot["speaking"] = False
+        return snapshot
 
     def server_close(self) -> None:
         if self.screen_watcher is not None:
@@ -114,7 +154,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json({"session_token": self.server.session_token, "csrf_token": self.server.csrf_token})
             return
         if path == "/api/state":
-            self._json(self.server.gateway.state())
+            state = self.server.gateway.state()
+            state["avatar_audio"] = self.server.avatar_audio()
+            self._json(state)
             return
         if path == "/api/audit":
             try:
@@ -278,6 +320,24 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         try:
             self._require_browser_session()
             payload = self._read_json()
+            if self.path == "/api/avatar/audio":
+                if payload.get("schema_version", 1) != 1:
+                    raise ValueError("unsupported avatar audio schema")
+                amplitude = payload.get("amplitude", 0.0)
+                speaking = payload.get("speaking", False)
+                timestamp_ms = payload.get("timestamp_ms", int(time.time() * 1000))
+                if isinstance(amplitude, bool) or not isinstance(amplitude, (int, float)) or not isfinite(float(amplitude)):
+                    raise ValueError("amplitude must be a finite number")
+                if not 0.0 <= float(amplitude) <= 1.0:
+                    raise ValueError("amplitude must be between 0 and 1")
+                if not isinstance(speaking, bool):
+                    raise ValueError("speaking must be boolean")
+                if isinstance(timestamp_ms, bool) or not isinstance(timestamp_ms, int):
+                    raise ValueError("timestamp_ms must be an integer")
+                self._json({"ok": True, "avatar_audio": self.server.set_avatar_audio(
+                    float(amplitude), speaking, timestamp_ms,
+                )})
+                return
             if self.path == "/api/chat":
                 self._json(self.server.gateway.handle_text(payload.get("text", "")))
                 return

@@ -621,12 +621,17 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(doctor_checks["hostos"]["ready"])
         self.assertNotIn("must-not-cross", json.dumps(doctor, ensure_ascii=False))
         with urlopen(self.base + "/", timeout=3) as response:
-            self.assertIn(b"attention-dnd", response.read())
+            frontend = response.read()
+            self.assertIn(b"attention-dnd", frontend)
+            self.assertIn(b"/api/avatar/audio", frontend)
+            self.assertIn(b"createMediaElementSource", frontend)
         with urlopen(self.base + "/avatar", timeout=3) as response:
             avatar_html = response.read()
             self.assertIn(b"JAWL Avatar", avatar_html)
             self.assertIn(b'id="mouth"', avatar_html)
             self.assertIn(b"2D FALLBACK", avatar_html)
+            self.assertIn(b"BroadcastChannel", avatar_html)
+            self.assertIn(b"setLipSync", avatar_html)
         _, avatar_config = self.get_json("/api/avatar/config")
         self.assertTrue(avatar_config["enabled"])
         self.assertTrue(avatar_config["ready"])
@@ -641,6 +646,17 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(self.jawl_adapter.last_status, "connected")
         status, state = self.get_json("/api/state")
         self.assertEqual(state["last_turn"]["response"]["text"], chat["text"])
+        _, pulse = self.post_json(
+            "/api/avatar/audio",
+            {"schema_version": 1, "amplitude": 0.4, "speaking": True, "timestamp_ms": 1},
+        )
+        self.assertTrue(pulse["avatar_audio"]["speaking"])
+        _, state_with_audio = self.get_json("/api/state")
+        self.assertEqual(state_with_audio["avatar_audio"]["amplitude"], 0.4)
+        self.post_json(
+            "/api/avatar/audio",
+            {"schema_version": 1, "amplitude": 0.0, "speaking": False, "timestamp_ms": 2},
+        )
 
         self.jawl_adapter.timeout = 0.1
         _, degraded = self.post_json("/api/chat", {"text": "no broadcast"})

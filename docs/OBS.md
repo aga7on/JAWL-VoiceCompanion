@@ -25,6 +25,12 @@ response subtitle and maps the response envelope's avatar state/expression to
 the presentation. It does not contain a control token and cannot change the
 HostOS level, approve tools or trigger desktop actions.
 
+When the control page is open in parallel, its TTS playback sends only a
+short-lived amplitude signal to the `avatar_audio` property. This drives the
+fallback mouth and the optional runtime's `setLipSync` hook even when OBS uses
+a separate browser context; no audio bytes are sent to or stored by this
+bridge.
+
 Add `?debug=1` temporarily to show state diagnostics in the upper-left corner:
 
 ```text
