@@ -226,7 +226,16 @@ class _SseReader:
                         self._publish("\n".join(data_lines))
                         data_lines.clear()
         except (HTTPError, URLError, OSError, TimeoutError, ValueError):
-            self.error = JawlWebUnavailable("JAWL chat stream is not reachable")
+            if not self._stop.is_set():
+                self.error = JawlWebUnavailable("JAWL chat stream is not reachable")
+        except Exception:  # noqa: BLE001 - a concurrent close may break http.client internals
+            # `stop()` closes the response from the request thread.  On some
+            # Python/HTTPResponse combinations readline() then raises an
+            # implementation-level AttributeError instead of returning EOF.
+            # Treat that race as normal cancellation; never leak a traceback
+            # from the daemon reader thread.
+            if not self._stop.is_set():
+                self.error = JawlWebUnavailable("JAWL chat stream failed")
         finally:
             self.ready.set()
             self.done.set()

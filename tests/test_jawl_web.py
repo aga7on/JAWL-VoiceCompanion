@@ -52,6 +52,13 @@ class _SseResponse:
         self.lines.put(b"")
 
 
+class _BrokenOnCloseSseResponse(_SseResponse):
+    def readline(self):
+        if self.closed.is_set():
+            raise AttributeError("closed response has no underlying stream")
+        return super().readline()
+
+
 class JawlWebTests(unittest.TestCase):
     def test_persona_filters_config_secrets(self):
         responses = {
@@ -130,6 +137,24 @@ class JawlWebTests(unittest.TestCase):
         cancel.set()
         thread.join(timeout=2)
         self.assertIsInstance(result.get("error"), JawlTurnCancelled)
+        self.assertEqual(adapter.last_chat_status, "cancelled")
+
+    def test_chat_cancellation_tolerates_http_reader_close_race(self):
+        stream = _BrokenOnCloseSseResponse()
+        cancel = threading.Event()
+
+        def opener(request, timeout):
+            del timeout
+            if request.full_url.endswith("/api/chat/stream"):
+                return stream
+            cancel.set()
+            return _Response({"ok": True, "message": {"seq": 1, "sender": "User"}})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770", opener=opener, chat_timeout_seconds=2,
+        )
+        with self.assertRaises(JawlTurnCancelled):
+            adapter.respond("РћС‚РјРµРЅРё РјРµРЅСЏ", cancel_event=cancel)
         self.assertEqual(adapter.last_chat_status, "cancelled")
 
 

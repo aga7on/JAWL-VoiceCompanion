@@ -69,3 +69,7 @@
   acknowledges a user sequence through `/api/chat`, filters old messages and
   propagates cancellation/no-broadcast states through the visible HTTP health
   contract. The web adapter is now preferred over the legacy terminal path.
+- Hardened the correlated SSE reader against the `http.client` close race and
+  added a regression test. A live isolated JAWL/Ollama probe confirmed terminal
+  input and model completion, while preserving `no_broadcast` when the model
+  emits no user-facing terminal message.

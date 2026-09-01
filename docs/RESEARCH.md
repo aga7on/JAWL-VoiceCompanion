@@ -26,6 +26,15 @@ The existing `HostTerminalClient` is therefore an event input plus broadcast
 output channel, not a request/response RPC. The companion must preserve a
 degraded fallback until a correlated streaming contract is implemented.
 
+The correlated web contract was inspected and exercised as well: JAWL's web
+`POST /api/chat` acknowledges the user sequence while
+`GET /api/chat/stream` carries later terminal broadcasts. The companion's
+adapter correlates only a later non-user sequence. In the isolated production
+probe the terminal input reached JAWL and Ollama completed, but the selected
+model emitted no user-facing broadcast, so `no_broadcast` was the correct
+result. JAWL's web helper also resolves its port/history files from the code
+root instead of `JAWL_DATA_DIR`, which matters for multi-instance isolation.
+
 ## VoiceMem
 
 Upstream/reference: [VoiceMem](https://github.com/xzf-thu/VoiceMem)

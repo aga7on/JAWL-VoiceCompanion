@@ -24,8 +24,8 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: changes from the state-sync update are uncommitted until the
-  final full-gate verification passes.
+- Working tree: the current SSE-close-race fix and state documentation are
+  uncommitted after the final full-gate verification; commit is pending.
 - Latest feature commit: `663fb71` (`feat: add correlated JAWL web chat`).
 
 ## Completed in this repository
@@ -94,6 +94,9 @@ storage.
 - The browser now renders the last bounded HostOS audit events; `/api/audit`
   requires the browser session and policy audit entries exclude arguments and
   raw command output.
+- `JawlWebChatAdapter` now treats an HTTP reader exception caused by concurrent
+  response close as normal cancellation; a regression test protects the
+  daemon reader from leaking a traceback.
 
 ## Reference inventory
 
@@ -135,10 +138,17 @@ storage.
   database counters, drives and filtered persona through its own API.
 - A named isolated JAWL turn-smoke was started against local Ollama using a
   copied embedding cache; the LLM request completed without changing
-  canonical JAWL data/config. JAWL produced a native thought with no
-  `send_message_to_terminal` broadcast, so the companion correctly returned
-  degraded fallback. A real user-facing JAWL turn remains unverified because
-  the current terminal protocol has no response correlation.
+  canonical JAWL data/config. Direct terminal handshake produced
+  `HOST_TERMINAL_MESSAGE` and a model response, but the native cycle emitted
+  no `send_message_to_terminal` broadcast, so the companion correctly returned
+  degraded fallback. The web POST+SSE path reached the same terminal bridge;
+  its user-facing success remains unverified for this model profile because
+  JAWL emitted no correlated agent message.
+- JAWL's web helper currently resolves its `chat.py` port/history paths from
+  its repository root rather than `JAWL_DATA_DIR`; a multi-instance launch
+  therefore needs a per-instance code root (or an upstream path fix). The
+  companion accepts only the loopback web URL and does not silently weaken this
+  boundary.
 - `G:\AI\OmniVoice` was inspected and contains only a virtual environment; its
   model/API location is an external blocker.
 - The configured JAWL `terminal.port` is currently stale and has no listening
@@ -165,8 +175,8 @@ storage.
   local service;
 - measure actual GPU contention and model residency on the target machine.
 - validate the correlated web bridge against a production JAWL model/tool
-  profile and add restart/reconnect recovery coverage; no-broadcast remains an
-  explicit degraded state.
+  profile that emits user-facing broadcasts and add restart/reconnect recovery
+  coverage; no-broadcast remains an explicit degraded state.
 
 ## Latest work session
 
@@ -186,16 +196,20 @@ turn-smoke completed an LLM request but exposed the broadcast-only terminal
 boundary; the companion returned degraded fallback as designed.
 The correlated web POST+SSE adapter is now implemented and preferred when a
 JAWL web URL is supplied; sequence correlation, cancellation and degraded
-no-broadcast behavior are covered by tests.
+no-broadcast behavior are covered by tests. The isolated production probe then
+confirmed terminal input and local Ollama completion, but also confirmed the
+no-broadcast model behavior and the upstream root-bound web path. The SSE
+reader close race was fixed with a focused regression test.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed compilation, 69 unit tests and 4 complete
+`scripts/run_full_gate.ps1` passed compilation, 70 unit tests and 4 complete
 HTTP E2E tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
-The working tree is clean after the state-sync commit; the preceding microphone
-slice is preserved in `36a808c` and the TTS slice in `a217cec`.
+The working tree has the current SSE fix and state update uncommitted; the
+preceding microphone slice is preserved in `36a808c` and the TTS slice in
+`a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
 placeholder remains the default. The web server's default executor remains dry-run and no VLM
@@ -207,7 +221,7 @@ also deferred.
 
 ## Next action
 
-Run the full gate after the current feature commit. Then validate the web
+Commit the verified fix. Then validate the web
 bridge against a live production JAWL model/tool profile, benchmark the
 installed VoiceMem ASR modes on a real Russian microphone and validate
 production model warmup. Then benchmark CozyVoice latency and choose the
