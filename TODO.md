@@ -229,8 +229,9 @@ Acceptance criteria:
 - [x] Native JAWL level bridge: browser level 0-3 writes the allowlisted
   config, restarts the agent and updates the companion policy after success.
 - [~] Add native JAWL contracts for unattended/approval state and emergency
-  stop; bridge emergency-stop now stops the native agent, while per-tool
-  cancellation and native approval state still need an upstream contract.
+  stop; bridge stop/reset now controls the native whole-agent lifecycle, while
+  per-tool cancellation and native approval state still need an upstream
+  contract.
 - [x] Add server-side one-shot approval queue with exact request/policy
   fingerprints and allow-once/deny decisions.
 - [~] Add unified tool-call audit log with secret redaction; the metadata-only

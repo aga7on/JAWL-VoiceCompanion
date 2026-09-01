@@ -157,6 +157,9 @@ class HostOSExecutor:
         state["stopped_processes"] = self.stop_all()
         return state
 
+    def reset_emergency_stop(self, actor: str = "user") -> dict[str, Any]:
+        return self.policy.set_emergency_stop(False, actor=actor)
+
     def stop_all(self) -> list[int]:
         with self._process_lock:
             items = list(self._processes.items())

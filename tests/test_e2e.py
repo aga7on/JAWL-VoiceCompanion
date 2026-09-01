@@ -771,6 +771,12 @@ class LocalE2ETests(unittest.TestCase):
             self.assertEqual(_JawlControlHandler.calls[-1], (
                 "POST", "/api/agent/stop", "e2e-console-token",
             ))
+            resumed = post("/api/emergency-stop/reset", {})
+            self.assertEqual(resumed["jawl_agent"], {"status": "started", "pid": 42})
+            self.assertFalse(resumed["policy"]["emergency_stop"])
+            self.assertEqual(_JawlControlHandler.calls[-1], (
+                "POST", "/api/agent/start", "e2e-console-token",
+            ))
         finally:
             control_server.shutdown()
             control_server.server_close()

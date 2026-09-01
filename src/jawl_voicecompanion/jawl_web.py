@@ -161,6 +161,16 @@ class JawlWebAdapter:
             raise JawlWebUnavailable("JAWL agent did not accept the stop request")
         return {"status": "stopped", "forced": bool(stopped.get("forced", False))}
 
+    def start_agent(self) -> dict[str, Any]:
+        """Start JAWL's native agent through its authenticated web API."""
+        if not self.token:
+            raise JawlWebUnavailable("JAWL agent control requires a console token")
+        started = self._request_json("/api/agent/start", method="POST", payload={})
+        if started.get("ok") is not True:
+            raise JawlWebUnavailable("JAWL agent did not accept the start request")
+        pid = started.get("pid")
+        return {"status": "started", **({"pid": pid} if isinstance(pid, int) else {})}
+
     def _get(self, path: str) -> dict[str, Any]:
         return self._request_json(path)
 

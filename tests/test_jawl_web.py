@@ -152,6 +152,16 @@ class JawlWebTests(unittest.TestCase):
         adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
         self.assertEqual(adapter.stop_agent(), {"status": "stopped", "forced": True})
 
+    def test_start_agent_returns_bounded_native_start_result(self):
+        def opener(request, timeout):
+            del timeout
+            self.assertEqual(request.method, "POST")
+            self.assertEqual(request.full_url, "http://127.0.0.1:8770/api/agent/start")
+            return _Response({"ok": True, "pid": 42, "secret": "hidden"})
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        self.assertEqual(adapter.start_agent(), {"status": "started", "pid": 42})
+
     def test_chat_post_and_sse_are_correlated_by_sequence(self):
         stream = _SseResponse()
         posted = threading.Event()

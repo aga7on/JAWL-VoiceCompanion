@@ -414,6 +414,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                         result["jawl_agent"] = {"status": "offline", "error": str(exc)}
                 self._json(result)
                 return
+            if self.path == "/api/emergency-stop/reset":
+                result = {"ok": True}
+                if self.server.jawl_hostos_control and self.server.gateway.jawl_web is not None:
+                    result["jawl_agent"] = self.server.gateway.jawl_web.start_agent()
+                result["policy"] = self.server.hostos.reset_emergency_stop(actor="browser")
+                self._json(result)
+                return
             if self.path == "/api/attention":
                 values = {key: payload[key] for key in ("dnd", "min_significance", "cooldown_seconds", "budget_per_hour", "quiet_hours") if key in payload}
                 if not values:

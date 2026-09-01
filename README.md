@@ -68,6 +68,8 @@ Changing the level writes only JAWL's HostOS fields and restarts its agent;
 the Companion reports success only after the restart succeeds. ROOT means the
 rights of the Windows account running JAWL. The Companion's separate
 unattended checkbox does not claim to alter JAWL's native approval policy.
+The emergency-stop button also stops native JAWL in bridge mode; the adjacent
+resume button starts it again before clearing the local stop.
 
 The web chat adapter keeps JAWL's `/api/chat/stream` SSE open, sends a
 correlated `/api/chat` POST and waits for an agent message with a newer

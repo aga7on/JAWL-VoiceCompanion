@@ -9,6 +9,8 @@
 - Bridge-mode emergency stop now also requests JAWL's native agent stop while
   always cancelling Companion-owned processes locally; per-tool native
   cancellation and native approval synchronization remain pending.
+- Added an explicit browser recovery action that starts native JAWL before
+  clearing the Companion emergency-stop latch.
 - Documented the verified JAWL native HostOS ownership boundary: the current
   companion executor is explicitly labelled as a separate control-plane path
   for controls that are not covered by the authenticated level/stop bridge,

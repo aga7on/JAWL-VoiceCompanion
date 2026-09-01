@@ -53,6 +53,7 @@
       <input id="deny-risks" type="text" placeholder="destructive, shell" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
       <button id="save-denylist" type="button">Сохранить deny-list</button>
       <button id="stop" class="danger">Аварийная остановка</button>
+      <button id="resume" type="button">Возобновить работу</button>
       <h2>Подтверждения</h2>
       <div id="approvals" class="meta">Нет ожидающих запросов.</div>
       <h2>Аватар и OBS</h2>
@@ -344,6 +345,11 @@
     });
     document.querySelector('#stop').addEventListener('click', async () => {
       await apiPost('/api/emergency-stop', {});
+      refresh();
+    });
+    document.querySelector('#resume').addEventListener('click', async () => {
+      if (!window.confirm('Возобновить работу агента и снять аварийную блокировку?')) return;
+      await apiPost('/api/emergency-stop/reset', {});
       refresh();
     });
     const obsUrl = document.querySelector('#obs-url');

@@ -167,6 +167,14 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(blocked["policy"]["deny_tools"], ["shell.exec"])
 
+    def test_emergency_stop_can_be_reset_in_local_control_plane(self):
+        self.post_json("/api/emergency-stop", {})
+        _, stopped = self.get_json("/api/state")
+        self.assertTrue(stopped["policy"]["emergency_stop"])
+        status, resumed = self.post_json("/api/emergency-stop/reset", {})
+        self.assertEqual(status, 200)
+        self.assertFalse(resumed["policy"]["emergency_stop"])
+
     def test_hostos_registry_is_visible_and_requests_use_server_policy(self):
         status, tools = self.get_json("/api/hostos/tools")
         self.assertEqual(status, 200)

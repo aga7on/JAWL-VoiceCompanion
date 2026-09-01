@@ -51,6 +51,11 @@ best-effort calls JAWL's authenticated `/api/agent/stop`; local Companion
 processes are stopped regardless of JAWL availability. This stops native
 Heartbeat, but is not yet a per-tool native cancellation contract.
 
+`POST /api/emergency-stop/reset` is the explicit recovery path. In bridge
+mode it starts native JAWL first and clears the local stop only after that
+request succeeds; without the bridge it clears only the local Companion
+stop.
+
 Without the opt-in bridge, companion-side HostOS execution and JAWL-native
 execution are two explicitly labelled paths. The browser's
 `/api/jawl/hostos` endpoint reports whether control is enabled. With control

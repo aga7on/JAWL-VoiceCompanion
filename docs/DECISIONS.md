@@ -237,3 +237,5 @@ stop route, but this is explicitly a whole-agent stop rather than per-tool
 cancellation. JAWL's native Heartbeat remains the autonomous caller;
 companion unattended and approval state are not reported as native JAWL state
 until JAWL exposes matching contracts.
+The browser recovery action starts native JAWL before clearing the local
+emergency-stop latch, so a failed native start leaves local execution blocked.
