@@ -38,9 +38,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: bridge implementation in progress; full gate is required before
-  commit.
-- Latest feature commit: `6700242` (`docs: record native JAWL HostOS status`).
+- Working tree: clean after the native JAWL HostOS level bridge slice.
+- Latest feature commit: `36cd034` (`feat: synchronize native JAWL HostOS level`).
 
 ## Completed in this repository
 
