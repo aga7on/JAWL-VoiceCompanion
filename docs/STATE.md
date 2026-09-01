@@ -38,7 +38,7 @@ separate CPU/RAM test completes.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the delayed audio-triage provider slice.
-- Latest feature commit: `263f562` (`feat: expose ambient readiness and optional backend`).
+- Latest feature commit: `ec4f7aa` (`feat: add ambient memory browser actions`).
 
 ## Completed in this repository
 
@@ -107,7 +107,8 @@ separate CPU/RAM test completes.
   and report missing loopback backends as degraded.
 - The browser control plane now displays ambient-memory consent, observation
   counts, loopback backend state and running/stopped status, with start/stop
-  controls disabled until consent is active.
+  controls disabled until consent is active. It also exposes explicit triage
+  and clear actions for the bounded buffer.
 - `AmbientTriageProvider` now defines a bounded delayed-provider contract with
   strict provenance/schema validation. `OllamaTriageProvider` is an optional
   stdlib HTTP adapter configured CPU-first (`num_gpu=0`); it does not select,
