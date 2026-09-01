@@ -52,7 +52,8 @@ Acceptance criteria:
 - [!] Add OmniVoice adapter when its model/API location is confirmed; the local
   `G:\AI\OmniVoice` directory currently contains only a virtual environment.
 - [x] Implement bounded sentence chunking for TTS.
-- [ ] Add hidden-thought filtering.
+- [x] Add hidden-thought filtering before user text reaches the envelope,
+  subtitle or TTS boundary.
 - [ ] Implement ordered parallel TTS queue.
 - [~] Implement latest-request-wins synthesis cancellation; browser playback
   cancellation and barge-in integration remain.

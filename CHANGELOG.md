@@ -73,3 +73,5 @@
   added a regression test. A live isolated JAWL/Ollama probe confirmed terminal
   input and model completion, while preserving `no_broadcast` when the model
   emits no user-facing terminal message.
+- Added fail-closed hidden-thought/control-markup filtering to both JAWL chat
+  transports, with HTTP E2E coverage for sanitization and upstream recovery.

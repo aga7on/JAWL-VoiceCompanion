@@ -65,6 +65,12 @@ as an assistant reply.
 The web adapter is preferred when its URL is supplied because its sequence
 acknowledgement provides the stronger correlation boundary.
 
+Before either JAWL transport returns text, the companion removes paired
+`<think>`, `<analysis>`, `<reasoning>`, `<reflection>` and tool-control blocks.
+An unclosed block or line-level internal marker is rejected as
+`invalid_response` and becomes the normal degraded fallback; internal text is
+never forwarded to the response envelope or TTS.
+
 ## Companion routes
 
 These read-only routes require the normal browser session and CSRF headers:

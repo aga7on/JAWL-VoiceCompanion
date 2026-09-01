@@ -11,7 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, urlopen
 
-from .jawl_adapter import JawlTurnCancelled
+from .jawl_adapter import JawlTurnCancelled, JawlUnsafeResponse, filter_user_response
 
 
 class JawlWebUnavailable(ConnectionError):
@@ -111,7 +111,10 @@ class JawlWebAdapter:
         try:
             with self._opener(request, timeout=self.timeout_seconds) as response:
                 raw = response.read(self._MAX_RESPONSE_BYTES + 1)
-        except (HTTPError, URLError, OSError, TimeoutError) as exc:
+        except HTTPError as exc:
+            exc.close()
+            raise JawlWebUnavailable("JAWL web console is not reachable") from exc
+        except (URLError, OSError, TimeoutError) as exc:
             raise JawlWebUnavailable("JAWL web console is not reachable") from exc
         if len(raw) > self._MAX_RESPONSE_BYTES:
             raise JawlWebUnavailable("JAWL web response exceeds the bounded limit")
@@ -225,7 +228,11 @@ class _SseReader:
                     elif not decoded and data_lines:
                         self._publish("\n".join(data_lines))
                         data_lines.clear()
-        except (HTTPError, URLError, OSError, TimeoutError, ValueError):
+        except HTTPError as exc:
+            exc.close()
+            if not self._stop.is_set():
+                self.error = JawlWebUnavailable("JAWL chat stream is not reachable")
+        except (URLError, OSError, TimeoutError, ValueError):
             if not self._stop.is_set():
                 self.error = JawlWebUnavailable("JAWL chat stream is not reachable")
         except Exception:  # noqa: BLE001 - a concurrent close may break http.client internals
@@ -338,7 +345,11 @@ class JawlWebChatAdapter(JawlWebAdapter):
         try:
             with self._opener(request, timeout=self.timeout_seconds) as response:
                 raw = response.read(self._MAX_CHAT_RESPONSE_BYTES + 1)
-        except (HTTPError, URLError, OSError, TimeoutError) as exc:
+        except HTTPError as exc:
+            exc.close()
+            self.last_chat_status = "offline"
+            raise JawlWebUnavailable("JAWL chat request is not reachable") from exc
+        except (URLError, OSError, TimeoutError) as exc:
             self.last_chat_status = "offline"
             raise JawlWebUnavailable("JAWL chat request is not reachable") from exc
         if len(raw) > self._MAX_CHAT_RESPONSE_BYTES:
@@ -369,8 +380,15 @@ class JawlWebChatAdapter(JawlWebAdapter):
                         sequence = message.get("seq")
                         answer = message.get("text")
                         if isinstance(sequence, int) and sequence > user_seq and isinstance(answer, str) and answer.strip():
+                            try:
+                                answer = filter_user_response(answer)
+                            except JawlUnsafeResponse as exc:
+                                self.last_chat_status = "invalid_response"
+                                raise JawlWebUnavailable(
+                                    "JAWL returned internal control markup"
+                                ) from exc
                             self.last_chat_status = "connected"
-                            return answer.strip()
+                            return answer
             self._check_cancel(cancel_event)
             if reader.error:
                 raise reader.error

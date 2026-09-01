@@ -163,10 +163,14 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
     active_streams = set()
     messages = []
     sequence = 0
+    available = True
 
     def do_GET(self):  # noqa: N802 - stdlib handler API
         if self.path != "/api/chat/stream":
             self.send_error(404)
+            return
+        if not _JawlChatWebHandler.available:
+            self.send_error(503)
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -182,7 +186,7 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 with _JawlChatWebHandler.condition:
                     _JawlChatWebHandler.condition.wait(0.05)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ValueError):
             self.close_connection = True
             return
         finally:
@@ -192,6 +196,9 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - stdlib handler API
         if self.path != "/api/chat":
             self.send_error(404)
+            return
+        if not _JawlChatWebHandler.available:
+            self.send_error(503)
             return
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -207,7 +214,11 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
                 agent = {
                     "seq": _JawlChatWebHandler.sequence,
                     "sender": "Agent",
-                    "text": f"JAWL WEB E2E: {text}",
+                    "text": (
+                        "<think>hidden reasoning</think><final>JAWL WEB E2E: sanitized</final>"
+                        if text == "hidden markup"
+                        else f"JAWL WEB E2E: {text}"
+                    ),
                 }
                 _JawlChatWebHandler.messages.append(agent)
                 streams = list(_JawlChatWebHandler.active_streams)
@@ -215,7 +226,7 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
             for stream in streams:
                 try:
                     stream._write_event([agent])
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ValueError):
                     pass
         body = json.dumps({"ok": True, "message": user}, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
@@ -249,6 +260,7 @@ class LocalE2ETests(unittest.TestCase):
         _JawlChatWebHandler.messages = []
         _JawlChatWebHandler.sequence = 0
         _JawlChatWebHandler.active_streams = set()
+        _JawlChatWebHandler.available = True
         threading.Thread(target=self.jawl_chat_provider.serve_forever, daemon=True).start()
         self.jawl = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _JawlHandler)
         _JawlHandler.messages = []
@@ -394,6 +406,19 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(self.jawl_chat_adapter.chat_status(), "connected")
         _, connected_health = self.get_json("/api/health")
         self.assertEqual(connected_health["components"]["jawl"], "connected")
+
+        _, sanitized = self.post_json("/api/chat", {"text": "hidden markup"})
+        self.assertEqual(sanitized["text"], "JAWL WEB E2E: sanitized")
+        self.assertNotIn("hidden reasoning", json.dumps(sanitized, ensure_ascii=False))
+
+        _JawlChatWebHandler.available = False
+        _, offline = self.post_json("/api/chat", {"text": "upstream offline"})
+        self.assertIn("fallback", offline["text"])
+        self.assertEqual(self.jawl_chat_adapter.chat_status(), "offline")
+        _JawlChatWebHandler.available = True
+        _, recovered = self.post_json("/api/chat", {"text": "web-recovered"})
+        self.assertEqual(recovered["text"], "JAWL WEB E2E: web-recovered")
+        self.assertEqual(self.jawl_chat_adapter.chat_status(), "connected")
 
         self.jawl_chat_adapter.chat_timeout_seconds = 1
         _, web_degraded = self.post_json("/api/chat", {"text": "no broadcast"})

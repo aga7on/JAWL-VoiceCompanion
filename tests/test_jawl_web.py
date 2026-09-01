@@ -157,6 +157,28 @@ class JawlWebTests(unittest.TestCase):
             adapter.respond("РћС‚РјРµРЅРё РјРµРЅСЏ", cancel_event=cancel)
         self.assertEqual(adapter.last_chat_status, "cancelled")
 
+    def test_chat_filters_internal_markup_before_return(self):
+        stream = _SseResponse()
+
+        def opener(request, timeout):
+            del timeout
+            if request.full_url.endswith("/api/chat/stream"):
+                return stream
+            stream.lines.put(
+                (
+                    'data: {"messages": [{"seq": 2, "sender": "Agent", '
+                    '"text": "<think>secret</think><final>visible</final>"}], '
+                    '"status": {"state": "online"}}\n'
+                ).encode("utf-8")
+            )
+            stream.lines.put(b"\n")
+            return _Response({"ok": True, "message": {"seq": 1, "sender": "User"}})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770", opener=opener, chat_timeout_seconds=2,
+        )
+        self.assertEqual(adapter.respond("Тест"), "visible")
+
 
 if __name__ == "__main__":
     unittest.main()
