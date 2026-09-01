@@ -40,6 +40,19 @@ select ROOT and explicitly enable the browser's autonomous mode; this lets
 Heartbeat/background tasks run without a prompt for every action while the
 emergency stop and deny-list remain active.
 
+If the default port is occupied by another local service (for example a
+WebSocket-only MCP service), start the Companion on another loopback port and
+use that same port for the avatar:
+
+```powershell
+.\scripts\run_web.ps1 --port 8766
+.\scripts\run_avatar_window.ps1 -Url "http://127.0.0.1:8766/avatar?source=pet"
+```
+
+Do not open a `/ws` endpoint directly in a browser. WebSocket routes are
+opened by the matching web client; the Companion avatar and control panel use
+ordinary HTTP URLs.
+
 Focused-window snapshots stay disabled unless `--screen-enabled` is supplied
 alongside `--hostos-live`. The snapshot path is explicit and bounded; it does
 not start a passive capture loop. The optional `--screen-watch` flag starts a

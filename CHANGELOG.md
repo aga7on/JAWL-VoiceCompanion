@@ -12,6 +12,9 @@
 - Added a bounded browser barge-in trigger: clear microphone activity cancels
   active TTS playback/request once, while VoiceMem remains the final turn and
   interruption classifier.
+- Added an optional Windows avatar-window launcher that opens the read-only
+  `/avatar` surface as a bounded always-on-top Edge/Chrome app window; OBS
+  continues to use the same-origin avatar URL.
 
 - Added an opt-in authenticated JAWL HostOS control bridge: level 0–3 now
   writes the native JAWL fields, restarts the JAWL agent and changes the local

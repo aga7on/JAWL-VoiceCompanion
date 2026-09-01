@@ -62,6 +62,21 @@ When `ready` is false or the runtime throws, `/avatar` keeps the lightweight
 placeholder. Add `?debug=1` to see the reason. This makes an incomplete model
 an explicit degraded state instead of a blank OBS source.
 
+## Desktop pet launcher
+
+On Windows, `scripts/run_avatar_window.ps1` opens the local `/avatar` route as
+an app window and applies a bounded size/position plus `TOPMOST`. The window
+is read-only and receives no browser session credentials. It is a presentation
+shell over the existing backend, not a second avatar or authorization surface.
+Before opening a browser process, the launcher verifies that the URL returns
+the Companion's HTML page. If the port belongs to a WebSocket-only service,
+it fails with a port-conflict message instead of showing that service's
+`Connection: keep-alive` upgrade error. Run the Companion on another loopback
+port and pass the matching `/avatar` URL when necessary.
+OBS should use the same URL as a Browser Source when transparent compositing is
+required; the launcher does not claim that Chromium app windows provide alpha
+compositing on every Windows configuration.
+
 ## Licensing
 
 The repository does not vendor a model, character art, Cubism Core or a

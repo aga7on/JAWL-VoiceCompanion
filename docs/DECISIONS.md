@@ -268,3 +268,15 @@ external benchmark is complete.
 The HTTP endpoint still returns one bounded WAV, so this decision does not
 claim first-audio streaming. Streaming playback, barge-in and the final model
 choice remain separate validation work.
+
+## ADR-020 - Keep the desktop pet as a presentation shell
+
+Status: Accepted
+Date: 2026-09-01
+
+The optional desktop pet is a small Windows launcher around the existing
+read-only `/avatar` browser surface. It may pin the app window above other
+windows, but it does not own state, credentials, policy or Live2D rendering.
+OBS uses the same surface directly for transparency. This keeps the core
+lightweight and avoids introducing a second native UI runtime before a real
+Live2D bundle and compositing requirements are validated.

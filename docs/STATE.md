@@ -146,6 +146,9 @@ separate CPU/RAM test completes.
 - The avatar bridge validates model `FileReferences` relative to the model
   JSON, reports fatal Moc/texture gaps separately from optional warnings and
   exposes `ready` without leaking local paths.
+- The Windows desktop-pet launcher now validates the Companion HTTP `/avatar`
+  page before opening Edge/Chrome, so an occupied port serving a WebSocket-only
+  service fails with a clear conflict instead of a misleading upgrade error.
 - The optional JAWL web bridge reads existing `/api/agent/status`, `/api/tick`,
   `/api/db/stats`, `/api/drives` and `/api/config` routes, filters config
   secrets and exposes session-protected inspection routes to the browser.
@@ -356,8 +359,9 @@ placeholder remains the default. The web server's default executor remains dry-r
 endpoint is configured by default; production semantic scoring and JAWL
 final-wording delivery, pixel-level redaction, ASR quality benchmarking,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
-model warmup are still pending. The native always-on-top desktop-pet shell is
-also deferred. The system-audio loopback adapter, permission/API wiring and
+model warmup are still pending. The desktop-pet launcher is available as a
+bounded always-on-top presentation shell; native transparent compositing is
+still deferred. The system-audio loopback adapter, permission/API wiring and
 isolated ASR consumer are implemented; backend installation and real-device
 capture/ASR quality validation remain pending. The CPU/RAM benchmark and
 triage-worker scheduling are still pending; no VLM model is being selected in

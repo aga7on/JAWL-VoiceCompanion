@@ -127,7 +127,9 @@ Acceptance criteria:
 - [~] Replace the dependency-free avatar placeholder with the Live2D runtime;
   optional runtime/model loading, validation and fallback are implemented, but
   no licensed model/runtime is installed yet.
-- [ ] Add a native always-on-top desktop-pet window around the shared surface.
+- [~] Add a native always-on-top desktop-pet window around the shared surface;
+  `scripts/run_avatar_window.ps1` provides a bounded Edge/Chrome `--app`
+  launcher, while true transparent compositing remains pending.
 - [ ] Implement transparent desktop-pet mode.
 - [ ] Add settings for persona, voice, memory, proactivity and privacy.
 - [~] Add visible listening/screen-observation indicators; the browser now
