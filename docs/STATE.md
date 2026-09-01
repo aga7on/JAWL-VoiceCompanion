@@ -24,9 +24,8 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: state synchronization is pending after the verified output
-  filtering commit.
-- Latest feature commit: `91342b7` (`feat: filter hidden JAWL output`).
+- Working tree: clean after the doctor/readiness slice.
+- Latest feature commit: `c66f088` (`feat: add component doctor report`).
 
 ## Completed in this repository
 
@@ -100,6 +99,10 @@ storage.
 - Both JAWL transports now fail closed on internal reasoning/tool markup and
   remove paired hidden blocks before text reaches the envelope, subtitle or
   TTS path. The local HTTP E2E also covers upstream outage and recovery.
+- A bounded `/api/doctor` report and browser panel now expose component
+  readiness, remediation hints and continued text-only availability. The
+  report is bounded, does not expose paths or secrets, and does not change
+  runtime configuration.
 
 ## Reference inventory
 
@@ -204,10 +207,12 @@ confirmed terminal input and local Ollama completion, but also confirmed the
 no-broadcast model behavior and the upstream root-bound web path. The SSE
 reader close race was fixed with a focused regression test. Hidden-thought
 filtering and HTTP error-body cleanup were added with recovery coverage.
+The doctor slice now covers mock/degraded, fully configured and required-JAWL
+offline states and is preserved in `c66f088`.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed compilation, 73 unit tests and 4 complete
-HTTP E2E tests; the full cross-layer gate is green;
+`scripts/run_full_gate.ps1` passed 77 unit tests and 4 complete HTTP E2E tests;
+the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
