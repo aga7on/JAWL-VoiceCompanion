@@ -392,7 +392,10 @@
           publishAvatarAudio(active ? Math.max(0, Math.min(1, (rms - 0.012) * 7)) : 0, active);
           if (monitor.streamDone && !active) {
             streamSpeechActive = false;
-            if (speechSession?.monitor === monitor) speechSession = null;
+            if (speechSession?.monitor === monitor) {
+              if (ttsAbort === speechSession.controller) ttsAbort = null;
+              speechSession = null;
+            }
             stopAvatarAudioMonitor();
             return;
           }

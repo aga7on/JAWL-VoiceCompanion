@@ -68,6 +68,8 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"decodeAudioData", frontend)
             self.assertIn(b"/api/chat/stream", frontend)
             self.assertIn(b"streamChat", frontend)
+            self.assertIn(b"pushSpeechDelta", frontend)
+            self.assertIn(b"finishSpeechSession", frontend)
             self.assertIn(b"AbortController", frontend)
             self.assertIn(b"bargeInTriggered", frontend)
             self.assertIn(b"hands-free", frontend)
