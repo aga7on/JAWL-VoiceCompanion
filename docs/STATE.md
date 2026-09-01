@@ -37,8 +37,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the HostOS unattended and emergency-stop slices.
-- Latest feature commit: `9444352` (`feat: cancel running HostOS processes on emergency stop`).
+- Working tree: clean after the HostOS unattended and recovery slices.
+- Latest feature commit: `119ce6a` (`test: cover HostOS restart recovery`).
 
 ## Completed in this repository
 
@@ -59,6 +59,8 @@ separate CPU/RAM test completes.
   redacted metadata-only audit entries.
 - HostOS now tracks managed and shell subprocesses; emergency stop terminates
   them and an interrupted shell request returns `cancelled`.
+- HTTP E2E now covers shutdown cleanup and safe restart defaults: owned
+  processes are stopped, unattended is off, and approvals are in-memory only.
 - Loopback browser surface supports chat, health/state display and policy-level
   selection using local session/CSRF headers.
 - Dedicated read-only `/avatar` surface renders a transparent OBS-ready
@@ -301,7 +303,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 111 unit tests and 7 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 111 unit tests and 8 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
