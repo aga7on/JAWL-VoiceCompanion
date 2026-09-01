@@ -83,11 +83,13 @@ intent becomes spoken output.
 Owns streaming voice perception and returns structured observations. It may
 perform fast retrieval, but it cannot directly mutate JAWL personality traits.
 
-The adapter must support the stable semantic boundary:
+The adapter supports the stable semantic boundaries:
 
 ```text
 feed_partial(text, ended=False)
 feed_partial(text, ended=True)
+feed_audio(pcm16, sample_rate=16000)
+end_audio()
 ```
 
 The current VoiceMem repository provides this method on `VoiceStream`, but its
@@ -95,7 +97,9 @@ bundled WebSocket demo is not treated as the production protocol. The small
 loopback sidecar runner in `services/voicemem_sidecar.py` owns the VoiceMem
 environment and translates its results into `USER_PARTIAL`/`VOICE_TURN`
 events. The JAWL process receives only bounded observations and final user
-text through `POST /api/voice/partial`.
+text through the authenticated `/api/voice/partial`, `/api/voice/audio` and
+`/api/voice/end` endpoints. The browser microphone is only an input surface;
+VoiceMem remains responsible for streaming ASR and VAD in its own environment.
 
 ### Voice Gateway
 

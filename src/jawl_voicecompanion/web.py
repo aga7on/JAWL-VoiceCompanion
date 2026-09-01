@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import secrets
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -139,12 +140,45 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("text must be string and ended must be boolean")
                 session_id = str(payload.get("session_id") or self.server.session_token)[:200]
                 events = self.server.voice_mem.feed_partial(text, ended=ended, session_id=session_id)
-                responses = []
-                for event in events:
-                    if event.get("type") != "VOICE_TURN":
-                        continue
-                    turn_text = event.get("payload", {}).get("text", "")
-                    responses.append(self.server.gateway.handle_text(turn_text, session_id=session_id))
+                responses = self._voice_turn_responses(events, session_id)
+                self._json({
+                    "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
+                    "events": events,
+                    "responses": responses,
+                })
+                return
+            if self.path == "/api/voice/audio":
+                if self.server.voice_mem is None:
+                    self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                encoded = payload.get("pcm16_base64", "")
+                if not isinstance(encoded, str) or not encoded:
+                    raise ValueError("pcm16_base64 must be a non-empty string")
+                try:
+                    pcm16 = base64.b64decode(encoded, validate=True)
+                except (ValueError, base64.binascii.Error) as exc:
+                    raise ValueError("pcm16_base64 is invalid") from exc
+                sample_rate = payload.get("sample_rate", 16000)
+                if isinstance(sample_rate, bool) or not isinstance(sample_rate, int):
+                    raise ValueError("sample_rate must be an integer")
+                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+                events = self.server.voice_mem.feed_audio(
+                    pcm16, sample_rate=sample_rate, session_id=session_id
+                )
+                responses = self._voice_turn_responses(events, session_id)
+                self._json({
+                    "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
+                    "events": events,
+                    "responses": responses,
+                })
+                return
+            if self.path == "/api/voice/end":
+                if self.server.voice_mem is None:
+                    self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+                events = self.server.voice_mem.end_audio(session_id=session_id)
+                responses = self._voice_turn_responses(events, session_id)
                 self._json({
                     "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
                     "events": events,
@@ -255,6 +289,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _voice_turn_responses(self, events: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
+        responses = []
+        for event in events:
+            if event.get("type") != "VOICE_TURN":
+                continue
+            turn_text = event.get("payload", {}).get("text", "")
+            responses.append(self.server.gateway.handle_text(turn_text, session_id=session_id))
+        return responses
 
 
 def create_server(

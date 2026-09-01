@@ -28,6 +28,8 @@
       <div id="messages"></div>
       <textarea id="input" rows="3" placeholder="Напиши сообщение…"></textarea>
       <button id="send">Отправить</button>
+      <button id="mic" type="button">🎙️ Включить микрофон</button>
+      <span id="mic-status" class="meta">Микрофон выключен.</span>
     </section>
     <section>
       <h2>HostOS</h2>
@@ -61,6 +63,8 @@
     const input = document.querySelector('#input');
     const health = document.querySelector('#health');
     let sessionHeaders = {};
+    let voice = null;
+    let voiceQueue = Promise.resolve();
     function addMessage(who, text) {
       const item = document.createElement('div');
       item.className = 'message';
@@ -110,6 +114,88 @@
     }
     async function apiPost(path, body) {
       return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
+    }
+    function downsample(samples, fromRate, toRate) {
+      if (fromRate === toRate) return samples;
+      const ratio = fromRate / toRate;
+      const output = new Float32Array(Math.floor(samples.length / ratio));
+      for (let i = 0; i < output.length; i++) {
+        const start = Math.floor(i * ratio);
+        const end = Math.max(start + 1, Math.floor((i + 1) * ratio));
+        let sum = 0;
+        for (let j = start; j < end && j < samples.length; j++) sum += samples[j];
+        output[i] = sum / Math.max(1, end - start);
+      }
+      return output;
+    }
+    function pcm16Base64(samples) {
+      const bytes = new Uint8Array(samples.length * 2);
+      const view = new DataView(bytes.buffer);
+      for (let i = 0; i < samples.length; i++) {
+        const value = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(i * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      }
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      return btoa(binary);
+    }
+    function queueVoiceChunk(samples, sampleRate) {
+      const payload = {
+        session_id: 'browser-mic', sample_rate: 16000, channels: 1,
+        pcm16_base64: pcm16Base64(downsample(samples, sampleRate, 16000))
+      };
+      voiceQueue = voiceQueue.then(async () => {
+        const response = await apiPost('/api/voice/audio', payload);
+        const data = await response.json();
+        for (const answer of data.responses || []) addMessage('Компаньон', answer.text || answer.error);
+        if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem недоступен');
+      }).catch(error => {
+        document.querySelector('#mic-status').textContent = `Ошибка микрофона: ${error.message}`;
+      });
+    }
+    async function stopMicrophone() {
+      if (!voice) return;
+      const active = voice;
+      voice = null;
+      active.processor.disconnect();
+      active.source.disconnect();
+      active.stream.getTracks().forEach(track => track.stop());
+      await voiceQueue;
+      try {
+        const response = await apiPost('/api/voice/end', {session_id: 'browser-mic'});
+        const data = await response.json();
+        for (const answer of data.responses || []) addMessage('Компаньон', answer.text || answer.error);
+      } catch (error) {
+        document.querySelector('#mic-status').textContent = `Остановка микрофона: ${error.message}`;
+      }
+      await active.context.close();
+      document.querySelector('#mic').textContent = '🎙️ Включить микрофон';
+      document.querySelector('#mic-status').textContent = 'Микрофон выключен.';
+    }
+    async function startMicrophone() {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Браузер не поддерживает микрофон');
+      const stream = await navigator.mediaDevices.getUserMedia({audio: {
+        channelCount: 1, echoCancellation: true, noiseSuppression: true
+      }});
+      const context = new AudioContext();
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const mute = context.createGain();
+      mute.gain.value = 0;
+      const samples = [];
+      const chunkSize = Math.floor(context.sampleRate * 0.2);
+      processor.onaudioprocess = event => {
+        samples.push(...event.inputBuffer.getChannelData(0));
+        while (samples.length >= chunkSize) queueVoiceChunk(samples.splice(0, chunkSize), context.sampleRate);
+      };
+      source.connect(processor);
+      processor.connect(mute);
+      mute.connect(context.destination);
+      voice = {stream, context, source, processor};
+      document.querySelector('#mic').textContent = '⏹ Выключить микрофон';
+      document.querySelector('#mic-status').textContent = 'Микрофон слушает; VoiceMem сам определяет конец фразы.';
     }
     async function bootstrap() {
       const response = await fetch('/api/session', {cache: 'no-store'});
@@ -164,6 +250,14 @@
         resultBox.textContent = data.result?.description || data.result?.reason || data.error || 'Нет результата.';
       } catch (error) {
         resultBox.textContent = `Vision недоступен: ${error.message}`;
+      }
+    });
+    document.querySelector('#mic').addEventListener('click', async () => {
+      try {
+        if (voice) await stopMicrophone();
+        else await startMicrophone();
+      } catch (error) {
+        document.querySelector('#mic-status').textContent = `Микрофон недоступен: ${error.message}`;
       }
     });
     bootstrap();

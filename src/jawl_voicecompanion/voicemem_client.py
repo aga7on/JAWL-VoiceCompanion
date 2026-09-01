@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import queue
 import subprocess
@@ -51,6 +52,36 @@ class VoiceMemProcessClient:
             "ended": ended,
         }
         return self._request(request, request_id)
+
+    def feed_audio(
+        self,
+        pcm16: bytes,
+        *,
+        sample_rate: int = 16000,
+        session_id: str = "local",
+    ) -> list[dict[str, Any]]:
+        if not isinstance(pcm16, bytes) or not pcm16 or len(pcm16) > 48 * 1024 or len(pcm16) % 2:
+            raise ValueError("pcm16 must be non-empty, even-sized and at most 48 KiB")
+        request_id = str(uuid4())
+        request = {
+            "schema_version": 1,
+            "request_id": request_id,
+            "type": "feed_audio",
+            "session_id": str(session_id or "local")[:200],
+            "sample_rate": int(sample_rate),
+            "channels": 1,
+            "pcm16_base64": base64.b64encode(pcm16).decode("ascii"),
+        }
+        return self._request(request, request_id)
+
+    def end_audio(self, *, session_id: str = "local") -> list[dict[str, Any]]:
+        request_id = str(uuid4())
+        return self._request({
+            "schema_version": 1,
+            "request_id": request_id,
+            "type": "end_audio",
+            "session_id": str(session_id or "local")[:200],
+        }, request_id)
 
     def health(self) -> dict[str, Any]:
         request_id = str(uuid4())

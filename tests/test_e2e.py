@@ -1,4 +1,5 @@
 import json
+import base64
 import socketserver
 import sys
 import tempfile
@@ -198,6 +199,28 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(final["responses"][0]["text"], "JAWL E2E: покажи редактор")
         _, state = self.get_json("/api/state")
         self.assertEqual(state["last_turn"]["user"], "покажи редактор")
+
+        _, audio = self.post_json("/api/voice/audio", {
+            "session_id": "voice-audio-s1",
+            "sample_rate": 16000,
+            "channels": 1,
+            "pcm16_base64": base64.b64encode(b"final!").decode("ascii"),
+        })
+        self.assertEqual([event["type"] for event in audio["events"]], ["USER_PARTIAL", "VOICE_TURN"])
+        self.assertEqual(audio["responses"][0]["text"], "JAWL E2E: аудио e2e")
+        _, state = self.get_json("/api/state")
+        self.assertEqual(state["last_turn"]["user"], "аудио e2e")
+
+        _, pending_audio = self.post_json("/api/voice/audio", {
+            "session_id": "voice-audio-flush",
+            "sample_rate": 16000,
+            "channels": 1,
+            "pcm16_base64": base64.b64encode(b"12").decode("ascii"),
+        })
+        self.assertEqual(pending_audio["responses"], [])
+        _, flushed = self.post_json("/api/voice/end", {"session_id": "voice-audio-flush"})
+        self.assertEqual([event["type"] for event in flushed["events"]], ["VOICE_TURN"])
+        self.assertEqual(flushed["responses"][0]["text"], "JAWL E2E: аудио")
 
     def test_screen_capture_vlm_dedup_and_bounded_screen_delta(self):
         self.post_json("/api/hostos/level", {"level": int(AccessLevel.OBSERVER)})

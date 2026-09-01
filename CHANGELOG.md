@@ -43,3 +43,6 @@
   kept its heavyweight runtime outside the JAWL/web process boundary.
 - Added the minimal VoiceMem JSON-lines runner, lazy subprocess client and
   authenticated `/api/voice/partial` bridge with UTF-8 transport framing.
+- Added bounded browser microphone capture, mono PCM16 `/api/voice/audio`,
+  `/api/voice/end` flushing and an E2E path proving audio → VoiceMem → JAWL →
+  visible state; raw audio remains transient.

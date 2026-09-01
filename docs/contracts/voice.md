@@ -23,6 +23,26 @@ One bounded JSON request per line:
 adapter forwards it to VoiceMem `stream.feed_partial`; it must not send
 partial text to JAWL as a complete turn.
 
+For microphone input, the same sidecar accepts bounded mono PCM16 chunks:
+
+```json
+{
+  "schema_version": 1,
+  "request_id": "uuid",
+  "type": "feed_audio",
+  "session_id": "voice-session",
+  "sample_rate": 16000,
+  "channels": 1,
+  "pcm16_base64": "..."
+}
+```
+
+The browser downsamples microphone data to 16 kHz before sending it. The
+sidecar forwards bytes to VoiceMem `stream.feed`, so VoiceMem owns the
+streaming ASR and VAD choice. A `type=end_audio` request sends bounded silence
+to finish an active phrase when capture is stopped. Audio is not persisted or
+included in output events; chunks are limited to 48 KiB.
+
 ## Output events
 
 Partial output:
@@ -83,5 +103,6 @@ If the sidecar cannot initialize or process a request, it returns a normal
 
 The repository contains the runner in `services/voicemem_sidecar.py`, the
 stdlib client in `src/jawl_voicecompanion/voicemem_client.py` and the web
-bridge at `/api/voice/partial`. The microphone/ASR adapter and production
-VoiceMem model configuration remain Phase 2/3 work.
+bridges at `/api/voice/partial`, `/api/voice/audio` and `/api/voice/end`.
+The current microphone path is an input adapter; Russian ASR benchmarking,
+AEC/barge-in and production model warmup remain Phase 2 work.

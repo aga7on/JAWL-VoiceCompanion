@@ -4,12 +4,13 @@ Last updated: 2026-09-01
 
 ## Current phase
 
-Phase 1 — contracts and text vertical slice (in progress).
+Phase 2 — Russian voice loop (transport slice in progress).
 
 Repository state: architecture baseline committed. A dependency-free mock
-text/control slice is implemented; real JAWL, VoiceMem, audio, TTS and Live2D
-are not connected, while optional UIA, focused-window OS and opt-in VLM
-adapters are available only through explicitly constructed/configured paths.
+text/control slice is implemented. The real VoiceMem sidecar boundary now
+accepts external ASR partials and browser PCM16 microphone chunks; real JAWL,
+production VoiceMem model startup, TTS and Live2D remain opt-in/integration
+work. Optional UIA, focused-window OS and VLM adapters remain explicit.
 
 ## Git state
 
@@ -68,6 +69,9 @@ adapters are available only through explicitly constructed/configured paths.
   complete visible path from chat/state through HostOS approval/execution and
   emergency stop, plus screen capture, VLM deduplication, screen events and
   the JAWL-compatible terminal handshake/JSON-lines path.
+- The browser microphone path converts input to bounded mono PCM16, VoiceMem
+  owns streaming ASR/VAD in its separate environment, and only final
+  `VOICE_TURN` events reach JAWL. `/api/voice/end` flushes active capture.
 
 ## Reference inventory
 
@@ -85,9 +89,10 @@ adapters are available only through explicitly constructed/configured paths.
 - VoiceMem's bundled `web/run.py` is a demo WebSocket and not a stable
   correlated sidecar API; the transport-neutral contract is now recorded in
   `docs/contracts/voice.md`.
-- The minimal sidecar runner/client and `/api/voice/partial` bridge are now
-  implemented. The production runner is lazy and returns `VOICE_DEGRADED` if
-  VoiceMem is not installed or cannot initialize.
+- The minimal sidecar runner/client and `/api/voice/partial`,
+  `/api/voice/audio`, `/api/voice/end` bridges are implemented. The
+  production runner is lazy and returns `VOICE_DEGRADED` if VoiceMem is not
+  installed or cannot initialize.
 - VoiceMem's current default streaming ASR should not be assumed to be the
   final Russian ASR choice; a benchmark is required.
 - CozyVoice has a local REST wrapper, but its current `stream` path should be
@@ -109,8 +114,8 @@ adapters are available only through explicitly constructed/configured paths.
 - harden the initial HostOS session lifecycle and broaden audit coverage.
 - add semantic screen significance scoring and connect `SCREEN_DELTA` to
   Attention/Presence and JAWL's final wording path;
-- connect the sidecar final event to real microphone/ASR input and validate
-  production VoiceMem model startup in its own environment;
+- validate production VoiceMem audio model startup in its own environment and
+  benchmark Russian ASR on a real microphone;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -122,26 +127,28 @@ Changed the passive watcher, web API/CLI wiring, vision deduplication,
 E2E runner/tests and the related architecture/contracts/documentation in
 `307da25`; extended the JAWL adapter path in `1f1717d`; recorded the
 VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner,
-client and HTTP bridge in `a33f7b9`.
+client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
+and final-turn routing in the current work session.
 
-Verification: `scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1`
-passed 56 tests; the stale-port degraded probe returned `status=offline`;
+Verification for the current work session:
+`scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 58 tests;
+the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
 model yet. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; semantic significance scoring,
-pixel-level redaction, JAWL/Attention consumption and TTS/audio cancellation
-are still pending. The native always-on-top desktop-pet shell is also
-deferred.
+pixel-level redaction, JAWL/Attention consumption, ASR quality benchmarking,
+AEC/barge-in, TTS/audio cancellation and production model warmup are still
+pending. The native always-on-top desktop-pet shell is also deferred.
 
 ## Next action
 
-Exercise the JAWL adapter against the actual local process, then connect
-external Russian ASR/microphone input to the VoiceMem bridge and turn only
-final `VOICE_TURN` events into JAWL user turns. The bounded `SCREEN_DELTA`
-stream still needs Attention/Presence consumption; TTS/audio cancellation
-and Live2D runtime selection follow these stable contracts.
+Exercise the JAWL adapter against the actual local process, then benchmark
+the installed VoiceMem ASR modes on a real Russian microphone and validate
+production model warmup. The bounded `SCREEN_DELTA` stream still needs
+Attention/Presence consumption; TTS/audio cancellation and Live2D runtime
+selection follow these stable contracts.
 
 ## State update protocol
 

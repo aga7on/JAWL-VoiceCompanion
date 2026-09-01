@@ -81,6 +81,8 @@ def main() -> None:
         default=5.0,
         help="VoiceMem sidecar request timeout in seconds",
     )
+    parser.add_argument("--voicemem-mode", default="normal")
+    parser.add_argument("--voicemem-audio-rate", type=int, default=16000)
     parser.add_argument("--sandbox-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
     parser.add_argument("--host-root", type=Path, action="append", default=[])
@@ -121,7 +123,11 @@ def main() -> None:
     if args.screen_watch and not (args.hostos_live and args.screen_enabled and vision_describer):
         parser.error("--screen-watch requires --hostos-live, --screen-enabled, --vision-url and --vision-model")
     voice_mem = (
-        VoiceMemProcessClient(args.voicemem_python, timeout_seconds=args.voicemem_timeout)
+        VoiceMemProcessClient(
+            args.voicemem_python,
+            args=("--mode", args.voicemem_mode, "--audio-sample-rate", str(args.voicemem_audio_rate)),
+            timeout_seconds=args.voicemem_timeout,
+        )
         if args.voicemem_python
         else None
     )

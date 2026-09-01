@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import subprocess
@@ -54,6 +55,36 @@ class VoiceMemSidecarTests(unittest.TestCase):
         result = asyncio.run(sidecar.handle({"type": "feed_partial", "ended": "yes"}))
         self.assertEqual(result[0]["type"], "VOICE_DEGRADED")
         self.assertEqual(result[0]["payload"]["reason"], "ended_must_be_boolean")
+
+    def test_pcm16_audio_produces_partial_and_final_events(self):
+        class FakeStream:
+            async def feed(self, pcm_bytes):
+                text = "голосовой e2e"
+                return SimpleNamespace(
+                    text=text,
+                    turn=SimpleNamespace(text=text) if pcm_bytes == b"final!" else None,
+                    memory_context="",
+                    emotion="",
+                    speaker_id="",
+                )
+
+        sidecar = VoiceMemSidecar(lambda _session_id: FakeStream())
+        result = asyncio.run(sidecar.handle({
+            "request_id": "audio-1", "type": "feed_audio", "session_id": "s1",
+            "sample_rate": 16000, "channels": 1,
+            "pcm16_base64": base64.b64encode(b"final!").decode("ascii"),
+        }))
+        self.assertEqual([event["type"] for event in result], ["USER_PARTIAL", "VOICE_TURN"])
+        self.assertEqual(result[1]["payload"]["text"], "голосовой e2e")
+
+    def test_pcm16_audio_rejects_wrong_rate(self):
+        sidecar = VoiceMemSidecar(lambda _session_id: None)
+        result = asyncio.run(sidecar.handle({
+            "request_id": "audio-2", "type": "feed_audio", "session_id": "s1",
+            "sample_rate": 24000, "pcm16_base64": base64.b64encode(b"12").decode("ascii"),
+        }))
+        self.assertEqual(result[0]["type"], "VOICE_DEGRADED")
+        self.assertEqual(result[0]["payload"]["reason"], "sample_rate does not match the sidecar input rate")
 
     def test_missing_runtime_is_a_degraded_event(self):
         def unavailable(_session_id):

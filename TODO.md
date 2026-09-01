@@ -38,11 +38,11 @@ Acceptance criteria:
 
 ## Phase 2 — Russian voice loop
 
-- [ ] Implement microphone input adapter.
+- [x] Implement the bounded browser microphone input adapter and PCM16 sidecar path.
 - [ ] Benchmark at least two Russian ASR candidates.
-- [ ] Connect external streaming ASR partials to the VoiceMem sidecar
+- [x] Connect external streaming ASR partials to the VoiceMem sidecar
   `feed_partial` contract.
-- [ ] Deliver final transcript as `USER_FINAL`.
+- [x] Deliver the VoiceMem final transcript through the JAWL user-turn gateway.
 - [ ] Implement CozyVoice 2 adapter.
 - [ ] Inspect and fix the local CozyVoice wrapper's non-streaming behavior.
 - [ ] Add OmniVoice adapter when its model/API location is confirmed.

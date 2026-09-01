@@ -57,8 +57,11 @@ the web process at VoiceMem's Python environment:
 ```
 
 The sidecar starts lazily. `POST /api/voice/partial` accepts cumulative ASR
-text; only `ended=true` produces a JAWL turn. Microphone capture and a final
-Russian ASR choice are not connected yet.
+text; only a final `VOICE_TURN` produces a JAWL turn. The control panel also
+has an opt-in microphone button: it sends bounded mono PCM16 chunks to
+`/api/voice/audio`, and `/api/voice/end` flushes an active phrase. VoiceMem's
+own streaming ASR/VAD runs in its separate environment. Russian ASR quality,
+AEC and barge-in still require a real-device benchmark.
 
 ## Architecture
 
