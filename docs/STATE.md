@@ -19,7 +19,7 @@ adapters are available only through explicitly constructed/configured paths.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `1f1717d` (`test: exercise jawl bridge in e2e`).
+- Latest feature commit: `a33f7b9` (`feat: add voicemem sidecar web bridge`).
 
 ## Completed in this repository
 
@@ -99,9 +99,6 @@ adapters are available only through explicitly constructed/configured paths.
 - The configured JAWL `terminal.port` is currently stale and has no listening
   socket; the read-only probe returned `status=offline`, so live process
   verification remains pending.
-- The JAWL `terminal.port` file currently exists, but its recorded port has no
-  listening loopback socket; the new adapter therefore correctly uses its
-  offline fallback until JAWL is started.
 
 ## Current blockers / decisions needed later
 
@@ -124,12 +121,12 @@ adapters are available only through explicitly constructed/configured paths.
 Changed the passive watcher, web API/CLI wiring, vision deduplication,
 E2E runner/tests and the related architecture/contracts/documentation in
 `307da25`; extended the JAWL adapter path in `1f1717d`; recorded the
-VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner/client
-and HTTP bridge in the current uncommitted change.
+VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner,
+client and HTTP bridge in `a33f7b9`.
 
-Verification: `scripts/run_e2e.ps1` passed 2 tests; `scripts/run_tests.ps1`
-passed 49 tests; the stale-port degraded probe returned `status=offline`;
-`git diff --check` reported no whitespace errors.
+Verification: `scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1`
+passed 56 tests; the stale-port degraded probe returned `status=offline`;
+`git diff --check` reported no whitespace errors and no Python warnings.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
 model yet. The web server's default executor remains dry-run and no VLM
@@ -140,11 +137,11 @@ deferred.
 
 ## Next action
 
-Exercise the JAWL adapter against the actual local process and connect the
-bounded `SCREEN_DELTA` stream to Attention/Presence without allowing it to
-become a second personality. TTS/audio cancellation remains required before
-the voice loop; selecting the first Live2D asset/runtime follows the stable
-web surface.
+Exercise the JAWL adapter against the actual local process, then connect
+external Russian ASR/microphone input to the VoiceMem bridge and turn only
+final `VOICE_TURN` events into JAWL user turns. The bounded `SCREEN_DELTA`
+stream still needs Attention/Presence consumption; TTS/audio cancellation
+and Live2D runtime selection follow these stable contracts.
 
 ## State update protocol
 
