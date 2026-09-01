@@ -49,6 +49,9 @@ use that same port for the avatar:
 .\scripts\run_avatar_window.ps1 -Url "http://127.0.0.1:8766/avatar?source=pet"
 ```
 
+`run_web.ps1` checks the selected port before starting and reports the owning
+process if it is already occupied.
+
 Do not open a `/ws` endpoint directly in a browser. WebSocket routes are
 opened by the matching web client; the Companion avatar and control panel use
 ordinary HTTP URLs.

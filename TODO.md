@@ -212,6 +212,8 @@ Quality gate:
 - [x] Add a real local-HTTP E2E suite for cross-layer user paths and make it
   mandatory for major updates.
 - [x] Add one full-gate command that runs compile, unit, E2E and diff checks.
+- [x] Add a launch-time port conflict check with an actionable alternate-port
+  message for local WebSocket/HTTP collisions.
 
 Acceptance criteria:
 

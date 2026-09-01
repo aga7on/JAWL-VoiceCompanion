@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a `run_web.ps1` port preflight so a port occupied by another service
+  fails with an actionable message before the Companion starts.
 - Hardened VoiceMem lifecycle handling: empty flushes stay lazy, failed stream
   sessions are evicted for retry, and `/api/voice/status` now includes bounded
   sidecar process state without exposing launch details.
