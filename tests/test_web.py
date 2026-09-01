@@ -48,6 +48,8 @@ class WebTests(unittest.TestCase):
         self.assertEqual(health["mode"], "phase1_mock_brain")
         with urlopen(self.base + "/", timeout=2) as response:
             self.assertIn(b"JAWL VoiceCompanion", response.read())
+        with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
+            self.assertIn(b"JAWL Avatar", response.read())
 
     def test_session_endpoint_exposes_local_bootstrap_tokens(self):
         status, session = self.get_json("/api/session")

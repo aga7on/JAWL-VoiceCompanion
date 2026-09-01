@@ -115,3 +115,21 @@ The service binds to loopback by default. WebSocket origin checks, session
 tokens, CSRF protection for state-changing HTTP requests and a backend policy
 gate are required before exposing any control operation. Remote access is
 deferred and must be designed as a separate authenticated deployment.
+
+## ADR-011 — Separate read-only avatar surface for desktop and OBS
+
+Status: Accepted
+Date: 2026-09-01
+
+The companion exposes `/avatar` as a dedicated transparent browser surface.
+The operator panel remains at `/`; both surfaces consume the same backend
+state, while only the operator panel exposes state-changing controls. This
+keeps OBS and desktop-pet presentation independent from the control-plane
+layout and prevents an OBS source from becoming an authorization boundary.
+
+The first implementation is a dependency-free placeholder that polls the
+bounded `/api/state` endpoint at a short interval. It is intentionally not a
+Live2D runtime yet. A later Live2D renderer will replace the placeholder in
+the same route and will use response-envelope avatar state, expression and
+subtitle fields. Native always-on-top window chrome is deferred until the web
+surface and Live2D lifecycle are stable.

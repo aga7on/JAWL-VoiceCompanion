@@ -25,7 +25,8 @@ blocked or requiring a decision.
 - [x] Serve the first local browser control plane for chat, status and
   reconnect recovery.
 - [x] Add a first adapter for JAWL's loopback HostTerminalClient protocol.
-- [ ] Render `idle`, `listening`, `thinking`, `speaking` and emotion states.
+- [~] Render `idle`, `listening`, `thinking`, `speaking` and emotion states;
+  the response contract and OBS surface currently cover the basic state path.
 - [ ] Add structured logs without secrets or hidden chain-of-thought.
 
 Acceptance criteria:
@@ -84,6 +85,9 @@ Acceptance criteria:
 ## Phase 4 — 2D Live2D product UI
 
 - [ ] Select a redistributable Live2D model or document user-supplied assets.
+- [x] Add a transparent browser avatar surface and a copyable OBS URL.
+- [ ] Replace the dependency-free avatar placeholder with the Live2D runtime.
+- [ ] Add a native always-on-top desktop-pet window around the shared surface.
 - [ ] Implement transparent desktop-pet mode.
 - [ ] Add settings for persona, voice, memory, proactivity and privacy.
 - [ ] Add visible listening/screen-observation indicators.

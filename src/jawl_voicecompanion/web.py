@@ -42,22 +42,23 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
     server: CompanionServer
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
-        if self.path == "/api/health":
+        path = urlsplit(self.path).path
+        if path == "/api/health":
             self._json(self.server.gateway.health())
             return
-        if self.path == "/api/session":
+        if path == "/api/session":
             self._json({"session_token": self.server.session_token, "csrf_token": self.server.csrf_token})
             return
-        if self.path == "/api/state":
+        if path == "/api/state":
             self._json(self.server.gateway.state())
             return
-        if self.path == "/api/audit":
+        if path == "/api/audit":
             self._json({"events": self.server.gateway.audit()})
             return
-        if self.path == "/api/hostos/tools":
+        if path == "/api/hostos/tools":
             self._json({"dry_run": self.server.hostos.dry_run, "tools": self.server.hostos.list_tools()})
             return
-        if self.path == "/api/hostos/approvals":
+        if path == "/api/hostos/approvals":
             try:
                 self._require_browser_session()
             except PermissionError as exc:
@@ -65,8 +66,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._json({"approvals": self.server.approvals.list(self.server.session_token)})
             return
-        if self.path in ("/", "/index.html"):
-            index_path = self.server.frontend_dir / "index.html"
+        if path in ("/", "/index.html", "/avatar", "/avatar.html"):
+            filename = "avatar.html" if path in ("/avatar", "/avatar.html") else "index.html"
+            index_path = self.server.frontend_dir / filename
             try:
                 body = index_path.read_bytes()
             except OSError:

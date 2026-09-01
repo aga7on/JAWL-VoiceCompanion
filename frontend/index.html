@@ -40,6 +40,13 @@
         <option value="3">3 · ROOT</option>
       </select><br>
       <button id="stop" class="danger">Аварийная остановка</button>
+      <h2>Подтверждения</h2>
+      <div id="approvals" class="meta">Нет ожидающих запросов.</div>
+      <h2>Аватар и OBS</h2>
+      <p class="meta">Прозрачная поверхность компаньона для Browser Source в OBS.</p>
+      <input id="obs-url" type="text" readonly aria-label="OBS URL" style="width: 100%; box-sizing: border-box; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
+      <button id="copy-obs-url">Скопировать ссылку</button>
+      <span id="copy-obs-status" class="meta"></span>
       <h2>Состояние</h2>
       <pre id="health">Загрузка…</pre>
     </section>
@@ -58,13 +65,38 @@
       messages.scrollTop = messages.scrollHeight;
     }
     async function refresh() {
-      const [state, status] = await Promise.all([fetch('/api/state'), fetch('/api/health')]);
+      const [state, status, approvalResponse] = await Promise.all([
+        fetch('/api/state'),
+        fetch('/api/health'),
+        fetch('/api/hostos/approvals', {headers: sessionHeaders})
+      ]);
       const stateData = await state.json();
       const statusData = await status.json();
+      const approvalData = approvalResponse.ok ? await approvalResponse.json() : {approvals: []};
       document.querySelector('#level').textContent = stateData.policy.active_level;
       document.querySelector('#level-name').textContent = stateData.policy.active_name;
       document.querySelector('#level-select').value = stateData.policy.active_level;
       health.textContent = JSON.stringify(statusData, null, 2);
+      const approvalBox = document.querySelector('#approvals');
+      approvalBox.replaceChildren();
+      const pending = approvalData.approvals.filter(item => item.status === 'pending');
+      if (!pending.length) {
+        approvalBox.textContent = 'Нет ожидающих запросов.';
+      } else {
+        for (const item of pending) {
+          const row = document.createElement('div');
+          row.className = 'message';
+          row.textContent = `${item.summary} · до ${item.expires_at}`;
+          const approve = document.createElement('button');
+          approve.textContent = 'Разрешить один раз';
+          approve.onclick = async () => { await apiPost(`/api/hostos/approvals/${item.approval_id}/approve`, {}); refresh(); };
+          const deny = document.createElement('button');
+          deny.textContent = 'Отклонить';
+          deny.onclick = async () => { await apiPost(`/api/hostos/approvals/${item.approval_id}/deny`, {}); refresh(); };
+          row.append(' ', approve, ' ', deny);
+          approvalBox.appendChild(row);
+        }
+      }
     }
     async function apiPost(path, body) {
       return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
@@ -86,12 +118,27 @@
       refresh();
     });
     document.querySelector('#level-select').addEventListener('change', async (event) => {
+      if (Number(event.target.value) === 3 && !window.confirm('Включить ROOT: действия получат права текущего пользователя Windows?')) {
+        refresh();
+        return;
+      }
       await apiPost('/api/hostos/level', {level: Number(event.target.value)});
       refresh();
     });
     document.querySelector('#stop').addEventListener('click', async () => {
       await apiPost('/api/emergency-stop', {});
       refresh();
+    });
+    const obsUrl = document.querySelector('#obs-url');
+    obsUrl.value = `${window.location.origin}/avatar`;
+    document.querySelector('#copy-obs-url').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(obsUrl.value);
+        document.querySelector('#copy-obs-status').textContent = 'Ссылка скопирована.';
+      } catch (error) {
+        obsUrl.select();
+        document.querySelector('#copy-obs-status').textContent = 'Скопируйте ссылку вручную (Ctrl+C).';
+      }
     });
     bootstrap();
   </script>

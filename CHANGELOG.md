@@ -28,3 +28,5 @@
   fingerprints and redacted previews.
 - Connected turn cancellation to the JAWL adapter through per-turn
   cancellation events and bounded socket reads.
+- Added a read-only transparent `/avatar` presentation surface for desktop
+  capture and OBS, plus a copyable URL in the control panel.

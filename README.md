@@ -16,8 +16,9 @@ Phase 0 — repository and architecture setup. No runtime integration has been
 implemented yet. See [docs/STATE.md](docs/STATE.md) and [TODO.md](TODO.md).
 
 The current Phase 1 slice includes a dependency-free text gateway, local
-browser control plane and initial HostOS tool registry. Real JAWL, voice,
-Live2D and non-dry-run web actions are still being integrated.
+browser control plane, initial HostOS tool registry and a transparent avatar
+surface for OBS. Real JAWL, voice, Live2D and non-dry-run web actions are
+still being integrated.
 
 ## Run the local slice
 
@@ -28,7 +29,9 @@ cd G:\AI\JAWL-VoiceCompanion
 ```
 
 Open `http://127.0.0.1:8765/`. The browser UI starts in HostOS level 0 and
-the default executor is dry-run. To explicitly construct a live executor,
+the default executor is dry-run. The transparent avatar/OBS surface is at
+`http://127.0.0.1:8765/avatar`; the control panel also provides a copyable
+same-origin URL. To explicitly construct a live executor,
 provide `--hostos-live` and configure the roots/managed executables; the
 approval queue and full production policy are still under development.
 
@@ -59,6 +62,7 @@ for cancellation and priority.
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
 
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).
+OBS setup is documented in [docs/OBS.md](docs/OBS.md).
 
 ## Planned runtime layout
 

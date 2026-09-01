@@ -135,6 +135,28 @@ on the backend against the current policy, session, tool risk and access level.
 The UI cannot grant itself permissions by sending a different level in a
 request.
 
+### Avatar presentation surface and OBS
+
+The presentation layer has two browser surfaces backed by the same local
+state:
+
+- `/` is the operator control plane for chat, HostOS level, approvals and
+  emergency stop;
+- `/avatar` is a transparent, read-only surface intended for a desktop window
+  or an OBS Browser Source.
+
+The avatar surface polls `/api/state` and renders the last response's bounded
+text, state and expression. It has no state-changing controls and does not
+receive session credentials. The current renderer is a dependency-free visual
+placeholder; the Live2D canvas will replace only this presentation layer and
+will keep JAWL, policy and memory ownership in the backend. `?debug=1` enables
+small diagnostics for local troubleshooting.
+
+The control plane generates the same-origin OBS URL. OBS should use a Browser
+Source with a transparent background and a fixed canvas size selected for the
+chosen model. A native always-on-top desktop-pet window remains a later shell
+around this surface, not a second runtime or authority.
+
 ### HostOS Tool Plane
 
 HostOS is the only layer allowed to create desktop or operating-system side
