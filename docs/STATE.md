@@ -37,8 +37,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the HostOS unattended and recovery slices.
-- Latest feature commit: `119ce6a` (`test: cover HostOS restart recovery`).
+- Working tree: clean after the JAWL HostOS ownership/status slice.
+- Latest feature commit: `5cb2943` (`docs: expose JAWL HostOS ownership boundary`).
 
 ## Completed in this repository
 
@@ -215,6 +215,14 @@ separate CPU/RAM test completes.
   therefore needs a per-instance code root (or an upstream path fix). The
   companion accepts only the loopback web URL and does not silently weaken this
   boundary.
+- JAWL already owns a native `HostOSClient`/SkillRegistry. The companion's
+  current HostOS executor is a separate control-plane path; browser policy
+  changes are not yet synchronized into a running JAWL process. This is the
+  next integration boundary, not a reason to create a second personality or
+  duplicate JAWL's tool registry.
+- The read-only `/api/jawl/hostos` bridge now reports the bounded native JAWL
+  HostOS `enabled` and `access_level` values from its filtered config, making
+  that separation visible in the browser.
 - `G:\AI\OmniVoice` was inspected and contains only a virtual environment; its
   model/API location is an external blocker.
 - The configured JAWL `terminal.port` is currently stale and has no listening
@@ -230,6 +238,8 @@ separate CPU/RAM test completes.
 - finish editable browser settings, memory and audit views; the current JAWL
   memory/persona surface is intentionally read-only;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
+- unify companion controls with JAWL's native HostOS authority through the
+  authenticated bridge described in `docs/contracts/jawl-hostos.md`.
 - improve and benchmark semantic screen significance scoring; the current
   heuristic gate connects `SCREEN_DELTA` to Attention/Presence and optional
   JAWL event IPC, while production final-wording validation remains;
@@ -303,7 +313,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 111 unit tests and 8 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 112 unit tests and 8 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
