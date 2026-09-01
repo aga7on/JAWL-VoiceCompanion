@@ -127,6 +127,10 @@ storage.
 - A real JAWL web console smoke-test with its agent stopped answered all five
   upstream routes; the companion bridge then exposed the live Heartbeat,
   database counters, drives and filtered persona through its own API.
+- A named isolated JAWL turn-smoke was started against local Ollama, but was
+  stopped before LLM initialization because the isolated Vector DB attempted
+  to download its missing 252 MB embedding cache. The canonical JAWL data and
+  config were not changed; a full live turn remains unverified.
 - The configured JAWL `terminal.port` is currently stale and has no listening
   socket; the read-only probe returned `status=offline`, so live process
   verification remains pending.
@@ -150,6 +154,8 @@ storage.
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
 - measure actual GPU contention and model residency on the target machine.
+- provide a cached/local embedding path for an isolated JAWL turn-smoke, then
+  verify the real terminal request/response through the companion.
 
 ## Latest work session
 
@@ -163,7 +169,8 @@ The current work session adds the TTS boundary and CozyVoice REST path plus
 the optional Live2D asset/runtime bridge, then adds the read-only JAWL web
 memory/persona bridge and its browser view, validates real JAWL payloads and
 applies a drive-field allow-list. The audit view was then added and covered
-end-to-end.
+end-to-end. A safe local-Ollama JAWL turn-smoke reached Vector DB startup but
+was stopped before its missing embedding download.
 
 Verification for the current work session:
 `scripts/run_e2e.ps1` passed 4 tests; `scripts/run_tests.ps1` passed 67 tests;
