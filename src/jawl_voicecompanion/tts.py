@@ -7,7 +7,8 @@ import json
 import re
 import threading
 import wave
-from typing import Any, Protocol
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -52,15 +53,23 @@ def split_sentences(text: str, max_chars: int = 500) -> list[str]:
 class CozyVoiceHttpClient:
     """Adapter for the local CozyVoice ``rest_api.py`` wrapper."""
 
-    def __init__(self, base_url: str, *, timeout_seconds: float = 120.0, max_audio_bytes: int = MAX_AUDIO_BYTES):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout_seconds: float = 120.0,
+        max_audio_bytes: int = MAX_AUDIO_BYTES,
+        opener: Callable[..., Any] = urlopen,
+    ):
         self.base_url = str(base_url).rstrip("/")
         self.timeout_seconds = max(1.0, min(float(timeout_seconds), 300.0))
         self.max_audio_bytes = max(64 * 1024, min(int(max_audio_bytes), MAX_AUDIO_BYTES))
+        self._opener = opener
 
     def health(self) -> dict[str, Any]:
         try:
             request = Request(f"{self.base_url}/health", method="GET")
-            with urlopen(request, timeout=min(self.timeout_seconds, 10.0)) as response:
+            with self._opener(request, timeout=min(self.timeout_seconds, 10.0)) as response:
                 value = json.loads(response.read(16 * 1024).decode("utf-8"))
             return value if isinstance(value, dict) else {"status": "degraded"}
         except (OSError, ValueError, json.JSONDecodeError):
@@ -76,7 +85,13 @@ class CozyVoiceHttpClient:
         speed = float(speed)
         if not 0.5 <= speed <= 2.0:
             raise ValueError("TTS speed must be between 0.5 and 2.0")
-        chunks = [self._request_sentence(part, voice, speed, cancel_event) for part in split_sentences(text)]
+        parts = split_sentences(text)
+        if len(parts) == 1:
+            chunks = [self._request_sentence(parts[0], voice, speed, cancel_event)]
+        else:
+            with ThreadPoolExecutor(max_workers=min(3, len(parts)), thread_name_prefix="tts") as pool:
+                futures = [pool.submit(self._request_sentence, part, voice, speed, cancel_event) for part in parts]
+                chunks = [future.result() for future in futures]
         if not chunks:
             raise ValueError("TTS text contains no speakable sentence")
         return _merge_wav(chunks, self.max_audio_bytes)
@@ -93,7 +108,7 @@ class CozyVoiceHttpClient:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
+            with self._opener(request, timeout=self.timeout_seconds) as response:
                 data = bytearray()
                 while True:
                     _check_cancel(cancel_event)

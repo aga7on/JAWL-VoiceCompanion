@@ -590,7 +590,9 @@ class LocalE2ETests(unittest.TestCase):
         with wave.open(io.BytesIO(audio), "rb") as wav:
             self.assertEqual(wav.getframerate(), 22050)
             self.assertGreater(wav.getnframes(), 0)
-        self.assertEqual([item["text"] for item in _TTSHandler.requests], ["Привет.", "Как дела?"])
+        self.assertEqual(
+            sorted(item["text"] for item in _TTSHandler.requests), ["Как дела?", "Привет."]
+        )
 
         self.post_json("/api/hostos/level", {"level": int(AccessLevel.ROOT)})
         request = {

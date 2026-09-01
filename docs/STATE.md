@@ -12,8 +12,9 @@ Phase 4 — 2D Live2D product UI (asset/runtime slice in progress).
 Repository state: architecture baseline committed. A dependency-free mock
 text/control slice is implemented. The real VoiceMem sidecar boundary now
 accepts external ASR partials and browser PCM16 microphone chunks, and the
-optional TTS boundary can call CozyVoice REST, and the `/avatar` surface can
-load a user-supplied Live2D bundle behind a read-only asset root. Real JAWL,
+optional model-neutral TTS boundary can call a local REST provider, and the
+`/avatar` surface can load a user-supplied Live2D bundle behind a read-only
+asset root. Real JAWL,
 production VoiceMem model startup, OmniVoice and an actual licensed Live2D
  model remain opt-in/integration work. Optional UIA, focused-window OS and VLM
  adapters remain explicit. The companion now has a loopback bridge for JAWL
@@ -182,8 +183,10 @@ separate CPU/RAM test completes.
   installed or cannot initialize.
 - VoiceMem's current default streaming ASR should not be assumed to be the
   final Russian ASR choice; a benchmark is required.
-- CozyVoice has a local REST wrapper, but its current `stream` path should be
-  validated and likely corrected before latency-sensitive integration.
+- The CozyVoice REST adapter now uses at most three concurrent sentence
+  requests and merges compatible WAV chunks in source order. The provider
+  remains model-neutral; the upstream `stream` path, selected model startup,
+  latency and first-audio playback still require validation.
 - The local OmniVoice directory currently does not expose a ready project/API
   layer; model and integration details must be confirmed before adapter work.
 - The 2026-09-01 local model inventory exposed only two Ollama profiles:
@@ -249,8 +252,8 @@ separate CPU/RAM test completes.
   JAWL event IPC, while production final-wording validation remains;
 - validate production VoiceMem audio model startup in its own environment and
   benchmark Russian ASR on a real microphone;
-- validate CozyVoice model startup/latency and decide whether an actual
-  streaming TTS worker is needed;
+- validate the TTS model selected by the external benchmark, measure startup/
+  latency and decide whether an actual streaming TTS worker is needed;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -304,6 +307,10 @@ triage now has a strict provider contract, optional CPU-first Ollama adapter
 and benchmark protocol with unit coverage;
 Vision/VLM remains model-neutral and paused by explicit decision.
 
+The current TTS follow-up adds bounded parallel sentence requests with
+source-order merge and a focused concurrency regression test. No TTS model is
+selected in this session; first-audio streaming remains pending.
+
 The latest HostOS hardening separates level 3 current-user capability from an
 explicit ROOT-only `unattended` switch. Background/Heartbeat tool calls can
 therefore run while the operator is away without per-action prompts; emergency
@@ -317,7 +324,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 119 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 120 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the

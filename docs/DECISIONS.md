@@ -251,3 +251,20 @@ fixed size limit and an allow-list of metadata fields; command arguments, raw
 tool results, screenshots, credentials and hidden reasoning are excluded at
 the persistence boundary. This is an operational audit, not a second memory
 store for the character.
+
+## ADR-019 - Keep TTS orchestration model-neutral
+
+Status: Accepted
+Date: 2026-09-01
+
+The companion keeps TTS models behind the existing provider interface so the
+operator can benchmark and replace OmniVoice, CozyVoice or another local
+provider without changing chat, cancellation, avatar or browser contracts.
+The current REST adapter may synthesize up to three sentence chunks in
+parallel, then merges them in source order. This reduces total synthesis time
+without exposing provider-specific state or committing to a model before the
+external benchmark is complete.
+
+The HTTP endpoint still returns one bounded WAV, so this decision does not
+claim first-audio streaming. Streaming playback, barge-in and the final model
+choice remain separate validation work.

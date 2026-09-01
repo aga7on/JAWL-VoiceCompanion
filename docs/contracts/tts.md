@@ -15,10 +15,12 @@ load the model. `POST /api/tts/synthesize` accepts an authenticated JSON body:
 
 The response is transient `audio/wav`; it is never written to the repository
 or durable memory. Text is limited to 4,000 characters and speed to 0.5–2.0.
-The adapter sends one CozyVoice request per sentence and merges compatible
-WAV chunks. The current endpoint is intentionally whole-response, so
-sentence-level playback/ordered parallel synthesis remains a later latency
-optimization.
+The adapter sends one CozyVoice request per sentence, runs at most three
+sentence requests concurrently, and merges compatible WAV chunks in the
+original text order. The provider boundary is model-neutral: selecting or
+replacing the TTS model does not change this contract. The current endpoint is
+still whole-response, so playback begins only after the merged WAV is ready;
+first-audio streaming remains a separate latency task.
 
 ## Cancellation and failure
 

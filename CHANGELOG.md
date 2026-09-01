@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added bounded model-neutral parallel sentence synthesis to the CozyVoice
+  adapter while preserving source-order WAV output; TTS model selection and
+  first-audio streaming remain separate follow-up work.
+
 - Added an opt-in authenticated JAWL HostOS control bridge: level 0–3 now
   writes the native JAWL fields, restarts the JAWL agent and changes the local
   companion policy only after successful restart; full ROOT means current

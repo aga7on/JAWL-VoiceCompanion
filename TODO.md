@@ -55,7 +55,9 @@ Acceptance criteria:
 - [x] Implement bounded sentence chunking for TTS.
 - [x] Add hidden-thought filtering before user text reaches the envelope,
   subtitle or TTS boundary.
-- [ ] Implement ordered parallel TTS queue.
+- [~] Implement ordered parallel TTS queue; the model-neutral CozyVoice REST
+  adapter now runs up to three sentence requests concurrently and merges WAV
+  chunks in source order. First-audio streaming remains pending.
 - [~] Implement latest-request-wins synthesis cancellation; browser playback
   cancellation and barge-in integration remain.
 - [ ] Add half-duplex hands-free mode.
