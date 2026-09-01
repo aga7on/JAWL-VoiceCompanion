@@ -24,8 +24,9 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the verified SSE-close-race fix commit.
-- Latest feature commit: `9363de3` (`fix: harden JAWL SSE cancellation`).
+- Working tree: state synchronization is pending after the verified output
+  filtering commit.
+- Latest feature commit: `91342b7` (`feat: filter hidden JAWL output`).
 
 ## Completed in this repository
 
@@ -96,6 +97,9 @@ storage.
 - `JawlWebChatAdapter` now treats an HTTP reader exception caused by concurrent
   response close as normal cancellation; a regression test protects the
   daemon reader from leaking a traceback.
+- Both JAWL transports now fail closed on internal reasoning/tool markup and
+  remove paired hidden blocks before text reaches the envelope, subtitle or
+  TTS path. The local HTTP E2E also covers upstream outage and recovery.
 
 ## Reference inventory
 
@@ -198,15 +202,18 @@ JAWL web URL is supplied; sequence correlation, cancellation and degraded
 no-broadcast behavior are covered by tests. The isolated production probe then
 confirmed terminal input and local Ollama completion, but also confirmed the
 no-broadcast model behavior and the upstream root-bound web path. The SSE
-reader close race was fixed with a focused regression test.
+reader close race was fixed with a focused regression test. Hidden-thought
+filtering and HTTP error-body cleanup were added with recovery coverage.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed compilation, 70 unit tests and 4 complete
+`scripts/run_full_gate.ps1` passed compilation, 73 unit tests and 4 complete
 HTTP E2E tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
-The SSE fix and its focused regression test are preserved in `9363de3`; the
+The SSE fix and its focused regression test are preserved in `9363de3`; hidden
+output filtering, HTTP error cleanup and recovery coverage are preserved in
+`91342b7`; the
 preceding microphone slice is preserved in `36a808c` and the TTS slice in
 `a217cec`.
 
