@@ -102,6 +102,9 @@ separate CPU/RAM test completes.
   isolated `ambient-audio:` VoiceMem session and ingests only final
   `VOICE_TURN` events into the bounded ambient buffer; partials never become
   user turns.
+- `AmbientAudioService` and the browser lifecycle routes now require explicit
+  ambient-memory consent before start, flush the isolated ASR session on stop
+  and report missing loopback backends as degraded.
 - `AmbientTriageProvider` now defines a bounded delayed-provider contract with
   strict provenance/schema validation. `OllamaTriageProvider` is an optional
   stdlib HTTP adapter configured CPU-first (`num_gpu=0`); it does not select,

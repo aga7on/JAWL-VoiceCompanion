@@ -83,6 +83,12 @@ has an opt-in microphone button: it sends bounded mono PCM16 chunks to
 own streaming ASR/VAD runs in its separate environment. Russian ASR quality,
 AEC and barge-in still require a real-device benchmark.
 
+System-audio capture is separately opt-in. Configure it with
+`--ambient-audio --voicemem-python <path>`; enable `--ambient-memory` or the
+browser toggle first, then start/stop it explicitly from the browser. The
+loopback backend is lazy and missing PyAudioWPatch is reported as degraded;
+system audio never becomes a user microphone turn.
+
 To enable local CozyVoice REST TTS (start `G:\AI\CozyVoice\rest_api.py`
 separately), add its base URL:
 

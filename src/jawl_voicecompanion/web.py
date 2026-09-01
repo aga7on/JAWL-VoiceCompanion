@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .approvals import ApprovalStore
+from .ambient_audio import AmbientAudioDisabled, AmbientAudioService
 from .ambient_memory import AmbientMemoryBuffer
 from .attention import AttentionPresence
 from .avatar import AvatarAssetStore
@@ -25,6 +26,7 @@ from .presence import ScreenDeltaWatcher
 from .tts import TTSService, TTSUnavailable, TTSCancelled
 from .vision import VisionLookService
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
+from .system_audio import SystemAudioUnavailable
 
 
 MAX_BODY_BYTES = 64 * 1024
@@ -46,6 +48,7 @@ class CompanionServer(ThreadingHTTPServer):
         avatar_assets: AvatarAssetStore | None = None,
         attention: AttentionPresence | None = None,
         ambient_memory: AmbientMemoryBuffer | None = None,
+        ambient_audio: AmbientAudioService | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -57,6 +60,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.avatar_assets = avatar_assets
         self.attention = attention or AttentionPresence()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
+        self.ambient_audio = ambient_audio
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -65,6 +69,8 @@ class CompanionServer(ThreadingHTTPServer):
     def server_close(self) -> None:
         if self.screen_watcher is not None:
             self.screen_watcher.stop()
+        if self.ambient_audio is not None:
+            self.ambient_audio.stop()
         if self.voice_mem is not None:
             self.voice_mem.close()
         if self.tts is not None:
@@ -145,6 +151,17 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 "observations": self.server.ambient_memory.observations(),
                 "episodes": self.server.ambient_memory.episodes(),
             })
+            return
+        if path == "/api/ambient-audio":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            if self.server.ambient_audio is None:
+                self._json({"configured": False, "status": "not_configured"})
+            else:
+                self._json(self.server.ambient_audio.state())
             return
         if path == "/api/voice/status":
             if self.server.voice_mem is None:
@@ -380,10 +397,26 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("enabled must be boolean")
                 self._json({"ok": True, "state": self.server.ambient_memory.set_enabled(enabled)})
                 return
+            if self.path == "/api/ambient-audio/start":
+                if self.server.ambient_audio is None:
+                    self._json({"error": "system audio is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._json({"ok": True, "state": self.server.ambient_audio.start()})
+                return
+            if self.path == "/api/ambient-audio/stop":
+                if self.server.ambient_audio is None:
+                    self._json({"error": "system audio is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._json({"ok": True, "state": self.server.ambient_audio.stop()})
+                return
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
         except VoiceMemUnavailable as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+        except AmbientAudioDisabled as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
+        except SystemAudioUnavailable as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except TTSCancelled:
             self._json({"error": "speech request was superseded"}, status=HTTPStatus.CONFLICT)
@@ -466,6 +499,7 @@ def create_server(
     jawl_event_dir: Path | None = None,
     attention: AttentionPresence | None = None,
     ambient_memory: AmbientMemoryBuffer | None = None,
+    ambient_audio: AmbientAudioService | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -504,6 +538,7 @@ def create_server(
         avatar_assets,
         active_attention,
         ambient_memory=ambient_memory,
+        ambient_audio=ambient_audio,
     )
     if watcher is not None:
         watcher.start()

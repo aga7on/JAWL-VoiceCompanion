@@ -114,3 +114,9 @@ stdlib client in `src/jawl_voicecompanion/voicemem_client.py` and the web
 bridges at `/api/voice/partial`, `/api/voice/audio` and `/api/voice/end`.
 The current microphone path is an input adapter; Russian ASR benchmarking,
 AEC/barge-in and production model warmup remain Phase 2 work.
+
+The optional system-audio lifecycle is exposed separately at
+`GET /api/ambient-audio`, `POST /api/ambient-audio/start` and
+`POST /api/ambient-audio/stop`. It requires the browser session/CSRF pair and
+ambient memory to be enabled before start. Capture is configured but never
+started automatically.

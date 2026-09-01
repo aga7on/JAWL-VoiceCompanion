@@ -4,7 +4,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge  # noqa: E402
+from jawl_voicecompanion.ambient_audio import (  # noqa: E402
+    AmbientAudioASRBridge,
+    AmbientAudioDisabled,
+    AmbientAudioService,
+)
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
 from jawl_voicecompanion.voicemem_client import VoiceMemUnavailable  # noqa: E402
 
@@ -32,6 +36,24 @@ class _FakeVoiceMem:
             "event_id": "ambient-flush-1",
             "payload": {"text": "Фраза после сброса", "confidence": 0.8},
         }]
+
+
+class _FakeCapture:
+    session_id = "ambient-audio:test"
+
+    def __init__(self):
+        self.running = False
+
+    def start(self):
+        self.running = True
+        return self.state()
+
+    def stop(self):
+        self.running = False
+        return self.state()
+
+    def state(self):
+        return {"running": self.running, "raw_persisted": False}
 
 
 class AmbientAudioTests(unittest.TestCase):
@@ -72,6 +94,19 @@ class AmbientAudioTests(unittest.TestCase):
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(result["error"], "voicemem_unavailable")
         self.assertEqual(memory.state()["observation_count"], 0)
+
+    def test_service_requires_memory_consent_and_flushes_on_explicit_stop(self):
+        voice_mem = _FakeVoiceMem(final_on_feed=False)
+        memory = AmbientMemoryBuffer(enabled=False)
+        bridge = AmbientAudioASRBridge(voice_mem, memory)
+        service = AmbientAudioService(bridge, capture=_FakeCapture())
+        with self.assertRaises(AmbientAudioDisabled):
+            service.start()
+        memory.set_enabled(True)
+        self.assertTrue(service.start()["capture"]["running"])
+        stopped = service.stop()
+        self.assertEqual(stopped["flush"]["status"], "flushed")
+        self.assertEqual(memory.observations()[0]["event_id"], "ambient-flush-1")
 
 
 if __name__ == "__main__":

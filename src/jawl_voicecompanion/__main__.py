@@ -6,6 +6,8 @@ import argparse
 from pathlib import Path
 
 from .gateway import TextGateway
+from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
+from .ambient_memory import AmbientMemoryBuffer
 from .browser_adapter import BrowserAdapter
 from .avatar import AvatarAssetStore
 from .jawl_adapter import JawlTerminalAdapter
@@ -105,6 +107,16 @@ def main() -> None:
     parser.add_argument("--voicemem-mode", default="normal")
     parser.add_argument("--voicemem-audio-rate", type=int, default=16000)
     parser.add_argument(
+        "--ambient-memory",
+        action="store_true",
+        help="enable bounded ambient evidence; capture remains stopped until enabled in the browser",
+    )
+    parser.add_argument(
+        "--ambient-audio",
+        action="store_true",
+        help="configure explicit Windows system-audio loopback controls (does not start capture)",
+    )
+    parser.add_argument(
         "--tts-url",
         default=None,
         help="local CozyVoice REST base URL, for example http://127.0.0.1:9888",
@@ -176,6 +188,12 @@ def main() -> None:
         if args.voicemem_python
         else None
     )
+    ambient_memory = AmbientMemoryBuffer(enabled=args.ambient_memory)
+    ambient_audio = None
+    if args.ambient_audio:
+        if voice_mem is None:
+            parser.error("--ambient-audio requires --voicemem-python")
+        ambient_audio = AmbientAudioService(AmbientAudioASRBridge(voice_mem, ambient_memory))
     tts_service = (
         TTSService(CozyVoiceHttpClient(args.tts_url, timeout_seconds=args.tts_timeout))
         if args.tts_url else None
@@ -201,6 +219,8 @@ def main() -> None:
         tts_service=tts_service,
         avatar_assets=avatar_assets,
         jawl_event_dir=args.jawl_event_dir,
+        ambient_memory=ambient_memory,
+        ambient_audio=ambient_audio,
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:

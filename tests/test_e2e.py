@@ -10,13 +10,14 @@ import unittest
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
-from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge  # noqa: E402
+from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge, AmbientAudioService  # noqa: E402
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
@@ -381,6 +382,12 @@ class LocalE2ETests(unittest.TestCase):
         self.tts = TTSService(CozyVoiceHttpClient(
             f"http://127.0.0.1:{self.tts_provider.server_port}", timeout_seconds=2,
         ))
+        self.ambient_memory = AmbientMemoryBuffer(enabled=True)
+        self.ambient_bridge = AmbientAudioASRBridge(_AmbientVoiceMem(), self.ambient_memory)
+        self.ambient_audio = AmbientAudioService(
+            self.ambient_bridge,
+            capture=SystemAudioLoopback(self.ambient_bridge.consume, backend=_AmbientBackend()),
+        )
         self.avatar_root = Path(self.temp.name) / "live2d"
         self.jawl_event_dir = Path(self.temp.name) / "jawl-events"
         self.avatar_root.mkdir()
@@ -407,7 +414,8 @@ class LocalE2ETests(unittest.TestCase):
             tts_service=self.tts,
             avatar_assets=AvatarAssetStore(self.avatar_root),
             jawl_event_dir=self.jawl_event_dir,
-            ambient_memory=AmbientMemoryBuffer(enabled=True),
+            ambient_memory=self.ambient_memory,
+            ambient_audio=self.ambient_audio,
         )
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -641,6 +649,30 @@ class LocalE2ETests(unittest.TestCase):
         _, triaged = self.post_json("/api/ambient-memory/triage", {})
         self.assertEqual(triaged["status"], "processed")
         self.assertEqual(triaged["episodes"][0]["payload"]["source"], "system_audio")
+
+    def test_ambient_audio_requires_explicit_browser_lifecycle(self):
+        _, initial = self.get_json("/api/ambient-audio")
+        self.assertTrue(initial["configured"])
+        self.assertTrue(initial["enabled"])
+        self.assertFalse(initial["capture"]["running"])
+        self.server.ambient_memory.set_enabled(False)
+        request = Request(
+            self.base + "/api/ambient-audio/start",
+            data=b"{}",
+            headers={"Content-Type": "application/json", **self.headers},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+        self.assertEqual(context.exception.code, 409)
+        context.exception.close()
+        self.server.ambient_memory.set_enabled(True)
+        _, started = self.post_json("/api/ambient-audio/start", {})
+        self.assertTrue(started["ok"])
+        self.assertTrue(started["state"]["capture"]["running"])
+        _, stopped = self.post_json("/api/ambient-audio/stop", {})
+        self.assertFalse(stopped["state"]["capture"]["running"])
+        self.assertEqual(stopped["state"]["flush"]["status"], "flushed")
 
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
         _, status = self.get_json("/api/voice/status")

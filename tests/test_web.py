@@ -104,6 +104,18 @@ class WebTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 403)
         context.exception.close()
 
+    def test_ambient_audio_requires_browser_session_and_reports_unconfigured(self):
+        request = Request(self.base + "/api/ambient-audio")
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+        request = Request(self.base + "/api/ambient-audio", headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            status = json.loads(response.read().decode("utf-8"))
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["status"], "not_configured")
+
     def test_ambient_memory_is_off_until_explicitly_enabled(self):
         request = Request(self.base + "/api/ambient-memory", headers=self.session_headers)
         with urlopen(request, timeout=2) as response:

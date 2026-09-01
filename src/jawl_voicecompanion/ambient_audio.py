@@ -8,7 +8,12 @@ from threading import RLock
 from typing import Any
 
 from .ambient_memory import AmbientMemoryBuffer
+from .system_audio import SystemAudioLoopback
 from .voicemem_client import VoiceMemUnavailable
+
+
+class AmbientAudioDisabled(RuntimeError):
+    """Raised when capture is requested before ambient memory is enabled."""
 
 
 class AmbientAudioASRBridge:
@@ -149,4 +154,37 @@ class AmbientAudioASRBridge:
         return f"{type(exc).__name__}: {str(exc)[:160]}"[:200]
 
 
-__all__ = ["AmbientAudioASRBridge"]
+class AmbientAudioService:
+    """Explicit lifecycle wrapper for loopback capture and final ASR flush."""
+
+    def __init__(
+        self,
+        bridge: AmbientAudioASRBridge,
+        *,
+        capture: SystemAudioLoopback | None = None,
+    ) -> None:
+        self.bridge = bridge
+        self.capture = capture or SystemAudioLoopback(bridge.consume, session_id="ambient-audio")
+
+    def start(self) -> dict[str, Any]:
+        if not self.bridge.memory.enabled:
+            raise AmbientAudioDisabled("enable ambient memory before starting system audio")
+        self.capture.start()
+        return self.state()
+
+    def stop(self) -> dict[str, Any]:
+        was_running = self.capture.running
+        capture_state = self.capture.stop()
+        flushed = self.bridge.flush(self.capture.session_id) if was_running else None
+        return {"capture": capture_state, "bridge": self.bridge.state(), "flush": flushed}
+
+    def state(self) -> dict[str, Any]:
+        return {
+            "configured": True,
+            "enabled": self.bridge.memory.enabled,
+            "capture": self.capture.state(),
+            "bridge": self.bridge.state(),
+        }
+
+
+__all__ = ["AmbientAudioASRBridge", "AmbientAudioDisabled", "AmbientAudioService"]
