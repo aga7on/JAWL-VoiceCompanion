@@ -299,9 +299,10 @@ separate follow-up adapters.
 The first hardware boundary is `SystemAudioLoopback`. It lazy-loads the
 optional PyAudioWPatch-compatible backend, selects the default WASAPI loopback
 device, queues bounded PCM16 chunks in RAM and sends them to a consumer with a
-separate session ID. It is never started by the web server automatically; a
-future ASR adapter must consume this stream separately from VoiceMem's
-microphone session.
+separate session ID. `AmbientAudioASRBridge` converts stereo/rates to bounded
+mono PCM16 for an isolated VoiceMem session and ingests only final
+`VOICE_TURN` observations into ambient memory. It is never started by the web
+server automatically; live backend permission/startup remains pending.
 
 ## Turn priority
 

@@ -92,6 +92,14 @@ Clients must wait for this marker and decode all event lines as UTF-8.
 If the sidecar cannot initialize or process a request, it returns a normal
 `VOICE_DEGRADED` event instead of exposing an exception or leaking details.
 
+## Ambient system-audio session
+
+The system-output loopback uses the same sidecar transport only through a
+separate session ID prefixed with `ambient-audio:`. `AmbientAudioASRBridge`
+downmixes/resamples bounded PCM16 and accepts only final `VOICE_TURN` events as
+`AMBIENT_AUDIO_OBSERVATION`. `USER_PARTIAL` never enters ambient memory and no
+ambient event is converted into JAWL `USER_FINAL`, speech or a tool call.
+
 ## Runtime rules
 
 - one VoiceMem stream is isolated per `session_id`;

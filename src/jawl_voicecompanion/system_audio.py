@@ -56,6 +56,7 @@ class SystemAudioLoopback:
         self._queue: Queue[_Chunk] | None = None
         self._worker: Thread | None = None
         self._pa: Any | None = None
+        self._loaded_backend: Any | None = None
         self._stream: Any | None = None
         self._backend_name = "not_loaded"
         self._device_name = ""
@@ -88,6 +89,7 @@ class SystemAudioLoopback:
                 self._stop.clear()
                 self._queue = queue
                 self._pa = pa
+                self._loaded_backend = backend
                 self._device_name = str(device.get("name") or "Windows loopback")[:160]
                 self._sample_rate = rate
                 self._channels = channels
@@ -219,7 +221,8 @@ class SystemAudioLoopback:
                     self._last_error = self._safe_error(exc)
 
     def _continue_flag(self) -> int:
-        return int(getattr(self.backend, "paContinue", 0))
+        backend = self._loaded_backend or self.backend
+        return int(getattr(backend, "paContinue", 0))
 
     def _cleanup_backend(self) -> None:
         self._stop.set()
@@ -228,6 +231,7 @@ class SystemAudioLoopback:
         self._worker = None
         self._queue = None
         self._pa = None
+        self._loaded_backend = None
         if pa is not None:
             try:
                 pa.terminate()

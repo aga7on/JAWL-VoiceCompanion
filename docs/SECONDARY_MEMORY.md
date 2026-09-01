@@ -96,7 +96,9 @@ of becoming personality or memory truth.
 3. Benchmark CPU/RAM triage candidates on Russian audio-text examples; keep
    Vision/VLM selection separate until its dedicated benchmark is complete.
 4. Use the `SystemAudioLoopback` adapter with an optional PyAudioWPatch
-   backend, behind an explicit permission and an isolated ASR session.
+   backend, behind an explicit permission and an isolated ASR session. The
+   `AmbientAudioASRBridge` now handles bounded mono/resample input and accepts
+   only final VoiceMem turns; live backend startup remains pending.
 5. Add idle consolidation into JAWL promotion candidates, with correction and
    forget controls.
 6. Run the full compile, unit, HTTP E2E and diff gate after every cross-layer

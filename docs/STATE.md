@@ -97,7 +97,11 @@ separate CPU/RAM test completes.
 - `SystemAudioLoopback` now defines the optional Windows WASAPI loopback
   boundary: lazy PyAudioWPatch-compatible loading, default-device selection,
   bounded in-memory PCM16 queue and explicit degraded behavior when the backend
-  is absent. It is not auto-started and is not yet wired to ASR.
+  is absent. It is not auto-started and is not wired to live capture startup.
+- `AmbientAudioASRBridge` now downmixes/resamples loopback PCM16 into an
+  isolated `ambient-audio:` VoiceMem session and ingests only final
+  `VOICE_TURN` events into the bounded ambient buffer; partials never become
+  user turns.
 - `AmbientTriageProvider` now defines a bounded delayed-provider contract with
   strict provenance/schema validation. `OllamaTriageProvider` is an optional
   stdlib HTTP adapter configured CPU-first (`num_gpu=0`); it does not select,
@@ -265,9 +269,10 @@ spoken final response remains model-dependent and the known `no_broadcast`
 production-profile result is preserved.
 The current implementation adds `AmbientMemoryBuffer` and authenticated
 `/api/ambient-memory` inspection, configuration, triage and clear routes;
-fake audio/visual input is covered end-to-end while Windows capture and ASR
-remain unconnected. Audio triage now has a strict provider contract, optional
-CPU-first Ollama adapter and benchmark protocol with unit coverage;
+fake audio/visual input and the loopback-to-ambient HTTP path are covered
+end-to-end while live Windows permission/startup remains unconnected. Audio
+triage now has a strict provider contract, optional CPU-first Ollama adapter
+and benchmark protocol with unit coverage;
 Vision/VLM remains model-neutral and paused by explicit decision.
 
 Verification for the current work session:

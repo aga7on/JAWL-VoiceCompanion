@@ -16,12 +16,14 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
+from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge  # noqa: E402
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
 from jawl_voicecompanion.jawl_web import JawlWebAdapter, JawlWebChatAdapter  # noqa: E402
 from jawl_voicecompanion.models import AccessLevel  # noqa: E402
+from jawl_voicecompanion.system_audio import SystemAudioLoopback  # noqa: E402
 from jawl_voicecompanion.tts import CozyVoiceHttpClient, TTSService  # noqa: E402
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
 from jawl_voicecompanion.voicemem_client import VoiceMemProcessClient  # noqa: E402
@@ -140,6 +142,84 @@ class _FakeScreen:
             },
             "persisted": False,
         }
+
+
+class _AmbientVoiceMem:
+    def __init__(self):
+        self.calls = 0
+
+    def feed_audio(self, _pcm16, *, sample_rate, session_id):
+        self.calls += 1
+        if self.calls != 1 or sample_rate != 16000:
+            return []
+        return [{
+            "type": "USER_PARTIAL",
+            "payload": {"text": "частичный системный звук"},
+        }, {
+            "type": "VOICE_TURN",
+            "event_id": "ambient-loopback-e2e",
+            "session_id": session_id,
+            "payload": {"text": "В игре объявлен важный квест", "confidence": 0.9},
+        }]
+
+    def end_audio(self, *, session_id):
+        return []
+
+
+class _AmbientStream:
+    def __init__(self, callback):
+        self.callback = callback
+
+    def start_stream(self):
+        return None
+
+    def stop_stream(self):
+        return None
+
+    def close(self):
+        return None
+
+
+class _AmbientPyAudio:
+    def __init__(self):
+        self.stream = None
+
+    def get_host_api_info_by_type(self, _api):
+        return {"defaultOutputDevice": 1}
+
+    def get_device_info_by_index(self, index):
+        if index == 1:
+            return {"name": "Speakers", "isLoopbackDevice": False}
+        return {
+            "index": index,
+            "name": "Speakers [Loopback]",
+            "isLoopbackDevice": True,
+            "maxInputChannels": 2,
+            "defaultSampleRate": 48000,
+        }
+
+    def get_loopback_device_info_generator(self):
+        yield self.get_device_info_by_index(7)
+
+    def open(self, **kwargs):
+        self.stream = _AmbientStream(kwargs["stream_callback"])
+        return self.stream
+
+    def terminate(self):
+        return None
+
+
+class _AmbientBackend:
+    paWASAPI = 1
+    paInt16 = 2
+    paContinue = 0
+
+    def __init__(self):
+        self.last = None
+
+    def PyAudio(self):
+        self.last = _AmbientPyAudio()
+        return self.last
 
 
 class _JawlHandler(socketserver.StreamRequestHandler):
@@ -538,6 +618,29 @@ class LocalE2ETests(unittest.TestCase):
         _, cleared = self.get_json("/api/ambient-memory")
         self.assertEqual(cleared["state"]["observation_count"], 0)
         self.assertEqual(cleared["state"]["episode_count"], 0)
+
+    def test_system_audio_loopback_reaches_ambient_memory_without_user_turn(self):
+        bridge = AmbientAudioASRBridge(_AmbientVoiceMem(), self.server.ambient_memory)
+        capture = SystemAudioLoopback(
+            bridge.consume,
+            backend=_AmbientBackend(),
+            queue_size=2,
+        )
+        capture.start()
+        capture.backend.last.stream.callback(b"\x01\x00" * 1600, 48000, {}, None)
+        deadline = time.monotonic() + 2
+        while self.server.ambient_memory.state()["observation_count"] == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        capture.stop()
+        _, ambient = self.get_json("/api/ambient-memory")
+        self.assertEqual(ambient["state"]["observation_count"], 1)
+        self.assertEqual(ambient["observations"][0]["event_id"], "ambient-loopback-e2e")
+        self.assertEqual(ambient["observations"][0]["payload"]["stream"], "system_audio")
+        _, state = self.get_json("/api/state")
+        self.assertIsNone(state["last_turn"])
+        _, triaged = self.post_json("/api/ambient-memory/triage", {})
+        self.assertEqual(triaged["status"], "processed")
+        self.assertEqual(triaged["episodes"][0]["payload"]["source"], "system_audio")
 
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
         _, status = self.get_json("/api/voice/status")

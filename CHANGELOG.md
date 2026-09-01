@@ -19,6 +19,9 @@
 - Added a strict delayed ambient-triage provider contract and optional
   CPU-first Ollama JSON adapter; no audio model is selected or loaded by
   default, and Vision/VLM selection is explicitly deferred.
+- Added an isolated `AmbientAudioASRBridge` with PCM16 downmix/resampling,
+  sidecar chunk bounds and final-only ambient ingestion; the loopback-to-HTTP
+  path is covered by E2E without creating a user turn.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.
