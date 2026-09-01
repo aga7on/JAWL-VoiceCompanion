@@ -261,12 +261,16 @@ workflows, while semantic watcher tuning remains.
   50.7 tok/s in the plain completion smoke; its chat smoke passed the four
   basic fact/math/instruction/context checks. Bonsai 4B and 8B use 2.54 GB/
   4.24 GB and are slower, so 1.7B is the first candidate for asynchronous
-  TTL-bounded memory compression, not for canonical chat or ASR.
+  TTL-bounded summary/topic compression, not for importance decisions,
+  canonical chat or ASR.
 - The delayed ambient triage path now has an OpenAI-compatible JSON-schema
   provider for local `llama-server` and similar endpoints. A live Bonsai 1.7B
-  request returned valid provenance but classified a synthetic future test
-  plan as `ignore`; calibration and deterministic promotion rules remain
-  required before unattended durable-memory writes.
+  request returned valid provenance but classified all four synthetic triage
+  cases as `ignore`. The memory layer now applies deterministic importance
+  guarding over provider output; a guarded live rerun promoted the explicit
+  error/remember cases and retained the plan/ordinary-background cases.
+  Salience calibration and JAWL promotion rules remain required before durable
+  writes.
 - The triage scheduler is now an opt-in daemon with bounded interval, duplicate
   start protection and server-shutdown handling; `/api/ambient-memory` exposes
   its last status. It performs no triage until the configured interval elapses.

@@ -239,7 +239,9 @@ class AmbientMemoryBuffer:
                     for group in groups:
                         result = provider.triage([item.event for item in group])
                         event_ids = {item.event["event_id"] for item in group}
-                        prepared.append((group, validate_triage_result(result, event_ids)))
+                        payload = validate_triage_result(result, event_ids)
+                        payload["importance"] = self._deterministic_importance(group)
+                        prepared.append((group, payload))
                 except Exception as exc:
                     return {
                         "status": "provider_error",
@@ -419,6 +421,18 @@ class AmbientMemoryBuffer:
                 "raw_frame_persisted": False,
             },
         }
+
+    @staticmethod
+    def _deterministic_importance(group: list[_StoredObservation]) -> str:
+        """Keep model triage from suppressing obvious bounded salient evidence."""
+        payloads = [item.event["payload"] for item in group]
+        confidence = sum(float(item.get("confidence", 0.5)) for item in payloads) / len(payloads)
+        combined = " ".join(
+            str(item.get("text") or item.get("summary") or "").strip() for item in payloads
+        )[:600]
+        if confidence < 0.35 or len(combined) < 8:
+            return "ignore"
+        return "promote_candidate" if _SALIENT.search(combined) and confidence >= 0.7 else "retain"
 
 
 class AmbientTriageScheduler:

@@ -108,19 +108,26 @@ VLM path for image/video work:
 
 The chat smoke covered a fact, arithmetic, exact-list instruction and a
 context question. Decision: use Bonsai 1.7B as the first optional RAM-resident
-worker for delayed ambient summarization/importance scoring. It must remain
-asynchronous and bounded by a TTL; it is not the canonical chat model, not the
-Russian ASR and not the Vision model. Bonsai 4B/8B stay available for later
-quality comparisons, but their extra memory and lower throughput do not justify
-placing them in the real-time loop now.
+worker for delayed ambient summarization and topic extraction; deterministic
+local policy owns importance. It must remain asynchronous and bounded by a TTL;
+it is not the canonical chat model, not the Russian ASR and not the Vision
+model. Bonsai 4B/8B stay available for later quality comparisons, but their
+extra memory and lower throughput do not justify placing them in the real-time
+loop now.
 
 The new OpenAI-compatible triage adapter was then tested against a live local
 Bonsai 1.7B `llama-server`. It returned schema-valid JSON with the expected
 `source_event_ids`, and the server was stopped after the request. The semantic
-decision for a synthetic “test tomorrow” observation was `ignore`, despite a
-high input confidence. This is a valid contract result but a quality warning:
-importance decisions need a calibration set and deterministic policy checks
-before unattended promotion to durable memory.
+decision was `ignore` for all four synthetic cases, including an explicit error
+and an explicit “remember this important decision”. This is a valid transport
+result but an unsafe importance policy for a small worker.
+
+The production-shaped guarded path was then rerun with the same live endpoint:
+the deterministic memory guard produced `promote_candidate` for the error and
+explicit remember cases, and `retain` for the explicit plan and ordinary game
+background. Bonsai's generated summary/topics are retained, while its
+importance field is advisory only. Calibration of the salience regex and
+eventual JAWL promotion still remain separate tasks.
 
 ## Additional installed VLM candidate: Qwen3.8-27B
 

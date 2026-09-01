@@ -26,6 +26,20 @@ class _FakeTriage:
         }
 
 
+class _IgnoreTriage:
+    name = "ignore-model"
+
+    def triage(self, observations):
+        return {
+            "importance": "ignore",
+            "summary": "The model attempted to suppress this observation.",
+            "topics": ["guard"],
+            "confidence": 0.99,
+            "source": "system_audio",
+            "source_event_ids": [observations[0]["event_id"]],
+        }
+
+
 class _Response:
     def __init__(self, payload):
         self.payload = payload
@@ -114,6 +128,18 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(result["provider"], "bad")
         self.assertEqual(memory.state(now=20)["episode_count"], 0)
         self.assertEqual(memory.triage(now=21)["status"], "provider_error")
+
+    def test_provider_cannot_suppress_deterministically_salient_observation(self):
+        memory = AmbientMemoryBuffer(enabled=True, triage_provider=_IgnoreTriage())
+        memory.ingest_system_audio(
+            "Важный error: deadline сегодня, запомни.",
+            confidence=0.9,
+            event_id="guarded-important",
+            now=10,
+        )
+        result = memory.triage(now=20)
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(result["episodes"][0]["payload"]["importance"], "promote_candidate")
 
     def test_ollama_provider_uses_cpu_and_structured_output(self):
         requests = []
