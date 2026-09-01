@@ -41,7 +41,7 @@ is the next implementation step.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the Windows activity and Presence slice.
-- Latest feature commit: `54bc689` (`feat: gate proactive speech on user activity`).
+- Latest feature commit: `9967f38` (`feat: add qwen vision server profile`).
 
 ## Completed in this repository
 
@@ -357,6 +357,13 @@ tests the public attention state through the HTTP E2E watcher path. It does
 not inspect keystrokes, titles or clipboard contents, and it does not select
 or load a VLM; the next step is the separately benchmarked Qwen3-VL-2B
 endpoint.
+
+The Vision follow-up adds a small PowerShell launcher for the benchmarked
+Qwen3-VL-2B Q4_K_M plus F16 mmproj. The launcher validates external model
+paths, binds `llama-server` to loopback, selects one CPU slot and disables
+GPU offload. A real smoke test passed `/health`, `/v1/models` and the
+existing `OpenAICompatibleVisionClient` against `ui_test.png`; the server was
+stopped after validation.
 
 The launch follow-up adds a PowerShell preflight for the selected web port;
 the observed `426 Upgrade Required` on port `8765` is now diagnosed before the
