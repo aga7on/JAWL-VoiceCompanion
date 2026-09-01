@@ -42,7 +42,8 @@ Acceptance criteria:
 ## Phase 2 — Russian voice loop
 
 - [x] Implement the bounded browser microphone input adapter and PCM16 sidecar path.
-- [ ] Benchmark at least two Russian ASR candidates.
+- [x] Benchmark Russian ASR candidates; the external CPU/RAM comparison
+  selected Qwen3-ASR-0.6B, while live microphone integration remains.
 - [x] Connect external streaming ASR partials to the VoiceMem sidecar
   `feed_partial` contract.
 - [x] Deliver the VoiceMem final transcript through the JAWL user-turn gateway.

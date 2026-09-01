@@ -31,7 +31,9 @@ model-neutral delayed audio-triage contract and optional CPU-first Ollama
 adapter are now present; no model is selected or loaded by default. The
 operator's CPU/RAM benchmark selected Qwen3-VL-2B as the primary Vision
 candidate, with SmolVLM2-500M as a speed fallback. The local endpoint and
-explicit screen look are now smoke-tested; continuous watcher tuning remains.
+explicit screen look are now smoke-tested, and the optimized screen watcher
+has produced bounded `SCREEN_DELTA` events; UIA context and semantic watcher
+tuning remain.
 
 ## Git state
 
@@ -40,8 +42,8 @@ explicit screen look are now smoke-tested; continuous watcher tuning remains.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the Windows activity and Presence slice.
-- Latest feature commit: `9967f38` (`feat: add qwen vision server profile`).
+- Working tree: clean after the bounded screen-capture Vision slice.
+- Latest feature commit: `1d98ec7` (`feat: bound screen capture for vision`).
 
 ## Completed in this repository
 
@@ -205,20 +207,27 @@ explicit screen look are now smoke-tested; continuous watcher tuning remains.
   `/api/voice/audio`, `/api/voice/end` bridges are implemented. The
   production runner is lazy and returns `VOICE_DEGRADED` if VoiceMem is not
   installed or cannot initialize.
-- VoiceMem's current default streaming ASR should not be assumed to be the
-  final Russian ASR choice; a benchmark is required.
+- The external CPU/RAM audio benchmark selected Qwen3-ASR-0.6B for Russian
+  speech experiments (RTF 0.13–0.15, about 1.48 GB peak RAM on the supplied
+  samples). It is not yet connected to the streaming VoiceMem bridge or
+  validated on a live microphone.
 - The operator's 2026-09-01 CPU/RAM benchmark selected
   `Qwen3-VL-2B-Q4_K_M.gguf` with `Qwen3-VL-2B-mmproj-F16.gguf` as the primary
   VLM profile: approximately 28–36 tok/s, 4.1 GB peak RAM, strong image/video
   quality and usable UI grounding after calibration. `SmolVLM2-500M` is the
   low-latency fallback; `Bonsai-1.7B` is text-only and `Qwen3-ASR-0.6B` is
-  the leading audio candidate. The files live outside this repository under
-  `C:\Users\ARTEM\vlm-bench\models`; no weights are copied into source.
+  the leading audio candidate. The VLM files live outside this repository
+  under `C:\Users\ARTEM\vlm-bench\models`; the ASR files remain in the
+  external Hugging Face cache; no weights are copied into source.
 - A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
   Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
   the real Windows focused-window capture. It returned a bounded Russian
   description in about 10.9 seconds; the raw frame was not persisted. This
   validates the explicit path, not yet a low-latency continuous watcher.
+- The optimized 2026-09-01 watcher smoke used a 960×720/1 MB profile and
+  captured a 960×520 frame (71.7 KB; coordinate scale about 2.02 on both
+  axes). It produced 3 bounded `SCREEN_DELTA` events in 12 seconds through
+  the live Qwen endpoint; raw frames remained absent from the event path.
 - The model-neutral REST TTS adapter now uses at most three concurrent
   sentence requests, merges compatible WAV chunks in source order, and
   exposes explicit cancellation. The browser aborts stale playback requests
@@ -276,7 +285,8 @@ explicit screen look are now smoke-tested; continuous watcher tuning remains.
 
 ## Current blockers / decisions needed later
 
-- Choose and benchmark Russian streaming ASR;
+- integrate and validate Qwen3-ASR-0.6B with the streaming VoiceMem boundary
+  or document a lower-latency replacement;
 - confirm the OmniVoice model/API location;
 - select and manually validate the first redistributable or user-supplied
   Live2D model/runtime bundle;
@@ -288,8 +298,8 @@ explicit screen look are now smoke-tested; continuous watcher tuning remains.
 - improve and benchmark semantic screen significance scoring; the current
   heuristic gate connects `SCREEN_DELTA` to Attention/Presence and optional
   JAWL event IPC, while production final-wording validation remains;
-- validate production VoiceMem audio model startup in its own environment and
-  benchmark Russian ASR on a real microphone;
+- validate production VoiceMem/Qwen3-ASR audio startup in its own environment
+  and measure Russian ASR on a real microphone;
 - validate the TTS model selected by the external benchmark, measure startup/
   latency and decide whether an actual streaming TTS worker is needed;
 - choose the initial JAWL LLM endpoint/profile;
@@ -366,9 +376,9 @@ Qwen3-VL-2B endpoint when configured.
 The Vision follow-up adds a small PowerShell launcher for the benchmarked
 Qwen3-VL-2B Q4_K_M plus F16 mmproj. The launcher validates external model
 paths, binds `llama-server` to loopback, selects one CPU slot and disables
-GPU offload. A real smoke test passed `/health`, `/v1/models` and the
-existing `OpenAICompatibleVisionClient` against `ui_test.png`; the server was
-stopped after validation.
+GPU offload. A real smoke test passed `/health`, `/v1/models`, the existing
+`OpenAICompatibleVisionClient` against `ui_test.png` and the live optimized
+screen watcher; the server was stopped after validation.
 
 The launch follow-up adds a PowerShell preflight for the selected web port;
 the observed `426 Upgrade Required` on port `8765` is now diagnosed before the
@@ -400,7 +410,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 131 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 133 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -416,7 +426,8 @@ preceding microphone slice is preserved in `36a808c` and the TTS slice in
 Known limitation: no licensed Live2D model/runtime is installed yet; the
 placeholder remains the default. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; production semantic scoring and JAWL
-final-wording delivery, pixel-level redaction, ASR quality benchmarking,
+final-wording delivery, UIA context/coordinate execution and pixel-level redaction,
+real-microphone ASR quality,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The desktop-pet launcher is available as a
 bounded always-on-top presentation shell; native transparent compositing is
@@ -424,15 +435,15 @@ still deferred. The system-audio loopback adapter, permission/API wiring and
 isolated ASR consumer are implemented; backend installation and real-device
 capture/ASR quality validation remain pending. The CPU/RAM benchmark is
 complete; triage-worker scheduling and the Qwen3-VL-2B local endpoint
-integration remain pending.
+integration are verified; watcher tuning and production model warmup remain.
 
 ## Next action
 
-Start and validate the local `llama-server` OpenAI-compatible endpoint with
-Qwen3-VL-2B and its mmproj, then run the existing explicit `vision__look` and
-screen-watcher paths against it. In parallel, benchmark audio-triage
-candidates and the installed VoiceMem ASR modes on real Russian audio, then
-validate the existing isolated Windows loopback consumer on the real device.
+Add UIA structure and calibrated coordinate execution around the bounded
+Qwen3-VL-2B screen path. In parallel, validate Qwen3-ASR/VoiceMem on real
+Russian microphone audio, benchmark the selected TTS provider, and connect
+the resulting final voice path to avatar lip-sync without weakening the
+HostOS approval and emergency-stop gates.
 
 ## State update protocol
 
