@@ -235,6 +235,11 @@ JAWL-compatible atomic event delivery.
 The latest documentation update records the ambient secondary-memory decision
 in `docs/SECONDARY_MEMORY.md`, with TODO items for separated system-audio
 capture, bounded retention, delayed triage, visual keyframes and provenance.
+An isolated 2026-09-01 smoke using JAWL's actual `DaemonsPoller`, `EventBus`
+and `EventBridge` accepted one `JawlEventFileSink` file, consumed it and
+delivered one `HOST_OS_SANDBOX_EVENT` to `Heartbeat.answer_to_event`; the
+spoken final response remains model-dependent and the known `no_broadcast`
+production-profile result is preserved.
 
 Verification for the current work session:
 `scripts/run_full_gate.ps1` passed 85 unit tests and 4 complete HTTP E2E tests;

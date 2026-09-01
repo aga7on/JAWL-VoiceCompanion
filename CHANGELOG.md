@@ -5,6 +5,11 @@
 - Added bounded Attention/Presence handling for screen deltas, DND/cooldown
   and explicit atomic delivery of salient `SPEAK_INTENT` events to JAWL's
   existing `.jawl_events` IPC boundary.
+- Documented ambient secondary memory as separate, opt-in evidence with
+  transient raw capture, delayed CPU/RAM triage and JAWL-owned promotion.
+- Verified the companion event sink against JAWL's actual poller, EventBus and
+  EventBridge in an isolated smoke; final model broadcast remains explicit
+  `no_broadcast` when the active profile does not call the terminal skill.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.

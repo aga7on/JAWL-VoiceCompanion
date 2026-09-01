@@ -99,3 +99,13 @@ significance and correlation metadata; it contains no image or local path.
 Omitting the option keeps Attention/Presence local-only. This wakes JAWL's
 existing event/Heartbeat path but does not bypass JAWL's final wording, DND or
 tool policy.
+
+The file shape and downstream routing were verified on 2026-09-01 in an
+isolated temporary directory using JAWL's actual `DaemonsPoller`, `EventBus`
+and `EventBridge` classes: one sink file was consumed, one
+`HOST_OS_SANDBOX_EVENT` reached `Heartbeat.answer_to_event`, and the bounded
+payload contained no image or local path. This proves IPC acceptance, not a
+spoken reply. A final user-facing message still depends on the active JAWL
+ReAct model calling its terminal-message skill; a local production-profile
+smoke previously completed the LLM request without such a broadcast and is
+therefore reported as `no_broadcast`.
