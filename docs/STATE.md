@@ -19,8 +19,7 @@ available only through an explicitly constructed live executor.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean at the last verification.
-- Latest feature commit: `fd78f71` (`feat: add opt-in focused window
-  capture`).
+- Latest feature commit: `6b2ba8e` (`feat: add explicit vision bridge`).
 
 ## Completed in this repository
 
