@@ -104,6 +104,7 @@
     let ttsConfigured = false;
     let currentAudio = null;
     let ttsAbort = null;
+    let streamSpeechActive = false;
     let bargeInTriggered = false;
     let avatarAudioContext = null;
     let avatarAudioMonitor = null;
@@ -263,7 +264,14 @@
       avatarAudioMonitor = null;
       if (monitor) {
         cancelAnimationFrame(monitor.frame);
-        try { monitor.source.disconnect(); } catch (_) {}
+        if (monitor.sources) {
+          for (const source of monitor.sources) {
+            try { source.stop(); } catch (_) {}
+            try { source.disconnect(); } catch (_) {}
+          }
+          monitor.sources.clear();
+        }
+        try { monitor.source?.disconnect(); } catch (_) {}
         try { monitor.analyser.disconnect(); } catch (_) {}
       }
       publishAvatarAudio(0, false);
@@ -311,8 +319,104 @@
         publishAvatarAudio(0, true);
       }
     }
+    async function startAvatarStreamMonitor() {
+      stopAvatarAudioMonitor();
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return null;
+      try {
+        avatarAudioContext ||= new AudioContextClass();
+        if (avatarAudioContext.state === 'suspended') await avatarAudioContext.resume();
+        const analyser = avatarAudioContext.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.connect(avatarAudioContext.destination);
+        const monitor = {kind: 'stream', sources: new Set(), analyser, frame: 0, streamDone: false};
+        avatarAudioMonitor = monitor;
+        const values = new Uint8Array(analyser.fftSize);
+        const sample = () => {
+          if (avatarAudioMonitor !== monitor) return;
+          analyser.getByteTimeDomainData(values);
+          let energy = 0;
+          for (const value of values) {
+            const normalized = (value - 128) / 128;
+            energy += normalized * normalized;
+          }
+          const rms = Math.sqrt(energy / Math.max(1, values.length));
+          const active = monitor.sources.size > 0;
+          publishAvatarAudio(active ? Math.max(0, Math.min(1, (rms - 0.012) * 7)) : 0, active);
+          if (monitor.streamDone && !active) {
+            streamSpeechActive = false;
+            stopAvatarAudioMonitor();
+            return;
+          }
+          monitor.frame = requestAnimationFrame(sample);
+        };
+        sample();
+        return monitor;
+      } catch (_) {
+        return null;
+      }
+    }
+    function decodeBase64Audio(value) {
+      const binary = atob(value);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+    async function speakStream(text, controller) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass || !window.ReadableStream) return false;
+      const response = await fetch('/api/tts/stream', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', ...sessionHeaders},
+        body: JSON.stringify({text, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
+        signal: controller.signal
+      });
+      if (!response.ok || !response.body) return false;
+      const monitor = await startAvatarStreamMonitor();
+      if (!monitor) {
+        try { await response.body.cancel(); } catch (_) {}
+        return false;
+      }
+      streamSpeechActive = true;
+      let nextStart = avatarAudioContext.currentTime + 0.03;
+      let buffer = '';
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const consume = async (line) => {
+        if (!line.trim()) return;
+        const event = JSON.parse(line);
+        if (event.type === 'error') throw new Error(event.error || 'TTS stream failed');
+        if (event.type === 'cancelled') throw new DOMException('Speech cancelled', 'AbortError');
+        if (event.type !== 'audio') return;
+        const audioBuffer = await avatarAudioContext.decodeAudioData(decodeBase64Audio(event.data_base64));
+        if (avatarAudioMonitor !== monitor || controller.signal.aborted) throw new DOMException('Speech cancelled', 'AbortError');
+        const source = avatarAudioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(monitor.analyser);
+        monitor.sources.add(source);
+        source.onended = () => {
+          monitor.sources.delete(source);
+          try { source.disconnect(); } catch (_) {}
+        };
+        const startAt = Math.max(nextStart, avatarAudioContext.currentTime + 0.01);
+        source.start(startAt);
+        nextStart = startAt + audioBuffer.duration;
+      };
+      while (true) {
+        const result = await reader.read();
+        buffer += decoder.decode(result.value || new Uint8Array(), {stream: !result.done});
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) await consume(line);
+        if (result.done) break;
+      }
+      await consume(buffer);
+      monitor.streamDone = true;
+      return true;
+    }
     async function stopSpeech() {
       stopAvatarAudioMonitor();
+      streamSpeechActive = false;
       if (currentAudio) {
         currentAudio.pause();
         currentAudio.currentTime = 0;
@@ -335,6 +439,8 @@
       const controller = new AbortController();
       ttsAbort = controller;
       try {
+        const streamed = await speakStream(text, controller);
+        if (streamed) return;
         const response = await fetch('/api/tts/synthesize', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', ...sessionHeaders},
@@ -350,6 +456,10 @@
         await startAvatarAudioMonitor(audio);
         await audio.play();
       } catch (error) {
+        if (error.name !== 'AbortError') {
+          stopAvatarAudioMonitor();
+          streamSpeechActive = false;
+        }
         if (error.name === 'AbortError') return;
         document.querySelector('#tts-status').textContent = `TTS не воспроизведён: ${error.message}`;
       } finally {
@@ -494,12 +604,12 @@
         const active = voice;
         if (!active || active.context !== context) return;
         let rms = 0;
-        if ((currentAudio || ttsAbort) || handsFree.checked) {
+        if ((currentAudio || ttsAbort || streamSpeechActive) || handsFree.checked) {
           let energy = 0;
           for (const sample of inputSamples) energy += sample * sample;
           rms = Math.sqrt(energy / Math.max(1, inputSamples.length));
         }
-        if (!bargeInTriggered && (currentAudio || ttsAbort)) {
+        if (!bargeInTriggered && (currentAudio || ttsAbort || streamSpeechActive)) {
           if (rms >= 0.08) {
             bargeInTriggered = true;
             stopSpeech();

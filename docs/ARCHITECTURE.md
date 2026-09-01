@@ -141,9 +141,12 @@ support sentence-level requests and cancellation. TTS output is not allowed
 to contain internal thoughts or control markup.
 
 The current implementation keeps that boundary small: `TTSService` applies
-latest-request-wins cancellation, while `CozyVoiceHttpClient` calls the
-separate local REST wrapper and returns bounded transient WAV data. The web
-process never imports CozyVoice or its torch/model dependency tree. OmniVoice
+latest-request-wins cancellation and can emit bounded sentence WAVs in source
+order, while `CozyVoiceHttpClient` calls the separate local REST wrapper and
+returns bounded transient WAV data. The browser's NDJSON/WebAudio path starts
+at the first completed sentence and falls back to the whole-WAV endpoint when
+needed; this is not token-level provider streaming. The web process never
+imports CozyVoice or its torch/model dependency tree. OmniVoice
 will implement the same provider interface after its runtime/API is confirmed.
 
 ### Attention/Presence Engine

@@ -291,12 +291,14 @@ workflows, while semantic watcher tuning remains.
   was not intelligible in Russian. TeraTTSv2 is provisional only; prosody,
   first-audio latency, cancellation and actual avatar-path integration remain.
   A direct warm streaming call produced its first chunk in about 1.04 s and
-  requires `<ru>...</ru>` input; the current Companion whole-WAV HTTP contract
-  cannot expose that chunk yet.
+  requires `<ru>...</ru>` input. The Companion now exposes a sentence-level
+  `/api/tts/stream` NDJSON/WebAudio path, while the native Tera chunk generator
+  remains outside the provider boundary.
 - An optional `scripts/teratts_server.py` wrapper now exposes TeraTTSv2 through
   the existing local TTS contract. A real smoke through `CozyVoiceHttpClient`
   and `TTSService` returned valid mono 44.1 kHz WAV audio; the model release
-  remains external and the browser still receives whole-response audio.
+  remains external; the browser can now receive sentence audio incrementally
+  through `/api/tts/stream` and drives lip-sync from the playback nodes.
 - A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
   Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
   the real Windows focused-window capture. It returned a bounded Russian
@@ -438,8 +440,9 @@ outside the repository until the local server contract is verified.
 The current TTS follow-up adds bounded parallel sentence requests with
 source-order merge, explicit server cancellation, browser request abort,
 provider-neutral voice/speed controls and focused concurrency/cancellation
-regression tests. No TTS model is selected in this session; first-audio
-streaming remains pending.
+regression tests. It also exposes `/api/tts/stream`: sentence WAVs are emitted
+in source order as NDJSON and scheduled by WebAudio before the full reply is
+ready; this is sentence-level, not native token streaming.
 
 The current VoiceMem follow-up hardens lazy sidecar startup and recovery:
 empty `/api/voice/end` calls do not initialize VoiceMem, a failed stream is
@@ -520,7 +523,7 @@ reactive 2D fallback remains the default. The web server's default executor rema
 endpoint is configured by default; production semantic scoring and JAWL
 final-wording delivery, real custom-app pointer acceptance and pixel-level redaction,
 real-microphone ASR quality and final Live2D lip-sync tuning,
-AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
+AEC/barge-in, native provider-level TTS chunking, OmniVoice and production
 model warmup are still pending. The desktop-pet launcher is available as a
 bounded always-on-top presentation shell; native transparent compositing is
 still deferred. The system-audio loopback adapter, permission/API wiring and

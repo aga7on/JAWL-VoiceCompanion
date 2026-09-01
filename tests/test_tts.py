@@ -132,6 +132,47 @@ class TTSServiceTests(unittest.TestCase):
             self.assertEqual(merged.readframes(2), b"1" * 4)
             self.assertEqual(merged.readframes(2), b"2" * 4)
 
+    def test_service_streams_sentence_audio_in_source_order(self):
+        first_started = threading.Event()
+        second_started = threading.Event()
+        release_first = threading.Event()
+
+        def wav(marker):
+            output = io.BytesIO()
+            with wave.open(output, "wb") as result:
+                result.setnchannels(1)
+                result.setsampwidth(2)
+                result.setframerate(22050)
+                result.writeframes(marker * 4)
+            return output.getvalue()
+
+        class Provider:
+            def synthesize(self, text, *, voice=None, speed=1.0, cancel_event=None):
+                del voice, speed, cancel_event
+                if text == "first.":
+                    first_started.set()
+                    release_first.wait(1)
+                    return wav(b"1")
+                second_started.set()
+                return wav(b"2")
+
+        result = []
+        service = TTSService(Provider())
+        worker = threading.Thread(
+            target=lambda: result.extend(service.stream("first. second.")), daemon=True
+        )
+        worker.start()
+        self.assertTrue(first_started.wait(1))
+        self.assertTrue(second_started.wait(1))
+        release_first.set()
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(result), 2)
+        with wave.open(io.BytesIO(result[0]), "rb") as first:
+            self.assertEqual(first.readframes(2), b"1" * 4)
+        with wave.open(io.BytesIO(result[1]), "rb") as second:
+            self.assertEqual(second.readframes(2), b"2" * 4)
+
     @staticmethod
     def _capture(fn):
         try:

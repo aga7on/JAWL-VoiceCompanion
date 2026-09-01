@@ -443,6 +443,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 audio = self.server.tts.synthesize(text, voice=voice, speed=float(speed))
                 self._audio(audio)
                 return
+            if self.path == "/api/tts/stream":
+                if self.server.tts is None:
+                    self._json({"error": "TTS provider is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                text = payload.get("text", "")
+                voice = payload.get("voice")
+                speed = payload.get("speed", 1.0)
+                if not isinstance(text, str) or voice is not None and not isinstance(voice, str):
+                    raise ValueError("text must be string and voice must be string or null")
+                if isinstance(speed, bool) or not isinstance(speed, (int, float)):
+                    raise ValueError("speed must be a number")
+                self._stream_tts(text, voice=voice, speed=float(speed))
+                return
             if self.path == "/api/tts/cancel":
                 if self.server.tts is not None:
                     self.server.tts.cancel()
@@ -644,6 +657,43 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _stream_tts(self, text: str, *, voice: str | None, speed: float) -> None:
+        """Send sentence WAVs as newline-delimited JSON without buffering the reply."""
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        try:
+            count = 0
+            for index, audio in enumerate(self.server.tts.stream(text, voice=voice, speed=speed)):
+                self._stream_event({
+                    "type": "audio",
+                    "index": index,
+                    "media_type": "audio/wav",
+                    "data_base64": base64.b64encode(audio).decode("ascii"),
+                })
+                count += 1
+            self._stream_event({"type": "done", "count": count})
+        except TTSCancelled:
+            self._stream_event({"type": "cancelled"})
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+            # Closing the browser stream closes the service-owned generator in
+            # its finally block, which cancels only this synthesis generation.
+            return
+        except Exception as exc:  # noqa: BLE001 - report provider failures in-band
+            try:
+                self._stream_event({"type": "error", "error": str(exc)[:500]})
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                return
+
+    def _stream_event(self, payload: dict[str, Any]) -> None:
+        body = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        self.wfile.write(body)
+        self.wfile.flush()
 
     def _voice_turn_responses(self, events: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
         responses = []

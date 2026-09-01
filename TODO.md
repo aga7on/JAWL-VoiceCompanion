@@ -54,17 +54,17 @@ Acceptance criteria:
 - [~] Inspect and fix the local CozyVoice wrapper's non-streaming behavior;
   the companion calls one sentence per request and merges compatible WAV
   chunks, while upstream wrapper streaming remains unverified.
-- [~] Add optional TeraTTSv2 REST worker; the external model was checked through
-  the existing `/health` + `/tts` contract and its lower-level first chunk was
-  measured, while Companion streaming playback remains pending.
+- [~] Add optional TeraTTSv2 REST worker; the external model is available through
+  the existing `/health` + `/tts` contract and generic sentence-level Companion
+  streaming playback is implemented, while native Tera chunk integration remains.
 - [!] Add OmniVoice adapter when its model/API location is confirmed; the local
   `G:\AI\OmniVoice` directory currently contains only a virtual environment.
 - [x] Implement bounded sentence chunking for TTS.
 - [x] Add hidden-thought filtering before user text reaches the envelope,
   subtitle or TTS boundary.
-- [~] Implement ordered parallel TTS queue; the model-neutral CozyVoice REST
-  adapter now runs up to three sentence requests concurrently and merges WAV
-  chunks in source order. First-audio streaming remains pending.
+- [x] Implement ordered parallel TTS queue; the model-neutral provider boundary
+  now runs up to three sentence requests concurrently and exposes source-order
+  NDJSON audio chunks for first-audio browser playback.
 - [~] Implement latest-request-wins synthesis cancellation; the browser now
   aborts playback/request and calls the explicit cancel route, while barge-in
   integration remains.

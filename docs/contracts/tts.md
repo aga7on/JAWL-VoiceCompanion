@@ -18,11 +18,20 @@ or durable memory. Text is limited to 4,000 characters and speed to 0.5–2.0.
 The adapter sends one CozyVoice request per sentence, runs at most three
 sentence requests concurrently, and merges compatible WAV chunks in the
 original text order. The provider boundary is model-neutral: selecting or
-replacing the TTS model does not change this contract. The current endpoint is
-still whole-response, so playback begins only after the merged WAV is ready;
-first-audio streaming remains a separate latency task.
+replacing the TTS model does not change this contract. This endpoint remains
+whole-response for compatibility.
 The browser may provide a bounded provider-specific `voice` identifier and a
 speed from `0.5` to `2.0`; these values do not select or imply a model.
+
+`POST /api/tts/stream` accepts the same authenticated JSON body and returns
+`application/x-ndjson`. Each `audio` line contains one bounded base64-encoded
+WAV sentence with its source `index`; a final `done` line contains the count.
+Sentence jobs are started in parallel (up to three), but lines are emitted in
+source order. The browser schedules each WAV in a WebAudio queue and drives
+avatar RMS lip-sync from the same nodes, so first audio can play before the
+whole reply is ready. This is sentence-level first-audio, not provider-native
+token streaming; a very long sentence remains a latency boundary. The browser
+falls back to `/api/tts/synthesize` when streaming WebAudio is unavailable.
 
 `POST /api/tts/cancel` accepts the authenticated session/CSRF pair and
 invalidates the active synthesis, if any. It is idempotent and returns a

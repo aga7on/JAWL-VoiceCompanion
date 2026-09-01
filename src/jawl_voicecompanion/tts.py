@@ -8,7 +8,7 @@ import re
 import threading
 import wave
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterator, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -156,6 +156,55 @@ class TTSService:
                 raise TTSUnavailable("TTS provider returned invalid or oversized audio")
             return audio
         finally:
+            with self._lock:
+                if self._active is cancel:
+                    self._active = None
+
+    def stream(self, text: str, *, voice: str | None = None, speed: float = 1.0) -> Iterator[bytes]:
+        """Yield sentence WAVs in order as soon as each one is ready.
+
+        Providers keep their existing whole-WAV contract.  The service owns the
+        small amount of orchestration needed for first-audio latency, ordering,
+        and latest-request-wins cancellation.
+        """
+        text = str(text or "").strip()
+        if not text or len(text) > MAX_TTS_CHARS:
+            raise ValueError("TTS text must be non-empty and at most 4000 characters")
+        speed = float(speed)
+        if not 0.5 <= speed <= 2.0:
+            raise ValueError("TTS speed must be between 0.5 and 2.0")
+        parts = split_sentences(text)
+        if not parts:
+            raise ValueError("TTS text contains no speakable sentence")
+
+        cancel = threading.Event()
+        with self._lock:
+            self._generation += 1
+            generation = self._generation
+            if self._active is not None:
+                self._active.set()
+            self._active = cancel
+
+        pool = ThreadPoolExecutor(max_workers=min(3, len(parts)), thread_name_prefix="tts-stream")
+        futures = [
+            pool.submit(self.provider.synthesize, part, voice=voice, speed=speed, cancel_event=cancel)
+            for part in parts
+        ]
+        try:
+            for future in futures:
+                _check_cancel(cancel)
+                audio = future.result()
+                with self._lock:
+                    if cancel.is_set() or generation != self._generation:
+                        raise TTSCancelled()
+                if not isinstance(audio, bytes) or not audio or len(audio) > MAX_AUDIO_BYTES:
+                    raise TTSUnavailable("TTS provider returned invalid or oversized audio")
+                yield _merge_wav([audio], MAX_AUDIO_BYTES)
+        finally:
+            cancel.set()
+            for future in futures:
+                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
             with self._lock:
                 if self._active is cancel:
                     self._active = None

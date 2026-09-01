@@ -708,6 +708,19 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(
             sorted(item["text"] for item in _TTSHandler.requests), ["Как дела?", "Привет."]
         )
+        stream_request = Request(
+            self.base + "/api/tts/stream",
+            data=json.dumps({"text": "Поток. Вторая фраза."}, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", **self.headers},
+            method="POST",
+        )
+        with urlopen(stream_request, timeout=3) as response:
+            self.assertIn("application/x-ndjson", response.headers.get("Content-Type", ""))
+            stream_events = [json.loads(line) for line in response.read().decode("utf-8").splitlines()]
+        self.assertEqual([event["type"] for event in stream_events], ["audio", "audio", "done"])
+        self.assertEqual([event["index"] for event in stream_events[:2]], [0, 1])
+        self.assertTrue(all(base64.b64decode(event["data_base64"]).startswith(b"RIFF") for event in stream_events[:2]))
+        self.assertEqual(stream_events[-1]["count"], 2)
         status, cancelled = self.post_json("/api/tts/cancel", {})
         self.assertEqual(status, 200)
         self.assertTrue(cancelled["ok"])
