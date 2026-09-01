@@ -96,6 +96,7 @@
     let ttsConfigured = false;
     let currentAudio = null;
     let ttsAbort = null;
+    let bargeInTriggered = false;
     function addMessage(who, text) {
       const item = document.createElement('div');
       item.className = 'message';
@@ -211,6 +212,7 @@
     async function speak(text) {
       if (!ttsConfigured || !text) return;
       await stopSpeech();
+      bargeInTriggered = false;
       const controller = new AbortController();
       ttsAbort = controller;
       try {
@@ -311,13 +313,24 @@
       const samples = [];
       const chunkSize = Math.floor(context.sampleRate * 0.2);
       processor.onaudioprocess = event => {
-        samples.push(...event.inputBuffer.getChannelData(0));
+        const inputSamples = event.inputBuffer.getChannelData(0);
+        if (!bargeInTriggered && (currentAudio || ttsAbort)) {
+          let energy = 0;
+          for (const sample of inputSamples) energy += sample * sample;
+          const rms = Math.sqrt(energy / Math.max(1, inputSamples.length));
+          if (rms >= 0.08) {
+            bargeInTriggered = true;
+            stopSpeech();
+          }
+        }
+        samples.push(...inputSamples);
         while (samples.length >= chunkSize) queueVoiceChunk(samples.splice(0, chunkSize), context.sampleRate);
       };
       source.connect(processor);
       processor.connect(mute);
       mute.connect(context.destination);
       voice = {stream, context, source, processor};
+      bargeInTriggered = false;
       document.querySelector('#mic').textContent = '⏹ Выключить микрофон';
       document.querySelector('#mic-status').textContent = 'Микрофон слушает; VoiceMem сам определяет конец фразы.';
     }

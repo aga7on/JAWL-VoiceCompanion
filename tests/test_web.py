@@ -56,6 +56,9 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"quiet-hours", frontend)
             self.assertIn(b"unattended", frontend)
             self.assertIn(b"save-denylist", frontend)
+            self.assertIn(b"/api/tts/cancel", frontend)
+            self.assertIn(b"AbortController", frontend)
+            self.assertIn(b"bargeInTriggered", frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
 

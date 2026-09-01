@@ -113,7 +113,10 @@ The repository contains the runner in `services/voicemem_sidecar.py`, the
 stdlib client in `src/jawl_voicecompanion/voicemem_client.py` and the web
 bridges at `/api/voice/partial`, `/api/voice/audio` and `/api/voice/end`.
 The current microphone path is an input adapter; Russian ASR benchmarking,
-AEC/barge-in and production model warmup remain Phase 2 work.
+AEC and production model warmup remain Phase 2 work. The browser has a bounded
+RMS activity trigger that requests TTS cancellation once while speech is
+active; it does not promote that signal to `BARGE_IN` or `USER_FINAL`. VoiceMem
+still decides whether the subsequent audio is a valid conversational turn.
 
 The optional system-audio lifecycle is exposed separately at
 `GET /api/ambient-audio`, `POST /api/ambient-audio/start` and

@@ -62,7 +62,9 @@ Acceptance criteria:
   aborts playback/request and calls the explicit cancel route, while barge-in
   integration remains.
 - [ ] Add half-duplex hands-free mode.
-- [ ] Add barge-in capture and interruption classification.
+- [~] Add barge-in capture and interruption classification; browser RMS
+  activity now cancels active speech/generation once, while VoiceMem-based
+  classification and full half-duplex behavior remain.
 - [ ] Benchmark first-audio latency and Russian prosody.
 
 Acceptance criteria:

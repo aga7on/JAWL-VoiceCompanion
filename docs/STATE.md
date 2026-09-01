@@ -188,9 +188,10 @@ separate CPU/RAM test completes.
   final Russian ASR choice; a benchmark is required.
 - The model-neutral REST TTS adapter now uses at most three concurrent
   sentence requests, merges compatible WAV chunks in source order, and
-  exposes explicit cancellation. The browser aborts stale playback requests;
-  the upstream `stream` path, selected model startup, latency and first-audio
-  playback still require validation.
+  exposes explicit cancellation. The browser aborts stale playback requests
+  and uses a bounded RMS activity trigger for basic barge-in; the upstream
+  `stream` path, selected model startup, latency and first-audio playback still
+  require validation.
 - The local OmniVoice directory currently does not expose a ready project/API
   layer; model and integration details must be confirmed before adapter work.
 - The 2026-09-01 local model inventory exposed only two Ollama profiles:
@@ -319,6 +320,10 @@ in this session; first-audio streaming remains pending.
 The current HostOS follow-up adds bounded file snapshots and conditional
 workspace writes with stale-file rejection. A browser proposal/review surface
 and broader edit transaction workflow remain pending.
+
+The current voice follow-up adds an authenticated TTS cancel route, browser
+request abort and a one-shot RMS barge-in trigger. VoiceMem classification,
+AEC quality and full half-duplex behavior remain pending.
 
 The latest HostOS hardening separates level 3 current-user capability from an
 explicit ROOT-only `unattended` switch. Background/Heartbeat tool calls can
