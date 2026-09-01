@@ -6,10 +6,13 @@
   writes the native JAWL fields, restarts the JAWL agent and changes the local
   companion policy only after successful restart; full ROOT means current
   Windows-user capability.
+- Bridge-mode emergency stop now also requests JAWL's native agent stop while
+  always cancelling Companion-owned processes locally; per-tool native
+  cancellation and native approval synchronization remain pending.
 - Documented the verified JAWL native HostOS ownership boundary: the current
   companion executor is explicitly labelled as a separate control-plane path
-  until an authenticated bridge synchronizes level, unattended, approvals and
-  emergency stop with JAWL.
+  for controls that are not covered by the authenticated level/stop bridge,
+  especially native unattended and approval state.
 - Added bounded read-only native JAWL HostOS status to the browser overview so
   companion policy and JAWL's configured level cannot be confused.
 - Emergency stop now terminates tracked managed and shell processes and marks

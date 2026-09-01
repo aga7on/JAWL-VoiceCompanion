@@ -46,8 +46,10 @@ Model-originated tool calls remain inside JAWL and use its native policy.
 `ROOT` is the full capability of the Windows account that launched JAWL. The
 companion's `unattended` switch controls only companion-side approvals; JAWL
 Heartbeat is already an autonomous native caller and has no equivalent
-companion toggle in its current web API. Emergency stop remains local to the
-companion until a native JAWL emergency-stop contract is available.
+companion toggle in its current web API. In bridge mode, emergency stop also
+best-effort calls JAWL's authenticated `/api/agent/stop`; local Companion
+processes are stopped regardless of JAWL availability. This stops native
+Heartbeat, but is not yet a per-tool native cancellation contract.
 
 Without the opt-in bridge, companion-side HostOS execution and JAWL-native
 execution are two explicitly labelled paths. The browser's

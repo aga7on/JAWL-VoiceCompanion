@@ -232,6 +232,8 @@ The companion does not duplicate JAWL's native HostOS SkillRegistry. When
 browser level selector writes only the allowlisted native `enabled` and
 `access_level` fields, then calls JAWL's authenticated agent stop/start
 routes. The local companion policy changes only after all three operations
-succeed. JAWL's native Heartbeat remains the autonomous caller; companion
-unattended, approval and emergency-stop state are not reported as native JAWL
-state until JAWL exposes matching contracts.
+succeed. In bridge mode, emergency stop also calls JAWL's authenticated agent
+stop route, but this is explicitly a whole-agent stop rather than per-tool
+cancellation. JAWL's native Heartbeat remains the autonomous caller;
+companion unattended and approval state are not reported as native JAWL state
+until JAWL exposes matching contracts.

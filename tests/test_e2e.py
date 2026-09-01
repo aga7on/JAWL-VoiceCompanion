@@ -765,6 +765,12 @@ class LocalE2ETests(unittest.TestCase):
             native = get("/api/jawl/hostos")
             self.assertTrue(native["control_enabled"])
             self.assertEqual(native["access_name"], "ROOT")
+            stopped = post("/api/emergency-stop", {})
+            self.assertEqual(stopped["jawl_agent"], {"status": "stopped", "forced": False})
+            self.assertTrue(stopped["policy"]["emergency_stop"])
+            self.assertEqual(_JawlControlHandler.calls[-1], (
+                "POST", "/api/agent/stop", "e2e-console-token",
+            ))
         finally:
             control_server.shutdown()
             control_server.server_close()
