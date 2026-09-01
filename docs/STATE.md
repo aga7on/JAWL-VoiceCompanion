@@ -38,7 +38,7 @@ separate CPU/RAM test completes.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the delayed audio-triage provider slice.
-- Latest feature commit: `a6d08d8` (`feat: expose ambient audio controls in browser`).
+- Latest feature commit: `263f562` (`feat: expose ambient readiness and optional backend`).
 
 ## Completed in this repository
 
@@ -282,7 +282,7 @@ and benchmark protocol with unit coverage;
 Vision/VLM remains model-neutral and paused by explicit decision.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 102 unit tests and 7 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 103 unit tests and 7 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
