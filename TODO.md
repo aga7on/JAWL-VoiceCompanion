@@ -137,8 +137,9 @@ Acceptance criteria:
   capture seam exists, while the model bridge is still pending.
 - [ ] Add capture request/response bridge when frontend owns capture.
 - [~] Add change detection, significance and cooldown; digest deduplication,
-  explicit-look cooldown and the opt-in bounded `SCREEN_DELTA` producer are
-  implemented, while semantic significance scoring remains.
+  explicit-look cooldown, bounded `SCREEN_DELTA` production and an
+  Attention/Presence `SPEAK_INTENT` gate are implemented. Explicit JAWL event
+  IPC is available, while production Heartbeat/final-wording validation remains.
 - [~] Add app deny-list and sensitive-window redaction policy; title/class
   blocking is present, while pixel-level redaction remains pending.
 - [x] Discard raw screenshots after analysis by default.
@@ -155,16 +156,18 @@ Acceptance criteria:
 
 ## Phase 6 — presence and autonomy
 
-- [~] Implement Attention/Presence Engine; the initial screen sensor emits
-  arbiter-aware `SCREEN_DELTA` events, while salience-to-speech decisions are
-  still pending.
-- [ ] Add salience levels and coalescing.
-- [ ] Add proactive cooldowns and quiet hours.
-- [ ] Add `SPEAK_INTENT` and JAWL final wording path.
+- [~] Implement Attention/Presence Engine; bounded screen events now pass
+  through salience, privacy, DND, cooldown and budget gates.
+- [x] Add salience levels and coalescing.
+- [~] Add proactive cooldowns and quiet hours; manual DND and cooldown are
+  implemented, while time-based quiet-hour windows remain.
+- [~] Add `SPEAK_INTENT` and JAWL final wording path; explicit `.jawl_events`
+  IPC is implemented, while production Heartbeat/final-wording validation
+  remains.
 - [ ] Add user activity/focus/fatigue signals.
 - [ ] Add optional daily journal and commitments.
 - [ ] Add gaming mode and resource backoff.
-- [ ] Add a user-adjustable proactivity budget.
+- [x] Add a user-adjustable proactivity budget.
 
 Quality gate:
 

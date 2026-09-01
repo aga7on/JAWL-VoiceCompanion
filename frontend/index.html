@@ -57,6 +57,8 @@
       <textarea id="vision-prompt" rows="2" placeholder="Что проверить на сфокусированном окне?"></textarea>
       <button id="vision-look">Посмотреть окно</button>
       <pre id="vision-result" class="meta"></pre>
+      <label><input id="attention-dnd" type="checkbox"> DND for proactive observation</label>
+      <p id="attention-status" class="meta">Attention/Presence: checking...</p>
       <h2>Состояние</h2>
       <pre id="health">Загрузка…</pre>
       <h2>JAWL · память и персона</h2>
@@ -115,6 +117,9 @@
       document.querySelector('#vision-status').textContent = visionStatusData.configured
         ? `Vision endpoint готов · screen ${visionStatusData.screen_enabled ? 'включён' : 'выключен'} · cooldown ${visionStatusData.cooldown_seconds} с`
         : `Vision endpoint не настроен; экран остаётся локальным (${visionStatusData.screen_enabled ? 'capture включён' : 'capture выключен'}).`;
+      const attention = visionStatusData.attention || {};
+      document.querySelector('#attention-dnd').checked = Boolean(attention.dnd);
+      document.querySelector('#attention-status').textContent = `Attention/Presence: ${attention.last_decision || 'not_checked'} · intents ${attention.intents_last_hour || 0}/${attention.budget_per_hour || 0}`;
       const approvalBox = document.querySelector('#approvals');
       approvalBox.replaceChildren();
       const pending = approvalData.approvals.filter(item => item.status === 'pending');
@@ -305,6 +310,11 @@
       } catch (error) {
         resultBox.textContent = `Vision недоступен: ${error.message}`;
       }
+    });
+    document.querySelector('#attention-dnd').addEventListener('change', async (event) => {
+      const response = await apiPost('/api/attention', {dnd: event.target.checked});
+      if (!response.ok) event.target.checked = !event.target.checked;
+      refresh();
     });
     document.querySelector('#mic').addEventListener('click', async () => {
       try {

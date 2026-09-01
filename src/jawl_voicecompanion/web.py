@@ -12,10 +12,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .approvals import ApprovalStore
+from .attention import AttentionPresence
 from .avatar import AvatarAssetStore
 from .doctor import build_doctor_report
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
+from .jawl_events import JawlEventFileSink
 from .jawl_web import JawlWebUnavailable
 from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
@@ -41,6 +43,7 @@ class CompanionServer(ThreadingHTTPServer):
         voice_mem: VoiceMemProcessClient | None = None,
         tts_service: TTSService | None = None,
         avatar_assets: AvatarAssetStore | None = None,
+        attention: AttentionPresence | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -50,6 +53,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.voice_mem = voice_mem
         self.tts = tts_service
         self.avatar_assets = avatar_assets
+        self.attention = attention or AttentionPresence()
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -104,6 +108,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             status = self.server.vision.status()
             if self.server.screen_watcher is not None:
                 status["watcher"] = self.server.screen_watcher.state()
+            status["attention"] = self.server.attention.state()
             self._json(status)
             return
         if path == "/api/vision/events":
@@ -114,6 +119,17 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             events = self.server.screen_watcher.events() if self.server.screen_watcher else []
             self._json({"events": events})
+            return
+        if path == "/api/vision/intents":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            self._json({"intents": self.server.attention.intents()})
+            return
+        if path == "/api/attention":
+            self._json(self.server.attention.state())
             return
         if path == "/api/voice/status":
             if self.server.voice_mem is None:
@@ -331,6 +347,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 state = self.server.gateway.policy.set_emergency_stop(True, actor="browser")
                 self._json({"ok": True, "policy": state})
                 return
+            if self.path == "/api/attention":
+                values = {key: payload[key] for key in ("dnd", "min_significance", "cooldown_seconds", "budget_per_hour") if key in payload}
+                if not values:
+                    raise ValueError("attention settings are required")
+                self._json({"ok": True, "attention": self.server.attention.configure(**values)})
+                return
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
@@ -414,6 +436,8 @@ def create_server(
     voice_mem: VoiceMemProcessClient | None = None,
     tts_service: TTSService | None = None,
     avatar_assets: AvatarAssetStore | None = None,
+    jawl_event_dir: Path | None = None,
+    attention: AttentionPresence | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -425,12 +449,17 @@ def create_server(
         dry_run=True,
     )
     vision_service = VisionLookService(active_executor, describer=vision_describer)
+    event_sink = JawlEventFileSink(jawl_event_dir) if jawl_event_dir else None
+    active_attention = attention or AttentionPresence(
+        intent_sink=event_sink.publish if event_sink is not None else None,
+    )
     watcher = (
         ScreenDeltaWatcher(
             vision_service,
             active_gateway.arbiter,
             interval_seconds=screen_watch_interval,
             session_id="screen-sensor",
+            event_sink=active_attention.consume,
         )
         if screen_watch
         else None
@@ -445,6 +474,7 @@ def create_server(
         voice_mem,
         tts_service,
         avatar_assets,
+        active_attention,
     )
     if watcher is not None:
         watcher.start()

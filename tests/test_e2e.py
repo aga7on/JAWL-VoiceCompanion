@@ -301,6 +301,7 @@ class LocalE2ETests(unittest.TestCase):
             f"http://127.0.0.1:{self.tts_provider.server_port}", timeout_seconds=2,
         ))
         self.avatar_root = Path(self.temp.name) / "live2d"
+        self.jawl_event_dir = Path(self.temp.name) / "jawl-events"
         self.avatar_root.mkdir()
         self.avatar_model = (
             '{"FileReferences":{"Moc":"companion.moc3",'
@@ -324,6 +325,7 @@ class LocalE2ETests(unittest.TestCase):
             voice_mem=self.voice_mem,
             tts_service=self.tts,
             avatar_assets=AvatarAssetStore(self.avatar_root),
+            jawl_event_dir=self.jawl_event_dir,
         )
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -386,6 +388,8 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(doctor_checks["avatar"]["ready"])
         self.assertTrue(doctor_checks["hostos"]["ready"])
         self.assertNotIn("must-not-cross", json.dumps(doctor, ensure_ascii=False))
+        with urlopen(self.base + "/", timeout=3) as response:
+            self.assertIn(b"attention-dnd", response.read())
         with urlopen(self.base + "/avatar", timeout=3) as response:
             self.assertIn(b"JAWL Avatar", response.read())
         _, avatar_config = self.get_json("/api/avatar/config")
@@ -543,6 +547,7 @@ class LocalE2ETests(unittest.TestCase):
 
         watcher = self.server.screen_watcher
         self.assertIsNotNone(watcher)
+        self.server.attention.configure(min_significance=1)
         deadline = time.monotonic() + 3
         while not watcher.events() and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -551,6 +556,18 @@ class LocalE2ETests(unittest.TestCase):
         self.assertNotIn("image", watcher.events()[0])
         _, event_log = self.get_json("/api/vision/events")
         self.assertEqual(event_log["events"][0]["type"], "SCREEN_DELTA")
+        _, intents = self.get_json("/api/vision/intents")
+        self.assertEqual(intents["intents"][0]["type"], "SPEAK_INTENT")
+        event_files = list(self.jawl_event_dir.glob("*.json"))
+        self.assertEqual(len(event_files), 1)
+        jawl_event = json.loads(event_files[0].read_text(encoding="utf-8"))
+        self.assertEqual(jawl_event["payload"]["event_type"], "SCREEN_DELTA")
+        self.assertNotIn("image", json.dumps(jawl_event, ensure_ascii=False))
+        _, attention = self.post_json("/api/attention", {"dnd": True, "budget_per_hour": 3})
+        self.assertTrue(attention["attention"]["dnd"])
+        self.assertEqual(attention["attention"]["budget_per_hour"], 3)
+        _, vision_status = self.get_json("/api/vision/status")
+        self.assertTrue(vision_status["attention"]["dnd"])
         self.assertEqual(len(_VisionHandler.requests), 1)
 
         _, first = self.post_json("/api/vision/look", {"prompt": "Что видно?", "force": True})

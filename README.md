@@ -41,7 +41,10 @@ Focused-window snapshots stay disabled unless `--screen-enabled` is supplied
 alongside `--hostos-live`. The snapshot path is explicit and bounded; it does
 not start a passive capture loop. The optional `--screen-watch` flag starts a
 bounded `SCREEN_DELTA` sensor only when a live screen adapter and VLM provider
-are configured; it does not yet trigger autonomous speech.
+are configured. Attention/Presence then applies salience, DND, cooldown and
+budget gates. Add `--jawl-event-dir` with the active JAWL `.jawl_events`
+directory to deliver accepted `SPEAK_INTENT` events through JAWL's existing
+IPC; without it, intents remain local and inspectable.
 
 To connect the text surface and the read-only inspection panel to JAWL's local
 web console, pass its URL:

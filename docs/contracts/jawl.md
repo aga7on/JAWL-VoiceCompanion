@@ -88,3 +88,14 @@ The unauthenticated loopback `GET /api/doctor` surface is separate from JAWL
 inspection. It reports bounded readiness states for all configured components,
 with `text_mode_available=true` whenever the companion gateway can still serve
 the deterministic text path.
+
+## Proactive event IPC
+
+The optional screen watcher can deliver accepted `SPEAK_INTENT` events to an
+explicit JAWL `.jawl_events` directory with `--jawl-event-dir`. The companion
+writes the same `{message, payload}` shape used by JAWL's `framework_api.py`
+and performs an atomic rename. The payload is bounded to a screen summary,
+significance and correlation metadata; it contains no image or local path.
+Omitting the option keeps Attention/Presence local-only. This wakes JAWL's
+existing event/Heartbeat path but does not bypass JAWL's final wording, DND or
+tool policy.

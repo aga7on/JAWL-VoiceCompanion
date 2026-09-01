@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added bounded Attention/Presence handling for screen deltas, DND/cooldown
+  and explicit atomic delivery of salient `SPEAK_INTENT` events to JAWL's
+  existing `.jawl_events` IPC boundary.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.

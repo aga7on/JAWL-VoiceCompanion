@@ -72,12 +72,30 @@ class WebTests(unittest.TestCase):
         status, vision = self.get_json("/api/vision/status")
         self.assertEqual(status, 200)
         self.assertFalse(vision["configured"])
+        self.assertIn("attention", vision)
         self.post_json("/api/hostos/level", {"level": 1})
         status, result = self.post_json("/api/vision/look", {"prompt": "Что видно?"})
         self.assertEqual(status, 200)
         self.assertFalse(result["ok"])
         self.assertEqual(result["result"]["status"], "degraded")
         self.assertNotIn("image", result["result"])
+
+    def test_attention_dnd_requires_browser_session(self):
+        status, attention = self.get_json("/api/attention")
+        self.assertEqual(status, 200)
+        self.assertFalse(attention["dnd"])
+        _, changed = self.post_json("/api/attention", {"dnd": True})
+        self.assertTrue(changed["attention"]["dnd"])
+        request = Request(
+            self.base + "/api/attention",
+            data=b'{"dnd": false}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
 
     def test_voice_status_is_explicit_when_sidecar_is_not_configured(self):
         status, voice = self.get_json("/api/voice/status")

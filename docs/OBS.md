@@ -93,7 +93,8 @@ Change detection and cooldown are also available as an explicit opt-in sensor:
   --vision-model "local-vlm"
 ```
 
-The watcher emits bounded events at `/api/vision/events` and never speaks or
-calls JAWL directly. Attention/Presence salience, quiet hours and the final
-`SPEAK_INTENT` path are still pending, so this mode is a sensor preview rather
-than autonomous conversation.
+The watcher emits bounded events at `/api/vision/events`. Attention/Presence
+applies salience, DND, cooldown and a bounded budget, exposing proposals at
+`/api/vision/intents`. To wake JAWL, pass `--jawl-event-dir` for the active
+instance's `.jawl_events` directory. JAWL still decides final wording and
+whether to speak; omit the option to keep the sensor local-only.

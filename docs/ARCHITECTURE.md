@@ -318,9 +318,11 @@ OpenAI-compatible client sends the image as a bounded `image_url` payload and
 returns only a bounded description. An explicit `--screen-watch` option now
 adds the first ambient producer: an arbiter-aware, bounded in-memory
 `ScreenDeltaWatcher` publishes `SCREEN_DELTA` events through
-`/api/vision/events`. It does not speak or call JAWL; salience scoring,
-coalescing policy and the `SPEAK_INTENT` consumer remain later
-Attention/Presence work.
+`/api/vision/events`. Attention/Presence applies salience, privacy, DND,
+coalescing and a proactive budget, exposing `SPEAK_INTENT` through
+`/api/vision/intents`. With an explicit `--jawl-event-dir`, accepted intents
+are atomically written to JAWL's existing event IPC; JAWL still owns final
+wording and whether to speak.
 
 ## Model profiles
 

@@ -81,9 +81,10 @@ provider traceback.
 
 ### `SCREEN_DELTA`
 
-Bounded description of a screen change. The initial producer uses a neutral
-low significance value until semantic salience scoring is implemented. Raw
-images should not be embedded in durable event logs.
+Bounded description of a screen change. The producer supplies a bounded
+significance value; Attention/Presence may raise it for clearly salient text,
+but treats the description as untrusted data. Raw images should not be
+embedded in durable event logs.
 
 ```json
 {
@@ -101,7 +102,8 @@ in-memory ring and requires the local browser session.
 
 ### `SPEAK_INTENT`
 
-An Attention/Presence proposal. JAWL must still apply DND, cooldown,
+An Attention/Presence proposal. The local gate applies salience, privacy,
+DND, cooldown and a bounded proactive budget. JAWL must still apply
 relevance, priority and personality before speaking.
 
 ```json
@@ -112,6 +114,11 @@ relevance, priority and personality before speaking.
   "expires_at": "2026-08-31T12:05:00+03:00"
 }
 ```
+
+When configured, the companion maps this proposal to JAWL's existing
+`.jawl_events` file IPC as a bounded `HOST_OS_SANDBOX_EVENT` payload. The
+mapping contains only `screen_summary`, significance and correlation
+metadata; it never contains a raw frame or a local path.
 
 ### `TOOL_APPROVAL`
 

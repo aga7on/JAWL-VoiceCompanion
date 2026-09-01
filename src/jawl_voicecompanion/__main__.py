@@ -64,6 +64,12 @@ def main() -> None:
         help="seconds between SCREEN_DELTA watcher polls",
     )
     parser.add_argument(
+        "--jawl-event-dir",
+        type=Path,
+        default=None,
+        help="explicit JAWL .jawl_events directory for proactive screen intents",
+    )
+    parser.add_argument(
         "--vision-url",
         default=None,
         help="OpenAI-compatible vision endpoint; requires --vision-model",
@@ -194,6 +200,7 @@ def main() -> None:
         voice_mem=voice_mem,
         tts_service=tts_service,
         avatar_assets=avatar_assets,
+        jawl_event_dir=args.jawl_event_dir,
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:
