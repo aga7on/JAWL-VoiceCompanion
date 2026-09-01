@@ -74,6 +74,41 @@ class HostOSToolTests(unittest.TestCase):
             self.assertEqual(result["status"], "denied")
             self.assertFalse((Path(directory) / "escape.txt").exists())
 
+    def test_conditional_workspace_write_rejects_stale_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "note.txt"
+            executor = HostOSExecutor(
+                HostOSPolicy(active_level=AccessLevel.OPERATOR),
+                root / "sandbox",
+                workspace_roots=(root,),
+                host_roots=(root,),
+                dry_run=False,
+            )
+            initial = executor.execute(ToolRequest(
+                tool="filesystem.write",
+                risk=RiskClass.WORKSPACE_WRITE,
+                arguments={"path": str(path), "text": "original"},
+            ))
+            self.assertEqual(initial["status"], "verified")
+            snapshot = executor.execute(ToolRequest(
+                tool="filesystem.read",
+                risk=RiskClass.OBSERVE,
+                arguments={"path": str(path)},
+            ))
+            path.write_text("external change", encoding="utf-8")
+            stale = executor.execute(ToolRequest(
+                tool="filesystem.write",
+                risk=RiskClass.WORKSPACE_WRITE,
+                arguments={
+                    "path": str(path),
+                    "text": "agent overwrite",
+                    "expected_sha256": snapshot["result"]["sha256"],
+                },
+            ))
+            self.assertEqual(stale["status"], "stale_file")
+            self.assertEqual(path.read_text(encoding="utf-8"), "external change")
+
     def test_registry_risk_overrides_model_supplied_risk(self):
         with tempfile.TemporaryDirectory() as directory:
             executor = HostOSExecutor(

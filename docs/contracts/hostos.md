@@ -59,6 +59,13 @@ over unattended execution; downgrading below level 3 disables it.
 `requested_access_level` is informational. The backend uses the active policy
 level, never a model-supplied value, to authorize the request.
 
+For `filesystem.write`, an optional `arguments.expected_sha256` enables a
+conditional workspace write. `filesystem.read` returns `sha256` when the
+bounded result contains the complete file. If the expected digest does not
+match the current file, or the file cannot be compared safely, no write is
+performed and the result status is `stale_file`. Omitting the digest is allowed
+for callers that deliberately accept last-write-wins behavior.
+
 ## Tool result
 
 ```json

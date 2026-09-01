@@ -6,7 +6,9 @@ explicit construction choice made by the backend, never by model output.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import subprocess
 import threading
 from dataclasses import dataclass, field, replace
@@ -260,9 +262,14 @@ class HostOSExecutor:
         path = self._resolve_path(request)
         if not path.is_file():
             raise ValueError("path is not a file")
-        raw = path.read_bytes()[: self.max_read_chars * 4]
+        with path.open("rb") as source:
+            raw = source.read(self.max_read_chars * 4 + 1)
+        truncated = len(raw) > self.max_read_chars * 4
         text = raw.decode("utf-8", errors="replace")[: self.max_read_chars]
-        return {"path": str(path), "text": text, "truncated": len(raw) >= self.max_read_chars * 4}
+        result = {"path": str(path), "text": text, "truncated": truncated}
+        if not truncated:
+            result["sha256"] = hashlib.sha256(raw).hexdigest()
+        return result
 
     def _write_file(self, request: ToolRequest) -> dict[str, Any]:
         path = self._resolve_path(request)
@@ -271,9 +278,31 @@ class HostOSExecutor:
             raise ValueError("text is required")
         if len(text) > self.max_read_chars:
             raise ValueError("text exceeds bounded write size")
+        expected = request.arguments.get("expected_sha256")
+        if expected is not None:
+            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
+                raise ValueError("expected_sha256 must be a 64-character hexadecimal digest")
+            if not path.is_file():
+                return {"status": "stale_file", "reason": "file_missing_before_conditional_write"}
+            actual = self._file_sha256(path)
+            if actual is None:
+                return {"status": "stale_file", "reason": "file_cannot_be_compared_safely"}
+            if actual.casefold() != expected.casefold():
+                return {"status": "stale_file", "reason": "file_changed_since_read"}
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         return {"path": str(path), "bytes": len(text.encode("utf-8"))}
+
+    @staticmethod
+    def _file_sha256(path: Path) -> str | None:
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+        except OSError:
+            return None
+        return digest.hexdigest()
 
     def _delete_file(self, request: ToolRequest) -> dict[str, Any]:
         path = self._resolve_path(request)

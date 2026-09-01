@@ -75,6 +75,9 @@ separate CPU/RAM test completes.
   cancellation and queue promotion; transport cancellation is still pending.
 - HostOS tool registry now contains bounded filesystem, process and argv
   adapters. Real execution is explicit; default executor mode is dry-run.
+  Complete bounded reads expose a SHA-256 snapshot and workspace writes can
+  require that digest, returning `stale_file` instead of overwriting a changed
+  file.
 - Optional Windows UIA adapter now provides bounded foreground-tree
   observation, semantic fingerprints and stale-target checks for control.
 - Browser adapter now supports bounded HTTP(S) navigation and delegates
@@ -313,6 +316,10 @@ source-order merge, explicit server cancellation, browser request abort and
 focused concurrency/cancellation regression tests. No TTS model is selected
 in this session; first-audio streaming remains pending.
 
+The current HostOS follow-up adds bounded file snapshots and conditional
+workspace writes with stale-file rejection. A browser proposal/review surface
+and broader edit transaction workflow remain pending.
+
 The latest HostOS hardening separates level 3 current-user capability from an
 explicit ROOT-only `unattended` switch. Background/Heartbeat tool calls can
 therefore run while the operator is away without per-action prompts; emergency
@@ -326,7 +333,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 121 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 122 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the

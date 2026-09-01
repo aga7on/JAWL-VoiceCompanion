@@ -7,6 +7,8 @@
   first-audio streaming remain separate follow-up work.
 - Added an authenticated TTS cancel route and browser request abort so a new
   turn can stop both playback and active server-side synthesis.
+- Added bounded file snapshots with SHA-256 conditional workspace writes;
+  changed files now fail with `stale_file` instead of being silently replaced.
 
 - Added an opt-in authenticated JAWL HostOS control bridge: level 0–3 now
   writes the native JAWL fields, restarts the JAWL agent and changes the local
