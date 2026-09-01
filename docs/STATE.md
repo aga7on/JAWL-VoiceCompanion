@@ -32,8 +32,8 @@ adapter are now present; no model is selected or loaded by default. The
 operator's CPU/RAM benchmark selected Qwen3-VL-2B as the primary Vision
 candidate, with SmolVLM2-500M as a speed fallback. The local endpoint and
 explicit screen look are now smoke-tested, and the optimized screen watcher
-has produced bounded `SCREEN_DELTA` events; UIA context and semantic watcher
-tuning remain.
+has produced bounded `SCREEN_DELTA` events; bounded UIA context is now attached
+to explicit Vision requests, while semantic watcher tuning remains.
 
 ## Git state
 
@@ -42,8 +42,8 @@ tuning remain.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the bounded screen-capture Vision slice.
-- Latest feature commit: `1d98ec7` (`feat: bound screen capture for vision`).
+- Working tree: clean after the Qwen ASR and UIA Vision validation slice.
+- Latest feature commit: `86f4844` (`feat: validate qwen asr and bound uia vision context`).
 
 ## Completed in this repository
 
@@ -209,10 +209,11 @@ tuning remain.
   installed or cannot initialize.
 - The external CPU/RAM audio benchmark selected Qwen3-ASR-0.6B for Russian
   speech experiments (RTF 0.13–0.15, about 1.48 GB peak RAM on the supplied
-  samples). A local `llama-server` `/v1/audio/transcriptions` smoke passed;
-  the bounded final-utterance adapter now forwards its transcript to the
-  VoiceMem `feed_partial(..., ended=True)` boundary. True streaming Qwen
-  partials and live Russian microphone quality remain pending.
+  samples). The exact benchmark file and transcription prompt return the
+  expected text from local `llama-server`; the bounded adapter now sends that
+  prompt and forwards its final transcript to the VoiceMem
+  `feed_partial(..., ended=True)` boundary. True streaming Qwen partials and
+  live Russian microphone quality remain pending.
 - The temporary OpenAI-compatible chat adapter accepts a configurable URL,
   model and environment-held key for provider experiments. TokenRouter with
   `z-ai/glm-5.3-free` reached HTTP 200 during the smoke, but one short request
@@ -435,7 +436,7 @@ preceding microphone slice is preserved in `36a808c` and the TTS slice in
 Known limitation: no licensed Live2D model/runtime is installed yet; the
 placeholder remains the default. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; production semantic scoring and JAWL
-final-wording delivery, UIA context/coordinate execution and pixel-level redaction,
+final-wording delivery, calibrated UIA coordinate execution and pixel-level redaction,
 real-microphone ASR quality,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The desktop-pet launcher is available as a
@@ -448,8 +449,8 @@ integration are verified; watcher tuning and production model warmup remain.
 
 ## Next action
 
-Add UIA structure and calibrated coordinate execution around the bounded
-Qwen3-VL-2B screen path. In parallel, validate Qwen3-ASR/VoiceMem on real
+Add calibrated UIA coordinate execution around the bounded Qwen3-VL-2B screen
+path. In parallel, validate Qwen3-ASR/VoiceMem on real
 Russian microphone audio, benchmark the selected TTS provider, and connect
 the resulting final voice path to avatar lip-sync without weakening the
 HostOS approval and emergency-stop gates.

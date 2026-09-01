@@ -133,6 +133,13 @@ focused-window rectangle; it is metadata only and does not authorize an action.
 The default profile is 960×720 with a 1 MB JPEG limit and can be tightened or
 widened through the CLI.
 
+When the optional Windows UI Automation adapter is available, the Vision
+bridge may perform a second, policy-gated `desktop.observe` and forward only a
+bounded semantic tree as transient model context. Each item contains a short-
+lived `element_ref`, its `element_sha256`, bounded name/class/control type and
+depth; sensitive elements are omitted. The reference is not authority: a
+later `desktop.act` must still pass HostOS fingerprint revalidation.
+
 ## Risk classes
 
 The initial classes are:

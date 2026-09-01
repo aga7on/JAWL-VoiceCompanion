@@ -170,7 +170,9 @@ Acceptance criteria:
 - [~] Implement focused-window capture on Windows; the explicit one-shot
   `screen.observe` adapter is present and disabled by default, with a
   benchmark-oriented 960×720/1 MB profile and coordinate-scale metadata.
-- [ ] Prefer UI Automation for native app structure.
+- [~] Prefer UI Automation for native app structure; bounded semantic context
+  is now sent transiently to Vision, while calibrated action grounding and
+  canvas/OCR fallback remain pending.
 - [ ] Add screenshot/OCR fallback for canvas and custom applications.
 - [x] Add explicit `vision__look` model tool; the HostOS `screen.observe`
   capture seam and Qwen3-VL-2B local `llama-server` path are smoke-tested.

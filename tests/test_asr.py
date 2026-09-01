@@ -59,6 +59,8 @@ class ASRTests(unittest.TestCase):
         body = request.data
         self.assertIn(b'name="model"', body)
         self.assertIn(b"Qwen3-ASR-0.6B", body)
+        self.assertIn(b'name="prompt"', body)
+        self.assertIn(b"Transcribe the audio exactly as spoken.", body)
         self.assertIn(b'filename="voice_sample.wav"', body)
         self.assertEqual(request.full_url, "http://127.0.0.1:8984/v1/audio/transcriptions")
 

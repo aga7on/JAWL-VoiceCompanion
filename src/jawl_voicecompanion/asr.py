@@ -26,6 +26,7 @@ MAX_UTTERANCE_BYTES = 4 * 1024 * 1024
 MAX_ASR_TEXT_CHARS = 12_000
 MAX_ASR_SESSIONS = 8
 SESSION_TTL_SECONDS = 120.0
+DEFAULT_TRANSCRIPTION_PROMPT = "Transcribe the audio exactly as spoken."
 
 
 class ASRUnavailable(ConnectionError):
@@ -60,6 +61,7 @@ class OpenAICompatibleASRClient:
         api_key: str = "",
         timeout_seconds: float = 30.0,
         max_audio_bytes: int = MAX_ASR_AUDIO_BYTES,
+        prompt: str = DEFAULT_TRANSCRIPTION_PROMPT,
         opener: Callable[..., Any] = urlopen,
     ) -> None:
         self.endpoint = _transcription_url(endpoint)
@@ -69,6 +71,7 @@ class OpenAICompatibleASRClient:
         self.api_key = str(api_key or "")
         self.timeout_seconds = max(2.0, min(float(timeout_seconds), 180.0))
         self.max_audio_bytes = max(64 * 1024, min(int(max_audio_bytes), MAX_ASR_AUDIO_BYTES))
+        self.prompt = str(prompt or "").strip()[:1200]
         self._opener = opener
 
     def health(self) -> dict[str, Any]:
@@ -113,14 +116,22 @@ class OpenAICompatibleASRClient:
         delimiter = f"--{boundary}".encode("ascii")
         chunks = [
             delimiter + b"\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n",
-            self.model.encode("utf-8") + b"\r\n" + delimiter + b"\r\n",
+            self.model.encode("utf-8") + b"\r\n",
+        ]
+        if self.prompt:
+            chunks.extend([
+                delimiter + b"\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n",
+                self.prompt.encode("utf-8") + b"\r\n",
+            ])
+        chunks.extend([
+            delimiter + b"\r\n",
             (
                 f'Content-Disposition: form-data; name="file"; filename="{safe_filename}"\r\n'
                 "Content-Type: audio/wav\r\n\r\n"
             ).encode("ascii"),
             wav_bytes,
             b"\r\n" + delimiter + b"--\r\n",
-        ]
+        ])
         return b"".join(chunks)
 
     @staticmethod
@@ -252,4 +263,9 @@ class ExternalASRService:
         return output.getvalue()
 
 
-__all__ = ["ASRUnavailable", "ExternalASRService", "OpenAICompatibleASRClient"]
+__all__ = [
+    "ASRUnavailable",
+    "DEFAULT_TRANSCRIPTION_PROMPT",
+    "ExternalASRService",
+    "OpenAICompatibleASRClient",
+]

@@ -54,7 +54,9 @@ not call VoiceMem or JAWL for every chunk. On `/api/voice/end`, the provider
 receives one transient WAV, its normalized transcript is passed to
 `VoiceMem.stream.feed_partial(text, ended=True)`, and only the resulting
 `VOICE_TURN` reaches JAWL. The raw WAV is discarded immediately after the
-provider call, including on failure.
+provider call, including on failure. The multipart request includes the
+bounded provider prompt `Transcribe the audio exactly as spoken.` so the local
+Qwen profile follows the same instruction as the CPU benchmark.
 
 The external buffer is limited to eight sessions and 4 MiB per utterance, with
 a 120-second idle TTL. Audio format cannot change within a session. Health

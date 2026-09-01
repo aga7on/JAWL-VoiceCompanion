@@ -9,6 +9,10 @@
   final-utterance bridge. PCM16 chunks stay in RAM until explicit end, then
   one transcript enters VoiceMem's final event path; the default VoiceMem
   streaming path is unchanged.
+- The ASR bridge now sends the bounded transcription prompt used by the CPU
+  benchmark. A live adapter smoke with the benchmark WAV returned the expected
+  transcript; Vision also forwards bounded transient UI Automation context
+  and includes that context in change detection.
 
 - Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
   transient JPEG profile, exposes bounded coordinate-scale metadata and makes
