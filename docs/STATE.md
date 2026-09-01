@@ -119,7 +119,8 @@ adapters are available only through explicitly constructed/configured paths.
 
 Changed the passive watcher, web API/CLI wiring, vision deduplication,
 E2E runner/tests and the related architecture/contracts/documentation in
-`307da25`; extended the JAWL adapter path in `1f1717d`.
+`307da25`; extended the JAWL adapter path in `1f1717d`; recorded the
+VoiceMem sidecar boundary in `91ffc50`.
 
 Verification: `scripts/run_e2e.ps1` passed 2 tests; `scripts/run_tests.ps1`
 passed 49 tests; the stale-port degraded probe returned `status=offline`;
