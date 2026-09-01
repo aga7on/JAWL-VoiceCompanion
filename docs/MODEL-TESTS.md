@@ -74,6 +74,26 @@ claim.
 | Chatterbox welcome | 6.04 s | 1.42 s | Correct short phrase |
 | Chatterbox poem | 10.40 s | 2.30 s | Several word/ending errors |
 
+## VoiceMem bundled streaming ASR/VAD
+
+The VoiceMem environment was also exercised in its own local environment with
+`VOICEMEM_ASR=sherpa`, the bundled Silero VAD and local embedding/slot models.
+The test fed `G:\AI\VoiceMem\assets\speech.wav` as 32 ms PCM16 chunks through
+the real `VoiceMem.stream(...).feed(...)` boundary, with no network service and
+with an isolated temporary memory root:
+
+| Fixture | Warmup | Partial updates | Final result |
+| --- | ---: | ---: | --- |
+| VoiceMem `speech.wav` (zh-en sherpa profile) | 5.61 s | 66 | `我喜欢吃马卡龙` |
+| Russian Qwen3-TTS welcome WAV (zh-en sherpa profile) | 7.55 s | 96 | no completed turn; last partial was an English hallucination |
+
+This confirms that the native VoiceMem streaming/VAD/memory boundary is
+operational, but its bundled sherpa model is not a Russian acoustic model. It
+must not be selected as the Russian microphone recognizer. The architecture
+therefore keeps VoiceMem as the streaming lifecycle, VAD and memory sidecar,
+while Qwen3-ASR remains the Russian recognizer until a true streaming Russian
+provider is validated.
+
 ## Additional installed VLM candidate: Qwen3.8-27B
 
 The workstation also has a Qwen3.8-27B Q4_K_M plus F16 mmproj in the local
@@ -110,4 +130,3 @@ python .\scripts\ui_score.py .\results\qwen3vl-moved_suite.json .\results\qwen3v
 The Qwen3-VL suite used the repository's `bench2` helper on port 8987. The
 experimental Qwen3.8 runs used ports 8988–8990 and were stopped after each
 test; no model server is intentionally left running by this record.
-

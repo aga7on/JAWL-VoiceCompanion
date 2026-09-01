@@ -86,6 +86,9 @@ Acceptance criteria:
 ## Phase 3 — VoiceMem sidecar and memory
 
 - [x] Define a transport-neutral VoiceMem sidecar contract.
+- [x] Run the bundled VoiceMem streaming ASR/VAD boundary against local WAV
+  fixtures; its zh-en profile works, while Russian remains delegated to the
+  Qwen3-ASR adapter.
 - [~] Run VoiceMem as a separate local service; the stdio runner, process
   client and `/api/voice/partial` bridge are present, while real model startup
   remains opt-in.

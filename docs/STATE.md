@@ -260,6 +260,13 @@ workflows, while semantic watcher tuning remains.
   RTF 0.15–0.16. It transcribed local Russian TTS welcome phrases correctly;
   synthetic poem samples still contain word/ending errors, and real Russian
   microphone validation remains pending.
+- The native VoiceMem stream was exercised offline with its bundled sherpa
+  streaming recognizer, Silero VAD and local memory components. The shipped
+  zh-en fixture completed a real `turn_over` after 66 partial updates; the
+  Russian Qwen3-TTS WAV did not complete a turn and produced an English
+  hallucination. VoiceMem's streaming lifecycle/VAD boundary is therefore
+  usable, but its bundled recognizer is not a Russian model; Qwen3-ASR stays
+  the Russian acoustic candidate until true streaming Russian ASR is tested.
 - A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
   Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
   the real Windows focused-window capture. It returned a bounded Russian
