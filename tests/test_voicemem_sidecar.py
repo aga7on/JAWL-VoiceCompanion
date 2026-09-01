@@ -97,6 +97,49 @@ class VoiceMemSidecarTests(unittest.TestCase):
         self.assertEqual(result[0]["type"], "VOICE_DEGRADED")
         self.assertEqual(sidecar.health()["status"], "degraded")
 
+    def test_ending_an_empty_session_does_not_initialize_voice_mem(self):
+        created = []
+
+        def factory(session_id):
+            created.append(session_id)
+            return None
+
+        sidecar = VoiceMemSidecar(factory)
+        result = asyncio.run(sidecar.handle({
+            "request_id": "empty-end", "type": "end_audio", "session_id": "empty",
+        }))
+        self.assertEqual(result, [])
+        self.assertEqual(created, [])
+        self.assertEqual(sidecar.health()["streams"], 0)
+
+    def test_failed_stream_is_evicted_and_can_recover(self):
+        attempts = []
+
+        class BrokenStream:
+            async def feed_partial(self, _text, ended=False):
+                raise RuntimeError("broken")
+
+        class WorkingStream:
+            async def feed_partial(self, text, ended=False):
+                return SimpleNamespace(text=text, turn=None)
+
+        def factory(session_id):
+            attempts.append(session_id)
+            return BrokenStream() if len(attempts) == 1 else WorkingStream()
+
+        sidecar = VoiceMemSidecar(factory)
+        first = asyncio.run(sidecar.handle({
+            "request_id": "broken", "type": "feed_partial", "session_id": "recover",
+            "text": "проверка", "ended": False,
+        }))
+        second = asyncio.run(sidecar.handle({
+            "request_id": "recovered", "type": "feed_partial", "session_id": "recover",
+            "text": "восстановление", "ended": False,
+        }))
+        self.assertEqual(first[0]["type"], "VOICE_DEGRADED")
+        self.assertEqual(second[0]["type"], "USER_PARTIAL")
+        self.assertEqual(attempts, ["recover", "recover"])
+
     def test_stdio_test_stub_runs_as_a_process(self):
         root = Path(__file__).parents[1]
         env = os.environ.copy()
@@ -134,7 +177,11 @@ class VoiceMemSidecarTests(unittest.TestCase):
     def test_client_recovers_after_sidecar_restart(self):
         client = VoiceMemProcessClient(sys.executable, args=("--test-stub",), timeout_seconds=2)
         try:
+            self.assertEqual(client.state()["status"], "not_started")
+            self.assertFalse(client.state()["running"])
             self.assertEqual(client.feed_partial("первый")[0]["type"], "USER_PARTIAL")
+            self.assertEqual(client.state()["status"], "running")
+            self.assertTrue(client.state()["running"])
             process = client._process
             self.assertIsNotNone(process)
             process.terminate()
@@ -148,6 +195,8 @@ class VoiceMemSidecarTests(unittest.TestCase):
             self.assertEqual(client.feed_partial("второй")[0]["type"], "USER_PARTIAL")
         finally:
             client.close()
+        self.assertEqual(client.state()["status"], "stopped")
+        self.assertFalse(client.state()["running"])
 
 
 if __name__ == "__main__":

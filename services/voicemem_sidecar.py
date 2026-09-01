@@ -66,6 +66,11 @@ class VoiceMemSidecar:
         try:
             stream = self._streams.get(session_id)
             if stream is None:
+                if request_type == "end_audio":
+                    # Do not initialize VoiceMem merely to flush a session
+                    # that never received audio.
+                    self._status, self._last_error = "ready", ""
+                    return []
                 if len(self._streams) >= MAX_SESSIONS:
                     return [self._error(request_id, "session_limit_reached", session_id)]
                 stream = self._stream_factory(session_id)
@@ -79,6 +84,8 @@ class VoiceMemSidecar:
             self._status, self._last_error = "ready", ""
         except Exception:
             self._status, self._last_error = "degraded", "voicemem_stream_failed"
+            self._streams.pop(session_id, None)
+            self._last_partial.pop(session_id, None)
             return [self._error(request_id, self._last_error, session_id)]
 
         events: list[dict[str, Any]] = []

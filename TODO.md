@@ -83,6 +83,8 @@ Acceptance criteria:
   remains opt-in.
 - [x] Add request/session correlation IDs to the sidecar protocol.
 - [x] Add the bounded JSON-lines runner and degraded-mode responses.
+- [x] Harden sidecar lifecycle: empty audio flushes do not initialize VoiceMem,
+  failed streams are evicted for recovery, and bounded process state is exposed.
 - [ ] Add speculative recall and final recall events.
 - [ ] Map VoiceMem affect to JAWL observations, not personality overrides.
 - [~] Add opt-in Windows system-audio loopback as a separate ambient stream;

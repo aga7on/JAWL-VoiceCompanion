@@ -86,12 +86,29 @@ class VoiceMemProcessClient:
     def health(self) -> dict[str, Any]:
         request_id = str(uuid4())
         replies = self._request({"type": "health", "request_id": request_id}, request_id)
-        return replies[0] if replies else {"type": "health", "status": "degraded"}
+        result = replies[0] if replies else {"type": "health", "status": "degraded"}
+        return {**result, "process": self.state()}
+
+    def state(self) -> dict[str, Any]:
+        """Return bounded process state without starting the sidecar."""
+        with self._lock:
+            process = self._process
+            running = process is not None and process.poll() is None
+            if process is not None and not running and self._status == "running":
+                self._status = "degraded"
+            return {
+                "status": self._status,
+                "running": running,
+                "pid": process.pid if running else None,
+            }
 
     def close(self) -> None:
-        process = self._process
-        reader = self._reader
-        self._process = None
+        with self._lock:
+            process = self._process
+            reader = self._reader
+            self._process = None
+            self._reader = None
+            self._status = "stopped"
         if process is None:
             return
         try:
@@ -108,7 +125,6 @@ class VoiceMemProcessClient:
             reader.join(timeout=2)
         if process.stdout is not None:
             process.stdout.close()
-        self._status = "stopped"
 
     def _request(self, payload: dict[str, Any], request_id: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -159,6 +175,9 @@ class VoiceMemProcessClient:
                     result_queue.put(item)
         finally:
             result_queue.put(None)
+            with self._lock:
+                if self._process is process and process.poll() is not None and self._status == "running":
+                    self._status = "degraded"
 
     def _read_until_complete(self, request_id: str) -> list[dict[str, Any]]:
         deadline = monotonic() + self.timeout_seconds

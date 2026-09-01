@@ -934,6 +934,9 @@ class LocalE2ETests(unittest.TestCase):
         _, status = self.get_json("/api/voice/status")
         self.assertTrue(status["configured"])
         self.assertEqual(status["status"], "ready")
+        self.assertEqual(status["process"]["status"], "running")
+        self.assertTrue(status["process"]["running"])
+        self.assertIsInstance(status["process"]["pid"], int)
         _, partial = self.post_json("/api/voice/partial", {
             "session_id": "voice-s1", "text": "покажи", "ended": False,
         })

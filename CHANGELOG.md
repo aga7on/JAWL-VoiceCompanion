@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Hardened VoiceMem lifecycle handling: empty flushes stay lazy, failed stream
+  sessions are evicted for retry, and `/api/voice/status` now includes bounded
+  sidecar process state without exposing launch details.
 - Added bounded model-neutral parallel sentence synthesis to the CozyVoice
   adapter while preserving source-order WAV output; TTS model selection and
   first-audio streaming remain separate follow-up work.

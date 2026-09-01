@@ -91,6 +91,13 @@ Clients must wait for this marker and decode all event lines as UTF-8.
 
 If the sidecar cannot initialize or process a request, it returns a normal
 `VOICE_DEGRADED` event instead of exposing an exception or leaking details.
+An `end_audio` request for a session that has received no audio is a no-op; it
+must not initialize the VoiceMem model. If an existing stream fails, the
+sidecar evicts that session so the next request can attempt a fresh stream.
+
+The process client reports a bounded local lifecycle state alongside health:
+`not_started`, `running`, `degraded` or `stopped`, plus only `running` and the
+child PID. It never exposes the executable path, arguments or environment.
 
 ## Ambient system-audio session
 
@@ -107,6 +114,8 @@ ambient event is converted into JAWL `USER_FINAL`, speech or a tool call.
 - partial events are droppable, final events are not silently dropped;
 - VoiceMem failure returns a bounded degraded event and leaves text chat alive;
 - health reports whether the sidecar, ASR and memory engine are ready;
+- a dead or failed sidecar can be observed as degraded and recovered by the
+  next request without replaying stale events;
 - the JAWL process must not import VoiceMem's audio/model dependency tree.
 
 The repository contains the runner in `services/voicemem_sidecar.py`, the
