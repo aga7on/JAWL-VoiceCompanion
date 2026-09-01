@@ -62,6 +62,8 @@
       <h2>Системный звук (ambient)</h2>
       <label><input id="ambient-memory-enabled" type="checkbox"> Сохранять ограниченные наблюдения</label>
       <p id="ambient-memory-status" class="meta">Ambient memory: checking...</p>
+      <button id="ambient-triage" type="button">Сжать сейчас</button>
+      <button id="ambient-clear" type="button">Очистить буфер</button>
       <button id="ambient-audio-toggle" type="button" disabled>Системный звук не настроен</button>
       <p id="ambient-audio-status" class="meta">Loopback: checking...</p>
       <h2>Состояние</h2>
@@ -342,6 +344,19 @@
     document.querySelector('#ambient-memory-enabled').addEventListener('change', async (event) => {
       const response = await apiPost('/api/ambient-memory/config', {enabled: event.target.checked});
       if (!response.ok) event.target.checked = !event.target.checked;
+      refresh();
+    });
+    document.querySelector('#ambient-triage').addEventListener('click', async () => {
+      const response = await apiPost('/api/ambient-memory/triage', {});
+      const data = await response.json();
+      document.querySelector('#ambient-memory-status').textContent = response.ok
+        ? `Сжато кандидатов: ${(data.episodes || []).length}; пропущено: ${data.ignored || 0}`
+        : `Triage error: ${data.error || 'unavailable'}`;
+      refresh();
+    });
+    document.querySelector('#ambient-clear').addEventListener('click', async () => {
+      if (!window.confirm('Очистить кратковременную ambient memory?')) return;
+      await apiPost('/api/ambient-memory/clear', {});
       refresh();
     });
     document.querySelector('#ambient-audio-toggle').addEventListener('click', async () => {

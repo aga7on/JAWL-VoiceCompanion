@@ -51,6 +51,8 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"JAWL VoiceCompanion", frontend)
             self.assertIn(b"ambient-audio-toggle", frontend)
             self.assertIn(b"ambient-memory-enabled", frontend)
+            self.assertIn(b"ambient-triage", frontend)
+            self.assertIn(b"ambient-clear", frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
 
