@@ -267,6 +267,9 @@ workflows, while semantic watcher tuning remains.
   request returned valid provenance but classified a synthetic future test
   plan as `ignore`; calibration and deterministic promotion rules remain
   required before unattended durable-memory writes.
+- The triage scheduler is now an opt-in daemon with bounded interval, duplicate
+  start protection and server-shutdown handling; `/api/ambient-memory` exposes
+  its last status. It performs no triage until the configured interval elapses.
 - Qwen3-ASR-0.6B was rerun from the moved `models/qwen3-asr` directory at
   RTF 0.15–0.16. It transcribed local Russian TTS welcome phrases correctly;
   synthetic poem samples still contain word/ending errors, and real Russian
@@ -506,9 +509,10 @@ model warmup are still pending. The desktop-pet launcher is available as a
 bounded always-on-top presentation shell; native transparent compositing is
 still deferred. The system-audio loopback adapter, permission/API wiring and
 isolated ASR consumer are implemented; backend installation and real-device
-capture/ASR quality validation remain pending. The CPU/RAM benchmark is
-complete; triage-worker scheduling and the Qwen3-VL-2B local endpoint
-integration are verified; watcher tuning and production model warmup remain.
+capture/ASR quality validation remain pending. The CPU/RAM benchmark and
+opt-in triage-worker scheduling are complete; the Qwen3-VL-2B local endpoint
+integration is verified; watcher tuning, triage calibration and production
+model warmup remain.
 
 The current follow-up added an opt-in half-duplex hands-free boundary to the
 browser microphone path. It uses local RMS silence only for phrase finalization,

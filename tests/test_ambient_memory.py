@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
+from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler  # noqa: E402
 from jawl_voicecompanion.ambient_triage import (  # noqa: E402
     OllamaTriageProvider,
     OpenAICompatibleTriageProvider,
@@ -174,6 +174,31 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(requests[0][0].get_header("Authorization"), "Bearer test-key")
         body = json.loads(requests[0][0].data.decode("utf-8"))
         self.assertEqual(body["response_format"]["type"], "json_schema")
+
+    def test_triage_scheduler_is_opt_in_and_stops_without_duplicate_workers(self):
+        import threading
+
+        completed = threading.Event()
+
+        class Memory:
+            def __init__(self):
+                self.calls = 0
+
+            def triage(self):
+                self.calls += 1
+                completed.set()
+                return {"status": "processed", "episodes": [{"id": self.calls}]}
+
+        memory = Memory()
+        scheduler = AmbientTriageScheduler(memory, interval_seconds=1)
+        self.assertFalse(scheduler.state()["running"])
+        scheduler.start()
+        scheduler.start()
+        self.assertTrue(completed.wait(2.5))
+        self.assertEqual(memory.calls, 1)
+        self.assertEqual(scheduler.state()["status"], "processed")
+        stopped = scheduler.stop()
+        self.assertFalse(stopped["running"])
 
 
 if __name__ == "__main__":

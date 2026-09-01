@@ -311,8 +311,10 @@ accepts only normalized audio/visual text events, applies private-text
 suppression plus TTL/count/byte bounds, and forms deterministic
 `AMBIENT_EPISODE_CANDIDATE` records. The browser exposes authenticated
 inspection, explicit enable/disable, triage and clear operations at
-`/api/ambient-memory`. Hardware capture and model-backed triage are deliberately
-separate follow-up adapters.
+`/api/ambient-memory`. `AmbientTriageScheduler` is an opt-in periodic wrapper
+around the same triage operation; it is disabled unless an interval is supplied
+and it stops with the server. Hardware capture and model-backed triage remain
+separate replaceable adapters.
 
 The first hardware boundary is `SystemAudioLoopback`. It lazy-loads the
 optional PyAudioWPatch-compatible backend, selects the default WASAPI loopback

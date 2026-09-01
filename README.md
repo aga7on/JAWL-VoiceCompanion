@@ -196,10 +196,12 @@ the companion with `--ambient-memory`, `--ambient-triage-url` and
   --ambient-triage-model "Ternary-Bonsai-1.7B"
 ```
 
-The worker is called only by the explicit `/api/ambient-memory/triage` action,
-receives bounded text metadata rather than raw media or tools, and must return
-the validated JSON schema. Bonsai 1.7B is the first tested profile for this
-delayed role; it is not part of the real-time chat loop.
+The worker is called by the explicit `/api/ambient-memory/triage` action, or by
+an opt-in `--ambient-triage-interval` background scheduler. It receives bounded
+text metadata rather than raw media or tools, and must return the validated JSON
+schema. Bonsai 1.7B is the first tested profile for this delayed role; it is
+not part of the real-time chat loop. Scheduler status is included in the
+authenticated `/api/ambient-memory` response.
 
 To enable local CozyVoice REST TTS (start `G:\AI\CozyVoice\rest_api.py`
 separately), add its base URL:

@@ -110,8 +110,8 @@ Acceptance criteria:
 - [~] Define the deferred CPU/RAM triage contract for ambient audio text;
   strict provider validation, opt-in Ollama/OpenAI-compatible adapters and the
   benchmark protocol are present. Bonsai 1.7B is the first selected local
-  worker; worker scheduling, calibration and bounded production wiring remain
-  pending.
+  worker; opt-in scheduling is present, while calibration and bounded
+  production wiring remain pending.
 - [~] Add deterministic importance filtering and coalescing into bounded
   ambient episodes; model-based triage remains separate.
 - [~] Add provenance, source-app, confidence and retention metadata to ambient

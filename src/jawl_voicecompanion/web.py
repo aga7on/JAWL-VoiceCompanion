@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from .approvals import ApprovalStore
 from .ambient_audio import AmbientAudioDisabled, AmbientAudioService
-from .ambient_memory import AmbientMemoryBuffer
+from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
 from .asr import ASRUnavailable, ExternalASRService
 from .audit import AuditLog
 from .attention import AttentionPresence
@@ -55,6 +55,7 @@ class CompanionServer(ThreadingHTTPServer):
         attention: AttentionPresence | None = None,
         ambient_memory: AmbientMemoryBuffer | None = None,
         ambient_audio: AmbientAudioService | None = None,
+        ambient_scheduler: AmbientTriageScheduler | None = None,
         jawl_hostos_control: bool = False,
         audit_log: AuditLog | None = None,
         asr_service: ExternalASRService | None = None,
@@ -70,6 +71,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.attention = attention or AttentionPresence()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
         self.ambient_audio = ambient_audio
+        self.ambient_scheduler = ambient_scheduler
         self.asr = asr_service
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
@@ -119,6 +121,8 @@ class CompanionServer(ThreadingHTTPServer):
             self.screen_watcher.stop()
         if self.ambient_audio is not None:
             self.ambient_audio.stop()
+        if self.ambient_scheduler is not None:
+            self.ambient_scheduler.stop()
         self.hostos.stop_all()
         if self.voice_mem is not None:
             self.voice_mem.close()
@@ -203,8 +207,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             except PermissionError as exc:
                 self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
                 return
+            state = self.server.ambient_memory.state()
+            if self.server.ambient_scheduler is not None:
+                state["scheduler"] = self.server.ambient_scheduler.state()
             self._json({
-                "state": self.server.ambient_memory.state(),
+                "state": state,
                 "observations": self.server.ambient_memory.observations(),
                 "episodes": self.server.ambient_memory.episodes(),
             })
@@ -665,6 +672,7 @@ def create_server(
     activity_provider: Callable[[], dict[str, Any]] | None = None,
     ambient_memory: AmbientMemoryBuffer | None = None,
     ambient_audio: AmbientAudioService | None = None,
+    ambient_scheduler: AmbientTriageScheduler | None = None,
     jawl_hostos_control: bool = False,
     audit_file: Path | None = None,
     asr_service: ExternalASRService | None = None,
@@ -717,6 +725,7 @@ def create_server(
         active_attention,
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
+        ambient_scheduler=ambient_scheduler,
         jawl_hostos_control=jawl_hostos_control,
         audit_log=audit_log,
         asr_service=asr_service,

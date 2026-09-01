@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .gateway import TextGateway
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
-from .ambient_memory import AmbientMemoryBuffer
+from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
 from .ambient_triage import OpenAICompatibleTriageProvider
 from .asr import ExternalASRService, OpenAICompatibleASRClient
 from .browser_adapter import BrowserAdapter
@@ -191,6 +191,12 @@ def main() -> None:
     parser.add_argument("--ambient-triage-api-key-env", default="AMBIENT_TRIAGE_API_KEY")
     parser.add_argument("--ambient-triage-timeout", type=float, default=120.0)
     parser.add_argument(
+        "--ambient-triage-interval",
+        type=float,
+        default=0.0,
+        help="opt-in background triage interval in seconds; zero disables the worker",
+    )
+    parser.add_argument(
         "--tts-url",
         default=None,
         help="local CozyVoice REST base URL, for example http://127.0.0.1:9888",
@@ -312,7 +318,15 @@ def main() -> None:
         )
     else:
         triage_provider = None
+    if args.ambient_triage_interval < 0:
+        parser.error("--ambient-triage-interval must be zero or positive")
     ambient_memory = AmbientMemoryBuffer(enabled=args.ambient_memory, triage_provider=triage_provider)
+    ambient_scheduler = (
+        AmbientTriageScheduler(ambient_memory, args.ambient_triage_interval)
+        if args.ambient_triage_interval > 0 else None
+    )
+    if ambient_scheduler is not None:
+        ambient_scheduler.start()
     ambient_audio = None
     if args.ambient_audio:
         if voice_mem is None:
@@ -345,6 +359,7 @@ def main() -> None:
         jawl_event_dir=args.jawl_event_dir,
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
+        ambient_scheduler=ambient_scheduler,
         asr_service=asr_service,
         activity_provider=(
             WindowsUserActivity(args.user_activity_idle_seconds).sample

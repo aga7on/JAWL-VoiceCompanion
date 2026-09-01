@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import re
-from threading import RLock
+from threading import Event, RLock, Thread, current_thread
 import time
 from typing import Any
 from uuid import uuid4
@@ -421,4 +421,59 @@ class AmbientMemoryBuffer:
         }
 
 
-__all__ = ["AmbientMemoryBuffer"]
+class AmbientTriageScheduler:
+    """Opt-in bounded background triage; never creates turns or invokes tools."""
+
+    def __init__(self, memory: AmbientMemoryBuffer, interval_seconds: float = 300.0) -> None:
+        self.memory = memory
+        self.interval_seconds = max(1.0, min(float(interval_seconds), 24 * 3600.0))
+        self._stop = Event()
+        self._lock = RLock()
+        self._thread: Thread | None = None
+        self._last: dict[str, Any] = {"status": "never", "episodes": 0, "error": None}
+
+    def start(self) -> dict[str, Any]:
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._stop.clear()
+                self._thread = Thread(target=self._run, name="ambient-triage", daemon=True)
+                self._thread.start()
+        return self.state()
+
+    def stop(self, timeout: float = 5.0) -> dict[str, Any]:
+        self._stop.set()
+        with self._lock:
+            thread = self._thread
+        if thread is not None and thread is not current_thread():
+            thread.join(timeout=max(0.0, min(float(timeout), 10.0)))
+        with self._lock:
+            if thread is None or not thread.is_alive():
+                self._thread = None
+        return self.state()
+
+    def state(self) -> dict[str, Any]:
+        with self._lock:
+            running = self._thread is not None and self._thread.is_alive()
+            return {
+                "enabled": True,
+                "running": running,
+                "interval_seconds": self.interval_seconds,
+                **self._last,
+            }
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                result = self.memory.triage()
+                update = {
+                    "status": str(result.get("status") or "unknown")[:40],
+                    "episodes": len(result.get("episodes") or []),
+                    "error": str(result.get("error") or "")[:200] or None,
+                }
+            except Exception as exc:  # keep an autonomous worker from taking down the server
+                update = {"status": "error", "episodes": 0, "error": type(exc).__name__}
+            with self._lock:
+                self._last = update
+
+
+__all__ = ["AmbientMemoryBuffer", "AmbientTriageScheduler"]
