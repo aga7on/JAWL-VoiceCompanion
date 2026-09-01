@@ -18,10 +18,9 @@ adapters are available only through explicitly constructed/configured paths.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: contains the current passive watcher/E2E documentation change
-  until it is committed after final verification.
-- Latest feature commit before this change: `6b2ba8e` (`feat: add explicit
-  vision bridge`).
+- Working tree: clean after the current verification.
+- Latest feature commit: `307da25` (`feat: add passive screen delta e2e
+  slice`).
 
 ## Completed in this repository
 
@@ -110,7 +109,8 @@ adapters are available only through explicitly constructed/configured paths.
 ## Latest work session
 
 Changed the passive watcher, web API/CLI wiring, vision deduplication,
-E2E runner/tests and the related architecture/contracts/documentation.
+E2E runner/tests and the related architecture/contracts/documentation in
+`307da25`.
 
 Verification: `scripts/run_e2e.ps1` passed 2 tests; `scripts/run_tests.ps1`
 passed 49 tests; `git diff --check` reported no whitespace errors.
