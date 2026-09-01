@@ -40,6 +40,10 @@ previous synthesis active by design.
 Provider or malformed-audio failures return `503` and leave text chat usable.
 
 The CozyVoice adapter accepts only the local REST base URL, sends no API key,
-and bounds downloaded audio to 8 MiB. OmniVoice has no confirmed local
-runtime/API in the current checkout, so it remains a future provider under
-this same interface.
+and bounds downloaded audio to 8 MiB. The optional `scripts/teratts_server.py`
+wrapper exposes the same local `/health` + `/tts` shape for TeraTTSv2, defaults
+plain text to a Russian `<ru>...</ru>` span, and keeps the model release outside
+the Companion repository. It is serialized around one loaded CPU runtime;
+Tera's lower-level chunk generator is not yet exposed by this whole-WAV
+contract. OmniVoice has no confirmed standalone local runtime/API in the
+current checkout, so it remains a future provider under the same interface.

@@ -54,6 +54,9 @@ Acceptance criteria:
 - [~] Inspect and fix the local CozyVoice wrapper's non-streaming behavior;
   the companion calls one sentence per request and merges compatible WAV
   chunks, while upstream wrapper streaming remains unverified.
+- [~] Add optional TeraTTSv2 REST worker; the external model was checked through
+  the existing `/health` + `/tts` contract and its lower-level first chunk was
+  measured, while Companion streaming playback remains pending.
 - [!] Add OmniVoice adapter when its model/API location is confirmed; the local
   `G:\AI\OmniVoice` directory currently contains only a virtual environment.
 - [x] Implement bounded sentence chunking for TTS.

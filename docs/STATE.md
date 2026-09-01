@@ -293,6 +293,10 @@ workflows, while semantic watcher tuning remains.
   A direct warm streaming call produced its first chunk in about 1.04 s and
   requires `<ru>...</ru>` input; the current Companion whole-WAV HTTP contract
   cannot expose that chunk yet.
+- An optional `scripts/teratts_server.py` wrapper now exposes TeraTTSv2 through
+  the existing local TTS contract. A real smoke through `CozyVoiceHttpClient`
+  and `TTSService` returned valid mono 44.1 kHz WAV audio; the model release
+  remains external and the browser still receives whole-response audio.
 - A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
   Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
   the real Windows focused-window capture. It returned a bounded Russian

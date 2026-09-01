@@ -213,6 +213,19 @@ separately), add its base URL:
 The panel then requests transient WAV audio after a successful response. TTS
 is optional; when unavailable the text path remains usable.
 
+The provisional TeraTTSv2 worker uses the same `/health` + `/tts` contract:
+
+```powershell
+.\scripts\run_teratts_server.ps1 -Port 9889 -Voice ru_f1
+.\scripts\run_web.ps1 --tts-url "http://127.0.0.1:9889"
+```
+
+Its model release stays outside this repository. The wrapper adds the default
+`<ru>...</ru>` language tag, bounds text/voice/speed, and serializes inference
+against the loaded CPU model. The current Companion client still waits for a
+complete WAV; Tera's lower-level chunk generator is reserved for a future
+streaming audio endpoint.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
