@@ -13,7 +13,9 @@ optional TTS boundary can call CozyVoice REST, and the `/avatar` surface can
 load a user-supplied Live2D bundle behind a read-only asset root. Real JAWL,
 production VoiceMem model startup, OmniVoice and an actual licensed Live2D
 model remain opt-in/integration work. Optional UIA, focused-window OS and VLM
-adapters remain explicit.
+adapters remain explicit. The companion now has a read-only loopback bridge
+for JAWL Heartbeat, persona and memory counters; it does not duplicate JAWL
+storage.
 
 ## Git state
 
@@ -82,6 +84,9 @@ adapters remain explicit.
 - The optional Live2D asset bridge serves only an explicitly configured root,
   exposes `/api/avatar/config`, loads a user-provided runtime/model pair and
   falls back to the placeholder when the bundle is absent or incompatible.
+- The optional JAWL web bridge reads existing `/api/agent/status`, `/api/tick`,
+  `/api/db/stats`, `/api/drives` and `/api/config` routes, filters config
+  secrets and exposes session-protected inspection routes to the browser.
 
 ## Reference inventory
 
@@ -113,6 +118,9 @@ adapters remain explicit.
   a licensed user-supplied bundle but cannot prove real rendering yet.
 - JAWL and VoiceMem use different Python environments and should remain
   separate services initially.
+- JAWL's existing web console provides the stable read-only memory/heartbeat
+  surface; no companion-side SQLite access or second durable memory store is
+  warranted.
 - The configured JAWL `terminal.port` is currently stale and has no listening
   socket; the read-only probe returned `status=offline`, so live process
   verification remains pending.
@@ -123,7 +131,8 @@ adapters remain explicit.
 - confirm the OmniVoice model/API location;
 - select and manually validate the first redistributable or user-supplied
   Live2D model/runtime bundle;
-- finish the browser settings, memory and audit views;
+- finish editable browser settings, memory and audit views; the current JAWL
+  memory/persona surface is intentionally read-only;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
 - add semantic screen significance scoring and connect `SCREEN_DELTA` to
   Attention/Presence and JAWL's final wording path;
@@ -145,10 +154,11 @@ VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner,
 client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
 and final-turn routing in `36a808c`.
 The current work session adds the TTS boundary and CozyVoice REST path plus
-the optional Live2D asset/runtime bridge.
+the optional Live2D asset/runtime bridge, then adds the read-only JAWL web
+memory/persona bridge and its browser view.
 
 Verification for the current work session:
-`scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 62 tests;
+`scripts/run_e2e.ps1` passed 4 tests; `scripts/run_tests.ps1` passed 66 tests;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings.
 The working tree is clean after commit `751123f`; the preceding microphone

@@ -78,6 +78,11 @@ Owns the canonical character state and exposes a local API for:
 JAWL remains the sole authority for final wording and whether a proactive
 intent becomes spoken output.
 
+The companion's optional `JawlWebAdapter` reads JAWL's existing loopback web
+console for health, Heartbeat, bounded memory counters, drives and a filtered
+persona view. It never opens JAWL storage directly and keeps no durable copy.
+The public companion routes are read-only and session-protected.
+
 ### VoiceMem gateway
 
 Owns streaming voice perception and returns structured observations. It may

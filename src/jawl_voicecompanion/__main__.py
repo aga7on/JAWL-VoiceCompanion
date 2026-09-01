@@ -9,6 +9,7 @@ from .gateway import TextGateway
 from .browser_adapter import BrowserAdapter
 from .avatar import AvatarAssetStore
 from .jawl_adapter import JawlTerminalAdapter
+from .jawl_web import JawlWebAdapter
 from .hostos_tools import HostOSExecutor
 from .screen_adapter import ScreenCaptureAdapter
 from .tts import CozyVoiceHttpClient, TTSService
@@ -29,6 +30,17 @@ def main() -> None:
         default=None,
         help="path to JAWL's terminal.port; omit to use the deterministic mock brain",
     )
+    parser.add_argument(
+        "--jawl-web-url",
+        default=None,
+        help="local JAWL web console URL, for example http://127.0.0.1:8770",
+    )
+    parser.add_argument(
+        "--jawl-web-token-env",
+        default="JAWL_WEB_TOKEN",
+        help="environment variable containing JAWL's optional console token",
+    )
+    parser.add_argument("--jawl-web-timeout", type=float, default=2.0)
     parser.add_argument(
         "--hostos-live",
         action="store_true",
@@ -99,12 +111,24 @@ def main() -> None:
     parser.add_argument("--host-root", type=Path, action="append", default=[])
     parser.add_argument("--allowed-executable", action="append", default=[])
     args = parser.parse_args()
-    gateway = TextGateway()
+    responder = None
+    brain_name = "phase1_mock_brain"
     if args.jawl_port_file:
-        gateway = TextGateway(
-            responder=JawlTerminalAdapter(args.jawl_port_file),
-            brain_name="jawl_terminal",
-        )
+        responder = JawlTerminalAdapter(args.jawl_port_file)
+        brain_name = "jawl_terminal"
+    jawl_web = None
+    if args.jawl_web_url:
+        import os
+
+        try:
+            jawl_web = JawlWebAdapter(
+                args.jawl_web_url,
+                token=os.environ.get(args.jawl_web_token_env, ""),
+                timeout_seconds=args.jawl_web_timeout,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+    gateway = TextGateway(responder=responder, brain_name=brain_name, jawl_web=jawl_web)
     hostos_executor = None
     if args.hostos_live:
         project_root = Path(__file__).resolve().parents[2]

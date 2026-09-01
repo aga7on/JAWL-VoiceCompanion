@@ -19,6 +19,7 @@ from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
+from jawl_voicecompanion.jawl_web import JawlWebAdapter  # noqa: E402
 from jawl_voicecompanion.models import AccessLevel  # noqa: E402
 from jawl_voicecompanion.tts import CozyVoiceHttpClient, TTSService  # noqa: E402
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
@@ -81,6 +82,43 @@ class _TTSHandler(BaseHTTPRequestHandler):
         return
 
 
+class _JawlWebHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        payloads = {
+            "/api/agent/status": {"running": True, "pid": 1234},
+            "/api/tick": {"phase": "wake", "step": 7, "model": "e2e-model"},
+            "/api/db/stats": {
+                "ok": True,
+                "sql": {"exists": True, "counts": {"notes": 4, "personality_traits": 2}, "ticks": 7},
+                "vector": {"knowledge": 3},
+                "graph": {"nodes": 5},
+            },
+            "/api/drives": {
+                "ok": True,
+                "dynamicReduction": True,
+                "drives": [{"name": "curiosity", "type": "fundamental"}],
+            },
+            "/api/config": {
+                "ok": True,
+                "values": {
+                    "settings:identity.agent_name": "Луна",
+                    "settings:llm.language": "ru",
+                    "settings:system.heartbeat_interval": 30,
+                    "env:LLM_API_KEY_1": "must-not-leak",
+                },
+            },
+        }
+        body = json.dumps(payloads.get(self.path, {"error": "not found"}), ensure_ascii=False).encode("utf-8")
+        self.send_response(200 if self.path in payloads else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
 class _FakeScreen:
     enabled = True
 
@@ -121,6 +159,8 @@ class LocalE2ETests(unittest.TestCase):
         self.tts_provider = ThreadingHTTPServer(("127.0.0.1", 0), _TTSHandler)
         _TTSHandler.requests = []
         threading.Thread(target=self.tts_provider.serve_forever, daemon=True).start()
+        self.jawl_web_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlWebHandler)
+        threading.Thread(target=self.jawl_web_provider.serve_forever, daemon=True).start()
         self.jawl = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _JawlHandler)
         _JawlHandler.messages = []
         self.jawl_port_file = Path(self.temp.name) / "terminal.port"
@@ -142,6 +182,9 @@ class LocalE2ETests(unittest.TestCase):
             policy=self.policy,
             responder=self.jawl_adapter,
             brain_name="e2e_brain",
+            jawl_web=JawlWebAdapter(
+                f"http://127.0.0.1:{self.jawl_web_provider.server_port}", timeout_seconds=2,
+            ),
         )
         self.voice_mem = VoiceMemProcessClient(
             sys.executable,
@@ -183,6 +226,8 @@ class LocalE2ETests(unittest.TestCase):
         self.provider.server_close()
         self.tts_provider.shutdown()
         self.tts_provider.server_close()
+        self.jawl_web_provider.shutdown()
+        self.jawl_web_provider.server_close()
         self.jawl.shutdown()
         self.jawl.server_close()
         self.temp.cleanup()
@@ -263,6 +308,24 @@ class LocalE2ETests(unittest.TestCase):
         _, stopped = self.post_json("/api/hostos/execute", request)
         self.assertEqual(stopped["result"]["status"], "denied")
         self.assertEqual(stopped["result"]["reason"], "emergency_stop_active")
+
+    def test_jawl_web_memory_and_persona_are_visible_without_secrets(self):
+        _, health = self.get_json("/api/health")
+        self.assertEqual(health["components"]["jawl_web"], "online")
+        _, status = self.get_json("/api/jawl/status")
+        self.assertEqual(status, {"configured": True, "status": "online"})
+
+        _, memory = self.get_json("/api/jawl/memory")
+        self.assertEqual(memory["database"]["sql"]["counts"]["notes"], 4)
+        self.assertEqual(memory["drives"]["drives"][0]["name"], "curiosity")
+
+        _, persona = self.get_json("/api/jawl/persona")
+        self.assertEqual(persona["settings"]["settings:identity.agent_name"], "Луна")
+        self.assertNotIn("must-not-leak", json.dumps(persona, ensure_ascii=False))
+
+        _, overview = self.get_json("/api/jawl/overview")
+        self.assertEqual(overview["status"], "ok")
+        self.assertEqual(overview["sources"]["tick"]["step"], 7)
 
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
         _, status = self.get_json("/api/voice/status")

@@ -13,6 +13,7 @@ from .vision import OpenAICompatibleVisionClient, VisionLookService
 from .presence import ScreenDeltaWatcher
 from .tts import CozyVoiceHttpClient, TTSService, TTSUnavailable, TTSCancelled
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
+from .jawl_web import JawlWebAdapter, JawlWebUnavailable
 
 __all__ = [
     "AccessLevel",
@@ -37,4 +38,6 @@ __all__ = [
     "TTSCancelled",
     "VoiceMemProcessClient",
     "VoiceMemUnavailable",
+    "JawlWebAdapter",
+    "JawlWebUnavailable",
 ]

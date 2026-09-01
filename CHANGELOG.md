@@ -52,3 +52,6 @@
 - Added an optional user-supplied Live2D asset root, read-only
   `/avatar-assets/` serving, `/api/avatar/config`, runtime adapter loading and
   placeholder fallback without committing SDK/model assets.
+- Added a loopback-only, read-only JAWL web adapter for Heartbeat, persona,
+  drive and memory counters; filtered config prevents secrets and no parallel
+  durable memory store is created.

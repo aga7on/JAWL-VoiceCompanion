@@ -12,7 +12,7 @@ The project combines:
 
 ## Current status
 
-Phase 2 — Russian voice loop. See
+Phase 4 — 2D Live2D product UI and integration bridges. See
 [docs/STATE.md](docs/STATE.md) and [TODO.md](TODO.md).
 
 The current slice includes a dependency-free text gateway, local browser
@@ -49,6 +49,16 @@ To connect the text surface to the local JAWL terminal bridge, pass its
 ```powershell
 .\scripts\run_web.ps1 --jawl-port-file "G:\AI\JAWL-Coding\src\utils\local\data\interfaces\host\terminal\terminal.port"
 ```
+
+To show JAWL Heartbeat, persona and memory counters in the companion panel,
+also point it at JAWL's local web console:
+
+```powershell
+.\scripts\run_web.ps1 --jawl-web-url "http://127.0.0.1:8770"
+```
+
+The bridge is read-only, loopback-only and filters secrets from JAWL config;
+the companion does not duplicate JAWL's durable memory.
 
 To enable the external-ASR text bridge through the VoiceMem sidecar, point
 the web process at VoiceMem's Python environment:
@@ -93,6 +103,7 @@ for cancellation and priority.
 - [docs/contracts/events.md](docs/contracts/events.md) — event contract;
 - [docs/contracts/voice.md](docs/contracts/voice.md) — VoiceMem sidecar contract;
 - [docs/contracts/tts.md](docs/contracts/tts.md) — TTS provider and cancellation contract;
+- [docs/contracts/jawl.md](docs/contracts/jawl.md) — read-only JAWL bridge contract;
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
 
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).

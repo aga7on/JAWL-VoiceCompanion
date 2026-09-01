@@ -15,6 +15,7 @@ from .approvals import ApprovalStore
 from .avatar import AvatarAssetStore
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
+from .jawl_web import JawlWebUnavailable
 from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
 from .tts import TTSService, TTSUnavailable, TTSCancelled
@@ -117,6 +118,28 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json(self.server.avatar_assets.config() if self.server.avatar_assets else {
                 "enabled": False, "runtime_url": None, "model_url": None, "adapter": None,
             })
+            return
+        if path in {"/api/jawl/status", "/api/jawl/overview", "/api/jawl/memory", "/api/jawl/persona"}:
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            adapter = self.server.gateway.jawl_web
+            if adapter is None:
+                self._json({"configured": False, "status": "not_configured"})
+                return
+            try:
+                if path == "/api/jawl/status":
+                    self._json({"configured": True, "status": adapter.status()})
+                elif path == "/api/jawl/memory":
+                    self._json(adapter.memory())
+                elif path == "/api/jawl/persona":
+                    self._json(adapter.persona())
+                else:
+                    self._json(adapter.overview())
+            except JawlWebUnavailable as exc:
+                self._json({"configured": True, "status": "offline", "error": str(exc)})
             return
         asset_prefix = "/avatar-assets/"
         if path.startswith(asset_prefix) and self.server.avatar_assets is not None:

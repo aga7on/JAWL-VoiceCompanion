@@ -173,3 +173,17 @@ adapter. The adapter receives `{canvas, modelUrl}` and may implement
 the existing dependency-free placeholder remains visible. This preserves the
 OBS URL, keeps the web process free of heavy SDK dependencies and avoids
 redistributing assets with unclear terms.
+## ADR-014 - JAWL remains the sole durable memory owner
+
+Status: Accepted
+Date: 2026-09-01
+
+The companion reads JAWL's existing local web routes for process state,
+Heartbeat, database counters, drives and a filtered persona configuration.
+It does not open JAWL's SQLite/Vector/Graph stores and does not create a
+parallel durable memory database. This keeps corrections, reflection and
+forgetting in one authority and makes JAWL outages an explicit degraded mode.
+
+The first bridge is read-only. Memory and persona writes require a versioned
+JAWL API with provenance, audit and correction semantics before they can be
+exposed in the companion UI.

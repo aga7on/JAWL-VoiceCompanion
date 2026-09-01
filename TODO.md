@@ -76,6 +76,7 @@ Acceptance criteria:
 - [ ] Add speculative recall and final recall events.
 - [ ] Map VoiceMem affect to JAWL observations, not personality overrides.
 - [ ] Define bounded core memory.
+- [x] Add a read-only JAWL bridge for bounded memory/persona inspection.
 - [ ] Define archival recall through JAWL Vector/Graph.
 - [ ] Add fact provenance, confidence and epistemic type.
 - [ ] Add `insert`, `patch`, `remove`, `archive` and `supersedes` operations.
@@ -111,8 +112,8 @@ Acceptance criteria:
 - [ ] Add first-run setup and component health/doctor panel.
 - [ ] Add performance profiles for low/standard/high modes.
 - [~] Render browser control-plane pages for settings, approvals, memory and
-  audit state; chat, approvals, level and emergency stop are present, while
-  settings, memory and audit views remain.
+  audit state; chat, approvals, level, emergency stop and a read-only JAWL
+  memory/persona summary are present, while editing views remain.
 - [x] Add visible HostOS access-level indicator and emergency stop.
 
 Acceptance criteria:

@@ -10,6 +10,7 @@ from uuid import uuid4
 from .hostos_policy import HostOSPolicy
 from .arbiter import TurnArbiter, TurnPriority
 from .jawl_adapter import JawlTurnCancelled
+from .jawl_web import JawlWebAdapter
 
 
 _REQUIRED_ENVELOPE_FIELDS = (
@@ -50,6 +51,7 @@ class TextGateway:
 
     policy: HostOSPolicy = field(default_factory=HostOSPolicy)
     responder: Callable[[str], str] | None = None
+    jawl_web: JawlWebAdapter | None = None
     brain_name: str = "phase1_mock_brain"
     arbiter: TurnArbiter = field(default_factory=TurnArbiter)
     _brain_status: str = field(default="mock", init=False, repr=False)
@@ -120,6 +122,7 @@ class TextGateway:
             "mode": self.brain_name,
             "components": {
                 "jawl": self._responder_status(),
+                "jawl_web": self._jawl_web_status(),
                 "voicemem": "not_connected",
                 "tts": "not_connected",
                 "hostos": "policy_only_dry_run",
@@ -131,6 +134,11 @@ class TextGateway:
             return "not_connected"
         status = getattr(self.responder, "status", None)
         return status() if callable(status) else self._brain_status
+
+    def _jawl_web_status(self) -> str:
+        if self.jawl_web is None:
+            return "not_configured"
+        return self.jawl_web.status()
 
     def state(self) -> dict[str, Any]:
         return {
