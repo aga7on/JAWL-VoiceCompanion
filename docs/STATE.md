@@ -25,7 +25,7 @@ storage.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: pending commit for the Live2D validation slice.
+- Latest feature commit: `c7f4995` (`feat: validate Live2D asset bundles`).
 
 ## Completed in this repository
 
@@ -179,12 +179,12 @@ documents the minimal renderer plugin contract. A safe local-Ollama JAWL turn-sm
 was stopped before its missing embedding download.
 
 Verification for the current work session:
-`scripts/run_e2e.ps1` passed 4 tests; the avatar unit tests passed 5 tests;
-the full suite is the final gate for this session;
+`scripts/run_e2e.ps1` passed 4 tests; the avatar unit tests passed 6 tests;
+the complete unit suite passed 66 tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web → adapter → companion API smoke-test also passed.
-The working tree contains the current validation-slice changes; the preceding microphone
+The working tree is clean after `c7f4995`; the preceding microphone
 slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
