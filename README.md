@@ -68,7 +68,9 @@ IPC; without it, intents remain local and inspectable.
 Screen capture defaults to a 960×720 image and a 1 MB transient JPEG. Use
 `--screen-max-width`, `--screen-max-height` and `--screen-max-bytes` to tune
 the CPU/quality tradeoff; the observation includes bounded coordinate-scale
-metadata for future UIA actions.
+metadata. Native controls use UIA fingerprints; canvas/custom surfaces can use
+the approval-gated `desktop.pointer` fallback, which recalibrates image
+coordinates against fresh foreground-window bounds.
 
 Add `--user-activity` to suppress proactive screen speech while Windows has
 recent user input. The signal is limited to idle time and foreground window

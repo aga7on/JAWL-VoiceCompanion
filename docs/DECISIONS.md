@@ -355,3 +355,16 @@ partial-ASR contract. Therefore the Companion keeps VoiceMem's streaming path
 as the default and adds Qwen only as an opt-in, bounded final-utterance
 adapter. Audio is held in RAM for one short session, transcribed once on
 explicit end, forwarded as one final VoiceMem partial, and discarded.
+
+## ADR-025 - Keep pixel actions separate from semantic UIA actions
+
+Status: Accepted
+Date: 2026-09-01
+
+Native controls continue to use UI Automation references and fingerprints.
+Canvas, games and custom-rendered surfaces use a separate `desktop.pointer`
+tool whose image-space coordinates must carry frame dimensions and exact
+foreground bounds. HostOS rechecks the foreground window before conversion,
+uses the normal interactive approval/unattended policy, and reports pointer
+dispatch separately from application acceptance. This avoids pretending that
+a cursor event proves a UI state transition.

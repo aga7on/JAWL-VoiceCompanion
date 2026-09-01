@@ -318,8 +318,9 @@ workflows, while semantic watcher tuning remains.
 - validate the TTS model selected by the external benchmark, measure startup/
   latency and decide whether an actual streaming TTS worker is needed;
 - choose the initial JAWL LLM endpoint/profile;
-- tune bounded screen resizing, UIA context and coordinate calibration for the
-  selected Qwen3-VL-2B endpoint;
+- tune bounded screen resizing and coordinate calibration for the selected
+  Qwen3-VL-2B endpoint, then validate pointer actions against a real
+  custom-rendered application;
 - measure actual GPU contention and model residency on the target machine.
 - validate the correlated web bridge against a production JAWL model/tool
   profile that emits user-facing broadcasts and add restart/reconnect recovery
@@ -418,6 +419,12 @@ therefore run while the operator is away without per-action prompts; emergency
 stop and deny-tools/deny-risk policy checks remain authoritative. The browser
 control plane exposes these settings and the policy fingerprint includes them.
 
+The latest desktop-control follow-up adds `desktop.pointer` for custom/canvas
+surfaces. Image coordinates are recalibrated against fresh foreground bounds,
+stale windows are rejected, and cursor placement is reported separately from
+application acceptance. Unit and HTTP E2E coverage use an injected pointer
+backend, so no real click was performed during automated verification.
+
 The emergency-stop slice tracks live `process.managed` and `shell.exec`
 children, terminates them through the same executor, and covers the race with
 a background shell request in unit tests. Server shutdown also cleans up
@@ -425,7 +432,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 133 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 146 unit tests and 12 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -441,7 +448,7 @@ preceding microphone slice is preserved in `36a808c` and the TTS slice in
 Known limitation: no licensed Live2D model/runtime is installed yet; the
 placeholder remains the default. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; production semantic scoring and JAWL
-final-wording delivery, calibrated UIA coordinate execution and pixel-level redaction,
+final-wording delivery, real custom-app pointer acceptance and pixel-level redaction,
 real-microphone ASR quality,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The desktop-pet launcher is available as a
