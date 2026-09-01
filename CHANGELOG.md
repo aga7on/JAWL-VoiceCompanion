@@ -16,6 +16,9 @@
 - Added a lazy, default-stopped `SystemAudioLoopback` boundary for an optional
   PyAudioWPatch-compatible Windows WASAPI backend with bounded in-memory PCM16
   delivery and degraded behavior when the backend is unavailable.
+- Added a strict delayed ambient-triage provider contract and optional
+  CPU-first Ollama JSON adapter; no audio model is selected or loaded by
+  default, and Vision/VLM selection is explicitly deferred.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.

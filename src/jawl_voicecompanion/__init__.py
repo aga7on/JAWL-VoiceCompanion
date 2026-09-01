@@ -17,6 +17,7 @@ from .tts import CozyVoiceHttpClient, TTSService, TTSUnavailable, TTSCancelled
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 from .jawl_web import JawlWebAdapter, JawlWebChatAdapter, JawlWebUnavailable
 from .ambient_memory import AmbientMemoryBuffer
+from .ambient_triage import AmbientTriageProvider, AmbientTriageUnavailable, OllamaTriageProvider
 from .system_audio import SystemAudioLoopback, SystemAudioUnavailable
 
 __all__ = [
@@ -48,6 +49,9 @@ __all__ = [
     "JawlWebChatAdapter",
     "JawlWebUnavailable",
     "AmbientMemoryBuffer",
+    "AmbientTriageProvider",
+    "AmbientTriageUnavailable",
+    "OllamaTriageProvider",
     "SystemAudioLoopback",
     "SystemAudioUnavailable",
 ]

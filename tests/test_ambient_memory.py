@@ -5,6 +5,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
+from jawl_voicecompanion.ambient_triage import OllamaTriageProvider  # noqa: E402
+
+
+class _FakeTriage:
+    name = "fake"
+
+    def triage(self, observations):
+        return {
+            "importance": "retain",
+            "summary": "Сжатый контекст из наблюдения",
+            "topics": ["context"],
+            "confidence": 0.91,
+            "source": "system_audio",
+            "source_event_ids": [observations[0]["event_id"]],
+        }
+
+
+class _Response:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        import json
+
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class AmbientMemoryTests(unittest.TestCase):
@@ -55,6 +86,65 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(len(memory.triage(now=120)["episodes"]), 1)
         self.assertEqual(memory.clear()["status"], "cleared")
         self.assertEqual(memory.state(now=121)["episode_count"], 0)
+
+    def test_explicit_model_provider_is_delayed_and_provenance_is_preserved(self):
+        memory = AmbientMemoryBuffer(enabled=True, triage_provider=_FakeTriage())
+        memory.ingest_system_audio("В игре объявлен новый контекст", event_id="audio-provider", now=10)
+        result = memory.triage(now=20)
+        self.assertEqual(result["status"], "processed")
+        self.assertEqual(result["provider"], "fake")
+        self.assertEqual(result["episodes"][0]["payload"]["triage_provider"], "fake")
+        self.assertEqual(result["episodes"][0]["payload"]["source_event_ids"], ["audio-provider"])
+
+    def test_invalid_provider_output_fails_closed_and_keeps_observation_pending(self):
+        class BadProvider:
+            name = "bad"
+
+            def triage(self, _observations):
+                return {"importance": "retain", "summary": "unknown provenance"}
+
+        memory = AmbientMemoryBuffer(enabled=True, triage_provider=BadProvider())
+        memory.ingest_visual("Контекст экрана", event_id="bad-provider", now=10)
+        result = memory.triage(now=20)
+        self.assertEqual(result["status"], "provider_error")
+        self.assertEqual(result["provider"], "bad")
+        self.assertEqual(memory.state(now=20)["episode_count"], 0)
+        self.assertEqual(memory.triage(now=21)["status"], "provider_error")
+
+    def test_ollama_provider_uses_cpu_and_structured_output(self):
+        requests = []
+
+        def opener(request, timeout):
+            requests.append((request, timeout))
+            return _Response(
+                {
+                    "message": {
+                        "content": '{"importance":"retain","summary":"Наблюдение сжато","topics":["context"],"confidence":0.8,"source":"system_audio","source_event_ids":["ollama-1"]}'
+                    }
+                }
+            )
+
+        provider = OllamaTriageProvider("triage-model", opener=opener)
+        result = provider.triage(
+            [
+                {
+                    "event_id": "ollama-1",
+                    "payload": {
+                        "stream": "system_audio",
+                        "text": "Важный контекст",
+                        "confidence": 0.8,
+                    },
+                }
+            ]
+        )
+        self.assertEqual(result["importance"], "retain")
+        self.assertEqual(len(requests), 1)
+        import json
+
+        body = json.loads(requests[0][0].data.decode("utf-8"))
+        self.assertEqual(body["options"]["num_gpu"], 0)
+        self.assertEqual(body["format"]["type"], "object")
+        self.assertEqual(body["keep_alive"], 0)
 
 
 if __name__ == "__main__":

@@ -114,6 +114,7 @@ for cancellation and priority.
 - [docs/contracts/tts.md](docs/contracts/tts.md) — TTS provider and cancellation contract;
 - [docs/contracts/jawl.md](docs/contracts/jawl.md) — read-only JAWL bridge contract;
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
+- [docs/AMBIENT_TRIAGE_BENCHMARK.md](docs/AMBIENT_TRIAGE_BENCHMARK.md) — delayed audio-triage benchmark protocol.
 
 The Live2D bundle contract is specified in [docs/contracts/avatar.md](docs/contracts/avatar.md).
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).

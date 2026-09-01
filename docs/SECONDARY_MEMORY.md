@@ -93,7 +93,8 @@ of becoming personality or memory truth.
 1. Define event envelopes and a fake capture source; test the complete delayed
    path without hardware or model weights.
 2. Add the bounded working buffer and deterministic importance/coalescing rules.
-3. Benchmark CPU/RAM triage candidates on Russian audio and screen examples.
+3. Benchmark CPU/RAM triage candidates on Russian audio-text examples; keep
+   Vision/VLM selection separate until its dedicated benchmark is complete.
 4. Use the `SystemAudioLoopback` adapter with an optional PyAudioWPatch
    backend, behind an explicit permission and an isolated ASR session.
 5. Add idle consolidation into JAWL promotion candidates, with correction and
@@ -102,3 +103,7 @@ of becoming personality or memory truth.
    runtime change. The expected result is: raw inputs are bounded and dropped,
    observations are attributable, and no ambient event becomes an unapproved
    action.
+
+The benchmark protocol is in `docs/AMBIENT_TRIAGE_BENCHMARK.md`. The current
+`OllamaTriageProvider` is only an optional CPU-first adapter with strict output
+validation; no model is selected or loaded by default.

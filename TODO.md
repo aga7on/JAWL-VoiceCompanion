@@ -87,8 +87,9 @@ Acceptance criteria:
   target: about 30 minutes) and no durable raw audio/video by default; the
   normalized buffer and authenticated browser controls are implemented, while
   real capture wiring remains.
-- [ ] Add a deferred CPU/RAM triage worker for ambient audio transcripts and
-  visual observations; benchmark available local models before selecting one.
+- [~] Define the deferred CPU/RAM triage contract for ambient audio text;
+  strict provider validation, an opt-in Ollama adapter and the benchmark
+  protocol are present. Worker scheduling and model selection remain pending.
 - [~] Add deterministic importance filtering and coalescing into bounded
   ambient episodes; model-based triage remains separate.
 - [~] Add provenance, source-app, confidence and retention metadata to ambient
@@ -148,7 +149,9 @@ Acceptance criteria:
 - [ ] Prefer UI Automation for native app structure.
 - [ ] Add screenshot/OCR fallback for canvas and custom applications.
 - [~] Add explicit `vision__look` model tool; the HostOS `screen.observe`
-  capture seam exists, while the model bridge is still pending.
+  capture seam exists, while the model bridge is still pending. VLM selection
+  and runtime integration are intentionally paused until the separate CPU/RAM
+  test completes.
 - [ ] Add capture request/response bridge when frontend owns capture.
 - [~] Add change detection, significance and cooldown; digest deduplication,
   explicit-look cooldown, bounded `SCREEN_DELTA` production and an

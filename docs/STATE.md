@@ -24,8 +24,11 @@ still pending. The ambient secondary-memory design is documented separately:
 optional system-audio loopback and visual observations use bounded transient
 tiers and delayed CPU/RAM triage, while JAWL remains the only owner of
 promoted memory. The first normalized ambient buffer and authenticated
-browser inspection/configuration path are now implemented; real capture and
-model triage remain opt-in work.
+browser inspection/configuration path are now implemented. A strict,
+model-neutral delayed audio-triage contract and optional CPU-first Ollama
+adapter are now present; no model is selected or loaded by default. Vision
+VLM selection and integration are explicitly paused until the operator's
+separate CPU/RAM test completes.
 
 ## Git state
 
@@ -34,7 +37,8 @@ model triage remain opt-in work.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the screen-attention slice.
+- Working tree: contains the uncommitted delayed audio-triage provider slice;
+  documentation and full-gate status must be updated before commit.
 - Latest feature commit: `d631a12` (`fix: harden proactive event delivery`).
 
 ## Completed in this repository
@@ -95,6 +99,10 @@ model triage remain opt-in work.
   boundary: lazy PyAudioWPatch-compatible loading, default-device selection,
   bounded in-memory PCM16 queue and explicit degraded behavior when the backend
   is absent. It is not auto-started and is not yet wired to ASR.
+- `AmbientTriageProvider` now defines a bounded delayed-provider contract with
+  strict provenance/schema validation. `OllamaTriageProvider` is an optional
+  stdlib HTTP adapter configured CPU-first (`num_gpu=0`); it does not select,
+  download or keep a model resident by default.
 - `JawlEventFileSink` atomically writes accepted screen intents to an
   explicitly configured JAWL `.jawl_events` directory in the existing
   `{message, payload}` IPC shape; raw frames and local paths are excluded.
@@ -258,11 +266,13 @@ spoken final response remains model-dependent and the known `no_broadcast`
 production-profile result is preserved.
 The current implementation adds `AmbientMemoryBuffer` and authenticated
 `/api/ambient-memory` inspection, configuration, triage and clear routes;
-fake audio/visual input is covered end-to-end while Windows capture and model
-triage remain unconnected.
+fake audio/visual input is covered end-to-end while Windows capture and ASR
+remain unconnected. Audio triage now has a strict provider contract, optional
+CPU-first Ollama adapter and benchmark protocol with unit coverage;
+Vision/VLM remains model-neutral and paused by explicit decision.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 94 unit tests and 5 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 97 unit tests and 5 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -281,17 +291,17 @@ AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The native always-on-top desktop-pet shell is
 also deferred. The system-audio loopback adapter exists, but backend
 installation, permission wiring, ASR consumption and CPU/RAM model triage are
-not implemented yet.
+not implemented yet. The CPU/RAM benchmark and triage-worker scheduling are
+still pending; no VLM model is being selected in this workstream.
 
 ## Next action
 
 Validate the web bridge and explicit screen-event IPC against a live
 production JAWL model/tool profile, including final response/broadcast
-behavior. Then benchmark the installed VoiceMem ASR modes on a real Russian
-microphone, validate production model warmup and CozyVoice latency, and choose
-the first user-supplied Live2D model. The normalized ambient-memory contracts
-and fake-source path are now in place; next implement a benchmarkable delayed
-triage provider before touching Windows loopback capture.
+behavior. In parallel, benchmark audio-triage candidates and the installed
+VoiceMem ASR modes on real Russian audio, then wire the selected audio profile
+to the isolated Windows loopback consumer. Keep Vision/VLM as a provider
+contract only until the separate model test returns a decision.
 
 ## State update protocol
 

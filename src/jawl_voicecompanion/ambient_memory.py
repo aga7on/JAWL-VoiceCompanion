@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 import re
 from threading import RLock
 import time
 from typing import Any
 from uuid import uuid4
+
+from .ambient_triage import AmbientTriageProvider, validate_triage_result
 
 
 _AUDIO_EVENT = "AMBIENT_AUDIO_OBSERVATION"
@@ -77,6 +79,7 @@ class AmbientMemoryBuffer:
         max_episodes: int = 64,
         max_bytes: int = 256 * 1024,
         max_episode_bytes: int = 256 * 1024,
+        triage_provider: AmbientTriageProvider | None = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.observation_ttl_seconds = max(1.0, min(float(observation_ttl_seconds), 7 * 24 * 3600.0))
@@ -86,6 +89,7 @@ class AmbientMemoryBuffer:
         self.max_episodes = max(1, min(int(max_episodes), 512))
         self.max_bytes = max(4096, min(int(max_bytes), 4 * 1024 * 1024))
         self.max_episode_bytes = max(4096, min(int(max_episode_bytes), 4 * 1024 * 1024))
+        self.triage_provider = triage_provider
         self._observations: deque[_StoredObservation] = deque()
         self._episodes: deque[dict[str, Any]] = deque(maxlen=self.max_episodes)
         self._bytes = 0
@@ -208,14 +212,19 @@ class AmbientMemoryBuffer:
             now=now,
         )
 
-    def triage(self, *, now: float | None = None, max_items: int = 64) -> dict[str, Any]:
-        """Coalesce unprocessed observations using deterministic local rules."""
+    def triage(
+        self,
+        *,
+        now: float | None = None,
+        max_items: int = 64,
+        provider: AmbientTriageProvider | None = None,
+    ) -> dict[str, Any]:
+        """Coalesce observations locally or through an explicitly configured provider."""
         timestamp = time.time() if now is None else float(now)
+        provider = provider or self.triage_provider
         with self._lock:
             self._prune(timestamp)
             pending = [item for item in self._observations if not item.triaged][: max(1, min(int(max_items), 256))]
-            for item in pending:
-                item.triaged = True
             groups: list[list[_StoredObservation]] = []
             for item in pending:
                 if not groups or item.received_at - groups[-1][-1].received_at > self.episode_window_seconds:
@@ -224,6 +233,39 @@ class AmbientMemoryBuffer:
 
             episodes: list[dict[str, Any]] = []
             ignored = 0
+            if provider is not None:
+                prepared: list[tuple[list[_StoredObservation], dict[str, Any]]] = []
+                try:
+                    for group in groups:
+                        result = provider.triage([item.event for item in group])
+                        event_ids = {item.event["event_id"] for item in group}
+                        prepared.append((group, validate_triage_result(result, event_ids)))
+                except Exception as exc:
+                    return {
+                        "status": "provider_error",
+                        "provider": self._provider_name(provider),
+                        "episodes": [],
+                        "ignored": 0,
+                        "error": str(exc)[:200] or type(exc).__name__,
+                    }
+                for group, payload in prepared:
+                    for item in group:
+                        item.triaged = True
+                    if payload["importance"] == "ignore":
+                        ignored += 1
+                        continue
+                    episode = self._episode_from_payload(group, payload, timestamp, self._provider_name(provider))
+                    if self._append_episode(episode):
+                        episodes.append(episode)
+                return {
+                    "status": "processed",
+                    "provider": self._provider_name(provider),
+                    "episodes": episodes,
+                    "ignored": ignored,
+                }
+
+            for item in pending:
+                item.triaged = True
             for group in groups:
                 episode = self._episode(group, timestamp)
                 if episode is None:
@@ -259,6 +301,7 @@ class AmbientMemoryBuffer:
                 "max_episode_bytes": self.max_episode_bytes,
                 "observation_ttl_seconds": self.observation_ttl_seconds,
                 "episode_ttl_seconds": self.episode_ttl_seconds,
+                "triage_provider": self._provider_name(self.triage_provider) if self.triage_provider else None,
             }
 
     def clear(self) -> dict[str, Any]:
@@ -308,6 +351,37 @@ class AmbientMemoryBuffer:
     @staticmethod
     def _serialized_size(value: dict[str, Any]) -> int:
         return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+    @staticmethod
+    def _provider_name(provider: Any) -> str:
+        return _bounded_text(getattr(provider, "name", "") or type(provider).__name__, 80)
+
+    def _episode_from_payload(
+        self,
+        group: list[_StoredObservation],
+        payload: dict[str, Any],
+        now: float,
+        provider_name: str,
+    ) -> dict[str, Any]:
+        observed = [str(item.event["payload"].get("observed_at")) for item in group]
+        return {
+            "schema_version": 1,
+            "event_id": str(uuid4()),
+            "session_id": "ambient-memory",
+            "created_at": _iso(now),
+            "source": "ambient_memory",
+            "type": _EPISODE_EVENT,
+            "priority": 4,
+            "payload": {
+                **payload,
+                "triage_provider": provider_name,
+                "observed_from": min(observed) if observed else _iso(group[0].received_at),
+                "observed_until": max(observed) if observed else _iso(group[-1].received_at),
+                "retention_until": _iso(now + self.episode_ttl_seconds),
+                "raw_audio_persisted": False,
+                "raw_frame_persisted": False,
+            },
+        }
 
     def _episode(self, group: list[_StoredObservation], now: float) -> dict[str, Any] | None:
         payloads = [item.event["payload"] for item in group]
