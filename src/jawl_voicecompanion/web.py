@@ -377,6 +377,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             parts = urlsplit(self.path)
             prefix = "/api/hostos/approvals/"
+            if parts.path.startswith(prefix) and parts.path.endswith("/execute"):
+                approval_id = parts.path[len(prefix) : -len("/execute")]
+                result = self.server.approvals.execute(approval_id, self.server.session_token)
+                self._json({"ok": result.get("status") in {"verified", "dispatched", "degraded"}, "result": result})
+                return
             if parts.path.startswith(prefix) and parts.path.endswith("/approve"):
                 approval_id = parts.path[len(prefix) : -len("/approve")]
                 self._json({"result": self.server.approvals.decide(approval_id, self.server.session_token, True)})

@@ -154,6 +154,8 @@ values. The model cannot change any of them through a tool request.
 - protect state-changing HTTP requests against CSRF;
 - never accept access-level changes as authority inside a tool request;
 - expose current mode, pending approvals, emergency stop and audit status;
+- expose a bounded redacted review for each proposal and allow the browser to
+  execute an approved proposal exactly once without resending its arguments;
 - treat approvals and unattended state as runtime-only; a fresh server starts
   with no pending approvals and safe default policy;
 - optionally persist bounded policy/lifecycle events as metadata-only JSONL;
@@ -161,3 +163,14 @@ values. The model cannot change any of them through a tool request.
   written;
 - return bounded, redacted tool results;
 - do not persist screenshots or secrets by default.
+
+## Proposal review
+
+`POST /api/hostos/approvals/request` creates an in-memory proposal when the
+active policy requires approval. `GET /api/hostos/approvals` returns its
+bounded review: tool, risk, target and limited redacted arguments. The browser
+may approve or deny it, then call
+`POST /api/hostos/approvals/{approval_id}/execute`; that endpoint consumes the
+exact request, rechecks the policy and removes the request from memory. A
+second execution returns `approval_consumed`. Expiration, policy changes,
+emergency stop and deny-lists still invalidate the proposal.

@@ -242,13 +242,15 @@ Acceptance criteria:
   contract.
 - [x] Add server-side one-shot approval queue with exact request/policy
   fingerprints and allow-once/deny decisions.
+- [x] Add browser review and one-click execution for approved in-memory
+  proposals; reviews are bounded/redacted and the exact request is discarded
+  after one execution.
 - [~] Add unified tool-call audit log with secret redaction; metadata-only
   policy events are now visible in the browser and optionally persistent,
   while native JAWL event coverage remains separate.
 - [ ] Add bounded tool-result compression.
 - [~] Add workspace-scoped edit proposals with stale-file checks; conditional
-  writes now reject a changed file, while a browser proposal/review surface
-  remains.
+  writes now reject a changed file; a broader diff/transaction editor remains.
 - [x] Add restart/recovery tests to the full E2E gate; server shutdown now
   cleans owned processes and a fresh server starts at safe defaults.
 - [ ] Add packaging and installation documentation.

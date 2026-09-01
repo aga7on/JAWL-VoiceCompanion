@@ -32,6 +32,11 @@ class WebTests(unittest.TestCase):
         with urlopen(self.base + path, timeout=2) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def get_json_auth(self, path):
+        request = Request(self.base + path, headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
     def post_json(self, path, payload):
         request = Request(
             self.base + path,
@@ -59,6 +64,9 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"/api/tts/cancel", frontend)
             self.assertIn(b"AbortController", frontend)
             self.assertIn(b"bargeInTriggered", frontend)
+            self.assertIn(b"/api/hostos/approvals/", frontend)
+            self.assertIn(b"/execute", frontend)
+            self.assertIn("Выполнить предложение".encode("utf-8"), frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
 
@@ -214,6 +222,28 @@ class WebTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(replay["result"]["status"], "approval_required")
+
+    def test_browser_proposal_review_and_execute_flow(self):
+        self.post_json("/api/hostos/level", {"level": 3})
+        request_payload = {
+            "request": {
+                "tool": "shell.exec",
+                "risk": "shell",
+                "arguments": {"argv": ["echo", "secret-value"]},
+            }
+        }
+        _, pending = self.post_json("/api/hostos/approvals/request", request_payload)
+        approval_id = pending["result"]["approval_id"]
+        _, listed = self.get_json_auth("/api/hostos/approvals")
+        proposal = next(item for item in listed["approvals"] if item["approval_id"] == approval_id)
+        self.assertEqual(proposal["review"]["arguments"]["argv"][1], "[redacted]")
+        self.post_json(f"/api/hostos/approvals/{approval_id}/approve", {})
+        _, approved = self.get_json_auth("/api/hostos/approvals")
+        self.assertEqual(next(item for item in approved["approvals"] if item["approval_id"] == approval_id)["status"], "approved")
+        _, executed = self.post_json(f"/api/hostos/approvals/{approval_id}/execute", {})
+        self.assertEqual(executed["result"]["status"], "degraded")
+        _, replay = self.post_json(f"/api/hostos/approvals/{approval_id}/execute", {})
+        self.assertEqual(replay["result"]["status"], "approval_consumed")
 
     def test_invalid_level_is_rejected(self):
         request = Request(

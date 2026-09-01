@@ -55,6 +55,23 @@ class ApprovalStoreTests(unittest.TestCase):
         self.assertFalse(result["approved"])
         self.assertEqual(result["reason"], "request_changed_after_approval")
 
+    def test_approved_proposal_executes_once_and_drops_request(self):
+        store, executor = self.make_store()
+        request = ToolRequest(
+            tool="shell.exec",
+            risk=RiskClass.SHELL,
+            arguments={"argv": ["echo", "secret-value"]},
+        )
+        approval_id = store.request(request, "session-a")["approval_id"]
+        review = store.list("session-a")[0]["review"]
+        self.assertEqual(review["arguments"]["argv"][1], "[redacted]")
+        store.decide(approval_id, "session-a", True)
+        result = store.execute(approval_id, "session-a")
+        self.assertEqual(result["status"], "degraded")
+        self.assertEqual(store.execute(approval_id, "session-a")["status"], "approval_consumed")
+        self.assertNotIn("secret-value", str(store.list("session-a")))
+        self.assertEqual(executor.policy.audit()[-1]["type"], "TOOL_AUTHORIZATION")
+
     def test_policy_change_invalidates_approval(self):
         store, executor = self.make_store()
         request = ToolRequest(tool="shell.exec", risk=RiskClass.SHELL, arguments={"argv": ["echo", "x"]})
@@ -68,4 +85,3 @@ class ApprovalStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

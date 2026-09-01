@@ -9,6 +9,8 @@
   turn can stop both playback and active server-side synthesis.
 - Added bounded file snapshots with SHA-256 conditional workspace writes;
   changed files now fail with `stale_file` instead of being silently replaced.
+- Added a browser review/execution path for one-shot HostOS proposals; reviews
+  are bounded/redacted and the in-memory request is dropped after execution.
 - Added a bounded browser barge-in trigger: clear microphone activity cancels
   active TTS playback/request once, while VoiceMem remains the final turn and
   interruption classifier.

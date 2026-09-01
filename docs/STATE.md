@@ -39,8 +39,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the avatar launcher port-conflict guard.
-- Latest feature commit: `2c796ad` (`fix: guard avatar launcher against websocket port conflicts`).
+- Working tree: clean after the browser proposal/review execution slice.
+- Latest feature commit: pending (`feat: add browser proposal review execution`).
 
 ## Completed in this repository
 
@@ -155,7 +155,11 @@ separate CPU/RAM test completes.
 - The browser now renders the last bounded HostOS audit events; `/api/audit`
   requires the browser session and policy audit entries exclude arguments and
   raw command output. The CLI now persists allowlisted metadata to bounded
-  JSONL and the browser can recover those events after restart.
+ JSONL and the browser can recover those events after restart.
+- The approval queue now exposes bounded/redacted proposal reviews and a
+  browser-only one-shot execution route; approved requests are removed from
+  memory after execution, while policy rechecks and stale-file protection stay
+  active.
 - `JawlWebChatAdapter` now treats an HTTP reader exception caused by concurrent
   response close as normal cancellation; a regression test protects the
   daemon reader from leaking a traceback.
@@ -321,8 +325,8 @@ focused concurrency/cancellation regression tests. No TTS model is selected
 in this session; first-audio streaming remains pending.
 
 The current HostOS follow-up adds bounded file snapshots and conditional
-workspace writes with stale-file rejection. A browser proposal/review surface
-and broader edit transaction workflow remain pending.
+workspace writes with stale-file rejection, plus a browser proposal/review and
+one-shot execution surface. A broader diff/transaction editor remains pending.
 
 The current voice follow-up adds an authenticated TTS cancel route, browser
 request abort and a one-shot RMS barge-in trigger. VoiceMem classification,
@@ -341,7 +345,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 122 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 124 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the

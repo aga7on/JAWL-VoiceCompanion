@@ -173,21 +173,33 @@
       }
       const approvalBox = document.querySelector('#approvals');
       approvalBox.replaceChildren();
-      const pending = approvalData.approvals.filter(item => item.status === 'pending');
-      if (!pending.length) {
+      const activeApprovals = approvalData.approvals.filter(item => ['pending', 'approved'].includes(item.status));
+      if (!activeApprovals.length) {
         approvalBox.textContent = 'Нет ожидающих запросов.';
       } else {
-        for (const item of pending) {
+        for (const item of activeApprovals) {
           const row = document.createElement('div');
           row.className = 'message';
-          row.textContent = `${item.summary} · до ${item.expires_at}`;
-          const approve = document.createElement('button');
-          approve.textContent = 'Разрешить один раз';
-          approve.onclick = async () => { await apiPost(`/api/hostos/approvals/${item.approval_id}/approve`, {}); refresh(); };
-          const deny = document.createElement('button');
-          deny.textContent = 'Отклонить';
-          deny.onclick = async () => { await apiPost(`/api/hostos/approvals/${item.approval_id}/deny`, {}); refresh(); };
-          row.append(' ', approve, ' ', deny);
+          const title = document.createElement('div');
+          title.textContent = `${item.summary} · статус: ${item.status} · до ${item.expires_at}`;
+          const review = document.createElement('pre');
+          review.className = 'meta';
+          review.textContent = JSON.stringify(item.review || {}, null, 2);
+          row.append(title, review);
+          if (item.status === 'pending') {
+            const approve = document.createElement('button');
+            approve.textContent = 'Разрешить один раз';
+            approve.onclick = async () => { await apiPost(`/api/hostos/approvals/${item.approval_id}/approve`, {}); refresh(); };
+            const deny = document.createElement('button');
+            deny.textContent = 'Отклонить';
+            deny.onclick = async () => { await apiPost(`/api/hostos/approvals/${item.approval_id}/deny`, {}); refresh(); };
+            row.append(' ', approve, ' ', deny);
+          } else if (item.status === 'approved') {
+            const execute = document.createElement('button');
+            execute.textContent = 'Выполнить предложение';
+            execute.onclick = async () => { await apiPost(`/api/hostos/approvals/${item.approval_id}/execute`, {}); refresh(); };
+            row.append(' ', execute);
+          }
           approvalBox.appendChild(row);
         }
       }
