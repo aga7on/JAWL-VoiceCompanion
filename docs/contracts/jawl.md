@@ -84,6 +84,15 @@ They are inspection surfaces, not a second memory editor. Writes to persona,
 traits, drives or facts will be added only after a versioned JAWL write
 contract and audit path are agreed.
 
+The current JAWL web server confirms the boundary: it exposes `PUT
+/api/config` for allow-listed YAML settings and `PUT /api/drives` for custom
+drive tuning, but it has no HTTP CRUD route for `personality_traits`, facts or
+vector/graph records. Trait CRUD currently lives inside JAWL's SQL skill and
+the operator database screen. The companion therefore does not reach into
+JAWL's SQLite/Vector/Graph files or invent a parallel fact store. A future
+write adapter must be versioned against an upstream JAWL endpoint or event
+contract and must carry its own audit/correction semantics.
+
 The unauthenticated loopback `GET /api/doctor` surface is separate from JAWL
 inspection. It reports bounded readiness states for all configured components,
 with `text_mode_available=true` whenever the companion gateway can still serve

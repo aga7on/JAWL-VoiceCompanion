@@ -103,6 +103,8 @@ Acceptance criteria:
   observations and episode candidates.
 - [ ] Define bounded core memory.
 - [x] Add a read-only JAWL bridge for bounded memory/persona inspection.
+- [!] Add JAWL trait/fact write bridge only after upstream exposes a versioned
+  HTTP/event contract; the current web console has no trait/fact CRUD route.
 - [ ] Define archival recall through JAWL Vector/Graph.
 - [ ] Add fact provenance, confidence and epistemic type.
 - [ ] Add `insert`, `patch`, `remove`, `archive` and `supersedes` operations.

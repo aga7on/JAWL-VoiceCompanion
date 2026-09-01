@@ -152,6 +152,10 @@ separate CPU/RAM test completes.
 - The optional JAWL web bridge reads existing `/api/agent/status`, `/api/tick`,
   `/api/db/stats`, `/api/drives` and `/api/config` routes, filters config
   secrets and exposes session-protected inspection routes to the browser.
+- The upstream API audit confirms there is no stable HTTP CRUD surface for
+  JAWL personality traits or facts; those remain JAWL-internal SQL skills/UI.
+  The companion will not access the databases directly or create a duplicate
+  durable memory store.
 - The browser now renders the last bounded HostOS audit events; `/api/audit`
   requires the browser session and policy audit entries exclude arguments and
   raw command output. The CLI now persists allowlisted metadata to bounded
@@ -327,6 +331,11 @@ in this session; first-audio streaming remains pending.
 The current HostOS follow-up adds bounded file snapshots and conditional
 workspace writes with stale-file rejection, plus a browser proposal/review and
 one-shot execution surface. A broader diff/transaction editor remains pending.
+
+The JAWL write-surface audit is intentionally conservative: configuration and
+drive endpoints exist upstream, but trait/fact CRUD is not exposed as a
+versioned web/event contract. Keep the companion bridge read-only for those
+records until that contract exists.
 
 The current voice follow-up adds an authenticated TTS cancel route, browser
 request abort and a one-shot RMS barge-in trigger. VoiceMem classification,
