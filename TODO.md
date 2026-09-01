@@ -58,8 +58,9 @@ Acceptance criteria:
 - [~] Implement ordered parallel TTS queue; the model-neutral CozyVoice REST
   adapter now runs up to three sentence requests concurrently and merges WAV
   chunks in source order. First-audio streaming remains pending.
-- [~] Implement latest-request-wins synthesis cancellation; browser playback
-  cancellation and barge-in integration remain.
+- [~] Implement latest-request-wins synthesis cancellation; the browser now
+  aborts playback/request and calls the explicit cancel route, while barge-in
+  integration remains.
 - [ ] Add half-duplex hands-free mode.
 - [ ] Add barge-in capture and interruption classification.
 - [ ] Benchmark first-audio latency and Russian prosody.

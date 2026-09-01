@@ -593,6 +593,10 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(
             sorted(item["text"] for item in _TTSHandler.requests), ["Как дела?", "Привет."]
         )
+        status, cancelled = self.post_json("/api/tts/cancel", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(cancelled["ok"])
+        self.assertEqual(cancelled["status"], "cancelled")
 
         self.post_json("/api/hostos/level", {"level": int(AccessLevel.ROOT)})
         request = {

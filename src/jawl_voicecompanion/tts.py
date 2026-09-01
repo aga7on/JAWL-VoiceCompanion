@@ -161,6 +161,10 @@ class TTSService:
                     self._active = None
 
     def close(self) -> None:
+        self.cancel()
+
+    def cancel(self) -> None:
+        """Cancel the active synthesis without closing the provider."""
         with self._lock:
             self._generation += 1
             if self._active is not None:

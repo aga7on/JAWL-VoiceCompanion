@@ -334,6 +334,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 audio = self.server.tts.synthesize(text, voice=voice, speed=float(speed))
                 self._audio(audio)
                 return
+            if self.path == "/api/tts/cancel":
+                if self.server.tts is not None:
+                    self.server.tts.cancel()
+                self._json({"ok": True, "status": "cancelled"})
+                return
             if self.path == "/api/hostos/execute":
                 raw_request = payload.get("request", payload)
                 if not isinstance(raw_request, dict):

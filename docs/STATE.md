@@ -183,10 +183,11 @@ separate CPU/RAM test completes.
   installed or cannot initialize.
 - VoiceMem's current default streaming ASR should not be assumed to be the
   final Russian ASR choice; a benchmark is required.
-- The CozyVoice REST adapter now uses at most three concurrent sentence
-  requests and merges compatible WAV chunks in source order. The provider
-  remains model-neutral; the upstream `stream` path, selected model startup,
-  latency and first-audio playback still require validation.
+- The model-neutral REST TTS adapter now uses at most three concurrent
+  sentence requests, merges compatible WAV chunks in source order, and
+  exposes explicit cancellation. The browser aborts stale playback requests;
+  the upstream `stream` path, selected model startup, latency and first-audio
+  playback still require validation.
 - The local OmniVoice directory currently does not expose a ready project/API
   layer; model and integration details must be confirmed before adapter work.
 - The 2026-09-01 local model inventory exposed only two Ollama profiles:
@@ -308,8 +309,9 @@ and benchmark protocol with unit coverage;
 Vision/VLM remains model-neutral and paused by explicit decision.
 
 The current TTS follow-up adds bounded parallel sentence requests with
-source-order merge and a focused concurrency regression test. No TTS model is
-selected in this session; first-audio streaming remains pending.
+source-order merge, explicit server cancellation, browser request abort and
+focused concurrency/cancellation regression tests. No TTS model is selected
+in this session; first-audio streaming remains pending.
 
 The latest HostOS hardening separates level 3 current-user capability from an
 explicit ROOT-only `unattended` switch. Background/Heartbeat tool calls can
@@ -324,7 +326,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 120 unit tests and 10 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 121 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the

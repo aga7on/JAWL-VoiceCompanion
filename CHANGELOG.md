@@ -5,6 +5,8 @@
 - Added bounded model-neutral parallel sentence synthesis to the CozyVoice
   adapter while preserving source-order WAV output; TTS model selection and
   first-audio streaming remain separate follow-up work.
+- Added an authenticated TTS cancel route and browser request abort so a new
+  turn can stop both playback and active server-side synthesis.
 
 - Added an opt-in authenticated JAWL HostOS control bridge: level 0–3 now
   writes the native JAWL fields, restarts the JAWL agent and changes the local

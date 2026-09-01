@@ -44,6 +44,29 @@ class TTSServiceTests(unittest.TestCase):
         self.assertIsInstance(result[0], TTSCancelled)
         self.assertEqual(calls, ["старый", "новый"])
 
+    def test_explicit_cancel_stops_active_generation(self):
+        started = threading.Event()
+
+        class Provider:
+            def synthesize(self, text, *, voice=None, speed=1.0, cancel_event=None):
+                del text, voice, speed
+                started.set()
+                while not cancel_event.is_set():
+                    time.sleep(0.005)
+                raise TTSCancelled()
+
+        service = TTSService(Provider())
+        result = []
+        worker = threading.Thread(
+            target=lambda: result.append(self._capture(lambda: service.synthesize("ожидание"))),
+            daemon=True,
+        )
+        worker.start()
+        self.assertTrue(started.wait(1))
+        service.cancel()
+        worker.join(1)
+        self.assertIsInstance(result[0], TTSCancelled)
+
     def test_cozyvoice_synthesizes_sentences_in_parallel_but_merges_in_order(self):
         first_started = threading.Event()
         release_first = threading.Event()

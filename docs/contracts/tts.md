@@ -22,11 +22,19 @@ replacing the TTS model does not change this contract. The current endpoint is
 still whole-response, so playback begins only after the merged WAV is ready;
 first-audio streaming remains a separate latency task.
 
+`POST /api/tts/cancel` accepts the authenticated session/CSRF pair and
+invalidates the active synthesis, if any. It is idempotent and returns a
+bounded JSON acknowledgement; it does not unload the provider or select a
+different model.
+
 ## Cancellation and failure
 
-`TTSService` is latest-request-wins. A newer request marks the older provider
-call stale; providers check the cancellation event between chunks and the
-service never returns stale audio. A superseded HTTP request returns `409`.
+`TTSService` is latest-request-wins. A newer request or explicit cancel marks
+the older provider call stale; providers check the cancellation event between
+chunks and the service never returns stale audio. A superseded HTTP request
+returns `409`. Browser playback cancellation aborts the client request and
+then sends the explicit cancel operation, so a new turn does not leave the
+previous synthesis active by design.
 Provider or malformed-audio failures return `503` and leave text chat usable.
 
 The CozyVoice adapter accepts only the local REST base URL, sends no API key,

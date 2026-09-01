@@ -95,6 +95,7 @@
     let voiceQueue = Promise.resolve();
     let ttsConfigured = false;
     let currentAudio = null;
+    let ttsAbort = null;
     function addMessage(who, text) {
       const item = document.createElement('div');
       item.className = 'message';
@@ -193,18 +194,32 @@
     async function apiPost(path, body) {
       return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
     }
-    function stopSpeech() {
-      if (!currentAudio) return;
-      currentAudio.pause();
-      currentAudio.currentTime = 0;
-      URL.revokeObjectURL(currentAudio.src);
-      currentAudio = null;
+    async function stopSpeech() {
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        URL.revokeObjectURL(currentAudio.src);
+        currentAudio = null;
+      }
+      const request = ttsAbort;
+      ttsAbort = null;
+      if (request) request.abort();
+      if (ttsConfigured && Object.keys(sessionHeaders).length) {
+        try { await apiPost('/api/tts/cancel', {}); } catch (_) { /* text mode remains usable */ }
+      }
     }
     async function speak(text) {
       if (!ttsConfigured || !text) return;
-      stopSpeech();
+      await stopSpeech();
+      const controller = new AbortController();
+      ttsAbort = controller;
       try {
-        const response = await apiPost('/api/tts/synthesize', {text});
+        const response = await fetch('/api/tts/synthesize', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', ...sessionHeaders},
+          body: JSON.stringify({text}),
+          signal: controller.signal
+        });
         if (!response.ok) return;
         const url = URL.createObjectURL(await response.blob());
         const audio = new Audio(url);
@@ -212,7 +227,10 @@
         audio.onended = () => { URL.revokeObjectURL(url); if (currentAudio === audio) currentAudio = null; };
         await audio.play();
       } catch (error) {
+        if (error.name === 'AbortError') return;
         document.querySelector('#tts-status').textContent = `TTS не воспроизведён: ${error.message}`;
+      } finally {
+        if (ttsAbort === controller) ttsAbort = null;
       }
     }
     function downsample(samples, fromRate, toRate) {
@@ -312,7 +330,7 @@
     document.querySelector('#send').addEventListener('click', async () => {
       const text = input.value.trim();
       if (!text) return;
-      stopSpeech();
+      await stopSpeech();
       addMessage('Ты', text);
       input.value = '';
       const response = await apiPost('/api/chat', {text});
