@@ -24,8 +24,9 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the current full-gate verification.
-- Latest feature commit: `2112998` (`test: enforce full cross-layer gate`).
+- Working tree: changes from the state-sync update are uncommitted until the
+  final full-gate verification passes.
+- Latest feature commit: `663fb71` (`feat: add correlated JAWL web chat`).
 
 ## Completed in this repository
 
@@ -193,7 +194,7 @@ HTTP E2E tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
-The working tree is clean after the next feature commit; the preceding microphone
+The working tree is clean after the state-sync commit; the preceding microphone
 slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
