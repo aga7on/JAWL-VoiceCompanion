@@ -256,6 +256,12 @@ workflows, while semantic watcher tuning remains.
   45.7 px calibrated UI mean error), while Qwen3.8-27B reaches good image/video
   descriptions only at roughly 27 GB RSS and 2.8 tok/s. Qwen3.8 is therefore
   optional on-demand, not a continuous watcher model.
+- The installed Ternary Bonsai text family was checked for the deferred
+  ambient-memory worker. Bonsai 1.7B PQ2 measured 1.29 GB peak RSS and
+  50.7 tok/s in the plain completion smoke; its chat smoke passed the four
+  basic fact/math/instruction/context checks. Bonsai 4B and 8B use 2.54 GB/
+  4.24 GB and are slower, so 1.7B is the first candidate for asynchronous
+  TTL-bounded memory compression, not for canonical chat or ASR.
 - Qwen3-ASR-0.6B was rerun from the moved `models/qwen3-asr` directory at
   RTF 0.15–0.16. It transcribed local Russian TTS welcome phrases correctly;
   synthetic poem samples still contain word/ending errors, and real Russian

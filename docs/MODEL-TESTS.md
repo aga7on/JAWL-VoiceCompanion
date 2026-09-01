@@ -94,6 +94,26 @@ therefore keeps VoiceMem as the streaming lifecycle, VAD and memory sidecar,
 while Qwen3-ASR remains the Russian recognizer until a true streaming Russian
 provider is validated.
 
+## Ternary Bonsai text workers
+
+The installed Ternary Bonsai family was checked for the deferred ambient-memory
+compression role. These are text-only workers, so they do not compete with the
+VLM path for image/video work:
+
+| Profile | Load | Peak RAM | Plain completion | Chat smoke |
+| --- | ---: | ---: | ---: | --- |
+| Bonsai 1.7B PQ2 | 3.0 s | 1.29 GB | 50.7 tok/s | 4/4 basic checks passed |
+| Bonsai 4B PQ2 | 1.4 s | 2.54 GB | 25.2 tok/s | 4/4 basic checks passed |
+| Bonsai 8B PQ2 | 1.8 s | 4.24 GB | 14.5 tok/s | 4/4 checks, but verbose/repetitive in plain completion |
+
+The chat smoke covered a fact, arithmetic, exact-list instruction and a
+context question. Decision: use Bonsai 1.7B as the first optional RAM-resident
+worker for delayed ambient summarization/importance scoring. It must remain
+asynchronous and bounded by a TTL; it is not the canonical chat model, not the
+Russian ASR and not the Vision model. Bonsai 4B/8B stay available for later
+quality comparisons, but their extra memory and lower throughput do not justify
+placing them in the real-time loop now.
+
 ## Additional installed VLM candidate: Qwen3.8-27B
 
 The workstation also has a Qwen3.8-27B Q4_K_M plus F16 mmproj in the local
