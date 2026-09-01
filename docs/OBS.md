@@ -35,3 +35,24 @@ The current visual is a dependency-free placeholder used to verify the
 transparent surface and lifecycle. The next avatar milestone replaces it
 with a redistributable or user-supplied 2D Live2D model without changing the
 OBS URL or backend ownership boundaries.
+
+## Explicit screen look
+
+The control panel also exposes an explicit, on-demand vision request. It
+captures the focused window through HostOS and sends the transient JPEG to an
+OpenAI-compatible endpoint only when all three options are configured:
+
+```powershell
+.\scripts\run_web.ps1 --hostos-live --screen-enabled `
+  --vision-url "http://127.0.0.1:8000/v1" --vision-model "local-vlm"
+```
+
+The endpoint can use an API key from the environment named by
+`--vision-api-key-env` (default: `VISION_API_KEY`). The key is never rendered
+in the UI or logs. The same frame digest is not sent to the VLM twice unless
+the request is explicitly forced; the bridge keeps only a digest and the
+bounded last description in memory.
+
+This is not yet a passive real-time watcher. Change detection, cooldown and
+the `SCREEN_DELTA` event are the foundation for that later Attention/Presence
+loop; the user must still request each look from the panel in this slice.

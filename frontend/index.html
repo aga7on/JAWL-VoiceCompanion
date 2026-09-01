@@ -47,6 +47,11 @@
       <input id="obs-url" type="text" readonly aria-label="OBS URL" style="width: 100%; box-sizing: border-box; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
       <button id="copy-obs-url">Скопировать ссылку</button>
       <span id="copy-obs-status" class="meta"></span>
+      <h2>Зрение</h2>
+      <p id="vision-status" class="meta">Проверка vision-контура…</p>
+      <textarea id="vision-prompt" rows="2" placeholder="Что проверить на сфокусированном окне?"></textarea>
+      <button id="vision-look">Посмотреть окно</button>
+      <pre id="vision-result" class="meta"></pre>
       <h2>Состояние</h2>
       <pre id="health">Загрузка…</pre>
     </section>
@@ -65,18 +70,23 @@
       messages.scrollTop = messages.scrollHeight;
     }
     async function refresh() {
-      const [state, status, approvalResponse] = await Promise.all([
+      const [state, status, approvalResponse, visionStatus] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/health'),
-        fetch('/api/hostos/approvals', {headers: sessionHeaders})
+        fetch('/api/hostos/approvals', {headers: sessionHeaders}),
+        fetch('/api/vision/status')
       ]);
       const stateData = await state.json();
       const statusData = await status.json();
       const approvalData = approvalResponse.ok ? await approvalResponse.json() : {approvals: []};
+      const visionStatusData = visionStatus.ok ? await visionStatus.json() : {configured: false};
       document.querySelector('#level').textContent = stateData.policy.active_level;
       document.querySelector('#level-name').textContent = stateData.policy.active_name;
       document.querySelector('#level-select').value = stateData.policy.active_level;
       health.textContent = JSON.stringify(statusData, null, 2);
+      document.querySelector('#vision-status').textContent = visionStatusData.configured
+        ? `Vision endpoint готов · screen ${visionStatusData.screen_enabled ? 'включён' : 'выключен'} · cooldown ${visionStatusData.cooldown_seconds} с`
+        : `Vision endpoint не настроен; экран остаётся локальным (${visionStatusData.screen_enabled ? 'capture включён' : 'capture выключен'}).`;
       const approvalBox = document.querySelector('#approvals');
       approvalBox.replaceChildren();
       const pending = approvalData.approvals.filter(item => item.status === 'pending');
@@ -138,6 +148,22 @@
       } catch (error) {
         obsUrl.select();
         document.querySelector('#copy-obs-status').textContent = 'Скопируйте ссылку вручную (Ctrl+C).';
+      }
+    });
+    document.querySelector('#vision-look').addEventListener('click', async () => {
+      const prompt = document.querySelector('#vision-prompt').value.trim();
+      const resultBox = document.querySelector('#vision-result');
+      if (!prompt) {
+        resultBox.textContent = 'Введите вопрос для vision-модуля.';
+        return;
+      }
+      resultBox.textContent = 'Захватываю сфокусированное окно…';
+      try {
+        const response = await apiPost('/api/vision/look', {prompt});
+        const data = await response.json();
+        resultBox.textContent = data.result?.description || data.result?.reason || data.error || 'Нет результата.';
+      } catch (error) {
+        resultBox.textContent = `Vision недоступен: ${error.message}`;
       }
     });
     bootstrap();

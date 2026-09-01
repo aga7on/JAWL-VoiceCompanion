@@ -115,11 +115,14 @@ Acceptance criteria:
 - [~] Add explicit `vision__look` model tool; the HostOS `screen.observe`
   capture seam exists, while the model bridge is still pending.
 - [ ] Add capture request/response bridge when frontend owns capture.
-- [ ] Add change detection, significance and cooldown.
+- [~] Add change detection, significance and cooldown; digest deduplication
+  and explicit-look cooldown are implemented, while significance scoring and
+  passive event production remain.
 - [~] Add app deny-list and sensitive-window redaction policy; title/class
   blocking is present, while pixel-level redaction remains pending.
-- [ ] Discard raw screenshots after analysis by default.
-- [ ] Store only bounded textual observations and metadata.
+- [x] Discard raw screenshots after analysis by default.
+- [~] Store only bounded textual observations and metadata; the explicit bridge
+  keeps only an in-memory digest and bounded last description.
 
 Acceptance criteria:
 

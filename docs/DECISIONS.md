@@ -133,3 +133,22 @@ Live2D runtime yet. A later Live2D renderer will replace the placeholder in
 the same route and will use response-envelope avatar state, expression and
 subtitle fields. Native always-on-top window chrome is deferred until the web
 surface and Live2D lifecycle are stable.
+
+## ADR-012 — Provider-neutral explicit vision bridge
+
+Status: Accepted
+Date: 2026-09-01
+
+Screen descriptions use a small provider-neutral bridge rather than importing
+JAWL's internal multimodality implementation. The bridge accepts an
+OpenAI-compatible chat-completions endpoint and sends a bounded transient
+`image_url` payload. This matches the multimodal contract already used by the
+local JAWL/QWB path while keeping credentials, model selection and failure
+handling local to the companion adapter.
+
+The bridge is reachable only through an explicit web request in the current
+slice. It deduplicates identical frames and applies a cooldown before a new
+description. It stores no image, title or raw provider response; only a short
+in-memory digest and bounded last description are retained for coalescing. A
+future ambient sensor may emit `SCREEN_DELTA`, but it must still pass the same
+HostOS permission, deny-list and resource-budget gates.

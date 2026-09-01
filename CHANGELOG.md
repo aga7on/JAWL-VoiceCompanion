@@ -32,3 +32,5 @@
   capture and OBS, plus a copyable URL in the control panel.
 - Added an explicit, opt-in focused-window `screen.observe` adapter with
   bounded transient JPEG output and sensitive/companion window blocking.
+- Added an OpenAI-compatible vision bridge, `/api/vision/look`, duplicate-frame
+  suppression and a cooldown-aware browser vision control.

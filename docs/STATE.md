@@ -92,7 +92,7 @@ available only through an explicitly constructed live executor.
 - select the first redistributable or user-supplied Live2D model;
 - finish the browser settings, memory and audit views;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
-- connect the screen snapshot to a VLM description bridge and change detector;
+- finish the passive screen change detector and `SCREEN_DELTA` producer;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -100,23 +100,24 @@ available only through an explicitly constructed live executor.
 
 ## Latest work session
 
-Changed `src/jawl_voicecompanion/screen_adapter.py`, `hostos_tools.py`,
-`__main__.py`, package exports and screen/HostOS tests, plus `README.md`,
-`TODO.md`, `docs/contracts/hostos.md` and `CHANGELOG.md`.
+Changed `src/jawl_voicecompanion/vision.py`, `web.py`, `__main__.py`,
+`frontend/index.html`, vision/HostOS tests, and the OBS/architecture/
+HostOS documentation.
 
-Verification: `scripts/run_tests.ps1` passed 40 tests; `git diff --check`
+Verification: `scripts/run_tests.ps1` passed 44 tests; `git diff --check`
 reported no whitespace errors.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
-model yet. The web server's default executor remains dry-run; the screen
-adapter is snapshot-only and the VLM bridge, passive change detection,
-pixel-level redaction and TTS/audio cancellation are still pending. The
-native always-on-top desktop-pet shell is also deferred.
+model yet. The web server's default executor remains dry-run and no VLM
+endpoint is configured by default; passive change detection, significance
+scoring, pixel-level redaction and TTS/audio cancellation are still pending.
+The native always-on-top desktop-pet shell is also deferred.
 
 ## Next action
 
 Exercise the JAWL adapter against the actual local process. Then implement the
-VLM description/change-detection bridge and select the first Live2D asset/runtime.
+passive `SCREEN_DELTA` producer and connect vision output to the Attention/
+Presence layer before selecting the first Live2D asset/runtime.
 TTS/audio cancellation remains required before the voice loop.
 
 ## State update protocol

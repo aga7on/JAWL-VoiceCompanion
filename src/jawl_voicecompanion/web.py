@@ -14,6 +14,7 @@ from .approvals import ApprovalStore
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .models import ToolRequest
+from .vision import VisionLookService
 
 
 MAX_BODY_BYTES = 64 * 1024
@@ -28,10 +29,12 @@ class CompanionServer(ThreadingHTTPServer):
         frontend_dir: Path,
         gateway: TextGateway,
         hostos_executor: HostOSExecutor,
+        vision_service: VisionLookService,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
         self.hostos = hostos_executor
+        self.vision = vision_service
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -57,6 +60,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/hostos/tools":
             self._json({"dry_run": self.server.hostos.dry_run, "tools": self.server.hostos.list_tools()})
+            return
+        if path == "/api/vision/status":
+            self._json(self.server.vision.status())
             return
         if path == "/api/hostos/approvals":
             try:
@@ -112,6 +118,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self.server.session_token,
                 )
                 self._json({"ok": result["status"] == "approval_required", "result": result})
+                return
+            if self.path == "/api/vision/look":
+                prompt = payload.get("prompt", "")
+                force = payload.get("force", False)
+                if not isinstance(force, bool):
+                    raise ValueError("force must be boolean")
+                result = self.server.vision.look(
+                    prompt,
+                    force=force,
+                    session_id=self.server.session_token,
+                )
+                self._json({"ok": result["status"] in {"ok", "unchanged"}, "result": result})
                 return
             parts = urlsplit(self.path)
             prefix = "/api/hostos/approvals/"
@@ -187,6 +205,7 @@ def create_server(
     frontend_dir: Path | None = None,
     gateway: TextGateway | None = None,
     hostos_executor: HostOSExecutor | None = None,
+    vision_describer: Any | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -197,4 +216,10 @@ def create_server(
         host_roots=(Path(__file__).resolve().parents[2],),
         dry_run=True,
     )
-    return CompanionServer((host, port), root, active_gateway, active_executor)
+    return CompanionServer(
+        (host, port),
+        root,
+        active_gateway,
+        active_executor,
+        VisionLookService(active_executor, describer=vision_describer),
+    )

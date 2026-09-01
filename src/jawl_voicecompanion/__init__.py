@@ -8,6 +8,7 @@ from .approvals import ApprovalStore
 from .models import AccessLevel, RiskClass, ToolRequest
 from .arbiter import TurnArbiter, TurnPriority
 from .screen_adapter import ScreenCaptureAdapter
+from .vision import OpenAICompatibleVisionClient, VisionLookService
 
 __all__ = [
     "AccessLevel",
@@ -22,4 +23,6 @@ __all__ = [
     "TurnArbiter",
     "TurnPriority",
     "ScreenCaptureAdapter",
+    "OpenAICompatibleVisionClient",
+    "VisionLookService",
 ]

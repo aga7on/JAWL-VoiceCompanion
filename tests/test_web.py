@@ -57,6 +57,17 @@ class WebTests(unittest.TestCase):
         self.assertTrue(session["session_token"])
         self.assertTrue(session["csrf_token"])
 
+    def test_vision_status_and_dry_run_look_are_available(self):
+        status, vision = self.get_json("/api/vision/status")
+        self.assertEqual(status, 200)
+        self.assertFalse(vision["configured"])
+        self.post_json("/api/hostos/level", {"level": 1})
+        status, result = self.post_json("/api/vision/look", {"prompt": "Что видно?"})
+        self.assertEqual(status, 200)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["result"]["status"], "degraded")
+        self.assertNotIn("image", result["result"])
+
     def test_chat_and_level_change_work(self):
         status, response = self.post_json("/api/chat", {"text": "Привет"})
         self.assertEqual(status, 200)

@@ -270,6 +270,14 @@ There are two separate paths:
 2. explicit `vision__look` tool when the model or user genuinely needs a
    fresh frame.
 
+The current implementation provides the second path through
+`/api/vision/look`. It invokes the HostOS `screen.observe` snapshot, hashes
+the transient image in memory, suppresses identical frames and enforces a
+short cooldown before a new VLM request. A provider-neutral
+OpenAI-compatible client sends the image as a bounded `image_url` payload and
+returns only a bounded description. The ambient `SCREEN_DELTA` producer is
+still a later Attention/Presence component.
+
 ## Model profiles
 
 The runtime should distinguish:
