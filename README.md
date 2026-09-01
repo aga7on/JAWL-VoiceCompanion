@@ -106,6 +106,7 @@ for cancellation and priority.
 - [docs/contracts/jawl.md](docs/contracts/jawl.md) — read-only JAWL bridge contract;
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
 
+The Live2D bundle contract is specified in [docs/contracts/avatar.md](docs/contracts/avatar.md).
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).
 OBS setup is documented in [docs/OBS.md](docs/OBS.md).
 Major cross-layer changes must pass the local HTTP E2E suite via

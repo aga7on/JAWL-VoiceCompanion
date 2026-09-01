@@ -59,3 +59,6 @@
   the payload against the real local JAWL console.
 - Added a session-protected HostOS audit view showing bounded metadata events;
   the browser never receives command arguments or raw execution output.
+- Added backend Live2D model-reference validation for fatal Moc/texture files,
+  explicit `ready`/warning diagnostics and a documented tiny renderer plugin
+  contract, keeping Pixi/Cubism and character assets out of the core repo.

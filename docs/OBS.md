@@ -59,10 +59,14 @@ window.Live2DCompanionRuntime = {
 };
 ```
 
-The `/avatar` page loads this adapter only when both files exist. Any missing
-or incompatible runtime keeps the placeholder active; add `?debug=1` to see
-the fallback reason. Model files are served read-only from the explicit asset
-root and are not copied into this repository.
+The model JSON must also reference an existing Moc and at least one texture.
+The backend validates those fatal references relative to the model file and
+reports the result through `/api/avatar/config`; missing optional motion or
+expression files are warnings. The `/avatar` page loads this adapter only
+when the bundle is `ready`. Any missing or incompatible runtime keeps the
+placeholder active; add `?debug=1` to see the fallback reason. Model files are
+served read-only from the explicit asset root and are not copied into this
+repository. The complete contract is in [contracts/avatar.md](contracts/avatar.md).
 
 ## Explicit screen look
 

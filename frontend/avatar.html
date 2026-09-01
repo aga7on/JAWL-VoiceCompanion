@@ -69,7 +69,16 @@
       try {
         const response = await fetch('/api/avatar/config', {cache: 'no-store'});
         const config = await response.json();
-        if (!config.enabled) return;
+        if (!config.ready) {
+          if (showDebug) {
+            const warnings = (config.validation?.warnings || []).join(', ');
+            const missing = (config.validation?.missing || []).length;
+            debug.textContent = config.enabled
+              ? `Live2D fallback · model is not renderable${missing ? ` · missing: ${missing}` : ''}${warnings ? ` · ${warnings}` : ''}`
+              : 'Live2D fallback · asset bundle is not configured';
+          }
+          return;
+        }
         await loadScript(config.runtime_url);
         const factory = window.Live2DCompanionRuntime?.create;
         if (typeof factory !== 'function') throw new Error('runtime не предоставил Live2DCompanionRuntime.create');

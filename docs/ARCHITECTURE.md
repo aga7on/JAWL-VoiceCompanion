@@ -173,9 +173,10 @@ state:
 
 The avatar surface polls `/api/state` and renders the last response's bounded
 text, state and expression. It has no state-changing controls and does not
-receive session credentials. The current renderer is a dependency-free visual
-placeholder; the Live2D canvas will replace only this presentation layer and
-will keep JAWL, policy and memory ownership in the backend. `?debug=1` enables
+receive session credentials. When an explicit asset bundle passes backend
+model validation, a tiny `Live2DCompanionRuntime` adapter replaces only the
+placeholder canvas; otherwise the dependency-free placeholder remains visible.
+JAWL, policy and memory ownership stay in the backend. `?debug=1` enables
 small diagnostics for local troubleshooting.
 
 The control plane generates the same-origin OBS URL. OBS should use a Browser

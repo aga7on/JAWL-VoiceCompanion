@@ -25,7 +25,7 @@ storage.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `1856b2e` (`feat: expose protected HostOS audit view`).
+- Latest feature commit: pending commit for the Live2D validation slice.
 
 ## Completed in this repository
 
@@ -84,6 +84,9 @@ storage.
 - The optional Live2D asset bridge serves only an explicitly configured root,
   exposes `/api/avatar/config`, loads a user-provided runtime/model pair and
   falls back to the placeholder when the bundle is absent or incompatible.
+- The avatar bridge validates model `FileReferences` relative to the model
+  JSON, reports fatal Moc/texture gaps separately from optional warnings and
+  exposes `ready` without leaking local paths.
 - The optional JAWL web bridge reads existing `/api/agent/status`, `/api/tick`,
   `/api/db/stats`, `/api/drives` and `/api/config` routes, filters config
   secrets and exposes session-protected inspection routes to the browser.
@@ -117,8 +120,10 @@ storage.
   validated and likely corrected before latency-sensitive integration.
 - The local OmniVoice directory currently does not expose a ready project/API
   layer; model and integration details must be confirmed before adapter work.
-- No Live2D model or runtime is present locally; the asset bridge is ready for
-  a licensed user-supplied bundle but cannot prove real rendering yet.
+- No Live2D model or runtime is installed in the companion repository. The
+  reference clones contain sample assets and Pixi/Cubism patterns, but the
+  asset bridge cannot claim real rendering until a licensed bundle is supplied
+  and opened in a browser.
 - JAWL and VoiceMem use different Python environments and should remain
   separate services initially.
 - JAWL's existing web console provides the stable read-only memory/heartbeat
@@ -169,15 +174,17 @@ The current work session adds the TTS boundary and CozyVoice REST path plus
 the optional Live2D asset/runtime bridge, then adds the read-only JAWL web
 memory/persona bridge and its browser view, validates real JAWL payloads and
 applies a drive-field allow-list. The audit view was then added and covered
-end-to-end. A safe local-Ollama JAWL turn-smoke reached Vector DB startup but
+end-to-end. The Live2D bridge now validates fatal model references and
+documents the minimal renderer plugin contract. A safe local-Ollama JAWL turn-smoke reached Vector DB startup but
 was stopped before its missing embedding download.
 
 Verification for the current work session:
-`scripts/run_e2e.ps1` passed 4 tests; `scripts/run_tests.ps1` passed 67 tests;
+`scripts/run_e2e.ps1` passed 4 tests; the avatar unit tests passed 5 tests;
+the full suite is the final gate for this session;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web → adapter → companion API smoke-test also passed.
-The working tree is clean after commit `1856b2e`; the preceding microphone
+The working tree contains the current validation-slice changes; the preceding microphone
 slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
@@ -190,7 +197,7 @@ also deferred.
 
 ## Next action
 
-Exercise the JAWL adapter against the actual local process, then benchmark
+Run the full suite and commit the avatar validation slice. Then exercise the JAWL adapter against the actual local process, then benchmark
 the installed VoiceMem ASR modes on a real Russian microphone and validate
 production model warmup. Then benchmark CozyVoice latency and choose the
 first user-supplied Live2D model. The bounded `SCREEN_DELTA` stream still

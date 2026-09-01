@@ -199,7 +199,14 @@ class LocalE2ETests(unittest.TestCase):
         ))
         self.avatar_root = Path(self.temp.name) / "live2d"
         self.avatar_root.mkdir()
-        (self.avatar_root / "model3.json").write_text("{}", encoding="utf-8")
+        self.avatar_model = (
+            '{"FileReferences":{"Moc":"companion.moc3",'
+            '"Textures":["textures/body.png"],"Motions":{"Idle":[]}}}'
+        )
+        (self.avatar_root / "model3.json").write_text(self.avatar_model, encoding="utf-8")
+        (self.avatar_root / "companion.moc3").write_bytes(b"moc")
+        (self.avatar_root / "textures").mkdir()
+        (self.avatar_root / "textures" / "body.png").write_bytes(b"png")
         (self.avatar_root / "live2d-runtime.js").write_text(
             "window.Live2DCompanionRuntime = {create: async () => ({})};", encoding="utf-8"
         )
@@ -268,8 +275,10 @@ class LocalE2ETests(unittest.TestCase):
             self.assertIn(b"JAWL Avatar", response.read())
         _, avatar_config = self.get_json("/api/avatar/config")
         self.assertTrue(avatar_config["enabled"])
+        self.assertTrue(avatar_config["ready"])
+        self.assertEqual(avatar_config["validation"]["missing"], [])
         with urlopen(self.base + "/avatar-assets/model3.json", timeout=3) as response:
-            self.assertEqual(response.read(), b"{}")
+            self.assertEqual(response.read().decode("utf-8"), self.avatar_model)
 
         status, chat = self.post_json("/api/chat", {"text": "проверка e2e"})
         self.assertEqual(status, 200)

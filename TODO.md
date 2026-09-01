@@ -95,12 +95,12 @@ Acceptance criteria:
 ## Phase 4 — 2D Live2D product UI
 
 - [~] Select a redistributable Live2D model or document user-supplied assets;
-  the user-supplied asset-root contract is documented, while a model/license
-  choice is still pending.
+  the asset-root contract and fatal Moc/texture validation are implemented,
+  while a model/license choice is still pending.
 - [x] Add a transparent browser avatar surface and a copyable OBS URL.
 - [~] Replace the dependency-free avatar placeholder with the Live2D runtime;
-  optional runtime/model loading and fallback are implemented, but no licensed
-  model/runtime is installed yet.
+  optional runtime/model loading, validation and fallback are implemented, but
+  no licensed model/runtime is installed yet.
 - [ ] Add a native always-on-top desktop-pet window around the shared surface.
 - [ ] Implement transparent desktop-pet mode.
 - [ ] Add settings for persona, voice, memory, proactivity and privacy.

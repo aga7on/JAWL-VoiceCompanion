@@ -187,3 +187,21 @@ forgetting in one authority and makes JAWL outages an explicit degraded mode.
 The first bridge is read-only. Memory and persona writes require a versioned
 JAWL API with provenance, audit and correction semantics before they can be
 exposed in the companion UI.
+
+## ADR-015 - Keep the Live2D renderer behind a tiny asset plugin
+
+Status: Accepted
+Date: 2026-09-01
+
+The inspected Mana and Miru implementations converge on Pixi plus
+`pixi-live2d-display` for browser rendering, while Warashi bundles a larger
+application-specific Cubism frontend. We will not copy either frontend into
+the companion. The avatar page accepts one small
+`Live2DCompanionRuntime.create({canvas, modelUrl})` adapter, and the selected
+runtime may load its own licensed Pixi/Cubism files from the explicit asset
+root. Backend validation checks the model's fatal Moc/texture references and
+the browser falls back to the dependency-free placeholder on failure.
+
+This keeps the Python service lightweight, preserves the OBS URL and allows a
+future renderer replacement without moving personality, memory, voice or
+HostOS logic into the frontend.
