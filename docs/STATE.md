@@ -39,8 +39,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the bounded audit persistence slice.
-- Latest feature commit: `c45c5d6` (`feat: persist bounded HostOS audit metadata`).
+- Working tree: clean after the model-neutral TTS orchestration slice.
+- Latest feature commit: `0b44c9c` (`feat: parallelize model-neutral TTS sentence synthesis`).
 
 ## Completed in this repository
 
