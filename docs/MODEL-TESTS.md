@@ -88,6 +88,15 @@ experiment. Keep Qwen3-TTS/Chatterbox/XTTS-v2 available until prosody, startup,
 first-audio latency, cancellation and avatar lip-sync are measured through the
 actual Companion path. No TTS model is hard-coded as final yet.
 
+The installed TeraTTSv2 implementation also exposes a streaming generator. A
+warm CPU run with the distilled model and `chunk_frames=16` produced the first
+audio chunk in about 1.04 s, then four chunks for 3.84 s of audio (overall RTF
+about 0.33). Its input requires an explicit `<ru>...</ru>` or `<en>...</en>`
+language tag. This makes it viable for a future adapter, but the current
+Companion `/api/tts/synthesize` contract still returns one complete WAV; a
+separate streaming HTTP/audio path is required before this first-audio result
+reaches the browser.
+
 ## VoiceMem bundled streaming ASR/VAD
 
 The VoiceMem environment was also exercised in its own local environment with

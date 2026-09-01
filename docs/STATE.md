@@ -290,6 +290,9 @@ workflows, while semantic watcher tuning remains.
   exact welcome and nearly exact poem), while XTTS-v2 was slower and Pocket-TTS
   was not intelligible in Russian. TeraTTSv2 is provisional only; prosody,
   first-audio latency, cancellation and actual avatar-path integration remain.
+  A direct warm streaming call produced its first chunk in about 1.04 s and
+  requires `<ru>...</ru>` input; the current Companion whole-WAV HTTP contract
+  cannot expose that chunk yet.
 - A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
   Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
   the real Windows focused-window capture. It returned a bounded Russian
