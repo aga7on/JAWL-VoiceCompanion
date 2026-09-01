@@ -25,7 +25,7 @@ storage.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `ba7d165` (`feat: add read-only JAWL web memory bridge`).
+- Latest feature commit: `3f4920d` (`fix: bound JAWL drive summaries`).
 
 ## Completed in this repository
 
@@ -166,7 +166,7 @@ Verification for the current work session:
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web → adapter → companion API smoke-test also passed.
-The working tree is clean after commit `751123f`; the preceding microphone
+The working tree is clean after commit `3f4920d`; the preceding microphone
 slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
