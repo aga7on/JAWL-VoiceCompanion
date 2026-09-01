@@ -38,7 +38,7 @@ separate CPU/RAM test completes.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the delayed audio-triage provider slice.
-- Latest feature commit: `e7e4fa8` (`feat: add explicit ambient audio lifecycle`).
+- Latest feature commit: `a6d08d8` (`feat: expose ambient audio controls in browser`).
 
 ## Completed in this repository
 
