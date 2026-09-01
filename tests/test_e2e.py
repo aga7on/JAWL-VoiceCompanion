@@ -19,7 +19,7 @@ from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
-from jawl_voicecompanion.jawl_web import JawlWebAdapter  # noqa: E402
+from jawl_voicecompanion.jawl_web import JawlWebAdapter, JawlWebChatAdapter  # noqa: E402
 from jawl_voicecompanion.models import AccessLevel  # noqa: E402
 from jawl_voicecompanion.tts import CozyVoiceHttpClient, TTSService  # noqa: E402
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
@@ -156,6 +156,84 @@ class _JawlHandler(socketserver.StreamRequestHandler):
         self.wfile.write((json.dumps(answer, ensure_ascii=False) + "\n").encode("utf-8"))
 
 
+class _JawlChatWebHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    condition = threading.Condition()
+    write_lock = threading.Lock()
+    active_streams = set()
+    messages = []
+    sequence = 0
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/api/chat/stream":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        try:
+            with _JawlChatWebHandler.condition:
+                _JawlChatWebHandler.active_streams.add(self)
+            self._write_event([])
+            while True:
+                self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+                with _JawlChatWebHandler.condition:
+                    _JawlChatWebHandler.condition.wait(0.05)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
+            return
+        finally:
+            with _JawlChatWebHandler.condition:
+                _JawlChatWebHandler.active_streams.discard(self)
+
+    def do_POST(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/api/chat":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        text = payload.get("text", "")
+        with _JawlChatWebHandler.condition:
+            _JawlChatWebHandler.sequence += 1
+            user = {"seq": _JawlChatWebHandler.sequence, "sender": "User", "text": text}
+            _JawlChatWebHandler.messages.append(user)
+            _JawlChatWebHandler.condition.notify_all()
+        if text != "no broadcast":
+            with _JawlChatWebHandler.condition:
+                _JawlChatWebHandler.sequence += 1
+                agent = {
+                    "seq": _JawlChatWebHandler.sequence,
+                    "sender": "Agent",
+                    "text": f"JAWL WEB E2E: {text}",
+                }
+                _JawlChatWebHandler.messages.append(agent)
+                streams = list(_JawlChatWebHandler.active_streams)
+                _JawlChatWebHandler.condition.notify_all()
+            for stream in streams:
+                try:
+                    stream._write_event([agent])
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass
+        body = json.dumps({"ok": True, "message": user}, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _write_event(self, messages):
+        body = json.dumps({"messages": messages, "status": {"state": "online"}}, ensure_ascii=False)
+        with _JawlChatWebHandler.write_lock:
+            self.wfile.write((f"data: {body}\n\n").encode("utf-8"))
+            self.wfile.flush()
+
+    def log_message(self, format, *args):
+        return
+
+
 class LocalE2ETests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -167,11 +245,21 @@ class LocalE2ETests(unittest.TestCase):
         threading.Thread(target=self.tts_provider.serve_forever, daemon=True).start()
         self.jawl_web_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlWebHandler)
         threading.Thread(target=self.jawl_web_provider.serve_forever, daemon=True).start()
+        self.jawl_chat_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlChatWebHandler)
+        _JawlChatWebHandler.messages = []
+        _JawlChatWebHandler.sequence = 0
+        _JawlChatWebHandler.active_streams = set()
+        threading.Thread(target=self.jawl_chat_provider.serve_forever, daemon=True).start()
         self.jawl = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _JawlHandler)
         _JawlHandler.messages = []
         self.jawl_port_file = Path(self.temp.name) / "terminal.port"
         self.jawl_port_file.write_text(str(self.jawl.server_address[1]), encoding="utf-8")
         self.jawl_adapter = JawlTerminalAdapter(self.jawl_port_file, timeout=2)
+        self.jawl_chat_adapter = JawlWebChatAdapter(
+            f"http://127.0.0.1:{self.jawl_chat_provider.server_port}",
+            timeout_seconds=2,
+            chat_timeout_seconds=2,
+        )
         threading.Thread(target=self.jawl.serve_forever, daemon=True).start()
         endpoint = f"http://127.0.0.1:{self.provider.server_port}/v1"
         self.client = OpenAICompatibleVisionClient(endpoint, "e2e-vlm")
@@ -241,6 +329,8 @@ class LocalE2ETests(unittest.TestCase):
         self.tts_provider.server_close()
         self.jawl_web_provider.shutdown()
         self.jawl_web_provider.server_close()
+        self.jawl_chat_provider.shutdown()
+        self.jawl_chat_provider.server_close()
         self.jawl.shutdown()
         self.jawl.server_close()
         self.temp.cleanup()
@@ -296,6 +386,22 @@ class LocalE2ETests(unittest.TestCase):
         self.assertIn("fallback", degraded["text"])
         self.assertEqual(self.jawl_adapter.status(), "no_broadcast")
         self.jawl_adapter.timeout = 2
+
+        self.gateway.responder = self.jawl_chat_adapter
+        self.gateway.brain_name = "jawl_web_chat"
+        _, web_chat = self.post_json("/api/chat", {"text": "web-correlated"})
+        self.assertEqual(web_chat["text"], "JAWL WEB E2E: web-correlated")
+        self.assertEqual(self.jawl_chat_adapter.chat_status(), "connected")
+        _, connected_health = self.get_json("/api/health")
+        self.assertEqual(connected_health["components"]["jawl"], "connected")
+
+        self.jawl_chat_adapter.chat_timeout_seconds = 1
+        _, web_degraded = self.post_json("/api/chat", {"text": "no broadcast"})
+        self.assertIn("fallback", web_degraded["text"])
+        self.assertEqual(self.jawl_chat_adapter.chat_status(), "no_broadcast")
+        _, degraded_health = self.get_json("/api/health")
+        self.assertEqual(degraded_health["components"]["jawl"], "no_broadcast")
+        self.jawl_chat_adapter.chat_timeout_seconds = 2
 
         _, tts_status = self.get_json("/api/tts/status")
         self.assertTrue(tts_status["configured"])

@@ -132,6 +132,9 @@ class TextGateway:
     def _responder_status(self) -> str:
         if not self.responder:
             return "not_connected"
+        chat_status = getattr(self.responder, "chat_status", None)
+        if callable(chat_status):
+            return chat_status()
         status = getattr(self.responder, "status", None)
         return status() if callable(status) else self._brain_status
 

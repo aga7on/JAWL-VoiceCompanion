@@ -43,22 +43,25 @@ not start a passive capture loop. The optional `--screen-watch` flag starts a
 bounded `SCREEN_DELTA` sensor only when a live screen adapter and VLM provider
 are configured; it does not yet trigger autonomous speech.
 
-To connect the text surface to the local JAWL terminal bridge, pass its
-`terminal.port` file:
-
-```powershell
-.\scripts\run_web.ps1 --jawl-port-file "G:\AI\JAWL-Coding\src\utils\local\data\interfaces\host\terminal\terminal.port"
-```
-
-To show JAWL Heartbeat, persona and memory counters in the companion panel,
-also point it at JAWL's local web console:
+To connect the text surface and the read-only inspection panel to JAWL's local
+web console, pass its URL:
 
 ```powershell
 .\scripts\run_web.ps1 --jawl-web-url "http://127.0.0.1:8770"
 ```
 
-The bridge is read-only, loopback-only and filters secrets from JAWL config;
-the companion does not duplicate JAWL's durable memory.
+The web chat adapter keeps JAWL's `/api/chat/stream` SSE open, sends a
+correlated `/api/chat` POST and waits for an agent message with a newer
+sequence. If the web console is omitted, the companion can use the legacy
+loopback terminal bridge instead:
+
+```powershell
+.\scripts\run_web.ps1 --jawl-port-file "G:\AI\JAWL-Coding\src\utils\local\data\interfaces\host\terminal\terminal.port"
+```
+
+The inspection bridge remains loopback-only and read-only, filters secrets
+from JAWL config and does not duplicate JAWL's durable memory. A missing agent
+broadcast produces a visible degraded fallback rather than an invented reply.
 
 To enable the external-ASR text bridge through the VoiceMem sidecar, point
 the web process at VoiceMem's Python environment:

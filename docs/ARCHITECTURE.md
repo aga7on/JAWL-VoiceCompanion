@@ -80,8 +80,11 @@ intent becomes spoken output.
 
 The companion's optional `JawlWebAdapter` reads JAWL's existing loopback web
 console for health, Heartbeat, bounded memory counters, drives and a filtered
-persona view. It never opens JAWL storage directly and keeps no durable copy.
-The public companion routes are read-only and session-protected.
+persona view. `JawlWebChatAdapter` uses the same console's `/api/chat` POST and
+`/api/chat/stream` SSE: the POST returns the user's sequence, and the adapter
+accepts only a later non-user message. It never opens JAWL storage directly
+and keeps no durable copy. Inspection routes are read-only and
+session-protected; chat remains loopback/token protected by JAWL.
 
 The same browser session protects the HostOS audit view. The UI displays only
 the last bounded metadata events; tool arguments and raw results remain

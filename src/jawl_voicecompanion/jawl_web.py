@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import time
+from queue import Empty, Queue
+from threading import Event, Lock, Thread
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, urlopen
+
+from .jawl_adapter import JawlTurnCancelled
 
 
 class JawlWebUnavailable(ConnectionError):
@@ -159,3 +164,214 @@ class JawlWebAdapter:
             for key in ("ok", "dynamicReduction")
             if key in payload
         } | {"drives": bounded}
+
+
+class _SseReader:
+    """Read one bounded JAWL SSE stream without blocking the request thread."""
+
+    _MAX_LINE_BYTES = 128 * 1024
+
+    def __init__(self, opener: Callable[..., Any], request: Request, timeout: float):
+        self._opener = opener
+        self._request = request
+        self._timeout = timeout
+        self._stop = Event()
+        self.ready = Event()
+        self.done = Event()
+        self.error: Exception | None = None
+        self._events: Queue[dict[str, Any]] = Queue(maxsize=64)
+        self._response: Any = None
+        self._lock = Lock()
+        self._thread = Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def get(self, timeout: float) -> dict[str, Any] | None:
+        try:
+            return self._events.get(timeout=max(0.01, timeout))
+        except Empty:
+            return None
+
+    def stop(self) -> None:
+        self._stop.set()
+        with self._lock:
+            response = self._response
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+        self._thread.join(timeout=0.5)
+
+    def _run(self) -> None:
+        data_lines: list[str] = []
+        try:
+            with self._opener(self._request, timeout=self._timeout) as response:
+                with self._lock:
+                    self._response = response
+                self.ready.set()
+                while not self._stop.is_set():
+                    line = response.readline()
+                    if not line:
+                        break
+                    if len(line) > self._MAX_LINE_BYTES:
+                        raise JawlWebUnavailable("JAWL chat SSE line exceeds the bounded limit")
+                    decoded = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if decoded.startswith(":"):
+                        continue
+                    if decoded.startswith("data:"):
+                        data_lines.append(decoded[5:].lstrip())
+                    elif not decoded and data_lines:
+                        self._publish("\n".join(data_lines))
+                        data_lines.clear()
+        except (HTTPError, URLError, OSError, TimeoutError, ValueError):
+            self.error = JawlWebUnavailable("JAWL chat stream is not reachable")
+        finally:
+            self.ready.set()
+            self.done.set()
+
+    def _publish(self, raw: str) -> None:
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            self.error = JawlWebUnavailable("JAWL chat stream returned invalid JSON")
+            return
+        if not isinstance(event, dict):
+            return
+        try:
+            self._events.put_nowait(event)
+        except Exception:
+            try:
+                self._events.get_nowait()
+                self._events.put_nowait(event)
+            except Empty:
+                pass
+
+
+class JawlWebChatAdapter(JawlWebAdapter):
+    """Use JAWL's web POST plus SSE stream as a correlated chat transport."""
+
+    _MAX_CHAT_RESPONSE_BYTES = 128 * 1024
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        timeout_seconds: float = 2.0,
+        chat_timeout_seconds: float = 120.0,
+        opener: Callable[..., Any] = urlopen,
+    ):
+        super().__init__(base_url, token=token, timeout_seconds=timeout_seconds, opener=opener)
+        self.chat_timeout_seconds = max(1.0, min(float(chat_timeout_seconds), 300.0))
+        self.last_chat_status = "not_checked"
+        self.last_chat_error = ""
+
+    def chat_status(self) -> str:
+        if self.last_chat_status == "not_checked":
+            return self.status()
+        return self.last_chat_status
+
+    def respond(self, text: str, cancel_event: Event | None = None) -> str:
+        clean = str(text or "").strip()
+        if not clean:
+            raise ValueError("JAWL chat text must not be empty")
+        request = Request(urljoin(self.base_url, "/api/chat/stream"), headers={
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-cache",
+            **({"X-Console-Token": self.token} if self.token else {}),
+        })
+        reader = _SseReader(self._opener, request, self.chat_timeout_seconds)
+        reader.start()
+        deadline = time.monotonic() + self.chat_timeout_seconds
+        self.last_chat_status = "starting"
+        self.last_chat_error = ""
+        try:
+            self._wait_until_online(reader, deadline, cancel_event)
+            user_seq = self._post_chat(clean)
+            return self._wait_for_agent(reader, user_seq, deadline, cancel_event)
+        except JawlTurnCancelled:
+            self.last_chat_status = "cancelled"
+            raise
+        except JawlWebUnavailable as exc:
+            self.last_chat_error = str(exc)
+            if self.last_chat_status not in {"no_broadcast", "offline"}:
+                self.last_chat_status = "offline"
+            raise
+        finally:
+            reader.stop()
+
+    def _wait_until_online(
+        self, reader: _SseReader, deadline: float, cancel_event: Event | None,
+    ) -> None:
+        while time.monotonic() < deadline:
+            self._check_cancel(cancel_event)
+            event = reader.get(min(0.1, max(0.01, deadline - time.monotonic())))
+            self._check_cancel(cancel_event)
+            if event is not None:
+                status = event.get("status")
+                if isinstance(status, dict) and status.get("state") == "online":
+                    return
+            if reader.error:
+                raise reader.error
+            if reader.done:
+                raise JawlWebUnavailable("JAWL chat stream closed before becoming online")
+        self.last_chat_status = "offline"
+        raise JawlWebUnavailable("JAWL chat stream did not become online before timeout")
+
+    def _post_chat(self, text: str) -> int:
+        body = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
+        request = Request(urljoin(self.base_url, "/api/chat"), data=body, method="POST", headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            **({"X-Console-Token": self.token} if self.token else {}),
+        })
+        try:
+            with self._opener(request, timeout=self.timeout_seconds) as response:
+                raw = response.read(self._MAX_CHAT_RESPONSE_BYTES + 1)
+        except (HTTPError, URLError, OSError, TimeoutError) as exc:
+            self.last_chat_status = "offline"
+            raise JawlWebUnavailable("JAWL chat request is not reachable") from exc
+        if len(raw) > self._MAX_CHAT_RESPONSE_BYTES:
+            raise JawlWebUnavailable("JAWL chat response exceeds the bounded limit")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise JawlWebUnavailable("JAWL chat returned invalid JSON") from exc
+        message = payload.get("message") if isinstance(payload, dict) else None
+        sequence = message.get("seq") if isinstance(message, dict) else None
+        if payload.get("ok") is not True or not isinstance(sequence, int):
+            raise JawlWebUnavailable("JAWL chat did not acknowledge the user message")
+        return sequence
+
+    def _wait_for_agent(
+        self, reader: _SseReader, user_seq: int, deadline: float, cancel_event: Event | None,
+    ) -> str:
+        while time.monotonic() < deadline:
+            self._check_cancel(cancel_event)
+            event = reader.get(min(0.1, max(0.01, deadline - time.monotonic())))
+            self._check_cancel(cancel_event)
+            if event is not None:
+                messages = event.get("messages")
+                if isinstance(messages, list):
+                    for message in messages:
+                        if not isinstance(message, dict) or message.get("sender") == "User":
+                            continue
+                        sequence = message.get("seq")
+                        answer = message.get("text")
+                        if isinstance(sequence, int) and sequence > user_seq and isinstance(answer, str) and answer.strip():
+                            self.last_chat_status = "connected"
+                            return answer.strip()
+            self._check_cancel(cancel_event)
+            if reader.error:
+                raise reader.error
+            if reader.done:
+                self.last_chat_status = "no_broadcast"
+                raise JawlWebUnavailable("JAWL chat stream closed without an agent broadcast")
+        self.last_chat_status = "no_broadcast"
+        raise JawlWebUnavailable("JAWL produced no correlated chat broadcast before timeout")
+
+    @staticmethod
+    def _check_cancel(cancel_event: Event | None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise JawlTurnCancelled("JAWL response superseded by a newer turn")

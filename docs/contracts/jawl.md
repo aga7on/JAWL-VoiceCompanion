@@ -34,20 +34,36 @@ description before reaching the browser.
 The bridge keeps no durable copy and returns `offline`/`degraded` when JAWL
 is unavailable.
 
-## Current terminal response boundary
+## Correlated web chat
 
-The JAWL `HostTerminalClient` channel is not a correlated RPC endpoint. A
-JSON line sent by the companion queues a user message; a user-facing response
-is emitted only when JAWL broadcasts a message through its terminal skill.
-There is no turn ID in this protocol. The current adapter therefore consumes
-the first broadcast on a short-lived loopback connection and marks a missing
-one as `no_broadcast`. The companion returns a validated degraded fallback in
-that case. This is intentional: a native JAWL thought with no terminal
-broadcast must never be presented as an assistant reply.
+When `--jawl-web-url` is configured, the companion uses these existing JAWL
+routes for user turns:
 
-A persistent correlated streaming adapter remains a separate integration task;
-it requires either a JAWL response ID or a proven web-stream correlation
-contract.
+| Route | Use |
+|---|---|
+| `GET /api/chat/stream` | SSE status and bounded message events |
+| `POST /api/chat` | enqueue one user message and return its `message.seq` |
+
+The adapter opens the SSE first, waits for the bridge to report `online`, then
+sends the POST. It returns the first non-`User` message whose `seq` is greater
+than the acknowledged user sequence. This filters history and other earlier
+turns without opening JAWL's `history.json` or databases. A stream failure,
+missing acknowledgement or missing agent message becomes a validated
+degraded fallback; the observable chat status is `connected`, `offline`,
+`cancelled` or `no_broadcast`.
+
+## Legacy terminal response boundary
+
+The JAWL `HostTerminalClient` channel remains an uncorrelated compatibility
+transport. A JSON line sent by the companion queues a user message; a
+user-facing response is emitted only when JAWL broadcasts a message through
+its terminal skill. The legacy adapter consumes the first broadcast on a
+short-lived loopback connection and marks a missing one as `no_broadcast`.
+This path must never present a native JAWL thought with no terminal broadcast
+as an assistant reply.
+
+The web adapter is preferred when its URL is supplied because its sequence
+acknowledgement provides the stronger correlation boundary.
 
 ## Companion routes
 

@@ -65,3 +65,7 @@
 - Documented that JAWL's current terminal channel is broadcast-only, exposed
   the `no_broadcast` degraded status, and added a full-gate command requiring
   compile, unit, local HTTP E2E and diff verification for major changes.
+- Added the correlated JAWL web-chat adapter: it holds the local SSE stream,
+  acknowledges a user sequence through `/api/chat`, filters old messages and
+  propagates cancellation/no-broadcast states through the visible HTTP health
+  contract. The web adapter is now preferred over the legacy terminal path.

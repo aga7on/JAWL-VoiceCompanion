@@ -17,9 +17,9 @@ blocked or requiring a decision.
 
 - [x] Define versioned event schemas.
 - [x] Define `ResponseEnvelope` validation.
-- [~] Implement a local JAWL gateway with health and graceful failure; the
-  terminal transport is covered, while its broadcast-only response boundary
-  needs a correlated streaming bridge for production turns.
+- [~] Implement a local JAWL gateway with health and graceful failure; the web
+  POST+SSE correlation bridge is implemented, while live production-model
+  validation and reconnect/recovery hardening remain.
 - [x] Implement `TurnArbiter` with user/proactive/background priority lanes.
 - [~] Add generation IDs and cancellation propagation (JAWL transport is
   covered; TTS/audio cancellation remains).

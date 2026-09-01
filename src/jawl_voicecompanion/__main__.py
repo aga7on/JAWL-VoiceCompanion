@@ -9,7 +9,7 @@ from .gateway import TextGateway
 from .browser_adapter import BrowserAdapter
 from .avatar import AvatarAssetStore
 from .jawl_adapter import JawlTerminalAdapter
-from .jawl_web import JawlWebAdapter
+from .jawl_web import JawlWebChatAdapter
 from .hostos_tools import HostOSExecutor
 from .screen_adapter import ScreenCaptureAdapter
 from .tts import CozyVoiceHttpClient, TTSService
@@ -41,6 +41,7 @@ def main() -> None:
         help="environment variable containing JAWL's optional console token",
     )
     parser.add_argument("--jawl-web-timeout", type=float, default=2.0)
+    parser.add_argument("--jawl-chat-timeout", type=float, default=120.0)
     parser.add_argument(
         "--hostos-live",
         action="store_true",
@@ -113,21 +114,24 @@ def main() -> None:
     args = parser.parse_args()
     responder = None
     brain_name = "phase1_mock_brain"
-    if args.jawl_port_file:
-        responder = JawlTerminalAdapter(args.jawl_port_file)
-        brain_name = "jawl_terminal"
     jawl_web = None
     if args.jawl_web_url:
         import os
 
         try:
-            jawl_web = JawlWebAdapter(
+            jawl_web = JawlWebChatAdapter(
                 args.jawl_web_url,
                 token=os.environ.get(args.jawl_web_token_env, ""),
                 timeout_seconds=args.jawl_web_timeout,
+                chat_timeout_seconds=args.jawl_chat_timeout,
             )
         except ValueError as exc:
             parser.error(str(exc))
+        responder = jawl_web
+        brain_name = "jawl_web_chat"
+    elif args.jawl_port_file:
+        responder = JawlTerminalAdapter(args.jawl_port_file)
+        brain_name = "jawl_terminal"
     gateway = TextGateway(responder=responder, brain_name=brain_name, jawl_web=jawl_web)
     hostos_executor = None
     if args.hostos_live:

@@ -163,9 +163,9 @@ storage.
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
 - measure actual GPU contention and model residency on the target machine.
-- implement and verify a correlated JAWL streaming/request-response bridge;
-  the current no-broadcast behavior is explicitly degraded and must not be
-  treated as a successful assistant turn.
+- validate the correlated web bridge against a production JAWL model/tool
+  profile and add restart/reconnect recovery coverage; no-broadcast remains an
+  explicit degraded state.
 
 ## Latest work session
 
@@ -183,14 +183,17 @@ end-to-end. The Live2D bridge now validates fatal model references and
 documents the minimal renderer plugin contract. A safe local-Ollama JAWL
 turn-smoke completed an LLM request but exposed the broadcast-only terminal
 boundary; the companion returned degraded fallback as designed.
+The correlated web POST+SSE adapter is now implemented and preferred when a
+JAWL web URL is supplied; sequence correlation, cancellation and degraded
+no-broadcast behavior are covered by tests.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed compilation, 67 unit tests and 4 complete
+`scripts/run_full_gate.ps1` passed compilation, 69 unit tests and 4 complete
 HTTP E2E tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
-The working tree is clean after `c7f4995`; the preceding microphone
+The working tree is clean after the next feature commit; the preceding microphone
 slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
@@ -203,9 +206,9 @@ also deferred.
 
 ## Next action
 
-Run `scripts/run_full_gate.ps1` and commit the JAWL response-contract/test-gate
-slice. Then implement the correlated JAWL streaming bridge, benchmark
-the installed VoiceMem ASR modes on a real Russian microphone and validate
+Run the full gate after the current feature commit. Then validate the web
+bridge against a live production JAWL model/tool profile, benchmark the
+installed VoiceMem ASR modes on a real Russian microphone and validate
 production model warmup. Then benchmark CozyVoice latency and choose the
 first user-supplied Live2D model. The bounded `SCREEN_DELTA` stream still
 needs Attention/Presence consumption.
