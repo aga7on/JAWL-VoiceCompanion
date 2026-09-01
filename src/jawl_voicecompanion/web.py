@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .approvals import ApprovalStore
+from .avatar import AvatarAssetStore
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .models import ToolRequest
@@ -37,6 +38,7 @@ class CompanionServer(ThreadingHTTPServer):
         screen_watcher: ScreenDeltaWatcher | None = None,
         voice_mem: VoiceMemProcessClient | None = None,
         tts_service: TTSService | None = None,
+        avatar_assets: AvatarAssetStore | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -45,6 +47,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.screen_watcher = screen_watcher
         self.voice_mem = voice_mem
         self.tts = tts_service
+        self.avatar_assets = avatar_assets
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -109,6 +112,29 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"configured": False, "status": "not_configured"})
                 return
             self._json(self.server.tts.health())
+            return
+        if path == "/api/avatar/config":
+            self._json(self.server.avatar_assets.config() if self.server.avatar_assets else {
+                "enabled": False, "runtime_url": None, "model_url": None, "adapter": None,
+            })
+            return
+        asset_prefix = "/avatar-assets/"
+        if path.startswith(asset_prefix) and self.server.avatar_assets is not None:
+            asset = self.server.avatar_assets.resolve_public(path[len(asset_prefix):])
+            if asset is None:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            try:
+                body = asset.read_bytes()
+            except OSError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", self.server.avatar_assets.content_type(asset))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if path == "/api/hostos/approvals":
             try:
@@ -348,6 +374,7 @@ def create_server(
     screen_watch_interval: float = 10.0,
     voice_mem: VoiceMemProcessClient | None = None,
     tts_service: TTSService | None = None,
+    avatar_assets: AvatarAssetStore | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -378,6 +405,7 @@ def create_server(
         watcher,
         voice_mem,
         tts_service,
+        avatar_assets,
     )
     if watcher is not None:
         watcher.start()

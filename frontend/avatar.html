@@ -8,6 +8,7 @@
     :root { color-scheme: dark; font-family: system-ui, sans-serif; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; color: #f1f3f5; }
     #surface { position: relative; width: 100%; height: 100%; min-width: 240px; min-height: 240px; }
+    #live2d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
     #avatar { position: absolute; left: 50%; bottom: 7%; width: min(46vw, 360px); aspect-ratio: 3 / 4; transform: translateX(-50%); }
     #head { position: absolute; left: 17%; top: 2%; width: 66%; aspect-ratio: 1; border: 4px solid #b8d8ff; border-radius: 50%; background: radial-gradient(circle at 50% 38%, #4a536d 0 18%, #283044 48%, #17202f 100%); box-shadow: 0 0 28px #78aef477; }
     #head::before, #head::after { content: ''; position: absolute; top: 43%; width: 10px; height: 10px; border-radius: 50%; background: #d8ecff; box-shadow: 0 0 10px #d8ecff; }
@@ -28,6 +29,7 @@
 </head>
 <body>
   <div id="surface" aria-label="Прозрачная поверхность 2D-компаньона">
+    <canvas id="live2d-canvas" class="hidden"></canvas>
     <div id="avatar" class="expression-neutral">
       <div id="head"></div>
       <div id="body"></div>
@@ -38,18 +40,66 @@
   </div>
   <script>
     const avatar = document.querySelector('#avatar');
+    const canvas = document.querySelector('#live2d-canvas');
     const subtitle = document.querySelector('#subtitle');
     const debug = document.querySelector('#debug');
     const showDebug = new URLSearchParams(window.location.search).get('debug') === '1';
+    const expressionFallbacks = {
+      neutral: 'neutral', attentive: 'attentive', concerned: 'concerned', confused: 'confused',
+      happy: 'happy', sad: 'sad', angry: 'angry', surprised: 'surprised'
+    };
+    let live2d = null;
+    let live2dError = '';
     if (showDebug) debug.classList.remove('hidden');
+
+    function safeExpression(value) {
+      const name = String(value || 'neutral').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      return expressionFallbacks[name] || 'neutral';
+    }
+    function loadScript(url) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = url;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Live2D runtime не загрузился'));
+        document.head.appendChild(script);
+      });
+    }
+    async function mountLive2D() {
+      try {
+        const response = await fetch('/api/avatar/config', {cache: 'no-store'});
+        const config = await response.json();
+        if (!config.enabled) return;
+        await loadScript(config.runtime_url);
+        const factory = window.Live2DCompanionRuntime?.create;
+        if (typeof factory !== 'function') throw new Error('runtime не предоставил Live2DCompanionRuntime.create');
+        live2d = await factory({canvas, modelUrl: config.model_url});
+        if (!live2d) throw new Error('runtime не создал модель');
+        avatar.classList.add('hidden');
+        canvas.classList.remove('hidden');
+      } catch (error) {
+        live2dError = error.message || 'Live2D runtime недоступен';
+        if (showDebug) debug.textContent = `Live2D fallback · ${live2dError}`;
+      }
+    }
 
     function render(state) {
       const turn = state.last_turn || {};
       const response = turn.response || {};
       const avatarState = response.avatar || {state: 'idle', expression: 'neutral'};
-      const expression = String(avatarState.expression || response.emotion?.id || 'neutral').replace(/[^a-z0-9_-]/gi, '');
+      const expression = safeExpression(avatarState.expression || response.emotion?.id);
       avatar.className = `expression-${expression} state-${String(avatarState.state || 'idle').replace(/[^a-z0-9_-]/gi, '')}`;
       subtitle.textContent = response.speak ? String(response.text || '').slice(0, 280) : '';
+      if (live2d) {
+        try {
+          live2d.setExpression?.(expression, Number(response.emotion?.intensity || 0));
+          live2d.setMotion?.(String(avatarState.motion || 'idle'));
+          live2d.setLipSync?.(0);
+        } catch (error) {
+          live2d.setExpression?.('neutral', 0);
+          if (showDebug) debug.textContent = `Live2D neutral fallback · ${error.message}`;
+        }
+      }
       if (showDebug) debug.textContent = `${avatarState.state || 'idle'} · ${expression} · ${state.policy.active_name}`;
     }
 
@@ -62,6 +112,7 @@
         if (showDebug) debug.textContent = `backend unavailable · ${error.message}`;
       }
     }
+    mountLive2D();
     refresh();
     window.setInterval(refresh, 250);
   </script>

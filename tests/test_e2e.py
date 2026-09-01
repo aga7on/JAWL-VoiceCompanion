@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
+from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
@@ -150,6 +151,12 @@ class LocalE2ETests(unittest.TestCase):
         self.tts = TTSService(CozyVoiceHttpClient(
             f"http://127.0.0.1:{self.tts_provider.server_port}", timeout_seconds=2,
         ))
+        self.avatar_root = Path(self.temp.name) / "live2d"
+        self.avatar_root.mkdir()
+        (self.avatar_root / "model3.json").write_text("{}", encoding="utf-8")
+        (self.avatar_root / "live2d-runtime.js").write_text(
+            "window.Live2DCompanionRuntime = {create: async () => ({})};", encoding="utf-8"
+        )
         self.server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
@@ -160,6 +167,7 @@ class LocalE2ETests(unittest.TestCase):
             screen_watch_interval=2,
             voice_mem=self.voice_mem,
             tts_service=self.tts,
+            avatar_assets=AvatarAssetStore(self.avatar_root),
         )
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -210,6 +218,10 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(session["session_token"], self.server.session_token)
         with urlopen(self.base + "/avatar", timeout=3) as response:
             self.assertIn(b"JAWL Avatar", response.read())
+        _, avatar_config = self.get_json("/api/avatar/config")
+        self.assertTrue(avatar_config["enabled"])
+        with urlopen(self.base + "/avatar-assets/model3.json", timeout=3) as response:
+            self.assertEqual(response.read(), b"{}")
 
         status, chat = self.post_json("/api/chat", {"text": "проверка e2e"})
         self.assertEqual(status, 200)

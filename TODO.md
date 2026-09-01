@@ -93,15 +93,21 @@ Acceptance criteria:
 
 ## Phase 4 — 2D Live2D product UI
 
-- [ ] Select a redistributable Live2D model or document user-supplied assets.
+- [~] Select a redistributable Live2D model or document user-supplied assets;
+  the user-supplied asset-root contract is documented, while a model/license
+  choice is still pending.
 - [x] Add a transparent browser avatar surface and a copyable OBS URL.
-- [ ] Replace the dependency-free avatar placeholder with the Live2D runtime.
+- [~] Replace the dependency-free avatar placeholder with the Live2D runtime;
+  optional runtime/model loading and fallback are implemented, but no licensed
+  model/runtime is installed yet.
 - [ ] Add a native always-on-top desktop-pet window around the shared surface.
 - [ ] Implement transparent desktop-pet mode.
 - [ ] Add settings for persona, voice, memory, proactivity and privacy.
 - [ ] Add visible listening/screen-observation indicators.
 - [ ] Add lip-sync from audio amplitude.
-- [ ] Add expression capability mapping and fallbacks.
+- [~] Add expression capability mapping and fallbacks; bounded semantic
+  mapping and neutral fallback are implemented, while runtime capability
+  discovery remains.
 - [ ] Add first-run setup and component health/doctor panel.
 - [ ] Add performance profiles for low/standard/high modes.
 - [~] Render browser control-plane pages for settings, approvals, memory and

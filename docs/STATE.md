@@ -4,14 +4,16 @@ Last updated: 2026-09-01
 
 ## Current phase
 
-Phase 2 — Russian voice loop (TTS slice in progress).
+Phase 4 — 2D Live2D product UI (asset/runtime slice in progress).
 
 Repository state: architecture baseline committed. A dependency-free mock
 text/control slice is implemented. The real VoiceMem sidecar boundary now
 accepts external ASR partials and browser PCM16 microphone chunks, and the
-optional TTS boundary can call CozyVoice REST. Real JAWL, production VoiceMem
-model startup, OmniVoice and Live2D remain opt-in/integration work. Optional
-UIA, focused-window OS and VLM adapters remain explicit.
+optional TTS boundary can call CozyVoice REST, and the `/avatar` surface can
+load a user-supplied Live2D bundle behind a read-only asset root. Real JAWL,
+production VoiceMem model startup, OmniVoice and an actual licensed Live2D
+model remain opt-in/integration work. Optional UIA, focused-window OS and VLM
+adapters remain explicit.
 
 ## Git state
 
@@ -77,6 +79,9 @@ UIA, focused-window OS and VLM adapters remain explicit.
   adapter splits bounded text into sentences, merges WAV chunks and exposes
   transient audio through `/api/tts/synthesize`. The browser plays it only
   when the provider is configured.
+- The optional Live2D asset bridge serves only an explicitly configured root,
+  exposes `/api/avatar/config`, loads a user-provided runtime/model pair and
+  falls back to the placeholder when the bundle is absent or incompatible.
 
 ## Reference inventory
 
@@ -104,6 +109,8 @@ UIA, focused-window OS and VLM adapters remain explicit.
   validated and likely corrected before latency-sensitive integration.
 - The local OmniVoice directory currently does not expose a ready project/API
   layer; model and integration details must be confirmed before adapter work.
+- No Live2D model or runtime is present locally; the asset bridge is ready for
+  a licensed user-supplied bundle but cannot prove real rendering yet.
 - JAWL and VoiceMem use different Python environments and should remain
   separate services initially.
 - The configured JAWL `terminal.port` is currently stale and has no listening
@@ -114,7 +121,8 @@ UIA, focused-window OS and VLM adapters remain explicit.
 
 - Choose and benchmark Russian streaming ASR;
 - confirm the OmniVoice model/API location;
-- select the first redistributable or user-supplied Live2D model;
+- select and manually validate the first redistributable or user-supplied
+  Live2D model/runtime bundle;
 - finish the browser settings, memory and audit views;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
 - add semantic screen significance scoring and connect `SCREEN_DELTA` to
@@ -136,17 +144,18 @@ E2E runner/tests and the related architecture/contracts/documentation in
 VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner,
 client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
 and final-turn routing in `36a808c`.
-The current work session adds the TTS boundary and CozyVoice REST path.
+The current work session adds the TTS boundary and CozyVoice REST path plus
+the optional Live2D asset/runtime bridge.
 
 Verification for the current work session:
-`scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 60 tests;
+`scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 62 tests;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings.
 The working tree is clean after commit `a217cec`; the preceding microphone
 slice is preserved in `36a808c`.
 
-Known limitation: the avatar is a dependency-free placeholder, not a Live2D
-model yet. The web server's default executor remains dry-run and no VLM
+Known limitation: no licensed Live2D model/runtime is installed yet; the
+placeholder remains the default. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; semantic significance scoring,
 pixel-level redaction, JAWL/Attention consumption, ASR quality benchmarking,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production

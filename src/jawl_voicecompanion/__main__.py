@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .gateway import TextGateway
 from .browser_adapter import BrowserAdapter
+from .avatar import AvatarAssetStore
 from .jawl_adapter import JawlTerminalAdapter
 from .hostos_tools import HostOSExecutor
 from .screen_adapter import ScreenCaptureAdapter
@@ -90,6 +91,9 @@ def main() -> None:
         help="local CozyVoice REST base URL, for example http://127.0.0.1:9888",
     )
     parser.add_argument("--tts-timeout", type=float, default=120.0)
+    parser.add_argument("--live2d-assets", type=Path, default=None)
+    parser.add_argument("--live2d-model", default="model3.json")
+    parser.add_argument("--live2d-runtime", default="live2d-runtime.js")
     parser.add_argument("--sandbox-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
     parser.add_argument("--host-root", type=Path, action="append", default=[])
@@ -142,6 +146,14 @@ def main() -> None:
         TTSService(CozyVoiceHttpClient(args.tts_url, timeout_seconds=args.tts_timeout))
         if args.tts_url else None
     )
+    avatar_assets = None
+    if args.live2d_assets:
+        try:
+            avatar_assets = AvatarAssetStore(
+                args.live2d_assets, model=args.live2d_model, runtime=args.live2d_runtime,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
     server = create_server(
         args.host,
         args.port,
@@ -153,6 +165,7 @@ def main() -> None:
         screen_watch_interval=args.screen_watch_interval,
         voice_mem=voice_mem,
         tts_service=tts_service,
+        avatar_assets=avatar_assets,
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:

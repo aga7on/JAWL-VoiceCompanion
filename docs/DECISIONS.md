@@ -154,3 +154,22 @@ No image, title or raw provider response is stored; only a short in-memory
 digest, bounded last description and bounded event ring are retained. Future
 salience and speech decisions must still pass the same HostOS permission,
 deny-list and resource-budget gates.
+
+## ADR-013 — User-supplied Live2D assets behind a read-only asset root
+
+Status: Accepted
+Date: 2026-09-01
+
+The repository does not include a Cubism runtime, Core binary, model, texture
+or character asset. The operator may provide a directory containing a bundled
+runtime and a `model3.json` tree through `--live2d-assets`. The backend serves
+only files resolved below that root through `/avatar-assets/`, with traversal,
+symlink escape and size checks.
+
+`/avatar` loads the optional runtime only when both runtime and model are
+present and the runtime exposes the small `Live2DCompanionRuntime.create`
+adapter. The adapter receives `{canvas, modelUrl}` and may implement
+`setExpression`, `setMotion`, `setLipSync` and `destroy`. If loading fails,
+the existing dependency-free placeholder remains visible. This preserves the
+OBS URL, keeps the web process free of heavy SDK dependencies and avoids
+redistributing assets with unclear terms.

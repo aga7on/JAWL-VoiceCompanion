@@ -36,6 +36,34 @@ transparent surface and lifecycle. The next avatar milestone replaces it
 with a redistributable or user-supplied 2D Live2D model without changing the
 OBS URL or backend ownership boundaries.
 
+## Optional Live2D model
+
+The repository deliberately does not ship a model or Cubism Core. To use a
+licensed user-supplied bundle, place its files below one directory, including
+`model3.json` and a bundled `live2d-runtime.js`, then start:
+
+```powershell
+.\scripts\run_web.ps1 --live2d-assets "G:\AI\Live2D\companion"
+```
+
+Custom names can be supplied with `--live2d-model` and `--live2d-runtime`.
+The runtime bundle must expose:
+
+```javascript
+window.Live2DCompanionRuntime = {
+  create: async ({canvas, modelUrl}) => ({
+    setExpression(name, intensity) {},
+    setMotion(name) {},
+    setLipSync(amplitude) {}
+  })
+};
+```
+
+The `/avatar` page loads this adapter only when both files exist. Any missing
+or incompatible runtime keeps the placeholder active; add `?debug=1` to see
+the fallback reason. Model files are served read-only from the explicit asset
+root and are not copied into this repository.
+
 ## Explicit screen look
 
 The control panel also exposes an explicit, on-demand vision request. It

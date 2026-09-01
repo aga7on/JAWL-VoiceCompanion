@@ -49,3 +49,6 @@
 - Added a provider-neutral cancellable TTS service, bounded CozyVoice REST
   client, WAV sentence merge, `/api/tts/status`, `/api/tts/synthesize` and
   optional browser playback with a local-HTTP E2E check.
+- Added an optional user-supplied Live2D asset root, read-only
+  `/avatar-assets/` serving, `/api/avatar/config`, runtime adapter loading and
+  placeholder fallback without committing SDK/model assets.
