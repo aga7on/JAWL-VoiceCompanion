@@ -94,8 +94,8 @@ of becoming personality or memory truth.
    path without hardware or model weights.
 2. Add the bounded working buffer and deterministic importance/coalescing rules.
 3. Benchmark CPU/RAM triage candidates on Russian audio and screen examples.
-4. Add Windows loopback capture behind an explicit permission and an isolated
-   ASR session.
+4. Use the `SystemAudioLoopback` adapter with an optional PyAudioWPatch
+   backend, behind an explicit permission and an isolated ASR session.
 5. Add idle consolidation into JAWL promotion candidates, with correction and
    forget controls.
 6. Run the full compile, unit, HTTP E2E and diff gate after every cross-layer

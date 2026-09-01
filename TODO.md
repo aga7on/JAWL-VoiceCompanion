@@ -79,8 +79,10 @@ Acceptance criteria:
 - [x] Add the bounded JSON-lines runner and degraded-mode responses.
 - [ ] Add speculative recall and final recall events.
 - [ ] Map VoiceMem affect to JAWL observations, not personality overrides.
-- [ ] Add opt-in Windows system-audio loopback as a separate ambient stream;
-  never mix it with microphone `USER_FINAL` turns.
+- [~] Add opt-in Windows system-audio loopback as a separate ambient stream;
+  the lazy PyAudioWPatch-compatible adapter and bounded PCM callback are
+  implemented, while installation, permission wiring and ASR integration
+  remain. Never mix it with microphone `USER_FINAL` turns.
 - [~] Add a bounded ambient working buffer with configurable TTL (initial
   target: about 30 minutes) and no durable raw audio/video by default; the
   normalized buffer and authenticated browser controls are implemented, while

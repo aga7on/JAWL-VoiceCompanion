@@ -17,6 +17,7 @@ from .tts import CozyVoiceHttpClient, TTSService, TTSUnavailable, TTSCancelled
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 from .jawl_web import JawlWebAdapter, JawlWebChatAdapter, JawlWebUnavailable
 from .ambient_memory import AmbientMemoryBuffer
+from .system_audio import SystemAudioLoopback, SystemAudioUnavailable
 
 __all__ = [
     "AccessLevel",
@@ -47,4 +48,6 @@ __all__ = [
     "JawlWebChatAdapter",
     "JawlWebUnavailable",
     "AmbientMemoryBuffer",
+    "SystemAudioLoopback",
+    "SystemAudioUnavailable",
 ]

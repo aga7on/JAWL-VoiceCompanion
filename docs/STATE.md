@@ -91,6 +91,10 @@ model triage remain opt-in work.
   ingestion, private-text suppression, duplicate/TTL/byte limits, deterministic
   coalescing and `AMBIENT_EPISODE_CANDIDATE` output; `/api/ambient-memory`
   exposes authenticated inspection, triage, clear and explicit enable/disable.
+- `SystemAudioLoopback` now defines the optional Windows WASAPI loopback
+  boundary: lazy PyAudioWPatch-compatible loading, default-device selection,
+  bounded in-memory PCM16 queue and explicit degraded behavior when the backend
+  is absent. It is not auto-started and is not yet wired to ASR.
 - `JawlEventFileSink` atomically writes accepted screen intents to an
   explicitly configured JAWL `.jawl_events` directory in the existing
   `{message, payload}` IPC shape; raw frames and local paths are excluded.
@@ -258,7 +262,7 @@ fake audio/visual input is covered end-to-end while Windows capture and model
 triage remain unconnected.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 91 unit tests and 5 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 94 unit tests and 5 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -275,7 +279,8 @@ endpoint is configured by default; production semantic scoring and JAWL
 final-wording delivery, pixel-level redaction, ASR quality benchmarking,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The native always-on-top desktop-pet shell is
-also deferred. Ambient Windows loopback capture and CPU/RAM model triage are
+also deferred. The system-audio loopback adapter exists, but backend
+installation, permission wiring, ASR consumption and CPU/RAM model triage are
 not implemented yet.
 
 ## Next action

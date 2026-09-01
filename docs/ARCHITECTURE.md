@@ -296,6 +296,13 @@ inspection, explicit enable/disable, triage and clear operations at
 `/api/ambient-memory`. Hardware capture and model-backed triage are deliberately
 separate follow-up adapters.
 
+The first hardware boundary is `SystemAudioLoopback`. It lazy-loads the
+optional PyAudioWPatch-compatible backend, selects the default WASAPI loopback
+device, queues bounded PCM16 chunks in RAM and sends them to a consumer with a
+separate session ID. It is never started by the web server automatically; a
+future ASR adapter must consume this stream separately from VoiceMem's
+microphone session.
+
 ## Turn priority
 
 ```text

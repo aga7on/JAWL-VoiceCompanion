@@ -13,6 +13,9 @@
 - Added the first default-off ambient-memory runtime slice: bounded normalized
   audio/visual observations, privacy/TTL/byte limits, deterministic delayed
   coalescing, authenticated browser inspection and explicit enable/disable.
+- Added a lazy, default-stopped `SystemAudioLoopback` boundary for an optional
+  PyAudioWPatch-compatible Windows WASAPI backend with bounded in-memory PCM16
+  delivery and degraded behavior when the backend is unavailable.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.
