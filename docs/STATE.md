@@ -38,8 +38,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the native JAWL HostOS level bridge slice.
-- Latest feature commit: `36cd034` (`feat: synchronize native JAWL HostOS level`).
+- Working tree: clean after the native JAWL emergency-stop slice.
+- Latest feature commit: `5988861` (`feat: stop native JAWL from emergency control`).
 
 ## Completed in this repository
 
@@ -222,8 +222,9 @@ separate CPU/RAM test completes.
   The companion still does not create a second JAWL tool registry.
 - The `/api/jawl/hostos` bridge reports bounded native JAWL HostOS values and
   whether control is enabled. JAWL's native Heartbeat remains autonomous;
-  companion unattended, approvals and emergency-stop state are not falsely
-  reported as native JAWL state.
+  companion unattended and approvals are not falsely reported as native JAWL
+  state; bridge emergency-stop also requests native `/api/agent/stop` while
+  retaining the local process cancellation path.
 - `G:\AI\OmniVoice` was inspected and contains only a virtual environment; its
   model/API location is an external blocker.
 - The configured JAWL `terminal.port` is currently stale and has no listening
