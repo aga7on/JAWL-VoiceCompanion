@@ -65,6 +65,11 @@ budget gates. Add `--jawl-event-dir` with the active JAWL `.jawl_events`
 directory to deliver accepted `SPEAK_INTENT` events through JAWL's existing
 IPC; without it, intents remain local and inspectable.
 
+Screen capture defaults to a 960×720 image and a 1 MB transient JPEG. Use
+`--screen-max-width`, `--screen-max-height` and `--screen-max-bytes` to tune
+the CPU/quality tradeoff; the observation includes bounded coordinate-scale
+metadata for future UIA actions.
+
 Add `--user-activity` to suppress proactive screen speech while Windows has
 recent user input. The signal is limited to idle time and foreground window
 class; it does not capture keystrokes, window titles or clipboard contents.

@@ -170,6 +170,9 @@ class _JawlControlHandler(BaseHTTPRequestHandler):
 class _FakeScreen:
     enabled = True
 
+    def profile(self):
+        return {"max_width": 960, "max_height": 720, "max_bytes": 1_000_000}
+
     def observe(self, *, include_image):
         return {
             "status": "verified",
@@ -985,6 +988,8 @@ class LocalE2ETests(unittest.TestCase):
         _, vision_status = self.get_json("/api/vision/status")
         self.assertTrue(vision_status["configured"])
         self.assertTrue(vision_status["screen_enabled"])
+        self.assertEqual(vision_status["capture_profile"]["max_width"], 960)
+        self.assertEqual(vision_status["capture_profile"]["max_height"], 720)
 
         watcher = self.server.screen_watcher
         self.assertIsNotNone(watcher)

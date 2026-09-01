@@ -153,12 +153,14 @@ class VisionLookService:
 
     def status(self) -> dict[str, Any]:
         screen_adapter = getattr(self.hostos_executor, "screen_capture", None)
+        profile = screen_adapter.profile() if hasattr(screen_adapter, "profile") else None
         return {
             "configured": self.describer is not None,
             "screen_enabled": bool(getattr(screen_adapter, "enabled", False)),
             "hostos_dry_run": bool(getattr(self.hostos_executor, "dry_run", True)),
             "cooldown_seconds": self.cooldown_seconds,
             "raw_frames_persisted": False,
+            "capture_profile": profile,
         }
 
     def look(self, prompt: str, *, force: bool = False, session_id: str = "local") -> dict[str, Any]:

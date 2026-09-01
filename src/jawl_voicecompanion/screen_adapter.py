@@ -42,9 +42,9 @@ class ScreenCaptureAdapter:
         self,
         *,
         enabled: bool = False,
-        max_width: int = 1920,
-        max_height: int = 1200,
-        max_bytes: int = 1_500_000,
+        max_width: int = 960,
+        max_height: int = 720,
+        max_bytes: int = 1_000_000,
         blocked_title_terms: Iterable[str] = _DEFAULT_BLOCKED_TITLE_TERMS,
     ) -> None:
         self.enabled = bool(enabled)
@@ -54,6 +54,14 @@ class ScreenCaptureAdapter:
         self.blocked_title_terms = tuple(
             str(term).casefold() for term in blocked_title_terms if str(term).strip()
         )
+
+    def profile(self) -> dict[str, int]:
+        """Return the bounded capture profile without exposing local paths."""
+        return {
+            "max_width": self.max_width,
+            "max_height": self.max_height,
+            "max_bytes": self.max_bytes,
+        }
 
     def observe(self, *, include_image: bool = True) -> dict[str, Any]:
         """Return one focused-window observation without persisting the frame."""
@@ -120,6 +128,10 @@ class ScreenCaptureAdapter:
 
         # Window title is deliberately not returned: it can contain document
         # names, account identifiers or other user data unrelated to vision.
+        encoded["coordinate_scale"] = {
+            "x": round(max(1.0, (right - left) / max(1, encoded["width"])), 4),
+            "y": round(max(1.0, (bottom - top) / max(1, encoded["height"])), 4),
+        }
         return {
             "status": "verified",
             "captured_at": _now(),

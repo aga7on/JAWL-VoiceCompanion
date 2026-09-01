@@ -8,6 +8,13 @@ from jawl_voicecompanion.screen_adapter import ScreenCaptureAdapter  # noqa: E40
 
 
 class ScreenCaptureAdapterTests(unittest.TestCase):
+    def test_capture_profile_is_bounded_and_exposed_without_paths(self):
+        adapter = ScreenCaptureAdapter(max_width=960, max_height=720, max_bytes=1_000_000)
+        self.assertEqual(
+            adapter.profile(),
+            {"max_width": 960, "max_height": 720, "max_bytes": 1_000_000},
+        )
+
     def test_capture_is_disabled_by_default(self):
         result = ScreenCaptureAdapter().observe()
         self.assertEqual(result["status"], "degraded")

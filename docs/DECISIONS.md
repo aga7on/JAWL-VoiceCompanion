@@ -309,3 +309,20 @@ loopback `llama-server` OpenAI-compatible endpoint. Full-resolution screen
 capture must remain bounded because the benchmark showed materially higher
 latency; resizing, UIA structure and calibrated coordinates remain part of
 the screen tool contract. This decision does not select a TTS or ASR model.
+
+## ADR-022 - Bound screen frames before Vision inference
+
+Status: Accepted
+Date: 2026-09-01
+
+The default focused-window capture is limited to 960×720 and a 1 MB JPEG.
+This matches the supplied CPU benchmark's practical 640–960px range and
+prevents the screen watcher from repeatedly spending the full-resolution
+latency budget. Operators may widen or tighten the profile explicitly through
+CLI flags.
+
+Because a resized image is not in the same coordinate system as the original
+window, `screen.observe` returns only bounded `coordinate_scale` metadata.
+Any future UI action must map coordinates back to the original window and then
+pass the normal stale-target, risk and approval gates; the metadata is never
+an authorization signal.

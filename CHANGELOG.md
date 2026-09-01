@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
+  transient JPEG profile, exposes bounded coordinate-scale metadata and makes
+  the profile visible through `/api/vision/status`.
 - Added an opt-in Windows activity signal for Attention/Presence; recent user
   input suppresses proactive screen speech, while only bounded idle time and
   foreground class metadata are exposed.

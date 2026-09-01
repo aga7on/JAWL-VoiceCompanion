@@ -59,8 +59,13 @@ Screen Sensor
    ├─ screenshot / OCR fallback
    └─ VLM only after policy and change detection
           ↓
-      SCREEN_DELTA → JAWL
+       SCREEN_DELTA → JAWL
 ```
+
+The default focused-window image profile is 960×720 with a 1 MB transient
+JPEG cap. Resizing is part of the capture boundary, and the adapter returns a
+bounded coordinate scale for future UIA actions; the scale does not itself
+authorize input.
 
 ## Service boundaries
 

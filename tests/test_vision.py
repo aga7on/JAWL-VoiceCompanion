@@ -95,6 +95,21 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(result["reason"], "vision_describer_not_configured")
         self.assertNotIn("image", result)
 
+    def test_status_exposes_bounded_capture_profile(self):
+        class FakeScreen:
+            enabled = True
+
+            def profile(self):
+                return {"max_width": 960, "max_height": 720, "max_bytes": 1_000_000}
+
+        class FakeHostOS:
+            dry_run = True
+            screen_capture = FakeScreen()
+
+        status = VisionLookService(FakeHostOS()).status()
+        self.assertEqual(status["capture_profile"]["max_width"], 960)
+        self.assertEqual(status["capture_profile"]["max_height"], 720)
+
 
 if __name__ == "__main__":
     unittest.main()

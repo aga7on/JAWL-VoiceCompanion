@@ -89,14 +89,16 @@ Then start the companion in a second terminal:
 
 ```powershell
 .\scripts\run_web.ps1 --port 8766 --hostos-live --screen-enabled `
+  --screen-max-width 960 --screen-max-height 720 `
   --vision-url "http://127.0.0.1:8983/v1" --vision-model "Qwen3-VL-2B"
 ```
 
 The endpoint was smoke-tested with `/health`, `/v1/models` and the existing
 `OpenAICompatibleVisionClient` against `assets/ui_test.png`. Full-resolution
 screen capture remains bounded: the benchmark showed materially higher
-latency, so the next tuning step is capture resizing plus UIA structure and
-coordinate calibration.
+latency. The default profile is 960×720 and 1 MB; `screen.observe` also
+reports bounded `coordinate_scale` metadata so a later UI action can map
+model-image coordinates back to the focused-window rectangle.
 
 The control panel also exposes an explicit, on-demand vision request. It
 captures the focused window through HostOS and sends the transient JPEG to an

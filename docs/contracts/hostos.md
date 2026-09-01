@@ -114,7 +114,8 @@ adapter:
     "data_base64": "<bounded transient payload>",
     "width": 1280,
     "height": 720,
-    "bytes": 420000
+    "bytes": 420000,
+    "coordinate_scale": {"x": 1.0, "y": 1.0}
   },
   "persisted": false
 }
@@ -126,6 +127,11 @@ the frame to disk. It is disabled unless the operator explicitly enables the
 screen adapter. The optional passive watcher reuses this same adapter and VLM
 bridge; it emits only bounded textual events and remains disabled unless
 explicitly requested at startup.
+
+`coordinate_scale` maps a coordinate in the resized image back to the original
+focused-window rectangle; it is metadata only and does not authorize an action.
+The default profile is 960×720 with a 1 MB JPEG limit and can be tightened or
+widened through the CLI.
 
 ## Risk classes
 

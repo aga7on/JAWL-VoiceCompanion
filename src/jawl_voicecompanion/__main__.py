@@ -62,6 +62,24 @@ def main() -> None:
         help="explicitly enable focused-window snapshots for screen.observe",
     )
     parser.add_argument(
+        "--screen-max-width",
+        type=int,
+        default=960,
+        help="maximum captured screen width in pixels",
+    )
+    parser.add_argument(
+        "--screen-max-height",
+        type=int,
+        default=720,
+        help="maximum captured screen height in pixels",
+    )
+    parser.add_argument(
+        "--screen-max-bytes",
+        type=int,
+        default=1_000_000,
+        help="maximum transient JPEG size for screen.observe",
+    )
+    parser.add_argument(
         "--screen-watch",
         action="store_true",
         help="start the explicit opt-in SCREEN_DELTA watcher",
@@ -188,7 +206,12 @@ def main() -> None:
             dry_run=False,
             allowed_executables=frozenset(args.allowed_executable),
             ui_automation=WindowsUIAutomationAdapter(),
-            screen_capture=ScreenCaptureAdapter(enabled=args.screen_enabled),
+            screen_capture=ScreenCaptureAdapter(
+                enabled=args.screen_enabled,
+                max_width=args.screen_max_width,
+                max_height=args.screen_max_height,
+                max_bytes=args.screen_max_bytes,
+            ),
         )
         hostos_executor.browser = BrowserAdapter(ui_automation=hostos_executor.ui_automation)
     vision_describer = None
