@@ -219,7 +219,8 @@ Acceptance criteria:
 - [x] Add bounded browser URL actions and UIA delegation behind `browser.act`.
 - [~] Add level-change events, session tokens and emergency stop; the initial
   loopback path is present, while broader session lifecycle hardening remains.
-- [ ] Add risk classes and per-class confirmation/deny-list policy.
+- [x] Add risk classes and per-class confirmation/deny-list policy, including
+  an explicit ROOT-only unattended mode for heartbeat/background work.
 - [x] Add exact approval fingerprints for commands and high-risk actions.
 - [ ] Create one tool policy for JAWL, MCP, desktop and browser tools.
 - [x] Add server-side one-shot approval queue with exact request/policy

@@ -377,6 +377,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 state = self.server.gateway.policy.set_access_level(payload["level"], actor="browser")
                 self._json({"ok": True, "policy": state})
                 return
+            if self.path == "/api/hostos/unattended":
+                enabled = payload.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be boolean")
+                state = self.server.gateway.policy.set_unattended(enabled, actor="browser")
+                self._json({"ok": True, "policy": state})
+                return
+            if self.path == "/api/hostos/denylist":
+                state = self.server.gateway.policy.set_denylist(
+                    tools=payload.get("tools"), risks=payload.get("risks"), actor="browser"
+                )
+                self._json({"ok": True, "policy": state})
+                return
             if self.path == "/api/emergency-stop":
                 state = self.server.gateway.policy.set_emergency_stop(True, actor="browser")
                 self._json({"ok": True, "policy": state})

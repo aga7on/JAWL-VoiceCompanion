@@ -44,6 +44,13 @@
         <option value="2">2 · OPERATOR</option>
         <option value="3">3 · ROOT</option>
       </select><br>
+      <label><input id="unattended" type="checkbox"> Автономный режим без подтверждений</label>
+      <p id="unattended-status" class="meta">Доступен только в ROOT; включайте перед уходом.</p>
+      <label for="deny-tools">Заблокированные инструменты (через запятую)</label>
+      <input id="deny-tools" type="text" placeholder="shell.exec, filesystem.delete" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
+      <label for="deny-risks">Заблокированные классы риска (через запятую)</label>
+      <input id="deny-risks" type="text" placeholder="destructive, shell" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
+      <button id="save-denylist" type="button">Сохранить deny-list</button>
       <button id="stop" class="danger">Аварийная остановка</button>
       <h2>Подтверждения</h2>
       <div id="approvals" class="meta">Нет ожидающих запросов.</div>
@@ -124,6 +131,12 @@
       document.querySelector('#level').textContent = stateData.policy.active_level;
       document.querySelector('#level-name').textContent = stateData.policy.active_name;
       document.querySelector('#level-select').value = stateData.policy.active_level;
+      document.querySelector('#unattended').checked = Boolean(stateData.policy.unattended);
+      document.querySelector('#unattended-status').textContent = stateData.policy.unattended
+        ? 'Автономный ROOT режим включён; аварийная остановка остаётся активной защитой.'
+        : 'Автономный режим выключен; рискованные действия требуют подтверждения.';
+      document.querySelector('#deny-tools').value = (stateData.policy.deny_tools || []).join(', ');
+      document.querySelector('#deny-risks').value = (stateData.policy.deny_risks || []).join(', ');
       health.textContent = JSON.stringify(statusData, null, 2);
       document.querySelector('#doctor').textContent = JSON.stringify(doctorData, null, 2);
       document.querySelector('#jawl-overview').textContent = JSON.stringify(jawlData, null, 2);
@@ -307,6 +320,20 @@
         return;
       }
       await apiPost('/api/hostos/level', {level: Number(event.target.value)});
+      refresh();
+    });
+    document.querySelector('#unattended').addEventListener('change', async (event) => {
+      if (event.target.checked && !window.confirm('Включить автономный ROOT режим? Агент сможет выполнять разрешённые инструменты без каждого подтверждения.')) {
+        event.target.checked = false;
+        return;
+      }
+      const response = await apiPost('/api/hostos/unattended', {enabled: event.target.checked});
+      if (!response.ok) event.target.checked = false;
+      refresh();
+    });
+    document.querySelector('#save-denylist').addEventListener('click', async () => {
+      const split = id => document.querySelector(id).value.split(',').map(item => item.trim()).filter(Boolean);
+      await apiPost('/api/hostos/denylist', {tools: split('#deny-tools'), risks: split('#deny-risks')});
       refresh();
     });
     document.querySelector('#stop').addEventListener('click', async () => {

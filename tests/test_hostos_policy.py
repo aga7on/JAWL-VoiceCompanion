@@ -39,6 +39,28 @@ class HostOSPolicyTests(unittest.TestCase):
         self.assertEqual(policy.authorize(request).status, "approval_required")
         self.assertTrue(policy.authorize(request, has_approval=True).allowed)
 
+    def test_unattended_mode_is_root_only_and_skips_prompt(self):
+        policy = HostOSPolicy(active_level=AccessLevel.OPERATOR)
+        with self.assertRaises(ValueError):
+            policy.set_unattended(True)
+        policy.set_access_level(AccessLevel.ROOT)
+        policy.set_unattended(True)
+        request = ToolRequest(tool="shell.exec", risk=RiskClass.SHELL)
+        self.assertTrue(policy.authorize(request).allowed)
+
+    def test_denylist_wins_over_unattended_root(self):
+        policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+        policy.set_unattended(True)
+        policy.set_denylist(tools=["shell.exec"], risks=[])
+        request = ToolRequest(tool="shell.exec", risk=RiskClass.SHELL)
+        self.assertEqual(policy.authorize(request).reason, "tool_denied_by_policy")
+
+    def test_downgrade_turns_off_unattended(self):
+        policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+        policy.set_unattended(True)
+        policy.set_access_level(AccessLevel.OBSERVER)
+        self.assertFalse(policy.unattended)
+
     def test_emergency_stop_blocks_even_root(self):
         policy = HostOSPolicy(active_level=AccessLevel.ROOT)
         policy.set_emergency_stop()

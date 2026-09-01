@@ -35,7 +35,10 @@ the default executor is dry-run. The transparent avatar/OBS surface is at
 `http://127.0.0.1:8765/avatar`; the control panel also provides a copyable
 same-origin URL. To explicitly construct a live executor,
 provide `--hostos-live` and configure the roots/managed executables; the
-approval queue and full production policy are still under development.
+approval queue remains available for attended operation. For unattended work,
+select ROOT and explicitly enable the browser's autonomous mode; this lets
+Heartbeat/background tasks run without a prompt for every action while the
+emergency stop and deny-list remain active.
 
 Focused-window snapshots stay disabled unless `--screen-enabled` is supplied
 alongside `--hostos-live`. The snapshot path is explicit and bounded; it does

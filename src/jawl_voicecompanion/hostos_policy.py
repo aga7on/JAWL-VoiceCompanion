@@ -58,9 +58,12 @@ class HostOSPolicy:
 
     active_level: AccessLevel = AccessLevel.SANDBOX
     emergency_stop: bool = False
+    unattended: bool = False
     approvals_required: dict[RiskClass, bool] = field(
         default_factory=lambda: dict(_DEFAULT_APPROVALS)
     )
+    deny_tools: set[str] = field(default_factory=set)
+    deny_risks: set[RiskClass] = field(default_factory=set)
     _audit: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def set_access_level(self, level: AccessLevel | int, actor: str = "user") -> dict[str, Any]:
@@ -71,11 +74,36 @@ class HostOSPolicy:
             "ACCESS_LEVEL_CHANGED",
             {"from": int(old_level), "to": int(new_level), "actor": actor},
         )
+        if new_level < AccessLevel.ROOT and self.unattended:
+            self.unattended = False
+            self._record("UNATTENDED_CHANGED", {"enabled": False, "actor": "access_level_downgrade"})
         return self.snapshot()
 
     def set_emergency_stop(self, enabled: bool = True, actor: str = "user") -> dict[str, Any]:
         self.emergency_stop = bool(enabled)
         self._record("EMERGENCY_STOP_CHANGED", {"enabled": self.emergency_stop, "actor": actor})
+        return self.snapshot()
+
+    def set_unattended(self, enabled: bool, actor: str = "user") -> dict[str, Any]:
+        enabled = bool(enabled)
+        if enabled and self.active_level < AccessLevel.ROOT:
+            raise ValueError("unattended mode requires ROOT access level")
+        self.unattended = enabled
+        self._record("UNATTENDED_CHANGED", {"enabled": enabled, "actor": actor})
+        return self.snapshot()
+
+    def set_denylist(
+        self,
+        tools: Any = None,
+        risks: Any = None,
+        actor: str = "user",
+    ) -> dict[str, Any]:
+        self.deny_tools = self._normalize_tools(tools)
+        self.deny_risks = self._normalize_risks(risks)
+        self._record(
+            "DENYLIST_CHANGED",
+            {"tools": sorted(self.deny_tools), "risks": sorted(item.value for item in self.deny_risks), "actor": actor},
+        )
         return self.snapshot()
 
     def authorize(self, request: ToolRequest, has_approval: bool = False) -> ToolDecision:
@@ -84,6 +112,21 @@ class HostOSPolicy:
                 status="denied",
                 allowed=False,
                 reason="emergency_stop_active",
+                effective_level=self.active_level,
+            )
+
+        if request.tool in self.deny_tools:
+            return ToolDecision(
+                status="denied",
+                allowed=False,
+                reason="tool_denied_by_policy",
+                effective_level=self.active_level,
+            )
+        if request.risk in self.deny_risks:
+            return ToolDecision(
+                status="denied",
+                allowed=False,
+                reason="risk_denied_by_policy",
                 effective_level=self.active_level,
             )
 
@@ -98,7 +141,7 @@ class HostOSPolicy:
             )
 
         needs_approval = self.approvals_required.get(request.risk, True)
-        if needs_approval and not has_approval:
+        if needs_approval and not has_approval and not self.unattended:
             return ToolDecision(
                 status="approval_required",
                 allowed=False,
@@ -119,8 +162,36 @@ class HostOSPolicy:
             "active_level": int(self.active_level),
             "active_name": self.active_level.name,
             "emergency_stop": self.emergency_stop,
+            "unattended": self.unattended,
             "approvals_required": {key.value: value for key, value in self.approvals_required.items()},
+            "deny_tools": sorted(self.deny_tools),
+            "deny_risks": sorted(item.value for item in self.deny_risks),
         }
+
+    @staticmethod
+    def _normalize_tools(values: Any) -> set[str]:
+        if values is None:
+            return set()
+        if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple, set, frozenset)):
+            raise ValueError("deny tools must be an array")
+        if len(values) > 64:
+            raise ValueError("deny tools list is too long")
+        result = set()
+        for value in values:
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 80:
+                raise ValueError("deny tool names must be non-empty strings up to 80 characters")
+            result.add(value.strip())
+        return result
+
+    @staticmethod
+    def _normalize_risks(values: Any) -> set[RiskClass]:
+        if values is None:
+            return set()
+        if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple, set, frozenset)):
+            raise ValueError("deny risks must be an array")
+        if len(values) > len(RiskClass):
+            raise ValueError("deny risks list is too long")
+        return {RiskClass.from_value(value) for value in values}
 
     def audit(self, limit: int = 50) -> list[dict[str, Any]]:
         return list(self._audit[-limit:])

@@ -560,6 +560,12 @@ class LocalE2ETests(unittest.TestCase):
         _, replay = self.post_json("/api/hostos/execute", {**request, "approval_id": approval_id})
         self.assertEqual(replay["result"]["status"], "approval_required")
 
+        _, unattended = self.post_json("/api/hostos/unattended", {"enabled": True})
+        self.assertTrue(unattended["policy"]["unattended"])
+        _, autonomous = self.post_json("/api/hostos/execute", request)
+        self.assertEqual(autonomous["result"]["status"], "verified")
+        self.assertIn("e2e-ok", autonomous["result"]["result"]["stdout"])
+
         self.post_json("/api/emergency-stop", {})
         _, stopped = self.post_json("/api/hostos/execute", request)
         self.assertEqual(stopped["result"]["status"], "denied")

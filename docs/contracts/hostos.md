@@ -26,6 +26,12 @@ selected access level
 Level 3 does not elevate the process, bypass the secure desktop or grant
 rights beyond the Windows account that launched the companion.
 
+`ROOT` is an OS capability level, not an instruction to ask the operator for
+every action. An explicit `UNATTENDED` policy switch may be enabled only at
+level 3 so Heartbeat/background work can execute approved tool classes while
+the operator is away. Emergency stop and the configured deny-list still win
+over unattended execution; downgrading below level 3 disables it.
+
 ## Tool request
 
 ```json
@@ -128,6 +134,9 @@ The user may require approval, deny or allow a class per access level. A
 request is evaluated again immediately before execution. Approvals for risky
 actions are one-shot and bind the exact tool, target, arguments, policy
 fingerprint and expiration time.
+
+The browser exposes the current `unattended`, `deny_tools` and `deny_risks`
+values. The model cannot change any of them through a tool request.
 
 ## Browser/API requirements
 

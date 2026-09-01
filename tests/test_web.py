@@ -54,6 +54,8 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"ambient-triage", frontend)
             self.assertIn(b"ambient-clear", frontend)
             self.assertIn(b"quiet-hours", frontend)
+            self.assertIn(b"unattended", frontend)
+            self.assertIn(b"save-denylist", frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
 
@@ -151,6 +153,19 @@ class WebTests(unittest.TestCase):
         status, changed = self.post_json("/api/hostos/level", {"level": 2})
         self.assertEqual(status, 200)
         self.assertEqual(changed["policy"]["active_name"], "OPERATOR")
+
+    def test_unattended_and_denylist_are_explicit_policy_controls(self):
+        with self.assertRaises(HTTPError) as context:
+            self.post_json("/api/hostos/unattended", {"enabled": True})
+        with context.exception:
+            self.assertEqual(context.exception.code, 400)
+        self.post_json("/api/hostos/level", {"level": 3})
+        status, enabled = self.post_json("/api/hostos/unattended", {"enabled": True})
+        self.assertEqual(status, 200)
+        self.assertTrue(enabled["policy"]["unattended"])
+        status, blocked = self.post_json("/api/hostos/denylist", {"tools": ["shell.exec"], "risks": []})
+        self.assertEqual(status, 200)
+        self.assertEqual(blocked["policy"]["deny_tools"], ["shell.exec"])
 
     def test_hostos_registry_is_visible_and_requests_use_server_policy(self):
         status, tools = self.get_json("/api/hostos/tools")

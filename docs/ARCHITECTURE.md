@@ -216,7 +216,9 @@ The access levels follow the local JAWL HostOS model:
 Level 3 does not mean Windows elevation: the process cannot cross the secure
 desktop or exceed the rights of the user who launched it. It remains a
 deliberate expert mode with a visible indicator, emergency stop, audit log and
-the ability to require confirmation for selected risk classes.
+deny-list. A separate explicit `unattended` switch is available only at level
+3, allowing Heartbeat/background work to run without an operator prompt for
+each action. Lowering the level disables that switch.
 
 The browser, keyboard/mouse, filesystem, process and shell tools all pass
 through the same policy gate. This prevents a lower-risk tool from becoming a

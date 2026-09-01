@@ -205,3 +205,19 @@ the browser falls back to the dependency-free placeholder on failure.
 This keeps the Python service lightweight, preserves the OBS URL and allows a
 future renderer replacement without moving personality, memory, voice or
 HostOS logic into the frontend.
+
+## ADR-016 - Separate full-user capability from unattended operation
+
+Status: Accepted
+Date: 2026-09-01
+
+`ROOT` (level 3) grants the tools the launched Windows account can perform;
+it does not imply that the browser must confirm every action. A separate,
+explicit `unattended` policy switch is enabled only after ROOT is selected.
+This is the mode required for JAWL Heartbeat and background work while the
+operator is away.
+
+Unattended execution still passes through the same HostOS registry and policy
+gate. Emergency stop, deny-tools, deny-risk classes and OS errors remain
+authoritative. Downgrading below ROOT turns unattended mode off, and every
+change is included in the bounded audit and approval policy fingerprint.

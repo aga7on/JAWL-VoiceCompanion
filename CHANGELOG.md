@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added explicit ROOT-only unattended execution for background/heartbeat work:
+  level 3 grants current-user capability, while the separate switch disables
+  per-action prompts only after operator confirmation; emergency stop and
+  deny-list checks remain authoritative.
 - Added bounded Attention/Presence handling for screen deltas, DND/cooldown
   and explicit atomic delivery of salient `SPEAK_INTENT` events to JAWL's
   existing `.jawl_events` IPC boundary.
