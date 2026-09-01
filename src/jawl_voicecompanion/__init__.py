@@ -10,6 +10,7 @@ from .arbiter import TurnArbiter, TurnPriority
 from .screen_adapter import ScreenCaptureAdapter
 from .vision import OpenAICompatibleVisionClient, VisionLookService
 from .presence import ScreenDeltaWatcher
+from .tts import CozyVoiceHttpClient, TTSService, TTSUnavailable, TTSCancelled
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 
 __all__ = [
@@ -28,6 +29,10 @@ __all__ = [
     "OpenAICompatibleVisionClient",
     "VisionLookService",
     "ScreenDeltaWatcher",
+    "CozyVoiceHttpClient",
+    "TTSService",
+    "TTSUnavailable",
+    "TTSCancelled",
     "VoiceMemProcessClient",
     "VoiceMemUnavailable",
 ]

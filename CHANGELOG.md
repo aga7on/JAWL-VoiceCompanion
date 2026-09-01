@@ -46,3 +46,6 @@
 - Added bounded browser microphone capture, mono PCM16 `/api/voice/audio`,
   `/api/voice/end` flushing and an E2E path proving audio → VoiceMem → JAWL →
   visible state; raw audio remains transient.
+- Added a provider-neutral cancellable TTS service, bounded CozyVoice REST
+  client, WAV sentence merge, `/api/tts/status`, `/api/tts/synthesize` and
+  optional browser playback with a local-HTTP E2E check.

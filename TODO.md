@@ -43,12 +43,16 @@ Acceptance criteria:
 - [x] Connect external streaming ASR partials to the VoiceMem sidecar
   `feed_partial` contract.
 - [x] Deliver the VoiceMem final transcript through the JAWL user-turn gateway.
-- [ ] Implement CozyVoice 2 adapter.
-- [ ] Inspect and fix the local CozyVoice wrapper's non-streaming behavior.
+- [x] Implement the bounded CozyVoice 2 REST adapter.
+- [~] Inspect and fix the local CozyVoice wrapper's non-streaming behavior;
+  the companion calls one sentence per request and merges compatible WAV
+  chunks, while upstream wrapper streaming remains unverified.
 - [ ] Add OmniVoice adapter when its model/API location is confirmed.
-- [ ] Implement sentence chunking and hidden-thought filtering.
+- [x] Implement bounded sentence chunking for TTS.
+- [ ] Add hidden-thought filtering.
 - [ ] Implement ordered parallel TTS queue.
-- [ ] Implement playback cancellation.
+- [~] Implement latest-request-wins synthesis cancellation; browser playback
+  cancellation and barge-in integration remain.
 - [ ] Add half-duplex hands-free mode.
 - [ ] Add barge-in capture and interruption classification.
 - [ ] Benchmark first-audio latency and Russian prosody.

@@ -12,13 +12,14 @@ The project combines:
 
 ## Current status
 
-Phase 1 — contracts and text vertical slice. See
+Phase 2 — Russian voice loop. See
 [docs/STATE.md](docs/STATE.md) and [TODO.md](TODO.md).
 
-The current Phase 1 slice includes a dependency-free text gateway, local
-browser control plane, initial HostOS tool registry and a transparent avatar
-surface for OBS. Real JAWL, voice, Live2D and non-dry-run web actions are
-still being integrated.
+The current slice includes a dependency-free text gateway, local browser
+control plane, initial HostOS tool registry, browser microphone ingress,
+optional CozyVoice REST TTS and a transparent avatar surface for OBS. Real
+JAWL, production model warmup, Live2D and non-dry-run web actions are still
+being integrated.
 
 ## Run the local slice
 
@@ -63,6 +64,16 @@ has an opt-in microphone button: it sends bounded mono PCM16 chunks to
 own streaming ASR/VAD runs in its separate environment. Russian ASR quality,
 AEC and barge-in still require a real-device benchmark.
 
+To enable local CozyVoice REST TTS (start `G:\AI\CozyVoice\rest_api.py`
+separately), add its base URL:
+
+```powershell
+.\scripts\run_web.ps1 --tts-url "http://127.0.0.1:9888"
+```
+
+The panel then requests transient WAV audio after a successful response. TTS
+is optional; when unavailable the text path remains usable.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -81,6 +92,7 @@ for cancellation and priority.
 - [docs/DECISIONS.md](docs/DECISIONS.md) — accepted architectural decisions;
 - [docs/contracts/events.md](docs/contracts/events.md) — event contract;
 - [docs/contracts/voice.md](docs/contracts/voice.md) — VoiceMem sidecar contract;
+- [docs/contracts/tts.md](docs/contracts/tts.md) — TTS provider and cancellation contract;
 - [docs/contracts/response-envelope.md](docs/contracts/response-envelope.md) — response contract.
 
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).

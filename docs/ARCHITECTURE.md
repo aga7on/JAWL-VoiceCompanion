@@ -112,6 +112,12 @@ Provides a common interface for CozyVoice 2 and OmniVoice. The worker should
 support sentence-level requests and cancellation. TTS output is not allowed
 to contain internal thoughts or control markup.
 
+The current implementation keeps that boundary small: `TTSService` applies
+latest-request-wins cancellation, while `CozyVoiceHttpClient` calls the
+separate local REST wrapper and returns bounded transient WAV data. The web
+process never imports CozyVoice or its torch/model dependency tree. OmniVoice
+will implement the same provider interface after its runtime/API is confirmed.
+
 ### Attention/Presence Engine
 
 This is a fast timing and salience layer, inspired by Miru's AttentionEngine.

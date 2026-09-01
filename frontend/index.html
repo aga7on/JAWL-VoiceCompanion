@@ -30,6 +30,7 @@
       <button id="send">Отправить</button>
       <button id="mic" type="button">🎙️ Включить микрофон</button>
       <span id="mic-status" class="meta">Микрофон выключен.</span>
+      <div id="tts-status" class="meta">TTS выключен.</div>
     </section>
     <section>
       <h2>HostOS</h2>
@@ -65,6 +66,8 @@
     let sessionHeaders = {};
     let voice = null;
     let voiceQueue = Promise.resolve();
+    let ttsConfigured = false;
+    let currentAudio = null;
     function addMessage(who, text) {
       const item = document.createElement('div');
       item.className = 'message';
@@ -74,16 +77,22 @@
       messages.scrollTop = messages.scrollHeight;
     }
     async function refresh() {
-      const [state, status, approvalResponse, visionStatus] = await Promise.all([
+      const [state, status, approvalResponse, visionStatus, ttsStatus] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/health'),
         fetch('/api/hostos/approvals', {headers: sessionHeaders}),
-        fetch('/api/vision/status')
+        fetch('/api/vision/status'),
+        fetch('/api/tts/status')
       ]);
       const stateData = await state.json();
       const statusData = await status.json();
       const approvalData = approvalResponse.ok ? await approvalResponse.json() : {approvals: []};
       const visionStatusData = visionStatus.ok ? await visionStatus.json() : {configured: false};
+      const ttsStatusData = ttsStatus.ok ? await ttsStatus.json() : {configured: false};
+      ttsConfigured = Boolean(ttsStatusData.configured && ttsStatusData.status !== 'offline');
+      document.querySelector('#tts-status').textContent = ttsConfigured
+        ? `TTS готов · ${ttsStatusData.provider || 'локальный провайдер'}`
+        : 'TTS не настроен; доступен текстовый режим.';
       document.querySelector('#level').textContent = stateData.policy.active_level;
       document.querySelector('#level-name').textContent = stateData.policy.active_name;
       document.querySelector('#level-select').value = stateData.policy.active_level;
@@ -114,6 +123,28 @@
     }
     async function apiPost(path, body) {
       return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
+    }
+    function stopSpeech() {
+      if (!currentAudio) return;
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+      URL.revokeObjectURL(currentAudio.src);
+      currentAudio = null;
+    }
+    async function speak(text) {
+      if (!ttsConfigured || !text) return;
+      stopSpeech();
+      try {
+        const response = await apiPost('/api/tts/synthesize', {text});
+        if (!response.ok) return;
+        const url = URL.createObjectURL(await response.blob());
+        const audio = new Audio(url);
+        currentAudio = audio;
+        audio.onended = () => { URL.revokeObjectURL(url); if (currentAudio === audio) currentAudio = null; };
+        await audio.play();
+      } catch (error) {
+        document.querySelector('#tts-status').textContent = `TTS не воспроизведён: ${error.message}`;
+      }
     }
     function downsample(samples, fromRate, toRate) {
       if (fromRate === toRate) return samples;
@@ -149,7 +180,10 @@
       voiceQueue = voiceQueue.then(async () => {
         const response = await apiPost('/api/voice/audio', payload);
         const data = await response.json();
-        for (const answer of data.responses || []) addMessage('Компаньон', answer.text || answer.error);
+        for (const answer of data.responses || []) {
+          addMessage('Компаньон', answer.text || answer.error);
+          speak(answer.text);
+        }
         if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem недоступен');
       }).catch(error => {
         document.querySelector('#mic-status').textContent = `Ошибка микрофона: ${error.message}`;
@@ -166,7 +200,10 @@
       try {
         const response = await apiPost('/api/voice/end', {session_id: 'browser-mic'});
         const data = await response.json();
-        for (const answer of data.responses || []) addMessage('Компаньон', answer.text || answer.error);
+        for (const answer of data.responses || []) {
+          addMessage('Компаньон', answer.text || answer.error);
+          speak(answer.text);
+        }
       } catch (error) {
         document.querySelector('#mic-status').textContent = `Остановка микрофона: ${error.message}`;
       }
@@ -206,11 +243,13 @@
     document.querySelector('#send').addEventListener('click', async () => {
       const text = input.value.trim();
       if (!text) return;
+      stopSpeech();
       addMessage('Ты', text);
       input.value = '';
       const response = await apiPost('/api/chat', {text});
       const data = await response.json();
       addMessage('Компаньон', data.text || data.error);
+      if (response.ok) speak(data.text);
       refresh();
     });
     document.querySelector('#level-select').addEventListener('change', async (event) => {

@@ -4,13 +4,14 @@ Last updated: 2026-09-01
 
 ## Current phase
 
-Phase 2 — Russian voice loop (transport slice in progress).
+Phase 2 — Russian voice loop (TTS slice in progress).
 
 Repository state: architecture baseline committed. A dependency-free mock
 text/control slice is implemented. The real VoiceMem sidecar boundary now
-accepts external ASR partials and browser PCM16 microphone chunks; real JAWL,
-production VoiceMem model startup, TTS and Live2D remain opt-in/integration
-work. Optional UIA, focused-window OS and VLM adapters remain explicit.
+accepts external ASR partials and browser PCM16 microphone chunks, and the
+optional TTS boundary can call CozyVoice REST. Real JAWL, production VoiceMem
+model startup, OmniVoice and Live2D remain opt-in/integration work. Optional
+UIA, focused-window OS and VLM adapters remain explicit.
 
 ## Git state
 
@@ -72,6 +73,10 @@ work. Optional UIA, focused-window OS and VLM adapters remain explicit.
 - The browser microphone path converts input to bounded mono PCM16, VoiceMem
   owns streaming ASR/VAD in its separate environment, and only final
   `VOICE_TURN` events reach JAWL. `/api/voice/end` flushes active capture.
+- `TTSService` provides latest-request-wins cancellation; the CozyVoice REST
+  adapter splits bounded text into sentences, merges WAV chunks and exposes
+  transient audio through `/api/tts/synthesize`. The browser plays it only
+  when the provider is configured.
 
 ## Reference inventory
 
@@ -116,6 +121,8 @@ work. Optional UIA, focused-window OS and VLM adapters remain explicit.
   Attention/Presence and JAWL's final wording path;
 - validate production VoiceMem audio model startup in its own environment and
   benchmark Russian ASR on a real microphone;
+- validate CozyVoice model startup/latency and decide whether an actual
+  streaming TTS worker is needed;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -129,27 +136,30 @@ E2E runner/tests and the related architecture/contracts/documentation in
 VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner,
 client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
 and final-turn routing in `36a808c`.
+The current work session adds the TTS boundary and CozyVoice REST path.
 
 Verification for the current work session:
-`scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 58 tests;
+`scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 60 tests;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings.
-The working tree is clean after commit `36a808c`.
+The TTS changes are ready for commit; the preceding microphone slice is clean
+in `36a808c`.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
 model yet. The web server's default executor remains dry-run and no VLM
 endpoint is configured by default; semantic significance scoring,
 pixel-level redaction, JAWL/Attention consumption, ASR quality benchmarking,
-AEC/barge-in, TTS/audio cancellation and production model warmup are still
-pending. The native always-on-top desktop-pet shell is also deferred.
+AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
+model warmup are still pending. The native always-on-top desktop-pet shell is
+also deferred.
 
 ## Next action
 
 Exercise the JAWL adapter against the actual local process, then benchmark
 the installed VoiceMem ASR modes on a real Russian microphone and validate
-production model warmup. The bounded `SCREEN_DELTA` stream still needs
-Attention/Presence consumption; TTS/audio cancellation and Live2D runtime
-selection follow these stable contracts.
+production model warmup. Then benchmark CozyVoice latency and choose the
+first user-supplied Live2D model. The bounded `SCREEN_DELTA` stream still
+needs Attention/Presence consumption.
 
 ## State update protocol
 

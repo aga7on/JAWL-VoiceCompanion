@@ -16,6 +16,7 @@ from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
+from .tts import TTSService, TTSUnavailable, TTSCancelled
 from .vision import VisionLookService
 from .voicemem_client import VoiceMemProcessClient, VoiceMemUnavailable
 
@@ -35,6 +36,7 @@ class CompanionServer(ThreadingHTTPServer):
         vision_service: VisionLookService,
         screen_watcher: ScreenDeltaWatcher | None = None,
         voice_mem: VoiceMemProcessClient | None = None,
+        tts_service: TTSService | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -42,6 +44,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.vision = vision_service
         self.screen_watcher = screen_watcher
         self.voice_mem = voice_mem
+        self.tts = tts_service
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -52,6 +55,8 @@ class CompanionServer(ThreadingHTTPServer):
             self.screen_watcher.stop()
         if self.voice_mem is not None:
             self.voice_mem.close()
+        if self.tts is not None:
+            self.tts.close()
         super().server_close()
 
 
@@ -98,6 +103,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"configured": True, **self.server.voice_mem.health()})
             except VoiceMemUnavailable as exc:
                 self._json({"configured": True, "status": "degraded", "reason": str(exc)})
+            return
+        if path == "/api/tts/status":
+            if self.server.tts is None:
+                self._json({"configured": False, "status": "not_configured"})
+                return
+            self._json(self.server.tts.health())
             return
         if path == "/api/hostos/approvals":
             try:
@@ -185,6 +196,20 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     "responses": responses,
                 })
                 return
+            if self.path == "/api/tts/synthesize":
+                if self.server.tts is None:
+                    self._json({"error": "TTS provider is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                text = payload.get("text", "")
+                voice = payload.get("voice")
+                speed = payload.get("speed", 1.0)
+                if not isinstance(text, str) or voice is not None and not isinstance(voice, str):
+                    raise ValueError("text must be string and voice must be string or null")
+                if isinstance(speed, bool) or not isinstance(speed, (int, float)):
+                    raise ValueError("speed must be a number")
+                audio = self.server.tts.synthesize(text, voice=voice, speed=float(speed))
+                self._audio(audio)
+                return
             if self.path == "/api/hostos/execute":
                 raw_request = payload.get("request", payload)
                 if not isinstance(raw_request, dict):
@@ -246,6 +271,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
         except VoiceMemUnavailable as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+        except TTSCancelled:
+            self._json({"error": "speech request was superseded"}, status=HTTPStatus.CONFLICT)
+        except TTSUnavailable as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
@@ -290,6 +319,14 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _audio(self, body: bytes) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _voice_turn_responses(self, events: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
         responses = []
         for event in events:
@@ -310,6 +347,7 @@ def create_server(
     screen_watch: bool = False,
     screen_watch_interval: float = 10.0,
     voice_mem: VoiceMemProcessClient | None = None,
+    tts_service: TTSService | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -339,6 +377,7 @@ def create_server(
         vision_service,
         watcher,
         voice_mem,
+        tts_service,
     )
     if watcher is not None:
         watcher.start()

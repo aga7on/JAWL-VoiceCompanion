@@ -1,11 +1,13 @@
 import json
 import base64
+import io
 import socketserver
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -17,6 +19,7 @@ from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
 from jawl_voicecompanion.models import AccessLevel  # noqa: E402
+from jawl_voicecompanion.tts import CozyVoiceHttpClient, TTSService  # noqa: E402
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
 from jawl_voicecompanion.voicemem_client import VoiceMemProcessClient  # noqa: E402
 from jawl_voicecompanion.web import create_server  # noqa: E402
@@ -31,6 +34,44 @@ class _VisionHandler(BaseHTTPRequestHandler):
         body = json.dumps({"choices": [{"message": {"content": "На экране окно редактора."}}]}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
+class _TTSHandler(BaseHTTPRequestHandler):
+    requests = []
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/health":
+            self.send_error(404)
+            return
+        body = b'{"status":"ok","model":"e2e"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/tts":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        _TTSHandler.requests.append(payload)
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(22050)
+            wav.writeframes(b"\0\0" * max(1, len(payload.get("text", ""))))
+        body = output.getvalue()
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/wav")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -76,6 +117,9 @@ class LocalE2ETests(unittest.TestCase):
         self.provider = ThreadingHTTPServer(("127.0.0.1", 0), _VisionHandler)
         _VisionHandler.requests = []
         threading.Thread(target=self.provider.serve_forever, daemon=True).start()
+        self.tts_provider = ThreadingHTTPServer(("127.0.0.1", 0), _TTSHandler)
+        _TTSHandler.requests = []
+        threading.Thread(target=self.tts_provider.serve_forever, daemon=True).start()
         self.jawl = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _JawlHandler)
         _JawlHandler.messages = []
         self.jawl_port_file = Path(self.temp.name) / "terminal.port"
@@ -103,6 +147,9 @@ class LocalE2ETests(unittest.TestCase):
             args=("--test-stub",),
             timeout_seconds=2,
         )
+        self.tts = TTSService(CozyVoiceHttpClient(
+            f"http://127.0.0.1:{self.tts_provider.server_port}", timeout_seconds=2,
+        ))
         self.server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
@@ -112,6 +159,7 @@ class LocalE2ETests(unittest.TestCase):
             screen_watch=True,
             screen_watch_interval=2,
             voice_mem=self.voice_mem,
+            tts_service=self.tts,
         )
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -125,6 +173,8 @@ class LocalE2ETests(unittest.TestCase):
         self.server.server_close()
         self.provider.shutdown()
         self.provider.server_close()
+        self.tts_provider.shutdown()
+        self.tts_provider.server_close()
         self.jawl.shutdown()
         self.jawl.server_close()
         self.temp.cleanup()
@@ -144,6 +194,16 @@ class LocalE2ETests(unittest.TestCase):
         with urlopen(request, timeout=3) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def post_binary(self, path, payload):
+        request = Request(
+            self.base + path,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", **self.headers},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            return response.status, response.read()
+
     def test_chat_avatar_approval_execution_and_emergency_stop(self):
         status, session = self.get_json("/api/session")
         self.assertEqual(status, 200)
@@ -158,6 +218,16 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(self.jawl_adapter.last_status, "connected")
         status, state = self.get_json("/api/state")
         self.assertEqual(state["last_turn"]["response"]["text"], chat["text"])
+
+        _, tts_status = self.get_json("/api/tts/status")
+        self.assertTrue(tts_status["configured"])
+        self.assertEqual(tts_status["status"], "ok")
+        _, audio = self.post_binary("/api/tts/synthesize", {"text": "Привет. Как дела?"})
+        self.assertTrue(audio.startswith(b"RIFF"))
+        with wave.open(io.BytesIO(audio), "rb") as wav:
+            self.assertEqual(wav.getframerate(), 22050)
+            self.assertGreater(wav.getnframes(), 0)
+        self.assertEqual([item["text"] for item in _TTSHandler.requests], ["Привет.", "Как дела?"])
 
         self.post_json("/api/hostos/level", {"level": int(AccessLevel.ROOT)})
         request = {

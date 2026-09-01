@@ -10,6 +10,7 @@ from .browser_adapter import BrowserAdapter
 from .jawl_adapter import JawlTerminalAdapter
 from .hostos_tools import HostOSExecutor
 from .screen_adapter import ScreenCaptureAdapter
+from .tts import CozyVoiceHttpClient, TTSService
 from .vision import OpenAICompatibleVisionClient
 from .voicemem_client import VoiceMemProcessClient
 from .windows_ui import WindowsUIAutomationAdapter
@@ -83,6 +84,12 @@ def main() -> None:
     )
     parser.add_argument("--voicemem-mode", default="normal")
     parser.add_argument("--voicemem-audio-rate", type=int, default=16000)
+    parser.add_argument(
+        "--tts-url",
+        default=None,
+        help="local CozyVoice REST base URL, for example http://127.0.0.1:9888",
+    )
+    parser.add_argument("--tts-timeout", type=float, default=120.0)
     parser.add_argument("--sandbox-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
     parser.add_argument("--host-root", type=Path, action="append", default=[])
@@ -131,6 +138,10 @@ def main() -> None:
         if args.voicemem_python
         else None
     )
+    tts_service = (
+        TTSService(CozyVoiceHttpClient(args.tts_url, timeout_seconds=args.tts_timeout))
+        if args.tts_url else None
+    )
     server = create_server(
         args.host,
         args.port,
@@ -141,6 +152,7 @@ def main() -> None:
         screen_watch=args.screen_watch,
         screen_watch_interval=args.screen_watch_interval,
         voice_mem=voice_mem,
+        tts_service=tts_service,
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:
