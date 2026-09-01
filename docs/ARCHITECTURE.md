@@ -381,6 +381,8 @@ bounded `desktop.pointer` fallback: Vision supplies image coordinates plus the
 frame dimensions and foreground-window bounds, and HostOS rechecks those
 bounds before converting to screen coordinates. Dispatch and application
 acceptance remain separate postconditions.
+Custom surfaces can likewise use `desktop.keyboard` for bounded Unicode text
+or hotkeys, with the same foreground-window binding and interactive policy.
 
 There are two separate paths:
 

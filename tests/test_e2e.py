@@ -30,6 +30,7 @@ from jawl_voicecompanion.tts import CozyVoiceHttpClient, TTSService  # noqa: E40
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
 from jawl_voicecompanion.voicemem_client import VoiceMemProcessClient  # noqa: E402
 from jawl_voicecompanion.windows_pointer import WindowsPointerAdapter  # noqa: E402
+from jawl_voicecompanion.windows_keyboard import WindowsKeyboardAdapter  # noqa: E402
 from jawl_voicecompanion.web import create_server  # noqa: E402
 
 
@@ -237,6 +238,17 @@ class _FakePointerBackend:
 
     def position(self):
         return self.position_value
+
+
+class _FakeKeyboardBackend:
+    def __init__(self):
+        self.calls = []
+
+    def type_text(self, text):
+        self.calls.append(("type", text))
+
+    def hotkey(self, keys):
+        self.calls.append(("hotkey", keys))
 
 
 class _AmbientVoiceMem:
@@ -468,6 +480,15 @@ class LocalE2ETests(unittest.TestCase):
             },
             pointer_backend=self.pointer_backend,
         )
+        self.keyboard_backend = _FakeKeyboardBackend()
+        self.keyboard = WindowsKeyboardAdapter(
+            foreground_provider=lambda: {
+                "status": "verified",
+                "class_name": "E2ECanvas",
+                "bounds": [100, 200, 1100, 1000],
+            },
+            keyboard_backend=self.keyboard_backend,
+        )
         self.executor = HostOSExecutor(
             self.policy,
             Path(self.temp.name) / "sandbox",
@@ -476,6 +497,7 @@ class LocalE2ETests(unittest.TestCase):
             dry_run=False,
             screen_capture=_FakeScreen(),
             pointer=self.pointer,
+            keyboard=self.keyboard,
         )
         self.gateway = TextGateway(
             policy=self.policy,
@@ -731,6 +753,28 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(result["result"]["screen_y"], 601)
         self.assertEqual(result["result"]["postcondition"]["verified"], True)
         self.assertEqual(self.pointer_backend.calls, [("click", 601, 601)])
+
+    def test_keyboard_text_uses_approval_and_foreground_postcondition(self):
+        self.post_json("/api/hostos/level", {"level": int(AccessLevel.OPERATOR)})
+        request = {
+            "request": {
+                "tool": "desktop.keyboard",
+                "risk": "observe",
+                "arguments": {"operation": "type", "value": "Привет, компаньон!"},
+                "target": {
+                    "window_class": "E2ECanvas",
+                    "window_bounds": [100, 200, 1100, 1000],
+                },
+            },
+        }
+        _, pending = self.post_json("/api/hostos/approvals/request", request)
+        approval_id = pending["result"]["approval_id"]
+        self.post_json(f"/api/hostos/approvals/{approval_id}/approve", {})
+        _, executed = self.post_json("/api/hostos/execute", {**request, "approval_id": approval_id})
+        result = executed["result"]
+        self.assertEqual(result["status"], "dispatched")
+        self.assertTrue(result["result"]["postcondition"]["verified"])
+        self.assertEqual(self.keyboard_backend.calls, [("type", "Привет, компаньон!")])
 
     def test_restart_stops_owned_processes_and_starts_safe(self):
         policy = HostOSPolicy(active_level=AccessLevel.ROOT)

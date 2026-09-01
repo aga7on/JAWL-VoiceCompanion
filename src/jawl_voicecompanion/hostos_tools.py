@@ -42,6 +42,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("screen.observe", RiskClass.OBSERVE, "Capture one bounded focused-window snapshot.", AccessLevel.OBSERVER),
     ToolSpec("desktop.act", RiskClass.INTERACTIVE, "Perform a bounded desktop UI action.", AccessLevel.OPERATOR, True),
     ToolSpec("desktop.pointer", RiskClass.INTERACTIVE, "Click or move within a fresh foreground-window target.", AccessLevel.OPERATOR, True),
+    ToolSpec("desktop.keyboard", RiskClass.INTERACTIVE, "Type bounded text or a hotkey in a fresh foreground window.", AccessLevel.OPERATOR, True),
     ToolSpec("browser.act", RiskClass.INTERACTIVE, "Perform a bounded browser action.", AccessLevel.OPERATOR, True),
 )
 
@@ -78,6 +79,7 @@ class HostOSExecutor:
     allowed_executables: frozenset[str] = frozenset()
     ui_automation: Any | None = None
     pointer: Any | None = None
+    keyboard: Any | None = None
     browser: Any | None = None
     screen_capture: Any | None = None
     max_read_chars: int = 100_000
@@ -231,6 +233,16 @@ class HostOSExecutor:
             target = dict(request.arguments)
             target.update(dict(request.target or {}))
             return self.pointer.act(
+                str(request.arguments.get("operation", "")),
+                target,
+                request.arguments.get("value"),
+            )
+        if request.tool == "desktop.keyboard":
+            if self.keyboard is None:
+                raise PermissionError("Windows keyboard adapter is unavailable")
+            target = dict(request.arguments)
+            target.update(dict(request.target or {}))
+            return self.keyboard.act(
                 str(request.arguments.get("operation", "")),
                 target,
                 request.arguments.get("value"),

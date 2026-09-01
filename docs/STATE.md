@@ -91,6 +91,9 @@ workflows, while semantic watcher tuning remains.
   adapter. It recalibrates image coordinates against fresh foreground-window
   bounds and reports cursor placement as a postcondition without claiming
   that the target application accepted the input.
+- The same path now includes `desktop.keyboard` for bounded Unicode text and
+  one-to-four-key hotkeys, bound to the observed foreground window and covered
+  by injected-backend unit/E2E tests.
 - Browser adapter now supports bounded HTTP(S) navigation and delegates
   semantic actions to UIA; no browser automation runtime is installed yet.
 - Browser API exposes the tool registry and routes execution requests through
@@ -423,11 +426,13 @@ therefore run while the operator is away without per-action prompts; emergency
 stop and deny-tools/deny-risk policy checks remain authoritative. The browser
 control plane exposes these settings and the policy fingerprint includes them.
 
-The latest desktop-control follow-up adds `desktop.pointer` for custom/canvas
+The latest desktop-control follow-up adds `desktop.pointer` and
+`desktop.keyboard` for custom/canvas
 surfaces. Image coordinates are recalibrated against fresh foreground bounds,
-stale windows are rejected, and cursor placement is reported separately from
-application acceptance. Unit and HTTP E2E coverage use an injected pointer
-backend, so no real click was performed during automated verification.
+stale windows are rejected, and pointer/keyboard dispatch is reported
+separately from application acceptance. Unit and HTTP E2E coverage use injected
+backends, so no real click or keystroke was performed during automated
+verification.
 
 The latest ASR validation re-ran the live Qwen endpoint through the Companion
 adapter against the three known VoiceMem samples and matched all expected
@@ -441,7 +446,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 146 unit tests and 12 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 149 unit tests and 13 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the

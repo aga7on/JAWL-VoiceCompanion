@@ -21,6 +21,7 @@ from .ambient_triage import AmbientTriageProvider, AmbientTriageUnavailable, Oll
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioDisabled, AmbientAudioService
 from .asr import ASRUnavailable, ExternalASRService, OpenAICompatibleASRClient
 from .windows_pointer import WindowsPointerAdapter
+from .windows_keyboard import WindowsKeyboardAdapter
 from .llm import LLMUnavailable, OpenAICompatibleChatClient
 from .system_audio import SystemAudioLoopback, SystemAudioUnavailable
 from .audit import AuditLog
@@ -64,6 +65,7 @@ __all__ = [
     "ExternalASRService",
     "OpenAICompatibleASRClient",
     "WindowsPointerAdapter",
+    "WindowsKeyboardAdapter",
     "LLMUnavailable",
     "OpenAICompatibleChatClient",
     "SystemAudioLoopback",

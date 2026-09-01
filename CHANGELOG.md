@@ -19,6 +19,9 @@
 - Revalidated the live Qwen3-ASR adapter against the three VoiceMem PCM16
   samples; all three expected multilingual transcripts were returned, while
   the absence of a Russian reference recording remains explicit.
+- Added a policy-gated `desktop.keyboard` fallback for bounded Unicode text and
+  one-to-four-key hotkeys, with foreground-window binding and a separate
+  dispatch postcondition.
 
 - Screen capture now defaults to a benchmark-oriented 960×720 / 1 MB
   transient JPEG profile, exposes bounded coordinate-scale metadata and makes

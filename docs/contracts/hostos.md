@@ -168,6 +168,12 @@ Supported operations are `move`, `click`, `double_click`, `right_click` and
 accepted the input. Pointer actions use the same interactive approval,
 unattended and emergency-stop policy as other desktop actions.
 
+Custom surfaces may also use `desktop.keyboard` with `type` (at most 4,000
+characters of Unicode text) or `hotkey` (one to four recognized keys). The
+request can bind the action to the expected foreground class and bounds; the
+result reports that the foreground window stayed unchanged, not that the
+application consumed the keystrokes.
+
 ## Risk classes
 
 The initial classes are:

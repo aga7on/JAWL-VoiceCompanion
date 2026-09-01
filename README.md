@@ -70,7 +70,8 @@ Screen capture defaults to a 960×720 image and a 1 MB transient JPEG. Use
 the CPU/quality tradeoff; the observation includes bounded coordinate-scale
 metadata. Native controls use UIA fingerprints; canvas/custom surfaces can use
 the approval-gated `desktop.pointer` fallback, which recalibrates image
-coordinates against fresh foreground-window bounds.
+coordinates against fresh foreground-window bounds. The matching
+`desktop.keyboard` fallback supports bounded Unicode text and hotkeys.
 
 Add `--user-activity` to suppress proactive screen speech while Windows has
 recent user input. The signal is limited to idle time and foreground window

@@ -243,7 +243,8 @@ Acceptance criteria:
 - [x] Implement initial Windows UI Automation observation with stale element
   checks.
 - [~] Implement bounded keyboard/mouse/window control and browser actions;
-  initial UIA control and browser navigation adapters are present.
+  UIA control, calibrated pointer and bounded keyboard adapters are present;
+  real custom-app validation and broader window management remain.
 - [x] Add bounded browser URL actions and UIA delegation behind `browser.act`.
 - [~] Add level-change events, session tokens and emergency stop; the loopback
   path now cancels tracked managed/shell processes, while broader session

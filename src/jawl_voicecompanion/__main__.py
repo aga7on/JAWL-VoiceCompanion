@@ -23,6 +23,7 @@ from .voicemem_client import VoiceMemProcessClient
 from .user_activity import WindowsUserActivity
 from .windows_ui import WindowsUIAutomationAdapter
 from .windows_pointer import WindowsPointerAdapter
+from .windows_keyboard import WindowsKeyboardAdapter
 from .web import create_server
 
 
@@ -243,6 +244,7 @@ def main() -> None:
             allowed_executables=frozenset(args.allowed_executable),
             ui_automation=WindowsUIAutomationAdapter(),
             pointer=WindowsPointerAdapter(),
+            keyboard=WindowsKeyboardAdapter(),
             screen_capture=ScreenCaptureAdapter(
                 enabled=args.screen_enabled,
                 max_width=args.screen_max_width,

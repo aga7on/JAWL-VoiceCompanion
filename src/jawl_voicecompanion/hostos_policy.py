@@ -31,6 +31,7 @@ _TOOL_MIN_LEVEL: dict[str, AccessLevel] = {
     "screen.observe": AccessLevel.OBSERVER,
     "desktop.act": AccessLevel.OPERATOR,
     "desktop.pointer": AccessLevel.OPERATOR,
+    "desktop.keyboard": AccessLevel.OPERATOR,
     "browser.act": AccessLevel.OPERATOR,
     "process.managed": AccessLevel.OPERATOR,
     "filesystem.write": AccessLevel.OPERATOR,
