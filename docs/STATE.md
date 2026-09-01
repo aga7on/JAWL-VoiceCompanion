@@ -4,6 +4,9 @@ Last updated: 2026-09-01
 
 ## Current phase
 
+Active workstream: Phase 6 — Presence and autonomy; the screen →
+Attention/Presence slice is in progress.
+
 Phase 4 — 2D Live2D product UI (asset/runtime slice in progress).
 
 Repository state: architecture baseline committed. A dependency-free mock
@@ -15,7 +18,9 @@ production VoiceMem model startup, OmniVoice and an actual licensed Live2D
 model remain opt-in/integration work. Optional UIA, focused-window OS and VLM
 adapters remain explicit. The companion now has a read-only loopback bridge
 for JAWL Heartbeat, persona and memory counters; it does not duplicate JAWL
-storage.
+storage. The screen path now has a bounded Attention/Presence gate and an
+optional explicit JAWL event-IPC sink; final production JAWL validation is
+still pending.
 
 ## Git state
 
@@ -24,8 +29,8 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the doctor/readiness slice.
-- Latest feature commit: `c66f088` (`feat: add component doctor report`).
+- Working tree: clean after the screen-attention slice.
+- Latest feature commit: `a832b67` (`feat: route screen intents through attention`).
 
 ## Completed in this repository
 
@@ -70,6 +75,12 @@ storage.
   producer. It stores a bounded in-memory event ring and publishes only
   `SCREEN_DELTA` summaries through the local API; it never speaks or stores a
   raw frame.
+- `AttentionPresence` consumes screen deltas with bounded salience/privacy,
+  manual DND, cooldown and hourly-budget gates, exposing inspectable
+  `SPEAK_INTENT` proposals through `/api/vision/intents`.
+- `JawlEventFileSink` atomically writes accepted screen intents to an
+  explicitly configured JAWL `.jawl_events` directory in the existing
+  `{message, payload}` IPC shape; raw frames and local paths are excluded.
 - The cross-layer E2E suite drives the real loopback HTTP server and covers a
   complete visible path from chat/state through HostOS approval/execution and
   emergency stop, plus screen capture, VLM deduplication, screen events and
@@ -170,8 +181,9 @@ storage.
 - finish editable browser settings, memory and audit views; the current JAWL
   memory/persona surface is intentionally read-only;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
-- add semantic screen significance scoring and connect `SCREEN_DELTA` to
-  Attention/Presence and JAWL's final wording path;
+- improve and benchmark semantic screen significance scoring; the current
+  heuristic gate connects `SCREEN_DELTA` to Attention/Presence and optional
+  JAWL event IPC, while production final-wording validation remains;
 - validate production VoiceMem audio model startup in its own environment and
   benchmark Russian ASR on a real microphone;
 - validate CozyVoice model startup/latency and decide whether an actual
@@ -208,10 +220,13 @@ no-broadcast model behavior and the upstream root-bound web path. The SSE
 reader close race was fixed with a focused regression test. Hidden-thought
 filtering and HTTP error-body cleanup were added with recovery coverage.
 The doctor slice now covers mock/degraded, fully configured and required-JAWL
-offline states and is preserved in `c66f088`.
+offline states and is preserved in `c66f088`. The current screen-attention
+slice is preserved in `a832b67` and includes unit, browser and cross-layer
+HTTP coverage for intent creation, DND and JAWL-compatible atomic event
+delivery.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 77 unit tests and 4 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 85 unit tests and 4 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
@@ -224,20 +239,19 @@ preceding microphone slice is preserved in `36a808c` and the TTS slice in
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
 placeholder remains the default. The web server's default executor remains dry-run and no VLM
-endpoint is configured by default; semantic significance scoring,
-pixel-level redaction, JAWL/Attention consumption, ASR quality benchmarking,
+endpoint is configured by default; production semantic scoring and JAWL
+final-wording delivery, pixel-level redaction, ASR quality benchmarking,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The native always-on-top desktop-pet shell is
 also deferred.
 
 ## Next action
 
-Validate the web
-bridge against a live production JAWL model/tool profile, benchmark the
-installed VoiceMem ASR modes on a real Russian microphone and validate
-production model warmup. Then benchmark CozyVoice latency and choose the
-first user-supplied Live2D model. The bounded `SCREEN_DELTA` stream still
-needs Attention/Presence consumption.
+Validate the web bridge and explicit screen-event IPC against a live
+production JAWL model/tool profile, including final response/broadcast
+behavior. Then benchmark the installed VoiceMem ASR modes on a real Russian
+microphone, validate production model warmup and CozyVoice latency, and choose
+the first user-supplied Live2D model.
 
 ## State update protocol
 
