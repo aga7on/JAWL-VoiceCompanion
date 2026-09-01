@@ -17,7 +17,9 @@ blocked or requiring a decision.
 
 - [x] Define versioned event schemas.
 - [x] Define `ResponseEnvelope` validation.
-- [ ] Implement a local JAWL gateway with health and graceful failure.
+- [~] Implement a local JAWL gateway with health and graceful failure; the
+  terminal transport is covered, while its broadcast-only response boundary
+  needs a correlated streaming bridge for production turns.
 - [x] Implement `TurnArbiter` with user/proactive/background priority lanes.
 - [~] Add generation IDs and cancellation propagation (JAWL transport is
   covered; TTS/audio cancellation remains).
@@ -47,7 +49,8 @@ Acceptance criteria:
 - [~] Inspect and fix the local CozyVoice wrapper's non-streaming behavior;
   the companion calls one sentence per request and merges compatible WAV
   chunks, while upstream wrapper streaming remains unverified.
-- [ ] Add OmniVoice adapter when its model/API location is confirmed.
+- [!] Add OmniVoice adapter when its model/API location is confirmed; the local
+  `G:\AI\OmniVoice` directory currently contains only a virtual environment.
 - [x] Implement bounded sentence chunking for TTS.
 - [ ] Add hidden-thought filtering.
 - [ ] Implement ordered parallel TTS queue.
@@ -165,6 +168,7 @@ Quality gate:
 
 - [x] Add a real local-HTTP E2E suite for cross-layer user paths and make it
   mandatory for major updates.
+- [x] Add one full-gate command that runs compile, unit, E2E and diff checks.
 
 Acceptance criteria:
 
@@ -196,7 +200,7 @@ Acceptance criteria:
   remains.
 - [ ] Add bounded tool-result compression.
 - [ ] Add workspace-scoped edit proposals with stale-file checks.
-- [ ] Add restart/recovery tests.
+- [ ] Add restart/recovery tests to the full E2E gate.
 - [ ] Add packaging and installation documentation.
 
 ## Deferred

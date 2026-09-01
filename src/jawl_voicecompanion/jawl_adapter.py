@@ -20,10 +20,11 @@ class JawlTurnCancelled(ConnectionError):
 class JawlTerminalAdapter:
     """Send one text turn through JAWL's loopback terminal channel.
 
-    The protocol has no response correlation ID yet, so this first adapter
-    uses a short-lived connection per user turn and consumes the first agent
-    response. A later streaming adapter will use a persistent session and
-    explicit turn IDs.
+    The current JAWL channel is event/broadcast based: the input line queues
+    a user message, and JAWL must call ``send_message_to_terminal`` to emit a
+    response line. It has no response correlation ID, so this adapter uses a
+    short-lived connection and consumes the first broadcast. A missing
+    broadcast is an explicit degraded result, not a fabricated answer.
     """
 
     handshake = b"JAWL_HANDSHAKE\n"
@@ -43,6 +44,8 @@ class JawlTerminalAdapter:
             int(self.port_file.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             return "invalid_port_file"
+        if self.last_status in {"connected", "no_broadcast", "empty_response", "invalid_response", "offline"}:
+            return self.last_status
         return "configured"
 
     def respond(self, text: str, cancel_event: Event | None = None) -> str:
@@ -53,6 +56,8 @@ class JawlTerminalAdapter:
                 connection.settimeout(0.2 if cancel_event is not None else self.timeout)
                 connection.sendall(self.handshake + payload)
                 raw = self._read_response(connection, cancel_event)
+        except (JawlTurnCancelled, JawlUnavailable):
+            raise
         except (OSError, TimeoutError) as exc:
             self.last_status = "offline"
             raise JawlUnavailable("JAWL terminal is not reachable") from exc
@@ -89,7 +94,8 @@ class JawlTerminalAdapter:
                 raise JawlUnavailable("JAWL response exceeds the bounded limit")
             if b"\n" in buffer:
                 return bytes(buffer.split(b"\n", 1)[0])
-        raise JawlUnavailable("JAWL response timed out")
+        self.last_status = "no_broadcast"
+        raise JawlUnavailable("JAWL produced no terminal broadcast before timeout")
 
     def _read_port(self) -> int:
         try:

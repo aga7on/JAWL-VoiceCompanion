@@ -109,8 +109,11 @@ for cancellation and priority.
 The Live2D bundle contract is specified in [docs/contracts/avatar.md](docs/contracts/avatar.md).
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).
 OBS setup is documented in [docs/OBS.md](docs/OBS.md).
-Major cross-layer changes must pass the local HTTP E2E suite via
-`scripts/run_e2e.ps1`, in addition to the unit suite.
+Major cross-layer changes must pass the full gate via
+`scripts/run_full_gate.ps1`. It runs compilation, all unit tests, the complete
+local HTTP E2E suite and a whitespace check. The E2E suite checks the public
+HTTP contracts and visible state across chat, voice, TTS, JAWL inspection,
+HostOS approvals/audit, screen vision and the avatar asset surface.
 
 ## Planned runtime layout
 

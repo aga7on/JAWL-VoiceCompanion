@@ -149,6 +149,9 @@ class _JawlHandler(socketserver.StreamRequestHandler):
             return
         message = json.loads(self.rfile.readline().decode("utf-8"))
         _JawlHandler.messages.append(message)
+        if message["text"] == "no broadcast":
+            time.sleep(0.25)
+            return
         answer = {"text": f"JAWL E2E: {message['text']}"}
         self.wfile.write((json.dumps(answer, ensure_ascii=False) + "\n").encode("utf-8"))
 
@@ -287,6 +290,12 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(self.jawl_adapter.last_status, "connected")
         status, state = self.get_json("/api/state")
         self.assertEqual(state["last_turn"]["response"]["text"], chat["text"])
+
+        self.jawl_adapter.timeout = 0.1
+        _, degraded = self.post_json("/api/chat", {"text": "no broadcast"})
+        self.assertIn("fallback", degraded["text"])
+        self.assertEqual(self.jawl_adapter.status(), "no_broadcast")
+        self.jawl_adapter.timeout = 2
 
         _, tts_status = self.get_json("/api/tts/status")
         self.assertTrue(tts_status["configured"])

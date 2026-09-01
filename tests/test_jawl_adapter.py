@@ -42,7 +42,32 @@ class JawlAdapterTests(unittest.TestCase):
         self.assertEqual(received["payload"], {"text": "Привет, JAWL"})
         self.assertEqual(answer, "Ответ настоящего JAWL")
 
+    def test_no_broadcast_is_reported_as_degraded(self):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        def serve_without_broadcast():
+            connection, _address = listener.accept()
+            with connection:
+                connection.recv(4096)
+                threading.Event().wait(0.25)
+
+        thread = threading.Thread(target=serve_without_broadcast, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                port_file = Path(directory) / "terminal.port"
+                port_file.write_text(str(port), encoding="utf-8")
+                adapter = JawlTerminalAdapter(port_file, timeout=0.1)
+                with self.assertRaises(ConnectionError):
+                    adapter.respond("Тест без broadcast")
+                self.assertEqual(adapter.last_status, "no_broadcast")
+        finally:
+            listener.close()
+            thread.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()
-

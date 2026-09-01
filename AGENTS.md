@@ -156,10 +156,12 @@ The project progresses only when the current vertical slice passes:
 - clear degraded-mode behavior when ASR, TTS, VLM or JAWL is unavailable;
 - manual latency and Russian-language quality review.
 
-Any major cross-layer change must also pass `scripts/run_e2e.ps1`. The E2E
-suite must exercise the real local HTTP server and its public contracts across
-at least one complete user path; unit tests alone are not sufficient evidence
-that the expected result reaches the visible UI/state.
+Any major cross-layer change must also pass `scripts/run_full_gate.ps1`. The
+full gate runs compilation, the complete unit suite, the complete local HTTP
+E2E suite and `git diff --check`. The E2E suite must exercise the real local
+HTTP server and its public contracts across the complete affected user paths;
+unit tests alone are not sufficient evidence that the expected result reaches
+the visible UI/state. `scripts/run_e2e.ps1` remains the focused E2E command.
 
 ## Naming
 

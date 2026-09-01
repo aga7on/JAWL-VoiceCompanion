@@ -19,6 +19,13 @@ Relevant strengths:
 
 Conclusion: use as the cognitive core.
 
+Runtime validation finding: an isolated JAWL instance was started with the
+local Ollama endpoint and its real Vector DB embedding cache. The LLM request
+completed, but the native cycle returned a thought with no terminal broadcast.
+The existing `HostTerminalClient` is therefore an event input plus broadcast
+output channel, not a request/response RPC. The companion must preserve a
+degraded fallback until a correlated streaming contract is implemented.
+
 ## VoiceMem
 
 Upstream/reference: [VoiceMem](https://github.com/xzf-thu/VoiceMem)
@@ -156,6 +163,11 @@ Relevant ideas previously inspected:
 
 Conclusion: design reference only for the current project. The repository is
 GPL-3.0 and its character/avatar assets have separate terms.
+
+The local `G:\AI\OmniVoice` checkout was also inspected: it contains only a
+Python virtual environment, without source, checkpoints, inference entrypoint
+or service API. No OmniVoice adapter is claimed until the actual project/model
+location is supplied.
 
 ## Combined findings
 

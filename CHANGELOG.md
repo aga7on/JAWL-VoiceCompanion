@@ -62,3 +62,6 @@
 - Added backend Live2D model-reference validation for fatal Moc/texture files,
   explicit `ready`/warning diagnostics and a documented tiny renderer plugin
   contract, keeping Pixi/Cubism and character assets out of the core repo.
+- Documented that JAWL's current terminal channel is broadcast-only, exposed
+  the `no_broadcast` degraded status, and added a full-gate command requiring
+  compile, unit, local HTTP E2E and diff verification for major changes.

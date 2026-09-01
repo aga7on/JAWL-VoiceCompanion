@@ -24,7 +24,8 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the current verification.
+- Working tree: changes from the current contract/test-gate update are
+  uncommitted until the full gate passes.
 - Latest feature commit: `c7f4995` (`feat: validate Live2D asset bundles`).
 
 ## Completed in this repository
@@ -132,10 +133,14 @@ storage.
 - A real JAWL web console smoke-test with its agent stopped answered all five
   upstream routes; the companion bridge then exposed the live Heartbeat,
   database counters, drives and filtered persona through its own API.
-- A named isolated JAWL turn-smoke was started against local Ollama, but was
-  stopped before LLM initialization because the isolated Vector DB attempted
-  to download its missing 252 MB embedding cache. The canonical JAWL data and
-  config were not changed; a full live turn remains unverified.
+- A named isolated JAWL turn-smoke was started against local Ollama using a
+  copied embedding cache; the LLM request completed without changing
+  canonical JAWL data/config. JAWL produced a native thought with no
+  `send_message_to_terminal` broadcast, so the companion correctly returned
+  degraded fallback. A real user-facing JAWL turn remains unverified because
+  the current terminal protocol has no response correlation.
+- `G:\AI\OmniVoice` was inspected and contains only a virtual environment; its
+  model/API location is an external blocker.
 - The configured JAWL `terminal.port` is currently stale and has no listening
   socket; the read-only probe returned `status=offline`, so live process
   verification remains pending.
@@ -159,8 +164,9 @@ storage.
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
 - measure actual GPU contention and model residency on the target machine.
-- provide a cached/local embedding path for an isolated JAWL turn-smoke, then
-  verify the real terminal request/response through the companion.
+- implement and verify a correlated JAWL streaming/request-response bridge;
+  the current no-broadcast behavior is explicitly degraded and must not be
+  treated as a successful assistant turn.
 
 ## Latest work session
 
@@ -175,15 +181,16 @@ the optional Live2D asset/runtime bridge, then adds the read-only JAWL web
 memory/persona bridge and its browser view, validates real JAWL payloads and
 applies a drive-field allow-list. The audit view was then added and covered
 end-to-end. The Live2D bridge now validates fatal model references and
-documents the minimal renderer plugin contract. A safe local-Ollama JAWL turn-smoke reached Vector DB startup but
-was stopped before its missing embedding download.
+documents the minimal renderer plugin contract. A safe local-Ollama JAWL
+turn-smoke completed an LLM request but exposed the broadcast-only terminal
+boundary; the companion returned degraded fallback as designed.
 
 Verification for the current work session:
 `scripts/run_e2e.ps1` passed 4 tests; the avatar unit tests passed 6 tests;
 the complete unit suite passed 66 tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
-real JAWL web → adapter → companion API smoke-test also passed.
+real JAWL web -> adapter -> companion API inspection smoke-test also passed.
 The working tree is clean after `c7f4995`; the preceding microphone
 slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 
@@ -197,7 +204,8 @@ also deferred.
 
 ## Next action
 
-Run the full suite and commit the avatar validation slice. Then exercise the JAWL adapter against the actual local process, then benchmark
+Run `scripts/run_full_gate.ps1` and commit the JAWL response-contract/test-gate
+slice. Then implement the correlated JAWL streaming bridge, benchmark
 the installed VoiceMem ASR modes on a real Russian microphone and validate
 production model warmup. Then benchmark CozyVoice latency and choose the
 first user-supplied Live2D model. The bounded `SCREEN_DELTA` stream still
