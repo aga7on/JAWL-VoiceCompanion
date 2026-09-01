@@ -5,5 +5,8 @@ description = "Local-first Russian AI companion with a 2D avatar and HostOS cont
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+system-audio = ["PyAudioWPatch==0.2.12.8; platform_system == 'Windows'"]
+
 [project.scripts]
 jawl-voicecompanion = "jawl_voicecompanion.__main__:main"

@@ -46,6 +46,8 @@ def build_doctor_report(
     voice_mem: Any | None = None,
     tts: Any | None = None,
     avatar_assets: Any | None = None,
+    ambient_memory: Any | None = None,
+    ambient_audio: Any | None = None,
 ) -> dict[str, Any]:
     """Return bounded component readiness without exposing paths or secrets."""
     health = gateway.health()
@@ -103,6 +105,25 @@ def build_doctor_report(
         ready=not dry_run,
         action="Use --hostos-live only after reviewing roots and approvals" if dry_run else None,
     ))
+
+    if ambient_memory is not None:
+        memory_state = ambient_memory.state()
+        enabled = bool(memory_state.get("enabled"))
+        checks.append(_check(
+            "ambient_memory", "ready" if enabled else "disabled",
+            "Bounded ambient evidence" if enabled else "Ambient evidence is disabled",
+            ready=enabled,
+            action="Enable ambient memory only after reviewing retention and privacy controls" if not enabled else None,
+        ))
+    if ambient_audio is not None:
+        audio_state = ambient_audio.state()
+        configured = bool(audio_state.get("configured"))
+        checks.append(_check(
+            "ambient_audio", "ready" if configured else "not_configured",
+            "System-audio loopback is configured" if configured else "System-audio loopback is not configured",
+            ready=configured,
+            action="Configure --ambient-audio and start it explicitly from the browser" if not configured else None,
+        ))
 
     required_failures = [item for item in checks if item["required"] and not item["ready"]]
     warnings = [item for item in checks if not item["ready"]]

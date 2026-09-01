@@ -24,6 +24,8 @@
   path is covered by E2E without creating a user turn.
 - Added browser consent/status controls for ambient memory and explicit
   system-audio start/stop lifecycle.
+- Added an optional Windows `system-audio` package extra and ambient readiness
+  entries to the doctor report; installation and capture remain explicit.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.

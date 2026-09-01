@@ -64,6 +64,19 @@ class DoctorTests(unittest.TestCase):
         self.assertFalse(jawl["ready"])
         self.assertNotIn("G:\\", str(report))
 
+    def test_ambient_readiness_is_visible_without_exposing_paths(self):
+        report = build_doctor_report(
+            gateway=TextGateway(),
+            hostos=SimpleNamespace(dry_run=True),
+            vision=SimpleNamespace(status=lambda: {"configured": False, "screen_enabled": False}),
+            ambient_memory=SimpleNamespace(state=lambda: {"enabled": True, "observation_count": 2}),
+            ambient_audio=SimpleNamespace(state=lambda: {"configured": True, "capture": {"running": False}}),
+        )
+        checks = {item["id"]: item for item in report["checks"]}
+        self.assertTrue(checks["ambient_memory"]["ready"])
+        self.assertTrue(checks["ambient_audio"]["ready"])
+        self.assertNotIn("G:\\", str(report))
+
 
 if __name__ == "__main__":
     unittest.main()

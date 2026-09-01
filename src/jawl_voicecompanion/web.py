@@ -94,6 +94,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 voice_mem=self.server.voice_mem,
                 tts=self.server.tts,
                 avatar_assets=self.server.avatar_assets,
+                ambient_memory=self.server.ambient_memory,
+                ambient_audio=self.server.ambient_audio,
             ))
             return
         if path == "/api/session":

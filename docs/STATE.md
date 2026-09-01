@@ -299,18 +299,19 @@ endpoint is configured by default; production semantic scoring and JAWL
 final-wording delivery, pixel-level redaction, ASR quality benchmarking,
 AEC/barge-in, streaming TTS playback cancellation, OmniVoice and production
 model warmup are still pending. The native always-on-top desktop-pet shell is
-also deferred. The system-audio loopback adapter exists, but backend
-installation, permission wiring, ASR consumption and CPU/RAM model triage are
-not implemented yet. The CPU/RAM benchmark and triage-worker scheduling are
-still pending; no VLM model is being selected in this workstream.
+also deferred. The system-audio loopback adapter, permission/API wiring and
+isolated ASR consumer are implemented; backend installation and real-device
+capture/ASR quality validation remain pending. The CPU/RAM benchmark and
+triage-worker scheduling are still pending; no VLM model is being selected in
+this workstream.
 
 ## Next action
 
 Validate the web bridge and explicit screen-event IPC against a live
 production JAWL model/tool profile, including final response/broadcast
 behavior. In parallel, benchmark audio-triage candidates and the installed
-VoiceMem ASR modes on real Russian audio, then wire the selected audio profile
-to the isolated Windows loopback consumer. Keep Vision/VLM as a provider
+VoiceMem ASR modes on real Russian audio, then validate the existing isolated
+Windows loopback consumer on the real device. Keep Vision/VLM as a provider
 contract only until the separate model test returns a decision.
 
 ## State update protocol

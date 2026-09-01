@@ -90,6 +90,9 @@ loopback backend is lazy and missing PyAudioWPatch is reported as degraded;
 the browser shows the consent/running state, and system audio never becomes a
 user microphone turn.
 
+Install the optional Windows backend only when this feature is needed:
+`python -m pip install -e ".[system-audio]"`.
+
 To enable local CozyVoice REST TTS (start `G:\AI\CozyVoice\rest_api.py`
 separately), add its base URL:
 
