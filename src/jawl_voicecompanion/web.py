@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from .approvals import ApprovalStore
 from .avatar import AvatarAssetStore
+from .doctor import build_doctor_report
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .jawl_web import JawlWebUnavailable
@@ -71,6 +72,16 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/health":
             self._json(self.server.gateway.health())
+            return
+        if path == "/api/doctor":
+            self._json(build_doctor_report(
+                gateway=self.server.gateway,
+                hostos=self.server.hostos,
+                vision=self.server.vision,
+                voice_mem=self.server.voice_mem,
+                tts=self.server.tts,
+                avatar_assets=self.server.avatar_assets,
+            ))
             return
         if path == "/api/session":
             self._json({"session_token": self.server.session_token, "csrf_token": self.server.csrf_token})

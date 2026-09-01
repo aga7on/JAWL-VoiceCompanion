@@ -90,6 +90,11 @@ The same browser session protects the HostOS audit view. The UI displays only
 the last bounded metadata events; tool arguments and raw results remain
 excluded by the policy audit layer.
 
+`GET /api/doctor` is the first-run readiness surface. It aggregates only
+bounded component states and remediation hints; it does not expose paths or
+secrets and does not change runtime configuration. Optional VoiceMem, TTS,
+vision and Live2D failures keep text-only chat available.
+
 The JAWL adapters also apply one user-output filter before text enters the
 gateway envelope: paired hidden reasoning/tool blocks are removed, while
 unclosed blocks and line-level internal markers fail closed. This keeps

@@ -62,6 +62,9 @@ loopback terminal bridge instead:
 The inspection bridge remains loopback-only and read-only, filters secrets
 from JAWL config and does not duplicate JAWL's durable memory. A missing agent
 broadcast produces a visible degraded fallback rather than an invented reply.
+The public loopback `GET /api/doctor` endpoint provides a bounded first-run
+readiness report for JAWL, VoiceMem, TTS, vision, Live2D and HostOS; missing
+optional services are reported as degraded while text-only chat remains usable.
 
 To enable the external-ASR text bridge through the VoiceMem sidecar, point
 the web process at VoiceMem's Python environment:

@@ -83,3 +83,8 @@ These read-only routes require the normal browser session and CSRF headers:
 They are inspection surfaces, not a second memory editor. Writes to persona,
 traits, drives or facts will be added only after a versioned JAWL write
 contract and audit path are agreed.
+
+The unauthenticated loopback `GET /api/doctor` surface is separate from JAWL
+inspection. It reports bounded readiness states for all configured components,
+with `text_mode_available=true` whenever the companion gateway can still serve
+the deterministic text path.

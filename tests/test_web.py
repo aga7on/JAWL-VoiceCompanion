@@ -51,6 +51,17 @@ class WebTests(unittest.TestCase):
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
 
+    def test_doctor_reports_mock_text_mode_without_secrets(self):
+        status, doctor = self.get_json("/api/doctor")
+        self.assertEqual(status, 200)
+        self.assertEqual(doctor["schema_version"], 1)
+        self.assertEqual(doctor["status"], "degraded")
+        self.assertTrue(doctor["text_mode_available"])
+        checks = {item["id"]: item for item in doctor["checks"]}
+        self.assertEqual(checks["jawl"]["status"], "mock")
+        self.assertEqual(checks["hostos"]["status"], "dry_run")
+        self.assertNotIn("G:\\", json.dumps(doctor))
+
     def test_session_endpoint_exposes_local_bootstrap_tokens(self):
         status, session = self.get_json("/api/session")
         self.assertEqual(status, 200)

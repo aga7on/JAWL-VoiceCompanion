@@ -75,3 +75,5 @@
   emits no user-facing terminal message.
 - Added fail-closed hidden-thought/control-markup filtering to both JAWL chat
   transports, with HTTP E2E coverage for sanitization and upstream recovery.
+- Added a bounded `/api/doctor` readiness report and browser panel for the
+  text-only/degraded startup path, with unit and cross-layer E2E coverage.

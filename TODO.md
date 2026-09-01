@@ -113,7 +113,8 @@ Acceptance criteria:
 - [~] Add expression capability mapping and fallbacks; bounded semantic
   mapping and neutral fallback are implemented, while runtime capability
   discovery remains.
-- [ ] Add first-run setup and component health/doctor panel.
+- [x] Add first-run setup and component health/doctor panel; the bounded
+  `/api/doctor` report and browser rendering are present.
 - [ ] Add performance profiles for low/standard/high modes.
 - [~] Render browser control-plane pages for settings, approvals, memory and
   audit state; chat, approvals, level, emergency stop and a read-only JAWL

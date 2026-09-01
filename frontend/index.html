@@ -26,6 +26,8 @@
     <section>
       <h2>Диалог</h2>
       <div id="messages"></div>
+      <h2>Doctor</h2>
+      <pre id="doctor" class="meta">loading...</pre>
       <textarea id="input" rows="3" placeholder="Напиши сообщение…"></textarea>
       <button id="send">Отправить</button>
       <button id="mic" type="button">🎙️ Включить микрофон</button>
@@ -81,14 +83,15 @@
       messages.scrollTop = messages.scrollHeight;
     }
     async function refresh() {
-      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, auditResponse] = await Promise.all([
+      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, auditResponse, doctorResponse] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/health'),
         fetch('/api/hostos/approvals', {headers: sessionHeaders}),
         fetch('/api/vision/status'),
         fetch('/api/tts/status'),
         fetch('/api/jawl/overview', {headers: sessionHeaders}),
-        fetch('/api/audit', {headers: sessionHeaders})
+        fetch('/api/audit', {headers: sessionHeaders}),
+        fetch('/api/doctor')
       ]);
       const stateData = await state.json();
       const statusData = await status.json();
@@ -97,6 +100,7 @@
       const ttsStatusData = ttsStatus.ok ? await ttsStatus.json() : {configured: false};
       const jawlData = jawlOverview.ok ? await jawlOverview.json() : {configured: false, status: 'unavailable'};
       const auditData = auditResponse.ok ? await auditResponse.json() : {events: []};
+      const doctorData = doctorResponse.ok ? await doctorResponse.json() : {status: 'unavailable'};
       ttsConfigured = Boolean(ttsStatusData.configured && ttsStatusData.status !== 'offline');
       document.querySelector('#tts-status').textContent = ttsConfigured
         ? `TTS готов · ${ttsStatusData.provider || 'локальный провайдер'}`
@@ -105,6 +109,7 @@
       document.querySelector('#level-name').textContent = stateData.policy.active_name;
       document.querySelector('#level-select').value = stateData.policy.active_level;
       health.textContent = JSON.stringify(statusData, null, 2);
+      document.querySelector('#doctor').textContent = JSON.stringify(doctorData, null, 2);
       document.querySelector('#jawl-overview').textContent = JSON.stringify(jawlData, null, 2);
       document.querySelector('#audit').textContent = JSON.stringify((auditData.events || []).slice(-10), null, 2);
       document.querySelector('#vision-status').textContent = visionStatusData.configured

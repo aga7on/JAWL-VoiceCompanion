@@ -186,7 +186,7 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 with _JawlChatWebHandler.condition:
                     _JawlChatWebHandler.condition.wait(0.05)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ValueError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError, ValueError):
             self.close_connection = True
             return
         finally:
@@ -226,7 +226,7 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
             for stream in streams:
                 try:
                     stream._write_event([agent])
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ValueError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError, ValueError):
                     pass
         body = json.dumps({"ok": True, "message": user}, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
@@ -376,6 +376,16 @@ class LocalE2ETests(unittest.TestCase):
         status, session = self.get_json("/api/session")
         self.assertEqual(status, 200)
         self.assertEqual(session["session_token"], self.server.session_token)
+        _, doctor = self.get_json("/api/doctor")
+        doctor_checks = {item["id"]: item for item in doctor["checks"]}
+        self.assertEqual(doctor["status"], "ready")
+        self.assertTrue(doctor_checks["jawl"]["ready"])
+        self.assertTrue(doctor_checks["voicemem"]["ready"])
+        self.assertTrue(doctor_checks["tts"]["ready"])
+        self.assertTrue(doctor_checks["vision"]["ready"])
+        self.assertTrue(doctor_checks["avatar"]["ready"])
+        self.assertTrue(doctor_checks["hostos"]["ready"])
+        self.assertNotIn("must-not-cross", json.dumps(doctor, ensure_ascii=False))
         with urlopen(self.base + "/avatar", timeout=3) as response:
             self.assertIn(b"JAWL Avatar", response.read())
         _, avatar_config = self.get_json("/api/avatar/config")
