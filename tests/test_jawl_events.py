@@ -27,6 +27,7 @@ class JawlEventSinkTests(unittest.TestCase):
             self.assertEqual(len(files), 1)
             payload = json.loads(files[0].read_text(encoding="utf-8"))
             self.assertEqual(payload["payload"]["event_type"], "SCREEN_DELTA")
+            self.assertEqual(payload["payload"]["intent_event_id"], "intent-1")
             self.assertFalse(payload["payload"]["raw_frame_persisted"])
             self.assertNotIn("image", json.dumps(payload))
 

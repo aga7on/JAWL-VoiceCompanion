@@ -63,7 +63,8 @@ class AttentionPresence:
             return {"status": "ignored", "reason": "attention_event_invalid"}
         with self._lock:
             self._last_decision = result["status"]
-            self._last_error = None
+            if result.get("delivered", True):
+                self._last_error = None
         return result
 
     def configure(
@@ -140,8 +141,13 @@ class AttentionPresence:
             self._intent_times.append(now)
             self._last_intent_at = now
         if self.intent_sink is not None:
-            self.intent_sink(intent)
-        return {"status": "proposed", "intent": intent}
+            try:
+                self.intent_sink(intent)
+            except Exception:  # noqa: BLE001 - an optional sink must not kill sensing
+                with self._lock:
+                    self._last_error = "attention_sink_failed"
+                return {"status": "proposed", "intent": intent, "delivered": False}
+        return {"status": "proposed", "intent": intent, "delivered": True}
 
     @staticmethod
     def _summary(value: Any) -> str:

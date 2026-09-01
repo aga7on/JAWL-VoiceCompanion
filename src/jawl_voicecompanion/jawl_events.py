@@ -35,6 +35,7 @@ class JawlEventFileSink:
                 "event_type": "SCREEN_DELTA",
                 "screen_summary": summary,
                 "significance": max(0, min(3, int(payload.get("significance", 0)))),
+                "intent_event_id": event_id,
                 "observed_event_id": str(payload.get("observed_event_id") or "")[:200],
                 "raw_frame_persisted": False,
             },

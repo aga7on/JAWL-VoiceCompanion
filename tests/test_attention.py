@@ -34,6 +34,7 @@ class AttentionTests(unittest.TestCase):
         attention = AttentionPresence(cooldown_seconds=0, intent_sink=delivered.append)
         result = attention.consume(_event("Появилась ошибка в редакторе"))
         self.assertEqual(result["status"], "proposed")
+        self.assertTrue(result["delivered"])
         intent = result["intent"]
         self.assertEqual(intent["type"], "SPEAK_INTENT")
         self.assertEqual(intent["payload"]["significance"], 3)
