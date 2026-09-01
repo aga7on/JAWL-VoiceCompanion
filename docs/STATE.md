@@ -219,6 +219,10 @@ workflows, while semantic watcher tuning remains.
   prompt and forwards its final transcript to the VoiceMem
   `feed_partial(..., ended=True)` boundary. True streaming Qwen partials and
   live Russian microphone quality remain pending.
+- A follow-up live run sent VoiceMem's three known PCM16 samples through the
+  same Companion adapter and matched their README transcripts in Chinese.
+  This validates the multilingual request/response path, not Russian acoustic
+  quality; no Russian reference recording is present in the inspected assets.
 - The temporary OpenAI-compatible chat adapter accepts a configurable URL,
   model and environment-held key for provider experiments. TokenRouter with
   `z-ai/glm-5.3-free` reached HTTP 200 during the smoke, but one short request
@@ -424,6 +428,11 @@ surfaces. Image coordinates are recalibrated against fresh foreground bounds,
 stale windows are rejected, and cursor placement is reported separately from
 application acceptance. Unit and HTTP E2E coverage use an injected pointer
 backend, so no real click was performed during automated verification.
+
+The latest ASR validation re-ran the live Qwen endpoint through the Companion
+adapter against the three known VoiceMem samples and matched all expected
+transcripts. A Russian reference WAV and a real microphone run are still
+required before making a Russian-quality claim.
 
 The emergency-stop slice tracks live `process.managed` and `shell.exec`
 children, terminates them through the same executor, and covers the race with
