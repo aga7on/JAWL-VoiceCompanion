@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 from .hostos_policy import HostOSPolicy
@@ -91,6 +91,86 @@ class TextGateway:
                 speak = True
                 emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
 
+        try:
+            envelope = self._build_envelope(
+                clean, answer, response_id, turn_id, speak=speak, emotion=emotion,
+            )
+            self._record_turn(session_id, clean, envelope)
+            return envelope
+        finally:
+            self.arbiter.complete(token)
+
+    def stream_text(self, text: str, session_id: str = "local") -> Iterator[dict[str, Any]]:
+        """Stream safe responder deltas and finish with one canonical envelope."""
+        clean = str(text or "").strip()
+        response_id = str(uuid4())
+        token = self.arbiter.begin(TurnPriority.USER_FINAL)
+        try:
+            if not clean:
+                answer = "РЇ РЅРµ СѓСЃР»С‹С€Р°Р»Р° С‚РµРєСЃС‚. РџРѕРїСЂРѕР±СѓР№ РїРѕРІС‚РѕСЂРёС‚СЊ РєРѕРјР°РЅРґСѓ."
+                speak = False
+                emotion = {"id": "confused", "intensity": 0.25, "confidence": 1.0}
+            else:
+                chunks: list[str] = []
+                try:
+                    stream_method = getattr(self.responder, "stream", None) if self.responder else None
+                    if callable(stream_method):
+                        source = stream_method(clean, cancel_event=token.cancel_event)
+                        for chunk in source:
+                            if token.cancel_event.is_set():
+                                raise JawlTurnCancelled()
+                            if not isinstance(chunk, str):
+                                raise ValueError("stream responder must yield strings")
+                            if chunk:
+                                chunks.append(chunk)
+                                yield {"type": "delta", "text": chunk, "turn_id": token.turn_id}
+                        answer = "".join(chunks).strip()
+                        if not answer:
+                            raise ConnectionError("stream responder returned empty text")
+                    elif self.responder:
+                        responder_method = getattr(self.responder, "respond", None)
+                        answer = responder_method(clean, cancel_event=token.cancel_event) if callable(responder_method) else self.responder(clean)
+                        if not isinstance(answer, str) or not answer.strip():
+                            raise ConnectionError("responder returned empty text")
+                        yield {"type": "delta", "text": answer, "turn_id": token.turn_id}
+                    else:
+                        answer = self._mock_response(clean)
+                        yield {"type": "delta", "text": answer, "turn_id": token.turn_id}
+                    self._brain_status = "connected" if self.responder else "mock"
+                    speak = True
+                    emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
+                except JawlTurnCancelled:
+                    self._brain_status = "cancelled"
+                    answer = "РћС‚РІРµС‚ РѕС‚РјРµРЅС‘РЅ РЅРѕРІС‹Рј СЃРѕРѕР±С‰РµРЅРёРµРј."
+                    speak = False
+                    emotion = {"id": "neutral", "intensity": 0.0, "confidence": 1.0}
+                except (ConnectionError, OSError, TimeoutError):
+                    if chunks:
+                        raise
+                    self._brain_status = "offline_fallback"
+                    answer = "JAWL СЃРµР№С‡Р°СЃ РЅРµРґРѕСЃС‚СѓРїРµРЅ. РЇ СЃРѕС…СЂР°РЅРёР»Р° С‚РµРєСЃС‚РѕРІС‹Р№ fallback Рё РіРѕС‚РѕРІР° РїСЂРѕРґРѕР»Р¶РёС‚СЊ РїРѕСЃР»Рµ РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРёСЏ СЃРІСЏР·Рё."
+                    speak = True
+                    emotion = {"id": "concerned", "intensity": 0.35, "confidence": 1.0}
+                    yield {"type": "delta", "text": answer, "turn_id": token.turn_id}
+
+            envelope = self._build_envelope(
+                clean, answer, response_id, token.turn_id, speak=speak, emotion=emotion,
+            )
+            self._record_turn(session_id, clean, envelope)
+            yield {"type": "final", "response": envelope}
+        finally:
+            self.arbiter.complete(token)
+
+    def _build_envelope(
+        self,
+        clean: str,
+        answer: str,
+        response_id: str,
+        turn_id: str,
+        *,
+        speak: bool,
+        emotion: dict[str, Any],
+    ) -> dict[str, Any]:
         envelope = {
             "schema_version": 1,
             "response_id": response_id,
@@ -108,13 +188,12 @@ class TextGateway:
             "interruptible": True,
             "proactive": False,
         }
-        try:
-            validate_response_envelope(envelope)
-            self._turns.append({"created_at": _now(), "session_id": session_id, "user": clean, "response": envelope})
-            del self._turns[:-50]
-            return envelope
-        finally:
-            self.arbiter.complete(token)
+        validate_response_envelope(envelope)
+        return envelope
+
+    def _record_turn(self, session_id: str, clean: str, envelope: dict[str, Any]) -> None:
+        self._turns.append({"created_at": _now(), "session_id": session_id, "user": clean, "response": envelope})
+        del self._turns[:-50]
 
     def health(self) -> dict[str, Any]:
         return {

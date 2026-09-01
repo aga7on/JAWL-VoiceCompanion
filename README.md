@@ -148,7 +148,10 @@ $env:TOKENROUTER_API_KEY = "set-this-only-in-your-shell"
 
 This is a temporary direct brain for model/provider tests. It does not claim
 JAWL's persona, durable memory or Heartbeat; use `--jawl-web-url` for the
-canonical JAWL conversation path.
+canonical JAWL conversation path. OpenAI-compatible providers with SSE are
+consumed through `/api/chat/stream`; the browser displays deltas immediately
+and receives the same final response envelope. JAWL's correlated web bridge
+uses the compatibility path until its upstream emits incremental agent text.
 
 To enable the external-ASR text bridge through the VoiceMem sidecar, point
 the web process at VoiceMem's Python environment:
@@ -211,9 +214,11 @@ separately), add its base URL:
 ```
 
 The panel then requests transient WAV audio after a successful response. TTS
-is optional; when unavailable the text path remains usable.
+is optional; when unavailable the text path remains usable. The browser uses
+sentence-level `/api/tts/stream` first-audio when WebAudio is available and
+keeps the whole-WAV endpoint as a fallback.
 
-The provisional TeraTTSv2 worker uses the same `/health` + `/tts` contract:
+The selected current TeraTTSv2 worker uses the same `/health` + `/tts` contract:
 
 ```powershell
 .\scripts\run_teratts_server.ps1 -Port 9889 -Voice ru_f1
@@ -222,9 +227,10 @@ The provisional TeraTTSv2 worker uses the same `/health` + `/tts` contract:
 
 Its model release stays outside this repository. The wrapper adds the default
 `<ru>...</ru>` language tag, bounds text/voice/speed, and serializes inference
-against the loaded CPU model. The current Companion client still waits for a
-complete WAV; Tera's lower-level chunk generator is reserved for a future
-streaming audio endpoint.
+against the loaded CPU model. Tera is the current CPU/Russian quality choice;
+voice cloning is intentionally deferred. Companion sentence streaming is
+available now, while Tera's lower-level native chunk generator remains a
+future optimization.
 
 ## Architecture
 

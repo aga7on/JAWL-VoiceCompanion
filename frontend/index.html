@@ -104,7 +104,9 @@
     let ttsConfigured = false;
     let currentAudio = null;
     let ttsAbort = null;
+    let chatAbort = null;
     let streamSpeechActive = false;
+    let speechSession = null;
     let bargeInTriggered = false;
     let avatarAudioContext = null;
     let avatarAudioMonitor = null;
@@ -121,6 +123,51 @@
       item.lastElementChild.textContent = text;
       messages.appendChild(item);
       messages.scrollTop = messages.scrollHeight;
+    }
+    function beginStreamingMessage(who) {
+      const item = document.createElement('div');
+      item.className = 'message';
+      item.innerHTML = `<div class="meta">${who}</div><div></div>`;
+      messages.appendChild(item);
+      return item.lastElementChild;
+    }
+    async function streamChat(text, speech, controller) {
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', ...sessionHeaders},
+        body: JSON.stringify({text}),
+        signal: controller.signal
+      });
+      if (!response.ok || !response.body) return null;
+      const output = beginStreamingMessage('Companion');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      let finalResponse = null;
+      const consume = line => {
+        if (!line.trim()) return;
+        const event = JSON.parse(line);
+        if (event.type === 'delta') {
+          output.textContent += event.text || '';
+          pushSpeechDelta(speech, event.text || '');
+          messages.scrollTop = messages.scrollHeight;
+        } else if (event.type === 'final') {
+          finalResponse = event.response || null;
+        } else if (event.type === 'error') {
+          throw new Error(event.error || 'Chat stream failed');
+        }
+      };
+      while (true) {
+        const result = await reader.read();
+        pending += decoder.decode(result.value || new Uint8Array(), {stream: !result.done});
+        const lines = pending.split('\n');
+        pending = lines.pop() || '';
+        for (const line of lines) consume(line);
+        if (result.done) break;
+      }
+      consume(pending);
+      if (!finalResponse) throw new Error('Chat stream ended without a response envelope');
+      return finalResponse;
     }
     async function refresh() {
       const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, jawlHostos, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse] = await Promise.all([
@@ -345,6 +392,7 @@
           publishAvatarAudio(active ? Math.max(0, Math.min(1, (rms - 0.012) * 7)) : 0, active);
           if (monitor.streamDone && !active) {
             streamSpeechActive = false;
+            if (speechSession?.monitor === monitor) speechSession = null;
             stopAvatarAudioMonitor();
             return;
           }
@@ -362,59 +410,141 @@
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return bytes.buffer;
     }
-    async function speakStream(text, controller) {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextClass || !window.ReadableStream) return false;
-      const response = await fetch('/api/tts/stream', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', ...sessionHeaders},
-        body: JSON.stringify({text, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
-        signal: controller.signal
-      });
-      if (!response.ok || !response.body) return false;
-      const monitor = await startAvatarStreamMonitor();
-      if (!monitor) {
-        try { await response.body.cancel(); } catch (_) {}
-        return false;
+    function scheduleSpeechAudio(session, audioBuffer) {
+      if (speechSession !== session || avatarAudioMonitor !== session.monitor || session.controller.signal.aborted) {
+        throw new DOMException('Speech cancelled', 'AbortError');
       }
-      streamSpeechActive = true;
-      let nextStart = avatarAudioContext.currentTime + 0.03;
-      let buffer = '';
+      const source = avatarAudioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(session.monitor.analyser);
+      session.monitor.sources.add(source);
+      source.onended = () => {
+        session.monitor.sources.delete(source);
+        try { source.disconnect(); } catch (_) {}
+      };
+      const startAt = Math.max(session.nextStart, avatarAudioContext.currentTime + 0.01);
+      source.start(startAt);
+      session.nextStart = startAt + audioBuffer.duration;
+    }
+    async function consumeTtsStream(response, session) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      const consume = async (line) => {
+      let pending = '';
+      const consume = async line => {
         if (!line.trim()) return;
         const event = JSON.parse(line);
         if (event.type === 'error') throw new Error(event.error || 'TTS stream failed');
         if (event.type === 'cancelled') throw new DOMException('Speech cancelled', 'AbortError');
         if (event.type !== 'audio') return;
         const audioBuffer = await avatarAudioContext.decodeAudioData(decodeBase64Audio(event.data_base64));
-        if (avatarAudioMonitor !== monitor || controller.signal.aborted) throw new DOMException('Speech cancelled', 'AbortError');
-        const source = avatarAudioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(monitor.analyser);
-        monitor.sources.add(source);
-        source.onended = () => {
-          monitor.sources.delete(source);
-          try { source.disconnect(); } catch (_) {}
-        };
-        const startAt = Math.max(nextStart, avatarAudioContext.currentTime + 0.01);
-        source.start(startAt);
-        nextStart = startAt + audioBuffer.duration;
+        scheduleSpeechAudio(session, audioBuffer);
       };
       while (true) {
         const result = await reader.read();
-        buffer += decoder.decode(result.value || new Uint8Array(), {stream: !result.done});
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        pending += decoder.decode(result.value || new Uint8Array(), {stream: !result.done});
+        const lines = pending.split('\n');
+        pending = lines.pop() || '';
         for (const line of lines) await consume(line);
         if (result.done) break;
       }
-      await consume(buffer);
-      monitor.streamDone = true;
+      await consume(pending);
+    }
+    async function createSpeechSession(controller) {
+      const monitor = await startAvatarStreamMonitor();
+      if (!monitor) return null;
+      const session = {
+        monitor, controller, nextStart: avatarAudioContext.currentTime + 0.03,
+        queue: Promise.resolve(), buffer: '', seenText: '', stopped: false
+      };
+      speechSession = session;
+      streamSpeechActive = true;
+      ttsAbort = controller;
+      return session;
+    }
+    function queueSpeechSegment(session, text) {
+      const segment = String(text || '').trim();
+      if (!segment || session.stopped) return;
+      session.queue = session.queue.then(async () => {
+        if (session.stopped || session.controller.signal.aborted) return;
+        const response = await fetch('/api/tts/stream', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', ...sessionHeaders},
+          body: JSON.stringify({text: segment, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
+          signal: session.controller.signal
+        });
+        if (!response.ok || !response.body) throw new Error('TTS stream unavailable');
+        await consumeTtsStream(response, session);
+      });
+      session.queue = session.queue.catch(error => {
+        if (error.name !== 'AbortError' && !session.stopped) {
+          document.querySelector('#tts-status').textContent = `TTS error: ${error.message}`;
+        }
+      });
+    }
+    function pushSpeechDelta(session, delta, flush = false) {
+      if (!session || session.stopped) return;
+      session.buffer += String(delta || '');
+      session.seenText += String(delta || '');
+      while (session.buffer.trim()) {
+        const punctuation = session.buffer.search(/(?<=[.!?…])\s+/);
+        const words = session.buffer.trim().split(/\s+/);
+        const cut = punctuation >= 0 ? punctuation + 1 : words.length >= 10 ? session.buffer.lastIndexOf(' ') : -1;
+        if (cut <= 0 && !flush) break;
+        const end = cut > 0 ? cut : session.buffer.length;
+        queueSpeechSegment(session, session.buffer.slice(0, end));
+        session.buffer = session.buffer.slice(end).trimStart();
+        if (cut <= 0) break;
+      }
+    }
+    async function finishSpeechSession(session, finalText) {
+      if (!session || session.stopped) return;
+      // Deltas have already filled the buffer; only flush text that did not
+      // reach a punctuation/word boundary before the final envelope.
+      if (finalText && !session.seenText) {
+        // The final envelope is authoritative if a provider emitted no deltas.
+        pushSpeechDelta(session, finalText, true);
+      } else {
+        pushSpeechDelta(session, '', true);
+      }
+      await session.queue;
+      session.monitor.streamDone = true;
+    }
+    async function speakStream(text, controller) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass || !window.ReadableStream) return false;
+      const session = await createSpeechSession(controller);
+      if (!session) return false;
+      let response;
+      try {
+        response = await fetch('/api/tts/stream', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', ...sessionHeaders},
+          body: JSON.stringify({text, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
+          signal: controller.signal
+        });
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        session.stopped = true;
+        if (speechSession === session) speechSession = null;
+        stopAvatarAudioMonitor();
+        streamSpeechActive = false;
+        return false;
+      }
+      if (!response.ok || !response.body) {
+        session.stopped = true;
+        if (speechSession === session) speechSession = null;
+        stopAvatarAudioMonitor();
+        streamSpeechActive = false;
+        try { await response.body?.cancel(); } catch (_) {}
+        return false;
+      }
+      await consumeTtsStream(response, session);
+      session.monitor.streamDone = true;
       return true;
     }
     async function stopSpeech() {
+      if (speechSession) speechSession.stopped = true;
+      speechSession = null;
       stopAvatarAudioMonitor();
       streamSpeechActive = false;
       if (currentAudio) {
@@ -426,6 +556,9 @@
       const request = ttsAbort;
       ttsAbort = null;
       if (request) request.abort();
+      const chatRequest = chatAbort;
+      chatAbort = null;
+      if (chatRequest) chatRequest.abort();
       if (ttsConfigured && Object.keys(sessionHeaders).length) {
         try { await apiPost('/api/tts/cancel', {}); } catch (_) { /* text mode remains usable */ }
       }
@@ -648,10 +781,32 @@
       await stopSpeech();
       addMessage('Ты', text);
       input.value = '';
-      const response = await apiPost('/api/chat', {text});
-      const data = await response.json();
-      addMessage('Компаньон', data.text || data.error);
-      if (response.ok) speak(data.text);
+      const chatController = new AbortController();
+      chatAbort = chatController;
+      const speech = ttsConfigured ? await createSpeechSession(new AbortController()) : null;
+      try {
+        const streamed = await streamChat(text, speech, chatController);
+        if (streamed) {
+          if (speech && streamed.speak) {
+            await finishSpeechSession(speech, streamed.text);
+          } else if (streamed.speak) {
+            speak(streamed.text);
+          }
+        } else {
+          if (speech) await stopSpeech();
+          const response = await apiPost('/api/chat', {text});
+          const data = await response.json();
+          addMessage('Компаньон', data.text || data.error);
+          if (response.ok) speak(data.text);
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          if (speech) await stopSpeech();
+          addMessage('System', error.message);
+        }
+      } finally {
+        if (chatAbort === chatController) chatAbort = null;
+      }
       refresh();
     });
     document.querySelector('#level-select').addEventListener('change', async (event) => {

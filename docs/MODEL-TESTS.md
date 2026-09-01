@@ -13,7 +13,7 @@ copied into this repository.
 | Final ASR bridge | Qwen3-ASR-0.6B Q8_0 + mmproj | Primary audio profile |
 | Streaming ASR/VAD | VoiceMem sidecar | Remains the default streaming owner |
 | Fast text fallback | Bonsai-1.7B | Retained from the benchmark; text-only |
-| TTS | TeraTTSv2 (provisional) | Best current CPU/clarity candidate; prosody and adapter validation pending |
+| TTS | TeraTTSv2 (current) | Best current CPU/Russian clarity candidate; voice cloning deferred |
 
 ## Qwen3-VL-2B from the moved benchmark directory
 
@@ -83,10 +83,11 @@ exact welcome transcript and a mostly correct poem at RTF about 1.25–1.27 with
 not intelligible to the Russian ASR check. These are acoustic intelligibility
 checks, not a subjective prosody or first-audio benchmark.
 
-Decision: treat TeraTTSv2 as the provisional TTS candidate for the next adapter
-experiment. Keep Qwen3-TTS/Chatterbox/XTTS-v2 available until prosody, startup,
-first-audio latency, cancellation and avatar lip-sync are measured through the
-actual Companion path. No TTS model is hard-coded as final yet.
+Decision: use TeraTTSv2 as the current TTS provider. Keep
+Qwen3-TTS/Chatterbox/XTTS-v2 available as alternatives until voice identity,
+prosody and real-device playback are revisited; voice cloning is not a current
+requirement. The Companion path still measures startup, first-audio latency,
+cancellation and avatar lip-sync independently of this choice.
 
 The installed TeraTTSv2 implementation also exposes a streaming generator. A
 warm CPU run with the distilled model and `chunk_frames=16` produced the first
@@ -97,6 +98,12 @@ exposes `/api/tts/stream`, which provides sentence-level first-audio through a
 bounded NDJSON/WebAudio queue. The installed Tera worker is still used through
 its whole-WAV REST wrapper; its native chunk generator is not yet wired into
 the provider boundary.
+
+A synthetic runtime smoke through the real Tera worker and Companion HTTP path
+measured 0.87 s to the first audio line for a two-sentence reply. A warmed
+four-sentence reply delivered its first line in 0.39 s and completed in 1.74 s;
+the four WAV durations were 2.18, 3.52, 3.14 and 1.99 s. This is a warm,
+local synthetic result, not a real microphone or subjective prosody claim.
 
 ## VoiceMem bundled streaming ASR/VAD
 

@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 ## Current phase
 
@@ -12,7 +12,7 @@ Phase 4 — 2D Live2D product UI (asset/runtime slice in progress).
 Repository state: architecture baseline committed. A dependency-free mock
 text/control slice is implemented. The real VoiceMem sidecar boundary now
 accepts external ASR partials and browser PCM16 microphone chunks, and the
-optional model-neutral TTS boundary can call a local REST provider, and the
+selected TeraTTSv2 provider is available through a local REST wrapper, and the
 `/avatar` surface can load a user-supplied Live2D bundle behind a read-only
 asset root. Real JAWL,
 production VoiceMem model startup, OmniVoice and an actual licensed Live2D
@@ -288,8 +288,9 @@ workflows, while semantic watcher tuning remains.
 - New external TTS samples were checked through Qwen3-ASR: TeraTTSv2 produced
   the strongest current CPU/clarity profile (RTF 0.05–0.06, about 2.56 GB RAM,
   exact welcome and nearly exact poem), while XTTS-v2 was slower and Pocket-TTS
-  was not intelligible in Russian. TeraTTSv2 is provisional only; prosody,
-  first-audio latency, cancellation and actual avatar-path integration remain.
+was not intelligible in Russian. TeraTTSv2 is the current selected provider;
+voice cloning is deferred, while prosody, first-audio latency, cancellation
+and actual avatar-path integration remain validation work.
   A direct warm streaming call produced its first chunk in about 1.04 s and
   requires `<ru>...</ru>` input. The Companion now exposes a sentence-level
   `/api/tts/stream` NDJSON/WebAudio path, while the native Tera chunk generator
@@ -380,8 +381,9 @@ workflows, while semantic watcher tuning remains.
   JAWL event IPC, while production final-wording validation remains;
 - validate production VoiceMem/Qwen3-ASR audio startup in its own environment
   and measure Russian ASR on a real microphone;
-- validate the TTS model selected by the external benchmark, measure startup/
-  latency and decide whether an actual streaming TTS worker is needed;
+- recheck TeraTTSv2 startup/latency and browser audio on the target machine;
+  sentence-level first-audio is implemented, while native Tera chunking is an
+  optional optimization;
 - choose the initial JAWL LLM endpoint/profile;
 - tune bounded screen resizing and coordinate calibration for the selected
   Qwen3-VL-2B endpoint, then validate pointer actions against a real
@@ -443,6 +445,18 @@ provider-neutral voice/speed controls and focused concurrency/cancellation
 regression tests. It also exposes `/api/tts/stream`: sentence WAVs are emitted
 in source order as NDJSON and scheduled by WebAudio before the full reply is
 ready; this is sentence-level, not native token streaming.
+
+The current model follow-up adds OpenAI-compatible SSE text streaming and an
+authenticated `/api/chat/stream` surface. Reasoning blocks stay buffered and
+only safe deltas are shown; the stream ends with one canonical response
+envelope. JAWL's current web adapter remains completion-oriented and uses the
+same endpoint's compatibility path.
+
+The real Tera worker was then exercised synthetically through the Companion
+HTTP stream: first audio arrived in 0.87 s for a short two-sentence reply; a
+warmed four-sentence reply produced first audio in 0.39 s and finished in
+1.74 s. No microphone hardware was used. These numbers are warm local
+benchmarks and must be rechecked after the final browser/audio setup.
 
 The current VoiceMem follow-up hardens lazy sidecar startup and recovery:
 empty `/api/voice/end` calls do not initialize VoiceMem, a failed stream is

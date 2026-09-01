@@ -31,6 +31,9 @@ blocked or requiring a decision.
   the response contract and OBS surface currently cover the basic state path.
 - [x] Add structured metadata-only JSONL logs without secrets, tool arguments
   or hidden chain-of-thought; the CLI stores bounded events in runtime.
+- [x] Add provider-neutral OpenAI SSE text streaming with a final envelope;
+  the browser consumes `/api/chat/stream`, while completed-message JAWL
+  transports retain the compatibility path.
 
 Acceptance criteria:
 
@@ -56,7 +59,8 @@ Acceptance criteria:
   chunks, while upstream wrapper streaming remains unverified.
 - [~] Add optional TeraTTSv2 REST worker; the external model is available through
   the existing `/health` + `/tts` contract and generic sentence-level Companion
-  streaming playback is implemented, while native Tera chunk integration remains.
+  streaming playback is implemented; Tera is the current provider, while native
+  chunk integration remains a future optimization.
 - [!] Add OmniVoice adapter when its model/API location is confirmed; the local
   `G:\AI\OmniVoice` directory currently contains only a virtual environment.
 - [x] Implement bounded sentence chunking for TTS.

@@ -23,6 +23,20 @@ class _Response:
         return json.dumps(self.payload).encode("utf-8")
 
 
+class _StreamResponse:
+    def __init__(self, lines):
+        self.lines = [line.encode("utf-8") for line in lines]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def __iter__(self):
+        return iter(self.lines)
+
+
 class LLMTests(unittest.TestCase):
     def test_client_normalizes_endpoint_and_removes_hidden_reasoning(self):
         requests = []
@@ -68,6 +82,26 @@ class LLMTests(unittest.TestCase):
                 "тест", cancel_event=cancel,
             )
         self.assertEqual(called, [])
+
+    def test_stream_yields_safe_deltas_and_keeps_reasoning_hidden(self):
+        requests = []
+
+        def opener(request, timeout):
+            del timeout
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return _StreamResponse([
+                'data: {"choices":[{"delta":{"content":"<think>secret"}}]}\n',
+                'data: {"choices":[{"delta":{"content":" reasoning</think>"}}]}\n',
+                'data: {"choices":[{"delta":{"content":"<final>Привет"}}]}\n',
+                'data: {"choices":[{"delta":{"content":" мир.</final>"}}]}\n',
+                "data: [DONE]\n",
+            ])
+
+        client = OpenAICompatibleChatClient("http://127.0.0.1:8000/v1", "glm", opener=opener)
+        chunks = list(client.stream("тест"))
+        self.assertEqual("".join(chunks), "Привет мир.")
+        self.assertTrue(all("secret" not in chunk for chunk in chunks))
+        self.assertTrue(requests[0]["stream"])
 
 
 if __name__ == "__main__":

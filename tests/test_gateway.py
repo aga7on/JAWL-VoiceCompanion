@@ -58,6 +58,20 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(new_result["text"], "Новый ответ")
         self.assertFalse(old_result["value"]["speak"])
 
+    def test_stream_text_emits_deltas_and_final_envelope_once(self):
+        class StreamingResponder:
+            def stream(self, text, cancel_event=None):
+                del text, cancel_event
+                yield "first "
+                yield "second"
+
+        gateway = TextGateway(responder=StreamingResponder(), brain_name="streaming_test")
+        events = list(gateway.stream_text("prompt"))
+        self.assertEqual([event["type"] for event in events], ["delta", "delta", "final"])
+        self.assertEqual("".join(event["text"] for event in events[:-1]), "first second")
+        self.assertEqual(events[-1]["response"]["text"], "first second")
+        self.assertEqual(gateway.state()["last_turn"]["response"]["text"], "first second")
+
 
 if __name__ == "__main__":
     unittest.main()

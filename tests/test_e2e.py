@@ -650,6 +650,17 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(self.jawl_adapter.last_status, "connected")
         status, state = self.get_json("/api/state")
         self.assertEqual(state["last_turn"]["response"]["text"], chat["text"])
+        stream_request = Request(
+            self.base + "/api/chat/stream",
+            data=json.dumps({"text": "проверка stream"}, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", **self.headers},
+            method="POST",
+        )
+        with urlopen(stream_request, timeout=3) as response:
+            self.assertIn("application/x-ndjson", response.headers.get("Content-Type", ""))
+            chat_events = [json.loads(line) for line in response.read().decode("utf-8").splitlines()]
+        self.assertEqual([event["type"] for event in chat_events], ["delta", "final"])
+        self.assertEqual(chat_events[-1]["response"]["text"], "JAWL E2E: проверка stream")
         _, pulse = self.post_json(
             "/api/avatar/audio",
             {"schema_version": 1, "amplitude": 0.4, "speaking": True, "timestamp_ms": 1},

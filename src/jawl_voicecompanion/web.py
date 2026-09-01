@@ -348,6 +348,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/chat":
                 self._json(self.server.gateway.handle_text(payload.get("text", "")))
                 return
+            if self.path == "/api/chat/stream":
+                self._stream_chat(payload.get("text", ""))
+                return
             if self.path == "/api/voice/partial":
                 if self.server.voice_mem is None:
                     self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
@@ -683,6 +686,25 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             # Closing the browser stream closes the service-owned generator in
             # its finally block, which cancels only this synthesis generation.
+            return
+        except Exception as exc:  # noqa: BLE001 - report provider failures in-band
+            try:
+                self._stream_event({"type": "error", "error": str(exc)[:500]})
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                return
+
+    def _stream_chat(self, text: str) -> None:
+        """Stream text deltas and one final ResponseEnvelope as NDJSON."""
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            for event in self.server.gateway.stream_text(text, session_id=self.server.session_token):
+                self._stream_event(event)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             return
         except Exception as exc:  # noqa: BLE001 - report provider failures in-band
             try:

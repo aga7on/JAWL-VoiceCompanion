@@ -27,6 +27,17 @@ execute tool calls, persist provider sessions, or reproduce JAWL's JSON action
 envelope. This keeps temporary TokenRouter/GLM or future local-model tests
 replaceable and prevents a second brain from appearing accidentally.
 
+When the provider supports OpenAI SSE, `OpenAICompatibleChatClient.stream()`
+requests `stream: true`, emits only reconciled user-visible deltas and keeps
+reasoning/tool blocks buffered until their closing marker. The authenticated
+Companion `POST /api/chat/stream` endpoint forwards those deltas as NDJSON and
+finishes with exactly one `final` event containing the same ResponseEnvelope
+used by `POST /api/chat`. Providers without a stream method use a one-delta
+compatibility path; JAWL's current correlated web adapter likewise remains
+completion-oriented because its upstream event is a completed agent message.
+This boundary is text streaming only; tool dispatch still requires the final
+validated JSON/envelope path.
+
 Before switching regular operation to a provider, validate it through JAWL's
 own `OpenAICompatibleProvider`/`QWBProvider` contract suite: ordinary text,
 empty content, JSON action envelope, native tool calls, streaming, timeouts,
