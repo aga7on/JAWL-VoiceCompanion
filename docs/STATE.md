@@ -38,8 +38,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the browser emergency-stop recovery slice.
-- Latest feature commit: `a11dd21` (`feat: add browser recovery for emergency stop`).
+- Working tree: clean after the bounded audit persistence slice.
+- Latest feature commit: `c45c5d6` (`feat: persist bounded HostOS audit metadata`).
 
 ## Completed in this repository
 
@@ -147,7 +147,8 @@ separate CPU/RAM test completes.
   secrets and exposes session-protected inspection routes to the browser.
 - The browser now renders the last bounded HostOS audit events; `/api/audit`
   requires the browser session and policy audit entries exclude arguments and
-  raw command output.
+  raw command output. The CLI now persists allowlisted metadata to bounded
+  JSONL and the browser can recover those events after restart.
 - `JawlWebChatAdapter` now treats an HTTP reader exception caused by concurrent
   response close as normal cancellation; a regression test protects the
   daemon reader from leaking a traceback.
@@ -316,7 +317,7 @@ tracked children so a recovery/restart does not leave companion-owned work
 running.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 117 unit tests and 9 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 119 unit tests and 10 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
