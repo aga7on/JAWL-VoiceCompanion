@@ -682,7 +682,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 count += 1
             self._stream_event({"type": "done", "count": count})
         except TTSCancelled:
-            self._stream_event({"type": "cancelled"})
+            try:
+                self._stream_event({"type": "cancelled"})
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                return
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             # Closing the browser stream closes the service-owned generator in
             # its finally block, which cancels only this synthesis generation.
