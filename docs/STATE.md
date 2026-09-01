@@ -154,6 +154,12 @@ model triage remain opt-in work.
   validated and likely corrected before latency-sensitive integration.
 - The local OmniVoice directory currently does not expose a ready project/API
   layer; model and integration details must be confirmed before adapter work.
+- The 2026-09-01 local model inventory exposed only two Ollama profiles:
+  `gemma-4-12b-obliterated:latest` and
+  `gemma-4-12b-coder-fable5-composer2.5-v1:latest`; Prism-ML and
+  Ternary-Bonsai-8B were not found locally. A hardware snapshot reported
+  about 93.7 GB physical RAM (about 55.2 GB free) and two RTX 5080 devices
+  with 16 GB each; this is an inventory, not a triage suitability benchmark.
 - No Live2D model or runtime is installed in the companion repository. The
   reference clones contain sample assets and Pixi/Cubism patterns, but the
   asset bridge cannot claim real rendering until a licensed bundle is supplied
