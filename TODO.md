@@ -29,7 +29,8 @@ blocked or requiring a decision.
 - [x] Add a first adapter for JAWL's loopback HostTerminalClient protocol.
 - [~] Render `idle`, `listening`, `thinking`, `speaking` and emotion states;
   the response contract and OBS surface currently cover the basic state path.
-- [ ] Add structured logs without secrets or hidden chain-of-thought.
+- [x] Add structured metadata-only JSONL logs without secrets, tool arguments
+  or hidden chain-of-thought; the CLI stores bounded events in runtime.
 
 Acceptance criteria:
 
@@ -234,9 +235,9 @@ Acceptance criteria:
   contract.
 - [x] Add server-side one-shot approval queue with exact request/policy
   fingerprints and allow-once/deny decisions.
-- [~] Add unified tool-call audit log with secret redaction; the metadata-only
-  policy audit is now visible in the browser, while broader tool coverage
-  remains.
+- [~] Add unified tool-call audit log with secret redaction; metadata-only
+  policy events are now visible in the browser and optionally persistent,
+  while native JAWL event coverage remains separate.
 - [ ] Add bounded tool-result compression.
 - [ ] Add workspace-scoped edit proposals with stale-file checks.
 - [x] Add restart/recovery tests to the full E2E gate; server shutdown now

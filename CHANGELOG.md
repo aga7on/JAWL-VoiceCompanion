@@ -11,6 +11,9 @@
   cancellation and native approval synchronization remain pending.
 - Added an explicit browser recovery action that starts native JAWL before
   clearing the Companion emergency-stop latch.
+- Added bounded optional JSONL persistence for metadata-only HostOS audit and
+  lifecycle events; command arguments, credentials and hidden reasoning are
+  excluded.
 - Documented the verified JAWL native HostOS ownership boundary: the current
   companion executor is explicitly labelled as a separate control-plane path
   for controls that are not covered by the authenticated level/stop bridge,

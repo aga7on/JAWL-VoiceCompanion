@@ -71,6 +71,12 @@ unattended checkbox does not claim to alter JAWL's native approval policy.
 The emergency-stop button also stops native JAWL in bridge mode; the adjacent
 resume button starts it again before clearing the local stop.
 
+The CLI keeps a bounded metadata-only HostOS audit at
+`runtime/audit.ndjson` by default. It contains policy and lifecycle events,
+never command arguments, screenshots, credentials or hidden reasoning. Library
+users can pass `--audit-file` or `audit_file` to `create_server` to choose the
+path.
+
 The web chat adapter keeps JAWL's `/api/chat/stream` SSE open, sends a
 correlated `/api/chat` POST and waits for an agent message with a newer
 sequence. If the web console is omitted, the companion can use the legacy

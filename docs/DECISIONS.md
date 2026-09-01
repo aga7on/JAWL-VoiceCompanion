@@ -239,3 +239,15 @@ companion unattended and approval state are not reported as native JAWL state
 until JAWL exposes matching contracts.
 The browser recovery action starts native JAWL before clearing the local
 emergency-stop latch, so a failed native start leaves local execution blocked.
+
+## ADR-018 - Bounded metadata-only audit persistence
+
+Status: Accepted
+Date: 2026-09-01
+
+Companion policy and lifecycle events may be persisted as JSONL so autonomous
+work remains inspectable after a process restart. The audit writer applies a
+fixed size limit and an allow-list of metadata fields; command arguments, raw
+tool results, screenshots, credentials and hidden reasoning are excluded at
+the persistence boundary. This is an operational audit, not a second memory
+store for the character.

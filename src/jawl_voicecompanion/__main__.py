@@ -131,6 +131,12 @@ def main() -> None:
     parser.add_argument("--live2d-assets", type=Path, default=None)
     parser.add_argument("--live2d-model", default="model3.json")
     parser.add_argument("--live2d-runtime", default="live2d-runtime.js")
+    parser.add_argument(
+        "--audit-file",
+        type=Path,
+        default=None,
+        help="metadata-only HostOS audit JSONL path (default: runtime/audit.ndjson)",
+    )
     parser.add_argument("--sandbox-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
     parser.add_argument("--host-root", type=Path, action="append", default=[])
@@ -228,6 +234,7 @@ def main() -> None:
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
         jawl_hostos_control=args.jawl_hostos_control,
+        audit_file=args.audit_file or Path(__file__).resolve().parents[2] / "runtime" / "audit.ndjson",
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:

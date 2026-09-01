@@ -693,6 +693,63 @@ class LocalE2ETests(unittest.TestCase):
         finally:
             fresh.server_close()
 
+    def test_audit_file_survives_companion_restart_without_tool_arguments(self):
+        audit_file = Path(self.temp.name) / "audit.ndjson"
+        first = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            audit_file=audit_file,
+        )
+        first_thread = threading.Thread(target=first.serve_forever, daemon=True)
+        first_thread.start()
+        first_base = f"http://127.0.0.1:{first.server_port}"
+        first_headers = {
+            "X-Companion-Session": first.session_token,
+            "X-Companion-CSRF": first.csrf_token,
+        }
+
+        def first_post(path, payload):
+            request = Request(
+                first_base + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", **first_headers},
+                method="POST",
+            )
+            with urlopen(request, timeout=3) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        first_post("/api/hostos/level", {"level": 3})
+        first_post("/api/emergency-stop", {})
+        first.shutdown()
+        first.server_close()
+        first_thread.join(timeout=2)
+
+        second = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            audit_file=audit_file,
+        )
+        second_thread = threading.Thread(target=second.serve_forever, daemon=True)
+        second_thread.start()
+        try:
+            request = Request(
+                f"http://127.0.0.1:{second.server_port}/api/audit",
+                headers={
+                    "X-Companion-Session": second.session_token,
+                    "X-Companion-CSRF": second.csrf_token,
+                },
+            )
+            with urlopen(request, timeout=3) as response:
+                audit = json.loads(response.read().decode("utf-8"))
+            types = [event["type"] for event in audit["events"]]
+            self.assertIn("ACCESS_LEVEL_CHANGED", types)
+            self.assertIn("EMERGENCY_STOP_CHANGED", types)
+            self.assertNotIn("argv", json.dumps(audit, ensure_ascii=False))
+        finally:
+            second.shutdown()
+            second.server_close()
+            second_thread.join(timeout=2)
+
     def test_jawl_web_memory_and_persona_are_visible_without_secrets(self):
         _, health = self.get_json("/api/health")
         self.assertEqual(health["components"]["jawl_web"], "online")

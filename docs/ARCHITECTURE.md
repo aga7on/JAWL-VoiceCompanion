@@ -88,7 +88,8 @@ session-protected; chat remains loopback/token protected by JAWL.
 
 The same browser session protects the HostOS audit view. The UI displays only
 the last bounded metadata events; tool arguments and raw results remain
-excluded by the policy audit layer.
+excluded by the policy audit layer. The CLI may persist the same metadata to a
+bounded JSONL file for recovery inspection.
 
 `GET /api/doctor` is the first-run readiness surface. It aggregates only
 bounded component states and remediation hints; it does not expose paths or

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from .models import AccessLevel, RiskClass, ToolDecision, ToolRequest
 
@@ -64,6 +64,7 @@ class HostOSPolicy:
     )
     deny_tools: set[str] = field(default_factory=set)
     deny_risks: set[RiskClass] = field(default_factory=set)
+    audit_sink: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False, compare=False)
     _audit: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def set_access_level(self, level: AccessLevel | int, actor: str = "user") -> dict[str, Any]:
@@ -214,8 +215,14 @@ class HostOSPolicy:
         self._record(event_type, {"approval_id": approval_id, "tool": tool})
 
     def _record(self, event_type: str, payload: dict[str, Any]) -> None:
-        self._audit.append({"created_at": _now(), "type": event_type, "payload": payload})
+        event = {"created_at": _now(), "type": event_type, "payload": payload}
+        self._audit.append(event)
         del self._audit[:-100]
+        if self.audit_sink is not None:
+            try:
+                self.audit_sink(event)
+            except Exception:  # noqa: BLE001 - audit persistence must not break the policy gate
+                pass
 
 
 class DryRunHostOS:

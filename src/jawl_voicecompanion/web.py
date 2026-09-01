@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from .approvals import ApprovalStore
 from .ambient_audio import AmbientAudioDisabled, AmbientAudioService
 from .ambient_memory import AmbientMemoryBuffer
+from .audit import AuditLog
 from .attention import AttentionPresence
 from .avatar import AvatarAssetStore
 from .doctor import build_doctor_report
@@ -50,6 +51,7 @@ class CompanionServer(ThreadingHTTPServer):
         ambient_memory: AmbientMemoryBuffer | None = None,
         ambient_audio: AmbientAudioService | None = None,
         jawl_hostos_control: bool = False,
+        audit_log: AuditLog | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -63,6 +65,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
         self.ambient_audio = ambient_audio
         self.jawl_hostos_control = jawl_hostos_control
+        self.audit_log = audit_log
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -113,7 +116,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             except PermissionError as exc:
                 self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
                 return
-            self._json({"events": self.server.gateway.audit()})
+            events = self.server.audit_log.events() if self.server.audit_log else self.server.gateway.audit()
+            self._json({"events": events})
             return
         if path == "/api/hostos/tools":
             self._json({"dry_run": self.server.hostos.dry_run, "tools": self.server.hostos.list_tools()})
@@ -547,6 +551,7 @@ def create_server(
     ambient_memory: AmbientMemoryBuffer | None = None,
     ambient_audio: AmbientAudioService | None = None,
     jawl_hostos_control: bool = False,
+    audit_file: Path | None = None,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -555,6 +560,7 @@ def create_server(
             raise ValueError("jawl_hostos_control requires a configured JAWL web adapter")
         if not active_gateway.jawl_web.token:
             raise ValueError("jawl_hostos_control requires a JAWL console token")
+    audit_log = AuditLog(audit_file) if audit_file else None
     active_executor = hostos_executor or HostOSExecutor(
         policy=active_gateway.policy,
         sandbox_root=Path(__file__).resolve().parents[2] / "runtime" / "sandbox",
@@ -562,6 +568,9 @@ def create_server(
         host_roots=(Path(__file__).resolve().parents[2],),
         dry_run=True,
     )
+    if audit_log:
+        active_gateway.policy.audit_sink = audit_log.append
+        active_executor.policy.audit_sink = audit_log.append
     vision_service = VisionLookService(active_executor, describer=vision_describer)
     event_sink = JawlEventFileSink(jawl_event_dir) if jawl_event_dir else None
     active_attention = attention or AttentionPresence(
@@ -592,6 +601,7 @@ def create_server(
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
         jawl_hostos_control=jawl_hostos_control,
+        audit_log=audit_log,
     )
     if watcher is not None:
         watcher.start()

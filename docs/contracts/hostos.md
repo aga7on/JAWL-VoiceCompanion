@@ -149,5 +149,8 @@ values. The model cannot change any of them through a tool request.
 - expose current mode, pending approvals, emergency stop and audit status;
 - treat approvals and unattended state as runtime-only; a fresh server starts
   with no pending approvals and safe default policy;
+- optionally persist bounded policy/lifecycle events as metadata-only JSONL;
+  command arguments, screenshots, credentials and hidden reasoning are never
+  written;
 - return bounded, redacted tool results;
 - do not persist screenshots or secrets by default.

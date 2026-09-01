@@ -20,6 +20,7 @@ from .ambient_memory import AmbientMemoryBuffer
 from .ambient_triage import AmbientTriageProvider, AmbientTriageUnavailable, OllamaTriageProvider
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioDisabled, AmbientAudioService
 from .system_audio import SystemAudioLoopback, SystemAudioUnavailable
+from .audit import AuditLog
 
 __all__ = [
     "AccessLevel",
@@ -58,4 +59,5 @@ __all__ = [
     "AmbientAudioService",
     "SystemAudioLoopback",
     "SystemAudioUnavailable",
+    "AuditLog",
 ]
