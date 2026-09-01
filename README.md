@@ -12,8 +12,8 @@ The project combines:
 
 ## Current status
 
-Phase 0 — repository and architecture setup. No runtime integration has been
-implemented yet. See [docs/STATE.md](docs/STATE.md) and [TODO.md](TODO.md).
+Phase 1 — contracts and text vertical slice. See
+[docs/STATE.md](docs/STATE.md) and [TODO.md](TODO.md).
 
 The current Phase 1 slice includes a dependency-free text gateway, local
 browser control plane, initial HostOS tool registry and a transparent avatar
@@ -25,6 +25,7 @@ still being integrated.
 ```powershell
 cd G:\AI\JAWL-VoiceCompanion
 .\scripts\run_tests.ps1
+.\scripts\run_e2e.ps1
 .\scripts\run_web.ps1
 ```
 
@@ -37,7 +38,9 @@ approval queue and full production policy are still under development.
 
 Focused-window snapshots stay disabled unless `--screen-enabled` is supplied
 alongside `--hostos-live`. The snapshot path is explicit and bounded; it does
-not start a passive capture loop.
+not start a passive capture loop. The optional `--screen-watch` flag starts a
+bounded `SCREEN_DELTA` sensor only when a live screen adapter and VLM provider
+are configured; it does not yet trigger autonomous speech.
 
 To connect the text surface to the local JAWL terminal bridge, pass its
 `terminal.port` file:
@@ -67,6 +70,8 @@ for cancellation and priority.
 
 The HostOS boundary is specified in [docs/contracts/hostos.md](docs/contracts/hostos.md).
 OBS setup is documented in [docs/OBS.md](docs/OBS.md).
+Major cross-layer changes must pass the local HTTP E2E suite via
+`scripts/run_e2e.ps1`, in addition to the unit suite.
 
 ## Planned runtime layout
 

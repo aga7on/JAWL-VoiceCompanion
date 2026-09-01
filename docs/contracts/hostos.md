@@ -108,8 +108,9 @@ adapter:
 The adapter omits the window title, blocks configured sensitive/companion
 windows before capture, caps dimensions and encoded size, and does not write
 the frame to disk. It is disabled unless the operator explicitly enables the
-screen adapter. Passive change detection and a VLM description bridge are
-separate later layers.
+screen adapter. The optional passive watcher reuses this same adapter and VLM
+bridge; it emits only bounded textual events and remains disabled unless
+explicitly requested at startup.
 
 ## Risk classes
 

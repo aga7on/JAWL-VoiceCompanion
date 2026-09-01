@@ -156,6 +156,11 @@ The project progresses only when the current vertical slice passes:
 - clear degraded-mode behavior when ASR, TTS, VLM or JAWL is unavailable;
 - manual latency and Russian-language quality review.
 
+Any major cross-layer change must also pass `scripts/run_e2e.ps1`. The E2E
+suite must exercise the real local HTTP server and its public contracts across
+at least one complete user path; unit tests alone are not sufficient evidence
+that the expected result reaches the visible UI/state.
+
 ## Naming
 
 - Python: `snake_case` files and functions;

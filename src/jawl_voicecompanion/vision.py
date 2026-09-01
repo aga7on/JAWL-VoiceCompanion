@@ -144,6 +144,7 @@ class VisionLookService:
     cooldown_seconds: float = 2.5
     _last_seen_digest: str | None = field(default=None, init=False, repr=False)
     _last_described_digest: str | None = field(default=None, init=False, repr=False)
+    _last_prompt: str | None = field(default=None, init=False, repr=False)
     _last_vlm_at: float = field(default=0.0, init=False, repr=False)
     _last_description: str = field(default="", init=False, repr=False)
 
@@ -182,13 +183,14 @@ class VisionLookService:
         observation = capture.get("result")
         if not isinstance(observation, dict) or not isinstance(observation.get("image"), dict):
             return {"status": "degraded", "reason": "screen_capture_has_no_image", "persisted": False}
+        captured_at = str(observation.get("captured_at") or "")[:80]
 
         encoded = observation["image"].get("data_base64")
         if not isinstance(encoded, str) or not encoded:
             return {"status": "degraded", "reason": "screen_capture_has_invalid_image", "persisted": False}
         digest = hashlib.sha256(encoded.encode("ascii", errors="ignore")).hexdigest()
         now = time.monotonic()
-        if not force and digest == self._last_described_digest:
+        if not force and digest == self._last_described_digest and clean_prompt == self._last_prompt:
             return {
                 "status": "unchanged",
                 "description": self._last_description,
@@ -225,10 +227,12 @@ class VisionLookService:
             return {"status": "degraded", "reason": "vision_description_empty", "persisted": False}
 
         self._last_described_digest = digest
+        self._last_prompt = clean_prompt
         self._last_description = description
         return {
             "status": "ok",
             "description": description,
+            "captured_at": captured_at,
             "changed": True,
             "vlm_called": True,
             "persisted": False,

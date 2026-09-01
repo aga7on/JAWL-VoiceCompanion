@@ -14,6 +14,7 @@ from .approvals import ApprovalStore
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .models import ToolRequest
+from .presence import ScreenDeltaWatcher
 from .vision import VisionLookService
 
 
@@ -30,15 +31,22 @@ class CompanionServer(ThreadingHTTPServer):
         gateway: TextGateway,
         hostos_executor: HostOSExecutor,
         vision_service: VisionLookService,
+        screen_watcher: ScreenDeltaWatcher | None = None,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
         self.hostos = hostos_executor
         self.vision = vision_service
+        self.screen_watcher = screen_watcher
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
         super().__init__(server_address, CompanionRequestHandler)
+
+    def server_close(self) -> None:
+        if self.screen_watcher is not None:
+            self.screen_watcher.stop()
+        super().server_close()
 
 
 class CompanionRequestHandler(BaseHTTPRequestHandler):
@@ -62,7 +70,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json({"dry_run": self.server.hostos.dry_run, "tools": self.server.hostos.list_tools()})
             return
         if path == "/api/vision/status":
-            self._json(self.server.vision.status())
+            status = self.server.vision.status()
+            if self.server.screen_watcher is not None:
+                status["watcher"] = self.server.screen_watcher.state()
+            self._json(status)
+            return
+        if path == "/api/vision/events":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            events = self.server.screen_watcher.events() if self.server.screen_watcher else []
+            self._json({"events": events})
             return
         if path == "/api/hostos/approvals":
             try:
@@ -206,6 +226,8 @@ def create_server(
     gateway: TextGateway | None = None,
     hostos_executor: HostOSExecutor | None = None,
     vision_describer: Any | None = None,
+    screen_watch: bool = False,
+    screen_watch_interval: float = 10.0,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
@@ -216,10 +238,25 @@ def create_server(
         host_roots=(Path(__file__).resolve().parents[2],),
         dry_run=True,
     )
-    return CompanionServer(
+    vision_service = VisionLookService(active_executor, describer=vision_describer)
+    watcher = (
+        ScreenDeltaWatcher(
+            vision_service,
+            active_gateway.arbiter,
+            interval_seconds=screen_watch_interval,
+            session_id="screen-sensor",
+        )
+        if screen_watch
+        else None
+    )
+    server = CompanionServer(
         (host, port),
         root,
         active_gateway,
         active_executor,
-        VisionLookService(active_executor, describer=vision_describer),
+        vision_service,
+        watcher,
     )
+    if watcher is not None:
+        watcher.start()
+    return server

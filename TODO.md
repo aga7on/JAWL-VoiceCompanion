@@ -115,14 +115,15 @@ Acceptance criteria:
 - [~] Add explicit `vision__look` model tool; the HostOS `screen.observe`
   capture seam exists, while the model bridge is still pending.
 - [ ] Add capture request/response bridge when frontend owns capture.
-- [~] Add change detection, significance and cooldown; digest deduplication
-  and explicit-look cooldown are implemented, while significance scoring and
-  passive event production remain.
+- [~] Add change detection, significance and cooldown; digest deduplication,
+  explicit-look cooldown and the opt-in bounded `SCREEN_DELTA` producer are
+  implemented, while semantic significance scoring remains.
 - [~] Add app deny-list and sensitive-window redaction policy; title/class
   blocking is present, while pixel-level redaction remains pending.
 - [x] Discard raw screenshots after analysis by default.
 - [~] Store only bounded textual observations and metadata; the explicit bridge
-  keeps only an in-memory digest and bounded last description.
+  and passive producer keep only an in-memory digest, event ring and bounded
+  last description.
 
 Acceptance criteria:
 
@@ -133,7 +134,9 @@ Acceptance criteria:
 
 ## Phase 6 — presence and autonomy
 
-- [ ] Implement Attention/Presence Engine.
+- [~] Implement Attention/Presence Engine; the initial screen sensor emits
+  arbiter-aware `SCREEN_DELTA` events, while salience-to-speech decisions are
+  still pending.
 - [ ] Add salience levels and coalescing.
 - [ ] Add proactive cooldowns and quiet hours.
 - [ ] Add `SPEAK_INTENT` and JAWL final wording path.
@@ -141,6 +144,11 @@ Acceptance criteria:
 - [ ] Add optional daily journal and commitments.
 - [ ] Add gaming mode and resource backoff.
 - [ ] Add a user-adjustable proactivity budget.
+
+Quality gate:
+
+- [x] Add a real local-HTTP E2E suite for cross-layer user paths and make it
+  mandatory for major updates.
 
 Acceptance criteria:
 

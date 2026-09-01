@@ -8,8 +8,8 @@ Phase 1 — contracts and text vertical slice (in progress).
 
 Repository state: architecture baseline committed. A dependency-free mock
 text/control slice is implemented; real JAWL, VoiceMem, audio, TTS and Live2D
-are not connected, while optional UIA and focused-window OS adapters are
-available only through an explicitly constructed live executor.
+are not connected, while optional UIA, focused-window OS and opt-in VLM
+adapters are available only through explicitly constructed/configured paths.
 
 ## Git state
 
@@ -18,8 +18,10 @@ available only through an explicitly constructed live executor.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean at the last verification.
-- Latest feature commit: `6b2ba8e` (`feat: add explicit vision bridge`).
+- Working tree: contains the current passive watcher/E2E documentation change
+  until it is committed after final verification.
+- Latest feature commit before this change: `6b2ba8e` (`feat: add explicit
+  vision bridge`).
 
 ## Completed in this repository
 
@@ -60,6 +62,13 @@ available only through an explicitly constructed live executor.
   exact request/policy fingerprints and redacted previews.
 - Gateway user turns now receive arbiter generations; a newer user turn signals
   the JAWL adapter to cancel its pending socket read.
+- `ScreenDeltaWatcher` provides an explicit opt-in, arbiter-aware passive
+  producer. It stores a bounded in-memory event ring and publishes only
+  `SCREEN_DELTA` summaries through the local API; it never speaks or stores a
+  raw frame.
+- The cross-layer E2E suite drives the real loopback HTTP server and covers a
+  complete visible path from chat/state through HostOS approval/execution and
+  emergency stop, plus screen capture, VLM deduplication and screen events.
 
 ## Reference inventory
 
@@ -91,7 +100,8 @@ available only through an explicitly constructed live executor.
 - select the first redistributable or user-supplied Live2D model;
 - finish the browser settings, memory and audit views;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
-- finish the passive screen change detector and `SCREEN_DELTA` producer;
+- add semantic screen significance scoring and connect `SCREEN_DELTA` to
+  Attention/Presence and JAWL's final wording path;
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -99,25 +109,26 @@ available only through an explicitly constructed live executor.
 
 ## Latest work session
 
-Changed `src/jawl_voicecompanion/vision.py`, `web.py`, `__main__.py`,
-`frontend/index.html`, vision/HostOS tests, and the OBS/architecture/
-HostOS documentation.
+Changed the passive watcher, web API/CLI wiring, vision deduplication,
+E2E runner/tests and the related architecture/contracts/documentation.
 
-Verification: `scripts/run_tests.ps1` passed 44 tests; `git diff --check`
-reported no whitespace errors.
+Verification: `scripts/run_e2e.ps1` passed 2 tests; `scripts/run_tests.ps1`
+passed 49 tests; `git diff --check` reported no whitespace errors.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
 model yet. The web server's default executor remains dry-run and no VLM
-endpoint is configured by default; passive change detection, significance
-scoring, pixel-level redaction and TTS/audio cancellation are still pending.
-The native always-on-top desktop-pet shell is also deferred.
+endpoint is configured by default; semantic significance scoring,
+pixel-level redaction, JAWL/Attention consumption and TTS/audio cancellation
+are still pending. The native always-on-top desktop-pet shell is also
+deferred.
 
 ## Next action
 
-Exercise the JAWL adapter against the actual local process. Then implement the
-passive `SCREEN_DELTA` producer and connect vision output to the Attention/
-Presence layer before selecting the first Live2D asset/runtime.
-TTS/audio cancellation remains required before the voice loop.
+Exercise the JAWL adapter against the actual local process and connect the
+bounded `SCREEN_DELTA` stream to Attention/Presence without allowing it to
+become a second personality. TTS/audio cancellation remains required before
+the voice loop; selecting the first Live2D asset/runtime follows the stable
+web surface.
 
 ## State update protocol
 

@@ -37,6 +37,17 @@ def main() -> None:
         help="explicitly enable focused-window snapshots for screen.observe",
     )
     parser.add_argument(
+        "--screen-watch",
+        action="store_true",
+        help="start the explicit opt-in SCREEN_DELTA watcher",
+    )
+    parser.add_argument(
+        "--screen-watch-interval",
+        type=float,
+        default=10.0,
+        help="seconds between SCREEN_DELTA watcher polls",
+    )
+    parser.add_argument(
         "--vision-url",
         default=None,
         help="OpenAI-compatible vision endpoint; requires --vision-model",
@@ -94,6 +105,8 @@ def main() -> None:
             api_key=os.environ.get(args.vision_api_key_env, ""),
             timeout_seconds=args.vision_timeout,
         )
+    if args.screen_watch and not (args.hostos_live and args.screen_enabled and vision_describer):
+        parser.error("--screen-watch requires --hostos-live, --screen-enabled, --vision-url and --vision-model")
     server = create_server(
         args.host,
         args.port,
@@ -101,6 +114,8 @@ def main() -> None:
         gateway,
         hostos_executor,
         vision_describer,
+        screen_watch=args.screen_watch,
+        screen_watch_interval=args.screen_watch_interval,
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:

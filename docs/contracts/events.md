@@ -67,18 +67,23 @@ trusting uncorrelated partial messages.
 
 ### `SCREEN_DELTA`
 
-Bounded description of a meaningful screen change. Raw images should not be
-embedded in durable event logs.
+Bounded description of a screen change. The initial producer uses a neutral
+low significance value until semantic salience scoring is implemented. Raw
+images should not be embedded in durable event logs.
 
 ```json
 {
-  "app": "Visual Studio Code",
-  "window": "main.py",
-  "summary": "В терминале появилась ошибка импорта.",
-  "significance": 4,
-  "captured_at": "2026-08-31T12:01:00+03:00"
+  "summary": "В окне редактора появилась ошибка импорта.",
+  "significance": 1,
+  "captured_at": "2026-09-01T12:01:00+03:00",
+  "changed": true,
+  "raw_frame_persisted": false
 }
 ```
+
+`app` and `window` are optional future metadata and must be redacted before
+they are added. The current `/api/vision/events` endpoint returns a bounded
+in-memory ring and requires the local browser session.
 
 ### `SPEAK_INTENT`
 

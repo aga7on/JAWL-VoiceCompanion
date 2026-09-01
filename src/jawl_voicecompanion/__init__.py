@@ -9,6 +9,7 @@ from .models import AccessLevel, RiskClass, ToolRequest
 from .arbiter import TurnArbiter, TurnPriority
 from .screen_adapter import ScreenCaptureAdapter
 from .vision import OpenAICompatibleVisionClient, VisionLookService
+from .presence import ScreenDeltaWatcher
 
 __all__ = [
     "AccessLevel",
@@ -25,4 +26,5 @@ __all__ = [
     "ScreenCaptureAdapter",
     "OpenAICompatibleVisionClient",
     "VisionLookService",
+    "ScreenDeltaWatcher",
 ]

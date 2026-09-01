@@ -275,8 +275,12 @@ The current implementation provides the second path through
 the transient image in memory, suppresses identical frames and enforces a
 short cooldown before a new VLM request. A provider-neutral
 OpenAI-compatible client sends the image as a bounded `image_url` payload and
-returns only a bounded description. The ambient `SCREEN_DELTA` producer is
-still a later Attention/Presence component.
+returns only a bounded description. An explicit `--screen-watch` option now
+adds the first ambient producer: an arbiter-aware, bounded in-memory
+`ScreenDeltaWatcher` publishes `SCREEN_DELTA` events through
+`/api/vision/events`. It does not speak or call JAWL; salience scoring,
+coalescing policy and the `SPEAK_INTENT` consumer remain later
+Attention/Presence work.
 
 ## Model profiles
 

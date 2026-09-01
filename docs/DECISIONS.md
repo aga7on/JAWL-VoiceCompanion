@@ -146,9 +146,11 @@ OpenAI-compatible chat-completions endpoint and sends a bounded transient
 local JAWL/QWB path while keeping credentials, model selection and failure
 handling local to the companion adapter.
 
-The bridge is reachable only through an explicit web request in the current
-slice. It deduplicates identical frames and applies a cooldown before a new
-description. It stores no image, title or raw provider response; only a short
-in-memory digest and bounded last description are retained for coalescing. A
-future ambient sensor may emit `SCREEN_DELTA`, but it must still pass the same
-HostOS permission, deny-list and resource-budget gates.
+The bridge is reachable through an explicit web request and through the
+opt-in `ScreenDeltaWatcher`. Both paths deduplicate identical frames and
+apply a cooldown before a new description. The watcher is arbiter-aware and
+publishes only bounded `SCREEN_DELTA` events; it does not speak or call JAWL.
+No image, title or raw provider response is stored; only a short in-memory
+digest, bounded last description and bounded event ring are retained. Future
+salience and speech decisions must still pass the same HostOS permission,
+deny-list and resource-budget gates.

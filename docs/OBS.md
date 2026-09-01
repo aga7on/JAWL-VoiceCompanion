@@ -53,6 +53,15 @@ in the UI or logs. The same frame digest is not sent to the VLM twice unless
 the request is explicitly forced; the bridge keeps only a digest and the
 bounded last description in memory.
 
-This is not yet a passive real-time watcher. Change detection, cooldown and
-the `SCREEN_DELTA` event are the foundation for that later Attention/Presence
-loop; the user must still request each look from the panel in this slice.
+Change detection and cooldown are also available as an explicit opt-in sensor:
+
+```powershell
+.\scripts\run_web.ps1 --hostos-live --screen-enabled --screen-watch `
+  --screen-watch-interval 10 --vision-url "http://127.0.0.1:8000/v1" `
+  --vision-model "local-vlm"
+```
+
+The watcher emits bounded events at `/api/vision/events` and never speaks or
+calls JAWL directly. Attention/Presence salience, quiet hours and the final
+`SPEAK_INTENT` path are still pending, so this mode is a sensor preview rather
+than autonomous conversation.
