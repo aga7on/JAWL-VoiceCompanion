@@ -96,7 +96,10 @@ class _JawlWebHandler(BaseHTTPRequestHandler):
             "/api/drives": {
                 "ok": True,
                 "dynamicReduction": True,
-                "drives": [{"name": "curiosity", "type": "fundamental"}],
+                "drives": [{
+                    "name": "curiosity", "type": "fundamental",
+                    "description": "bounded drive", "secret": "must-not-cross",
+                }],
             },
             "/api/config": {
                 "ok": True,
@@ -318,6 +321,7 @@ class LocalE2ETests(unittest.TestCase):
         _, memory = self.get_json("/api/jawl/memory")
         self.assertEqual(memory["database"]["sql"]["counts"]["notes"], 4)
         self.assertEqual(memory["drives"]["drives"][0]["name"], "curiosity")
+        self.assertNotIn("must-not-cross", json.dumps(memory, ensure_ascii=False))
 
         _, persona = self.get_json("/api/jawl/persona")
         self.assertEqual(persona["settings"]["settings:identity.agent_name"], "Луна")
@@ -326,6 +330,7 @@ class LocalE2ETests(unittest.TestCase):
         _, overview = self.get_json("/api/jawl/overview")
         self.assertEqual(overview["status"], "ok")
         self.assertEqual(overview["sources"]["tick"]["step"], 7)
+        self.assertNotIn("must-not-cross", json.dumps(overview, ensure_ascii=False))
 
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
         _, status = self.get_json("/api/voice/status")

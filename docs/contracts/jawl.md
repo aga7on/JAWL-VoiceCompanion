@@ -29,6 +29,8 @@ The adapter consumes these existing JAWL routes:
 
 `/api/config` is filtered to a small allow-list. Environment values, API
 keys, provider URLs and unknown fields never cross into the companion API.
+Drive objects are also reduced to a fixed field allow-list and bounded
+description before reaching the browser.
 The bridge keeps no durable copy and returns `offline`/`degraded` when JAWL
 is unavailable.
 

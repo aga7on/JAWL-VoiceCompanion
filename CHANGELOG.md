@@ -55,3 +55,5 @@
 - Added a loopback-only, read-only JAWL web adapter for Heartbeat, persona,
   drive and memory counters; filtered config prevents secrets and no parallel
   durable memory store is created.
+- Bounded JAWL drive summaries to an explicit field allow-list after validating
+  the payload against the real local JAWL console.

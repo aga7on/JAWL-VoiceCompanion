@@ -121,6 +121,9 @@ storage.
 - JAWL's existing web console provides the stable read-only memory/heartbeat
   surface; no companion-side SQLite access or second durable memory store is
   warranted.
+- A real JAWL web console smoke-test with its agent stopped answered all five
+  upstream routes; the companion bridge then exposed the live Heartbeat,
+  database counters, drives and filtered persona through its own API.
 - The configured JAWL `terminal.port` is currently stale and has no listening
   socket; the read-only probe returned `status=offline`, so live process
   verification remains pending.
@@ -155,12 +158,14 @@ client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
 and final-turn routing in `36a808c`.
 The current work session adds the TTS boundary and CozyVoice REST path plus
 the optional Live2D asset/runtime bridge, then adds the read-only JAWL web
-memory/persona bridge and its browser view.
+memory/persona bridge and its browser view. The follow-up validates real JAWL
+payloads and applies a drive-field allow-list.
 
 Verification for the current work session:
 `scripts/run_e2e.ps1` passed 4 tests; `scripts/run_tests.ps1` passed 66 tests;
 the stale-port degraded probe returned `status=offline`;
-`git diff --check` reported no whitespace errors and no Python warnings.
+`git diff --check` reported no whitespace errors and no Python warnings; the
+real JAWL web → adapter → companion API smoke-test also passed.
 The working tree is clean after commit `751123f`; the preceding microphone
 slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 

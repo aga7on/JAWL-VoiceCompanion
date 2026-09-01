@@ -76,6 +76,8 @@ class JawlWebAdapter:
         if result["errors"]:
             result["status"] = "degraded"
         result["sources"]["persona"] = self._safe_persona(result["sources"].get("persona"))
+        result["sources"]["memory"] = self._memory_stats(result["sources"].get("memory", {}))
+        result["sources"]["drives"] = self._bounded_drives(result["sources"].get("drives", {}))
         return result
 
     def memory(self) -> dict[str, Any]:
@@ -138,8 +140,22 @@ class JawlWebAdapter:
         drives = payload.get("drives")
         if not isinstance(drives, list):
             return {key: payload[key] for key in ("ok", "dynamicReduction") if key in payload}
+        # JAWL may include reflections and implementation details here. Keep
+        # the browser view a summary instead of a second memory dump.
+        fields = (
+            "id", "key", "name", "title", "type", "description", "decayRate",
+            "decayIntervalSec", "deficit", "config", "pendingRestart",
+        )
+        bounded = []
+        for drive in drives[:20]:
+            if not isinstance(drive, dict):
+                continue
+            item = {key: drive[key] for key in fields if key in drive}
+            if isinstance(item.get("description"), str):
+                item["description"] = item["description"][:1000]
+            bounded.append(item)
         return {
             key: payload[key]
             for key in ("ok", "dynamicReduction")
             if key in payload
-        } | {"drives": drives[:20]}
+        } | {"drives": bounded}
