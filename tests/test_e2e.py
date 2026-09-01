@@ -1,4 +1,5 @@
 import json
+import socketserver
 import sys
 import tempfile
 import threading
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
+from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
 from jawl_voicecompanion.models import AccessLevel  # noqa: E402
 from jawl_voicecompanion.vision import OpenAICompatibleVisionClient  # noqa: E402
 from jawl_voicecompanion.web import create_server  # noqa: E402
@@ -54,12 +56,30 @@ class _FakeScreen:
         }
 
 
+class _JawlHandler(socketserver.StreamRequestHandler):
+    messages = []
+
+    def handle(self):
+        if self.rfile.readline() != b"JAWL_HANDSHAKE\n":
+            return
+        message = json.loads(self.rfile.readline().decode("utf-8"))
+        _JawlHandler.messages.append(message)
+        answer = {"text": f"JAWL E2E: {message['text']}"}
+        self.wfile.write((json.dumps(answer, ensure_ascii=False) + "\n").encode("utf-8"))
+
+
 class LocalE2ETests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.provider = ThreadingHTTPServer(("127.0.0.1", 0), _VisionHandler)
         _VisionHandler.requests = []
         threading.Thread(target=self.provider.serve_forever, daemon=True).start()
+        self.jawl = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _JawlHandler)
+        _JawlHandler.messages = []
+        self.jawl_port_file = Path(self.temp.name) / "terminal.port"
+        self.jawl_port_file.write_text(str(self.jawl.server_address[1]), encoding="utf-8")
+        self.jawl_adapter = JawlTerminalAdapter(self.jawl_port_file, timeout=2)
+        threading.Thread(target=self.jawl.serve_forever, daemon=True).start()
         endpoint = f"http://127.0.0.1:{self.provider.server_port}/v1"
         self.client = OpenAICompatibleVisionClient(endpoint, "e2e-vlm")
         self.policy = HostOSPolicy()
@@ -73,7 +93,7 @@ class LocalE2ETests(unittest.TestCase):
         )
         self.gateway = TextGateway(
             policy=self.policy,
-            responder=lambda text: f"JAWL E2E: {text}",
+            responder=self.jawl_adapter,
             brain_name="e2e_brain",
         )
         self.server = create_server(
@@ -97,6 +117,8 @@ class LocalE2ETests(unittest.TestCase):
         self.server.server_close()
         self.provider.shutdown()
         self.provider.server_close()
+        self.jawl.shutdown()
+        self.jawl.server_close()
         self.temp.cleanup()
 
     def get_json(self, path):
@@ -124,6 +146,8 @@ class LocalE2ETests(unittest.TestCase):
         status, chat = self.post_json("/api/chat", {"text": "проверка e2e"})
         self.assertEqual(status, 200)
         self.assertEqual(chat["text"], "JAWL E2E: проверка e2e")
+        self.assertEqual(_JawlHandler.messages, [{"text": "проверка e2e"}])
+        self.assertEqual(self.jawl_adapter.last_status, "connected")
         status, state = self.get_json("/api/state")
         self.assertEqual(state["last_turn"]["response"]["text"], chat["text"])
 

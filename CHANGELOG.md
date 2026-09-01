@@ -37,3 +37,5 @@
 - Added an opt-in, arbiter-aware `SCREEN_DELTA` watcher with a bounded event
   endpoint and a real local-HTTP E2E suite covering chat, avatar, approvals,
   execution, emergency stop, screen vision and deduplication.
+- Extended the E2E path through a local JAWL-compatible TCP terminal, covering
+  the handshake and JSON-lines response before the result reaches HTTP state.
