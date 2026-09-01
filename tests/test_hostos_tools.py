@@ -1,5 +1,7 @@
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -111,6 +113,31 @@ class HostOSToolTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "degraded")
             self.assertFalse((sandbox / "note.txt").exists())
+
+    def test_emergency_stop_cancels_running_shell_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+            policy.set_unattended(True)
+            executor = HostOSExecutor(policy, Path(directory), dry_run=False)
+            result = []
+            worker = threading.Thread(
+                target=lambda: result.append(executor.execute(ToolRequest(
+                    tool="shell.exec",
+                    risk=RiskClass.SHELL,
+                    arguments={"argv": [sys.executable, "-c", "import time; time.sleep(30)"]},
+                ))),
+                daemon=True,
+            )
+            worker.start()
+            for _ in range(50):
+                if executor._processes:
+                    break
+                time.sleep(0.02)
+            state = executor.activate_emergency_stop(actor="test")
+            worker.join(timeout=2)
+            self.assertTrue(state["stopped_processes"])
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(result[0]["status"], "cancelled")
 
 
 if __name__ == "__main__":

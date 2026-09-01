@@ -81,7 +81,9 @@ level, never a model-supplied value, to authorize the request.
 ```
 
 Possible statuses include `denied`, `approval_required`, `dispatched`,
-`verified`, `timeout`, `cancelled`, `stale_target` and `degraded`.
+`verified`, `timeout`, `cancelled`, `stale_target` and `degraded`. Emergency
+stop cancels tracked managed/shell processes and returns `cancelled` for a
+running shell request when its process is terminated.
 `dispatched` must not be reported as `verified` unless a bounded postcondition
 was observed.
 

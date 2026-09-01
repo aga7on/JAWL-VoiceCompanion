@@ -217,8 +217,9 @@ Acceptance criteria:
 - [~] Implement bounded keyboard/mouse/window control and browser actions;
   initial UIA control and browser navigation adapters are present.
 - [x] Add bounded browser URL actions and UIA delegation behind `browser.act`.
-- [~] Add level-change events, session tokens and emergency stop; the initial
-  loopback path is present, while broader session lifecycle hardening remains.
+- [~] Add level-change events, session tokens and emergency stop; the loopback
+  path now cancels tracked managed/shell processes, while broader session
+  lifecycle hardening remains.
 - [x] Add risk classes and per-class confirmation/deny-list policy, including
   an explicit ROOT-only unattended mode for heartbeat/background work.
 - [x] Add exact approval fingerprints for commands and high-risk actions.

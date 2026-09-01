@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
@@ -78,6 +79,8 @@ class HostOSExecutor:
     max_read_chars: int = 100_000
     max_output_chars: int = 20_000
     _processes: dict[int, subprocess.Popen] = field(default_factory=dict, repr=False)
+    _process_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _cancelled: set[int] = field(default_factory=set, repr=False)
     _specs: dict[str, ToolSpec] = field(
         default_factory=lambda: {spec.name: spec for spec in TOOL_SPECS}, repr=False
     )
@@ -148,6 +151,37 @@ class HostOSExecutor:
             "effective_level": int(decision.effective_level),
             "result": result,
         }
+
+    def activate_emergency_stop(self, actor: str = "user") -> dict[str, Any]:
+        state = self.policy.set_emergency_stop(True, actor=actor)
+        state["stopped_processes"] = self.stop_all()
+        return state
+
+    def stop_all(self) -> list[int]:
+        with self._process_lock:
+            items = list(self._processes.items())
+            self._cancelled.update(pid for pid, process in items if process.poll() is None)
+        stopped = []
+        for pid, process in items:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                    stopped.append(pid)
+                except OSError:
+                    pass
+        for _pid, process in items:
+            try:
+                process.wait(timeout=0.5)
+            except (subprocess.TimeoutExpired, OSError):
+                try:
+                    process.kill()
+                    process.wait(timeout=0.5)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+        with self._process_lock:
+            for pid, _process in items:
+                self._processes.pop(pid, None)
+        return stopped
 
     def _dispatch(self, request: ToolRequest) -> dict[str, Any]:
         if request.tool in {"sandbox.read", "filesystem.read"}:
@@ -301,19 +335,25 @@ class HostOSExecutor:
             shell=False,
             creationflags=creationflags,
         )
-        self._processes[process.pid] = process
+        with self._process_lock:
+            self._processes[process.pid] = process
+        if self.policy.emergency_stop:
+            self.stop_all()
+            raise PermissionError("emergency_stop_active")
         return {"status": "dispatched", "pid": process.pid, "verified": False}
 
     def _stop_process(self, request: ToolRequest) -> dict[str, Any]:
         pid = request.arguments.get("pid")
         if isinstance(pid, bool) or not isinstance(pid, int):
             raise ValueError("pid must be an integer")
-        process = self._processes.get(pid)
+        with self._process_lock:
+            process = self._processes.get(pid)
         if process is None:
             raise PermissionError("only processes started by this executor can be stopped")
         if process.poll() is None:
             process.terminate()
-        self._processes.pop(pid, None)
+        with self._process_lock:
+            self._processes.pop(pid, None)
         return {"status": "dispatched", "pid": pid, "terminated": True}
 
     def _execute_argv(self, request: ToolRequest) -> dict[str, Any]:
@@ -326,21 +366,35 @@ class HostOSExecutor:
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise ValueError("timeout_sec must be numeric")
         timeout = max(1.0, min(float(timeout), 60.0))
-        completed = subprocess.run(
+        process = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             shell=False,
-            check=False,
         )
-        return {
-            "exit_code": completed.returncode,
-            "stdout": completed.stdout[: self.max_output_chars],
-            "stderr": completed.stderr[: self.max_output_chars],
-            "truncated": len(completed.stdout) > self.max_output_chars or len(completed.stderr) > self.max_output_chars,
-        }
+        with self._process_lock:
+            self._processes[process.pid] = process
+        if self.policy.emergency_stop:
+            self.stop_all()
+            raise PermissionError("emergency_stop_active")
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            with self._process_lock:
+                cancelled = process.pid in self._cancelled
+                self._cancelled.discard(process.pid)
+            if cancelled:
+                return {"status": "cancelled", "pid": process.pid, "exit_code": process.returncode}
+            return {
+                "exit_code": process.returncode,
+                "stdout": stdout[: self.max_output_chars],
+                "stderr": stderr[: self.max_output_chars],
+                "truncated": len(stdout) > self.max_output_chars or len(stderr) > self.max_output_chars,
+            }
+        finally:
+            with self._process_lock:
+                self._processes.pop(process.pid, None)
 
     def _resolve_workspace_path(self, request: ToolRequest) -> Path:
         raw = request.arguments.get("path")

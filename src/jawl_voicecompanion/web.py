@@ -71,6 +71,7 @@ class CompanionServer(ThreadingHTTPServer):
             self.screen_watcher.stop()
         if self.ambient_audio is not None:
             self.ambient_audio.stop()
+        self.hostos.stop_all()
         if self.voice_mem is not None:
             self.voice_mem.close()
         if self.tts is not None:
@@ -391,7 +392,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "policy": state})
                 return
             if self.path == "/api/emergency-stop":
-                state = self.server.gateway.policy.set_emergency_stop(True, actor="browser")
+                state = self.server.hostos.activate_emergency_stop(actor="browser")
                 self._json({"ok": True, "policy": state})
                 return
             if self.path == "/api/attention":
