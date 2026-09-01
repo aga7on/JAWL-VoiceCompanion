@@ -43,8 +43,8 @@ workflows, while semantic watcher tuning remains.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the Qwen ASR and UIA Vision validation slice.
-- Latest feature commit: `86f4844` (`feat: validate qwen asr and bound uia vision context`).
+- Working tree: clean after the calibrated desktop pointer validation slice.
+- Latest feature commit: `8ff0697` (`feat: add calibrated desktop pointer fallback`).
 
 ## Completed in this repository
 

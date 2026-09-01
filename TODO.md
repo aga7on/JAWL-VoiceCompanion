@@ -171,7 +171,7 @@ Acceptance criteria:
   `screen.observe` adapter is present and disabled by default, with a
   benchmark-oriented 960×720/1 MB profile and coordinate-scale metadata.
 - [~] Prefer UI Automation for native app structure; bounded semantic context
-  is now sent transiently to Vision, while calibrated action grounding and
+  is now sent transiently to Vision, while native action grounding and
   canvas/OCR fallback remain pending.
 - [x] Add a bounded calibrated `desktop.pointer` fallback for canvas/custom
   surfaces with stale foreground-window rejection and cursor postcondition.
