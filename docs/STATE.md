@@ -511,7 +511,11 @@ keeps VoiceMem/Qwen as the ASR and final-turn owner, and rotates the session ID
 after each utterance. The moved benchmark directory was revalidated for both
 Qwen3-VL-2B and Qwen3-ASR-0.6B; the installed Qwen3.8-27B experiment is recorded
 as on-demand only because its CPU latency and memory footprint are too high.
-The full gate remains green after these changes.
+An additional read-only Windows foreground-window smoke returned real bounds,
+a bounded 960x562 JPEG snapshot and five UIA elements; mapping the captured
+image center back to screen coordinates returned `[569,331]` with no disk
+persistence. A real custom-app dispatch/postcondition test is still pending.
+The full gate remains green after the feature changes.
 
 ## Next action
 
