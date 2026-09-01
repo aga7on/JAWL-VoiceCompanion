@@ -111,6 +111,8 @@ class _JawlWebHandler(BaseHTTPRequestHandler):
                     "settings:identity.agent_name": "Луна",
                     "settings:llm.language": "ru",
                     "settings:system.heartbeat_interval": 30,
+                    "interfaces:host.os.enabled": True,
+                    "interfaces:host.os.access_level": 3,
                     "env:LLM_API_KEY_1": "must-not-leak",
                 },
             },
@@ -662,6 +664,9 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(overview["status"], "ok")
         self.assertEqual(overview["sources"]["tick"]["step"], 7)
         self.assertNotIn("must-not-cross", json.dumps(overview, ensure_ascii=False))
+        _, hostos = self.get_json("/api/jawl/hostos")
+        self.assertEqual(hostos["access_name"], "ROOT")
+        self.assertTrue(hostos["enabled"])
 
     def test_ambient_memory_is_delayed_bounded_and_visible(self):
         now = time.time()

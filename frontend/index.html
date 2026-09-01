@@ -102,13 +102,14 @@
       messages.scrollTop = messages.scrollHeight;
     }
     async function refresh() {
-      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse] = await Promise.all([
+      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, jawlHostos, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/health'),
         fetch('/api/hostos/approvals', {headers: sessionHeaders}),
         fetch('/api/vision/status'),
         fetch('/api/tts/status'),
         fetch('/api/jawl/overview', {headers: sessionHeaders}),
+        fetch('/api/jawl/hostos', {headers: sessionHeaders}),
         fetch('/api/audit', {headers: sessionHeaders}),
         fetch('/api/doctor'),
         fetch('/api/ambient-memory', {headers: sessionHeaders}),
@@ -120,6 +121,7 @@
       const visionStatusData = visionStatus.ok ? await visionStatus.json() : {configured: false};
       const ttsStatusData = ttsStatus.ok ? await ttsStatus.json() : {configured: false};
       const jawlData = jawlOverview.ok ? await jawlOverview.json() : {configured: false, status: 'unavailable'};
+      const jawlHostosData = jawlHostos.ok ? await jawlHostos.json() : {configured: false, status: 'unavailable'};
       const auditData = auditResponse.ok ? await auditResponse.json() : {events: []};
       const doctorData = doctorResponse.ok ? await doctorResponse.json() : {status: 'unavailable'};
       const ambientMemoryData = ambientMemoryResponse.ok ? await ambientMemoryResponse.json() : {state: {enabled: false}};
@@ -139,7 +141,7 @@
       document.querySelector('#deny-risks').value = (stateData.policy.deny_risks || []).join(', ');
       health.textContent = JSON.stringify(statusData, null, 2);
       document.querySelector('#doctor').textContent = JSON.stringify(doctorData, null, 2);
-      document.querySelector('#jawl-overview').textContent = JSON.stringify(jawlData, null, 2);
+      document.querySelector('#jawl-overview').textContent = JSON.stringify({...jawlData, hostos: jawlHostosData}, null, 2);
       document.querySelector('#audit').textContent = JSON.stringify((auditData.events || []).slice(-10), null, 2);
       document.querySelector('#vision-status').textContent = visionStatusData.configured
         ? `Vision endpoint готов · screen ${visionStatusData.screen_enabled ? 'включён' : 'выключен'} · cooldown ${visionStatusData.cooldown_seconds} с`

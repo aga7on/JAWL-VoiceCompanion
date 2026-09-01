@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Documented the verified JAWL native HostOS ownership boundary: the current
+  companion executor is explicitly labelled as a separate control-plane path
+  until an authenticated bridge synchronizes level, unattended, approvals and
+  emergency stop with JAWL.
+- Added bounded read-only native JAWL HostOS status to the browser overview so
+  companion policy and JAWL's configured level cannot be confused.
 - Emergency stop now terminates tracked managed and shell processes and marks
   an interrupted shell request as `cancelled` instead of leaving it running.
 - Added an HTTP E2E restart/recovery check for owned-process cleanup, fresh

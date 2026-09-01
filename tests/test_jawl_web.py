@@ -83,6 +83,25 @@ class JawlWebTests(unittest.TestCase):
         self.assertEqual(result["settings"]["settings:identity.agent_name"], "Луна")
         self.assertNotIn("env:LLM_API_KEY_1", result["settings"])
 
+    def test_hostos_status_is_bounded_and_uses_safe_config_allowlist(self):
+        responses = {
+            "/api/config": {
+                "values": {
+                    "interfaces:host.os.enabled": True,
+                    "interfaces:host.os.access_level": 3,
+                    "interfaces:host.os.secret": "must-not-leak",
+                }
+            }
+        }
+
+        def opener(request, timeout):
+            return _Response(responses[request.full_url.removeprefix("http://127.0.0.1:8770")])
+
+        result = JawlWebAdapter("http://127.0.0.1:8770", opener=opener).hostos()
+        self.assertEqual(result["access_name"], "ROOT")
+        self.assertTrue(result["enabled"])
+        self.assertNotIn("secret", str(result))
+
     def test_remote_url_is_rejected_before_token_can_leave_machine(self):
         with self.assertRaises(ValueError):
             JawlWebAdapter("https://example.invalid", token="secret")

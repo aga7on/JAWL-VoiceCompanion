@@ -224,6 +224,13 @@ The browser, keyboard/mouse, filesystem, process and shell tools all pass
 through the same policy gate. This prevents a lower-risk tool from becoming a
 side door around the selected HostOS level.
 
+JAWL already has a native `HostOSClient` and SkillRegistry. The companion
+executor currently covers companion-side browser/control requests; its level
+setting is not yet synchronized with a running JAWL process. Production must
+connect the browser to JAWL's native HostOS authority through one authenticated
+local bridge instead of maintaining two independent policy sources. See
+`docs/contracts/jawl-hostos.md`.
+
 ## Memory ownership
 
 ```text

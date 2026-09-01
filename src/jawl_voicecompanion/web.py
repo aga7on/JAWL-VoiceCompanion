@@ -186,7 +186,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 "enabled": False, "runtime_url": None, "model_url": None, "adapter": None,
             })
             return
-        if path in {"/api/jawl/status", "/api/jawl/overview", "/api/jawl/memory", "/api/jawl/persona"}:
+        if path in {"/api/jawl/status", "/api/jawl/overview", "/api/jawl/memory", "/api/jawl/persona", "/api/jawl/hostos"}:
             try:
                 self._require_browser_session()
             except PermissionError as exc:
@@ -203,6 +203,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json(adapter.memory())
                 elif path == "/api/jawl/persona":
                     self._json(adapter.persona())
+                elif path == "/api/jawl/hostos":
+                    self._json(adapter.hostos())
                 else:
                     self._json(adapter.overview())
             except JawlWebUnavailable as exc:

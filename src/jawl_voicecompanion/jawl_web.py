@@ -29,6 +29,8 @@ class JawlWebAdapter:
         "settings:system.continuous_cycle",
         "settings:system.heartbeat_interval",
         "settings:llm.is_multimodal",
+        "interfaces:host.os.enabled",
+        "interfaces:host.os.access_level",
     )
 
     def __init__(
@@ -101,6 +103,19 @@ class JawlWebAdapter:
             "configured": True,
             "status": "ok",
             "settings": self._safe_persona(config),
+        }
+
+    def hostos(self) -> dict[str, Any]:
+        settings = self._safe_persona(self._get("/api/config"))
+        level = settings.get("interfaces:host.os.access_level")
+        if isinstance(level, bool) or not isinstance(level, int) or level not in range(4):
+            level = None
+        return {
+            "configured": True,
+            "status": "ok" if level is not None else "not_exposed",
+            "enabled": settings.get("interfaces:host.os.enabled"),
+            "access_level": level,
+            "access_name": ("SANDBOX", "OBSERVER", "OPERATOR", "ROOT")[level] if level is not None else None,
         }
 
     def _get(self, path: str) -> dict[str, Any]:

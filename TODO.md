@@ -223,7 +223,12 @@ Acceptance criteria:
 - [x] Add risk classes and per-class confirmation/deny-list policy, including
   an explicit ROOT-only unattended mode for heartbeat/background work.
 - [x] Add exact approval fingerprints for commands and high-risk actions.
-- [ ] Create one tool policy for JAWL, MCP, desktop and browser tools.
+- [ ] Create one tool policy for JAWL, MCP, desktop and browser tools; the
+  current companion executor and JAWL's native HostOSClient are not yet
+  synchronized.
+- [ ] Add an authenticated local JAWL↔HostOS bridge so browser level 0–3,
+  unattended mode, approvals and emergency stop control the native JAWL
+  executor rather than a parallel policy.
 - [x] Add server-side one-shot approval queue with exact request/policy
   fingerprints and allow-once/deny decisions.
 - [~] Add unified tool-call audit log with secret redaction; the metadata-only
