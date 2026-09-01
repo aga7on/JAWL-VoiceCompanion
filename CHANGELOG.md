@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added an opt-in authenticated JAWL HostOS control bridge: level 0–3 now
+  writes the native JAWL fields, restarts the JAWL agent and changes the local
+  companion policy only after successful restart; full ROOT means current
+  Windows-user capability.
 - Documented the verified JAWL native HostOS ownership boundary: the current
   companion executor is explicitly labelled as a separate control-plane path
   until an authenticated bridge synchronizes level, unattended, approvals and

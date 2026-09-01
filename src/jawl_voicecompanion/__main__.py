@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from .gateway import TextGateway
@@ -41,6 +42,11 @@ def main() -> None:
         "--jawl-web-token-env",
         default="JAWL_WEB_TOKEN",
         help="environment variable containing JAWL's optional console token",
+    )
+    parser.add_argument(
+        "--jawl-hostos-control",
+        action="store_true",
+        help="allow the browser to apply JAWL native HostOS levels and restart its agent",
     )
     parser.add_argument("--jawl-web-timeout", type=float, default=2.0)
     parser.add_argument("--jawl-chat-timeout", type=float, default=120.0)
@@ -134,8 +140,6 @@ def main() -> None:
     brain_name = "phase1_mock_brain"
     jawl_web = None
     if args.jawl_web_url:
-        import os
-
         try:
             jawl_web = JawlWebChatAdapter(
                 args.jawl_web_url,
@@ -150,6 +154,10 @@ def main() -> None:
     elif args.jawl_port_file:
         responder = JawlTerminalAdapter(args.jawl_port_file)
         brain_name = "jawl_terminal"
+    if args.jawl_hostos_control and not args.jawl_web_url:
+        parser.error("--jawl-hostos-control requires --jawl-web-url")
+    if args.jawl_hostos_control and not os.environ.get(args.jawl_web_token_env, ""):
+        parser.error(f"--jawl-hostos-control requires a token in {args.jawl_web_token_env}")
     gateway = TextGateway(responder=responder, brain_name=brain_name, jawl_web=jawl_web)
     hostos_executor = None
     if args.hostos_live:
@@ -169,8 +177,6 @@ def main() -> None:
     if args.vision_url or args.vision_model:
         if not args.vision_url or not args.vision_model:
             parser.error("--vision-url and --vision-model must be provided together")
-        import os
-
         vision_describer = OpenAICompatibleVisionClient(
             args.vision_url,
             args.vision_model,
@@ -221,6 +227,7 @@ def main() -> None:
         jawl_event_dir=args.jawl_event_dir,
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
+        jawl_hostos_control=args.jawl_hostos_control,
     )
     print(f"JAWL VoiceCompanion listening on http://{args.host}:{args.port}")
     try:

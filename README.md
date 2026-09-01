@@ -56,6 +56,19 @@ web console, pass its URL:
 .\scripts\run_web.ps1 --jawl-web-url "http://127.0.0.1:8770"
 ```
 
+To let the browser's HostOS level selector apply the same level to native JAWL,
+provide the JAWL console token and explicitly enable the control bridge:
+
+```powershell
+$env:JAWL_WEB_TOKEN = "your-local-console-token"
+.\scripts\run_web.ps1 --jawl-web-url "http://127.0.0.1:8770" --jawl-hostos-control
+```
+
+Changing the level writes only JAWL's HostOS fields and restarts its agent;
+the Companion reports success only after the restart succeeds. ROOT means the
+rights of the Windows account running JAWL. The Companion's separate
+unattended checkbox does not claim to alter JAWL's native approval policy.
+
 The web chat adapter keeps JAWL's `/api/chat/stream` SSE open, sends a
 correlated `/api/chat` POST and waits for an agent message with a newer
 sequence. If the web console is omitted, the companion can use the legacy

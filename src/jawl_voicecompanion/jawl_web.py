@@ -19,7 +19,7 @@ class JawlWebUnavailable(ConnectionError):
 
 
 class JawlWebAdapter:
-    """Read safe JAWL summaries without opening its database directly."""
+    """Read safe JAWL summaries and optionally control its local lifecycle."""
 
     _MAX_RESPONSE_BYTES = 128 * 1024
     _SAFE_CONFIG = (
@@ -118,11 +118,58 @@ class JawlWebAdapter:
             "access_name": ("SANDBOX", "OBSERVER", "OPERATOR", "ROOT")[level] if level is not None else None,
         }
 
+    def set_hostos_level(self, level: int) -> dict[str, Any]:
+        """Persist and apply JAWL's native HostOS level through its web API."""
+        if isinstance(level, bool) or not isinstance(level, int) or level not in range(4):
+            raise ValueError("JAWL HostOS level must be an integer from 0 to 3")
+        if not self.token:
+            raise JawlWebUnavailable("JAWL HostOS control requires a console token")
+
+        written = self._request_json(
+            "/api/config",
+            method="PUT",
+            payload={
+                "values": {
+                    "interfaces:host.os.enabled": True,
+                    "interfaces:host.os.access_level": level,
+                },
+                "lists": {},
+            },
+        )
+        if written.get("ok") is not True:
+            raise JawlWebUnavailable("JAWL rejected the HostOS configuration")
+        stopped = self._request_json("/api/agent/stop", method="POST", payload={})
+        if stopped.get("ok") is not True:
+            raise JawlWebUnavailable("JAWL agent could not be stopped after HostOS configuration")
+        started = self._request_json("/api/agent/start", method="POST", payload={})
+        if started.get("ok") is not True:
+            raise JawlWebUnavailable("JAWL agent could not be started with the new HostOS level")
+        return {
+            "status": "synchronized",
+            "access_level": level,
+            "access_name": ("SANDBOX", "OBSERVER", "OPERATOR", "ROOT")[level],
+            "written": written.get("written", []),
+            "agent_restarted": True,
+        }
+
     def _get(self, path: str) -> dict[str, Any]:
+        return self._request_json(path)
+
+    def _request_json(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if method != "GET" and not self.token:
+            raise JawlWebUnavailable("JAWL control requires a console token")
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
         request = Request(urljoin(self.base_url, path.lstrip("/")), headers={
             "Accept": "application/json",
+            **({"Content-Type": "application/json"} if data is not None else {}),
             **({"X-Console-Token": self.token} if self.token else {}),
-        })
+        }, data=data, method=method)
         try:
             with self._opener(request, timeout=self.timeout_seconds) as response:
                 raw = response.read(self._MAX_RESPONSE_BYTES + 1)

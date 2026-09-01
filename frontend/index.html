@@ -36,6 +36,7 @@
     </section>
     <section>
       <h2>HostOS</h2>
+      <p id="jawl-hostos-status" class="meta">JAWL native HostOS: status not checked.</p>
       <p>Текущий режим: <strong id="level-name">SANDBOX</strong> (<span id="level">0</span>)</p>
       <label for="level-select">Уровень доступа</label><br>
       <select id="level-select">
@@ -142,6 +143,9 @@
       health.textContent = JSON.stringify(statusData, null, 2);
       document.querySelector('#doctor').textContent = JSON.stringify(doctorData, null, 2);
       document.querySelector('#jawl-overview').textContent = JSON.stringify({...jawlData, hostos: jawlHostosData}, null, 2);
+      document.querySelector('#jawl-hostos-status').textContent = jawlHostosData.control_enabled
+        ? `JAWL native HostOS: control enabled · ${jawlHostosData.access_name || 'level unknown'}`
+        : 'JAWL native HostOS: diagnostics only; use --jawl-hostos-control to synchronize.';
       document.querySelector('#audit').textContent = JSON.stringify((auditData.events || []).slice(-10), null, 2);
       document.querySelector('#vision-status').textContent = visionStatusData.configured
         ? `Vision endpoint готов · screen ${visionStatusData.screen_enabled ? 'включён' : 'выключен'} · cooldown ${visionStatusData.cooldown_seconds} с`

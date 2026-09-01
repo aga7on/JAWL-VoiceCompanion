@@ -49,6 +49,7 @@ class CompanionServer(ThreadingHTTPServer):
         attention: AttentionPresence | None = None,
         ambient_memory: AmbientMemoryBuffer | None = None,
         ambient_audio: AmbientAudioService | None = None,
+        jawl_hostos_control: bool = False,
     ):
         self.frontend_dir = frontend_dir.resolve()
         self.gateway = gateway
@@ -61,6 +62,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.attention = attention or AttentionPresence()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
         self.ambient_audio = ambient_audio
+        self.jawl_hostos_control = jawl_hostos_control
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -204,7 +206,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 elif path == "/api/jawl/persona":
                     self._json(adapter.persona())
                 elif path == "/api/jawl/hostos":
-                    self._json(adapter.hostos())
+                    self._json({**adapter.hostos(), "control_enabled": self.server.jawl_hostos_control})
                 else:
                     self._json(adapter.overview())
             except JawlWebUnavailable as exc:
@@ -377,8 +379,17 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/hostos/level":
                 if "level" not in payload:
                     raise ValueError("level is required")
+                jawl_hostos = None
+                if self.server.jawl_hostos_control:
+                    adapter = self.server.gateway.jawl_web
+                    if adapter is None:
+                        raise JawlWebUnavailable("JAWL HostOS control is not configured")
+                    jawl_hostos = adapter.set_hostos_level(payload["level"])
                 state = self.server.gateway.policy.set_access_level(payload["level"], actor="browser")
-                self._json({"ok": True, "policy": state})
+                result = {"ok": True, "policy": state}
+                if jawl_hostos is not None:
+                    result["jawl_hostos"] = jawl_hostos
+                self._json(result)
                 return
             if self.path == "/api/hostos/unattended":
                 enabled = payload.get("enabled")
@@ -441,6 +452,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         except TTSCancelled:
             self._json({"error": "speech request was superseded"}, status=HTTPStatus.CONFLICT)
         except TTSUnavailable as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+        except JawlWebUnavailable as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -520,9 +533,15 @@ def create_server(
     attention: AttentionPresence | None = None,
     ambient_memory: AmbientMemoryBuffer | None = None,
     ambient_audio: AmbientAudioService | None = None,
+    jawl_hostos_control: bool = False,
 ) -> CompanionServer:
     root = frontend_dir or Path(__file__).resolve().parents[2] / "frontend"
     active_gateway = gateway or TextGateway()
+    if jawl_hostos_control:
+        if active_gateway.jawl_web is None:
+            raise ValueError("jawl_hostos_control requires a configured JAWL web adapter")
+        if not active_gateway.jawl_web.token:
+            raise ValueError("jawl_hostos_control requires a JAWL console token")
     active_executor = hostos_executor or HostOSExecutor(
         policy=active_gateway.policy,
         sandbox_root=Path(__file__).resolve().parents[2] / "runtime" / "sandbox",
@@ -559,6 +578,7 @@ def create_server(
         active_attention,
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
+        jawl_hostos_control=jawl_hostos_control,
     )
     if watcher is not None:
         watcher.start()

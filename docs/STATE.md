@@ -15,10 +15,11 @@ accepts external ASR partials and browser PCM16 microphone chunks, and the
 optional TTS boundary can call CozyVoice REST, and the `/avatar` surface can
 load a user-supplied Live2D bundle behind a read-only asset root. Real JAWL,
 production VoiceMem model startup, OmniVoice and an actual licensed Live2D
-model remain opt-in/integration work. Optional UIA, focused-window OS and VLM
-adapters remain explicit. The companion now has a read-only loopback bridge
-for JAWL Heartbeat, persona and memory counters; it does not duplicate JAWL
-storage. The screen path now has a bounded Attention/Presence gate and an
+ model remain opt-in/integration work. Optional UIA, focused-window OS and VLM
+ adapters remain explicit. The companion now has a loopback bridge for JAWL
+ Heartbeat, persona and memory counters plus an opt-in authenticated native
+ HostOS level control path; it does not duplicate JAWL storage or its tool
+ registry. The screen path now has a bounded Attention/Presence gate and an
 optional explicit JAWL event-IPC sink; final production JAWL validation is
 still pending. The ambient secondary-memory design is documented separately:
 optional system-audio loopback and visual observations use bounded transient
@@ -37,8 +38,9 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the JAWL HostOS ownership/status slice.
-- Latest feature commit: `5cb2943` (`docs: expose JAWL HostOS ownership boundary`).
+- Working tree: bridge implementation in progress; full gate is required before
+  commit.
+- Latest feature commit: `6700242` (`docs: record native JAWL HostOS status`).
 
 ## Completed in this repository
 
@@ -215,14 +217,14 @@ separate CPU/RAM test completes.
   therefore needs a per-instance code root (or an upstream path fix). The
   companion accepts only the loopback web URL and does not silently weaken this
   boundary.
-- JAWL already owns a native `HostOSClient`/SkillRegistry. The companion's
-  current HostOS executor is a separate control-plane path; browser policy
-  changes are not yet synchronized into a running JAWL process. This is the
-  next integration boundary, not a reason to create a second personality or
-  duplicate JAWL's tool registry.
-- The read-only `/api/jawl/hostos` bridge now reports the bounded native JAWL
-  HostOS `enabled` and `access_level` values from its filtered config, making
-  that separation visible in the browser.
+- JAWL owns a native `HostOSClient`/SkillRegistry. An opt-in
+  `--jawl-hostos-control` bridge now writes only its allowlisted HostOS level
+  fields and restarts the JAWL agent before changing the companion policy.
+  The companion still does not create a second JAWL tool registry.
+- The `/api/jawl/hostos` bridge reports bounded native JAWL HostOS values and
+  whether control is enabled. JAWL's native Heartbeat remains autonomous;
+  companion unattended, approvals and emergency-stop state are not falsely
+  reported as native JAWL state.
 - `G:\AI\OmniVoice` was inspected and contains only a virtual environment; its
   model/API location is an external blocker.
 - The configured JAWL `terminal.port` is currently stale and has no listening
@@ -238,8 +240,8 @@ separate CPU/RAM test completes.
 - finish editable browser settings, memory and audit views; the current JAWL
   memory/persona surface is intentionally read-only;
 - harden the initial HostOS session lifecycle and broaden audit coverage.
-- unify companion controls with JAWL's native HostOS authority through the
-  authenticated bridge described in `docs/contracts/jawl-hostos.md`.
+- add native JAWL contracts for approval state and emergency stop so those
+  controls can eventually be synchronized instead of remaining companion-only.
 - improve and benchmark semantic screen significance scoring; the current
   heuristic gate connects `SCREEN_DELTA` to Attention/Presence and optional
   JAWL event IPC, while production final-wording validation remains;

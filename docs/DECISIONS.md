@@ -221,3 +221,17 @@ Unattended execution still passes through the same HostOS registry and policy
 gate. Emergency stop, deny-tools, deny-risk classes and OS errors remain
 authoritative. Downgrading below ROOT turns unattended mode off, and every
 change is included in the bounded audit and approval policy fingerprint.
+
+## ADR-017 - Opt-in native JAWL HostOS level bridge
+
+Status: Accepted
+Date: 2026-09-01
+
+The companion does not duplicate JAWL's native HostOS SkillRegistry. When
+`--jawl-hostos-control` is explicitly enabled with a JAWL console token, the
+browser level selector writes only the allowlisted native `enabled` and
+`access_level` fields, then calls JAWL's authenticated agent stop/start
+routes. The local companion policy changes only after all three operations
+succeed. JAWL's native Heartbeat remains the autonomous caller; companion
+unattended, approval and emergency-stop state are not reported as native JAWL
+state until JAWL exposes matching contracts.

@@ -128,6 +128,45 @@ class _JawlWebHandler(BaseHTTPRequestHandler):
         return
 
 
+class _JawlControlHandler(BaseHTTPRequestHandler):
+    config_values = {}
+    calls = []
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/api/config":
+            self.send_error(404)
+            return
+        self._reply({"ok": True, "values": dict(_JawlControlHandler.config_values)})
+
+    def do_PUT(self):  # noqa: N802 - stdlib handler API
+        if self.path != "/api/config":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        _JawlControlHandler.calls.append(("PUT", self.path, self.headers.get("X-Console-Token")))
+        _JawlControlHandler.config_values.update(payload.get("values", {}))
+        self._reply({"ok": True, "written": ["config/interfaces.yaml"]})
+
+    def do_POST(self):  # noqa: N802 - stdlib handler API
+        if self.path not in {"/api/agent/stop", "/api/agent/start"}:
+            self.send_error(404)
+            return
+        _JawlControlHandler.calls.append(("POST", self.path, self.headers.get("X-Console-Token")))
+        self._reply({"ok": True, "pid": 42} if self.path.endswith("start") else {"ok": True, "forced": False})
+
+    def _reply(self, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
 class _FakeScreen:
     enabled = True
 
@@ -340,6 +379,13 @@ class LocalE2ETests(unittest.TestCase):
         threading.Thread(target=self.tts_provider.serve_forever, daemon=True).start()
         self.jawl_web_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlWebHandler)
         threading.Thread(target=self.jawl_web_provider.serve_forever, daemon=True).start()
+        self.jawl_control_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlControlHandler)
+        _JawlControlHandler.config_values = {
+            "interfaces:host.os.enabled": False,
+            "interfaces:host.os.access_level": 0,
+        }
+        _JawlControlHandler.calls = []
+        threading.Thread(target=self.jawl_control_provider.serve_forever, daemon=True).start()
         self.jawl_chat_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlChatWebHandler)
         _JawlChatWebHandler.messages = []
         _JawlChatWebHandler.sequence = 0
@@ -435,6 +481,8 @@ class LocalE2ETests(unittest.TestCase):
         self.tts_provider.server_close()
         self.jawl_web_provider.shutdown()
         self.jawl_web_provider.server_close()
+        self.jawl_control_provider.shutdown()
+        self.jawl_control_provider.server_close()
         self.jawl_chat_provider.shutdown()
         self.jawl_chat_provider.server_close()
         self.jawl.shutdown()
@@ -667,6 +715,60 @@ class LocalE2ETests(unittest.TestCase):
         _, hostos = self.get_json("/api/jawl/hostos")
         self.assertEqual(hostos["access_name"], "ROOT")
         self.assertTrue(hostos["enabled"])
+
+    def test_jawl_hostos_control_syncs_native_and_companion_policy(self):
+        adapter = JawlWebAdapter(
+            f"http://127.0.0.1:{self.jawl_control_provider.server_port}",
+            token="e2e-console-token",
+            timeout_seconds=2,
+        )
+        control_server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(jawl_web=adapter),
+            jawl_hostos_control=True,
+        )
+        thread = threading.Thread(target=control_server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{control_server.server_port}"
+        headers = {
+            "X-Companion-Session": control_server.session_token,
+            "X-Companion-CSRF": control_server.csrf_token,
+        }
+
+        def post(path, payload):
+            request = Request(
+                base + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", **headers},
+                method="POST",
+            )
+            with urlopen(request, timeout=3) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        def get(path):
+            with urlopen(Request(base + path, headers=headers), timeout=3) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            result = post("/api/hostos/level", {"level": 3})
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["policy"]["active_name"], "ROOT")
+            self.assertEqual(result["jawl_hostos"]["status"], "synchronized")
+            self.assertEqual(_JawlControlHandler.config_values["interfaces:host.os.access_level"], 3)
+            self.assertTrue(_JawlControlHandler.config_values["interfaces:host.os.enabled"])
+            self.assertEqual(_JawlControlHandler.calls, [
+                ("PUT", "/api/config", "e2e-console-token"),
+                ("POST", "/api/agent/stop", "e2e-console-token"),
+                ("POST", "/api/agent/start", "e2e-console-token"),
+            ])
+            native = get("/api/jawl/hostos")
+            self.assertTrue(native["control_enabled"])
+            self.assertEqual(native["access_name"], "ROOT")
+        finally:
+            control_server.shutdown()
+            control_server.server_close()
+            thread.join(timeout=2)
 
     def test_ambient_memory_is_delayed_bounded_and_visible(self):
         now = time.time()

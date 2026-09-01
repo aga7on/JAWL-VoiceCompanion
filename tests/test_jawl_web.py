@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.jawl_adapter import JawlTurnCancelled  # noqa: E402
-from jawl_voicecompanion.jawl_web import JawlWebAdapter, JawlWebChatAdapter  # noqa: E402
+from jawl_voicecompanion.jawl_web import JawlWebAdapter, JawlWebChatAdapter, JawlWebUnavailable  # noqa: E402
 
 
 class _Response:
@@ -105,6 +105,42 @@ class JawlWebTests(unittest.TestCase):
     def test_remote_url_is_rejected_before_token_can_leave_machine(self):
         with self.assertRaises(ValueError):
             JawlWebAdapter("https://example.invalid", token="secret")
+
+    def test_hostos_control_writes_config_and_restarts_agent_with_token(self):
+        calls = []
+        responses = {
+            ("PUT", "/api/config"): {"ok": True, "written": ["config/interfaces.yaml"]},
+            ("POST", "/api/agent/stop"): {"ok": True, "forced": False},
+            ("POST", "/api/agent/start"): {"ok": True, "pid": 42},
+        }
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            payload = json.loads(request.data.decode("utf-8")) if request.data else None
+            calls.append((request.method, path, payload, request.headers.get("X-console-token")))
+            return _Response(responses[(request.method, path)])
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        result = adapter.set_hostos_level(3)
+        self.assertEqual(result["status"], "synchronized")
+        self.assertEqual(result["access_name"], "ROOT")
+        self.assertEqual([item[:2] for item in calls], [
+            ("PUT", "/api/config"),
+            ("POST", "/api/agent/stop"),
+            ("POST", "/api/agent/start"),
+        ])
+        self.assertEqual(calls[0][2]["values"]["interfaces:host.os.access_level"], 3)
+        self.assertTrue(calls[0][2]["values"]["interfaces:host.os.enabled"])
+        self.assertTrue(all(item[3] == "secret" for item in calls))
+
+    def test_hostos_control_requires_token_and_valid_level(self):
+        adapter = JawlWebAdapter("http://127.0.0.1:8770")
+        with self.assertRaises(JawlWebUnavailable):
+            adapter.set_hostos_level(3)
+        tokened = JawlWebAdapter("http://127.0.0.1:8770", token="secret")
+        with self.assertRaises(ValueError):
+            tokened.set_hostos_level(True)
 
     def test_chat_post_and_sse_are_correlated_by_sequence(self):
         stream = _SseResponse()
