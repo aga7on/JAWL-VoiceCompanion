@@ -100,6 +100,58 @@ embedded in durable event logs.
 they are added. The current `/api/vision/events` endpoint returns a bounded
 in-memory ring and requires the local browser session.
 
+### `AMBIENT_AUDIO_OBSERVATION`
+
+Delayed transcript evidence from system-audio loopback. It is not a user turn
+and must not be routed to `USER_FINAL`, speech, tools or personality updates.
+
+```json
+{
+  "stream": "system_audio",
+  "text": "bounded transcript",
+  "confidence": 0.78,
+  "observed_at": "2026-09-01T12:01:00+03:00",
+  "source_app": "optional-redacted-label",
+  "raw_audio_persisted": false,
+  "retention_until": "2026-09-01T12:31:00+03:00"
+}
+```
+
+### `AMBIENT_VISUAL_OBSERVATION`
+
+Delayed, bounded description or keyframe evidence from the screen sensor. Raw
+frames are transient and are not part of durable memory by default.
+
+```json
+{
+  "stream": "screen",
+  "summary": "bounded visual description",
+  "confidence": 0.71,
+  "observed_at": "2026-09-01T12:01:00+03:00",
+  "source_app": "optional-redacted-label",
+  "raw_frame_persisted": false,
+  "retention_until": "2026-09-01T12:31:00+03:00"
+}
+```
+
+### `AMBIENT_EPISODE_CANDIDATE`
+
+An attributed summary produced by delayed triage and coalescing. This remains
+evidence until JAWL's memory owner promotes it using provenance, confidence,
+epistemic type and valid-time checks.
+
+```json
+{
+  "importance": "retain",
+  "summary": "bounded Russian summary",
+  "topics": ["bounded-topic"],
+  "confidence": 0.64,
+  "source_event_ids": ["uuid"],
+  "observed_from": "2026-09-01T12:00:00+03:00",
+  "observed_until": "2026-09-01T12:05:00+03:00"
+}
+```
+
 ### `SPEAK_INTENT`
 
 An Attention/Presence proposal. The local gate applies salience, privacy,
@@ -134,5 +186,7 @@ Updates quiet hours, manual DND, screen permission or proactive budget.
 - Events must be idempotent or carry a deduplication key.
 - Partial events may be dropped; final events may not be silently dropped.
 - Low-value screen events are coalesced.
+- Ambient audio/video observations are delayed, attributable and lower
+  priority than user turns; they cannot directly cause an action.
 - A newer user event supersedes lower-priority proactive/background work.
 - Event payloads are untrusted data and must be framed as data in prompts.

@@ -79,6 +79,15 @@ Acceptance criteria:
 - [x] Add the bounded JSON-lines runner and degraded-mode responses.
 - [ ] Add speculative recall and final recall events.
 - [ ] Map VoiceMem affect to JAWL observations, not personality overrides.
+- [ ] Add opt-in Windows system-audio loopback as a separate ambient stream;
+  never mix it with microphone `USER_FINAL` turns.
+- [ ] Add a bounded ambient working buffer with configurable TTL (initial target:
+  about 30 minutes) and no durable raw audio/video by default.
+- [ ] Add a deferred CPU/RAM triage worker for ambient audio transcripts and
+  visual observations; benchmark available local models before selecting one.
+- [ ] Add importance filtering and coalescing into bounded ambient episodes.
+- [ ] Add provenance, source-app, confidence and retention metadata to ambient
+  observations and episode candidates.
 - [ ] Define bounded core memory.
 - [x] Add a read-only JAWL bridge for bounded memory/persona inspection.
 - [ ] Define archival recall through JAWL Vector/Graph.
@@ -146,6 +155,9 @@ Acceptance criteria:
 - [~] Store only bounded textual observations and metadata; the explicit bridge
   and passive producer keep only an in-memory digest, event ring and bounded
   last description.
+- [ ] Add opt-in ambient video/keyframe observations for secondary memory;
+  discard raw frames after analysis and keep this path separate from explicit
+  `vision__look` and proactive speech.
 
 Acceptance criteria:
 
@@ -212,6 +224,7 @@ Acceptance criteria:
 
 - [ ] 3D/VRM avatar — deliberately excluded from current scope.
 - [ ] Mobile clients and multi-device sync.
-- [ ] System-audio/video watching mode.
+- [ ] Full continuous raw system-audio/video recording — deliberately deferred;
+  only bounded, opt-in ambient observations are planned in Phases 3 and 5.
 - [ ] Complex swarm behavior.
 - [ ] Cloud deployment.

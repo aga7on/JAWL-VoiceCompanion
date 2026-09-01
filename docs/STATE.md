@@ -20,7 +20,10 @@ adapters remain explicit. The companion now has a read-only loopback bridge
 for JAWL Heartbeat, persona and memory counters; it does not duplicate JAWL
 storage. The screen path now has a bounded Attention/Presence gate and an
 optional explicit JAWL event-IPC sink; final production JAWL validation is
-still pending.
+  still pending. The ambient secondary-memory design is documented separately:
+  optional system-audio loopback and visual observations use bounded transient
+  tiers and delayed CPU/RAM triage, while JAWL remains the only owner of
+  promoted memory.
 
 ## Git state
 
@@ -78,6 +81,10 @@ still pending.
 - `AttentionPresence` consumes screen deltas with bounded salience/privacy,
   manual DND, cooldown and hourly-budget gates, exposing inspectable
   `SPEAK_INTENT` proposals through `/api/vision/intents`.
+- Ambient secondary memory is documented as a separate, opt-in evidence path:
+  system audio stays separate from microphone turns, raw audio/frames are
+  transient, and delayed triage must produce attributable candidates before
+  any JAWL promotion.
 - `JawlEventFileSink` atomically writes accepted screen intents to an
   explicitly configured JAWL `.jawl_events` directory in the existing
   `{message, payload}` IPC shape; raw frames and local paths are excluded.
@@ -225,6 +232,10 @@ slice is preserved in `a832b67` and `d631a12` and includes unit, browser and
 cross-layer HTTP coverage for intent creation, DND, correlation and
 JAWL-compatible atomic event delivery.
 
+The latest documentation update records the ambient secondary-memory decision
+in `docs/SECONDARY_MEMORY.md`, with TODO items for separated system-audio
+capture, bounded retention, delayed triage, visual keyframes and provenance.
+
 Verification for the current work session:
 `scripts/run_full_gate.ps1` passed 85 unit tests and 4 complete HTTP E2E tests;
 the full cross-layer gate is green;
@@ -251,7 +262,8 @@ Validate the web bridge and explicit screen-event IPC against a live
 production JAWL model/tool profile, including final response/broadcast
 behavior. Then benchmark the installed VoiceMem ASR modes on a real Russian
 microphone, validate production model warmup and CozyVoice latency, and choose
-the first user-supplied Live2D model.
+the first user-supplied Live2D model. After that, implement the ambient-memory
+contracts with fake audio/video sources before touching Windows loopback capture.
 
 ## State update protocol
 

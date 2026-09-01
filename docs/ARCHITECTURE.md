@@ -254,6 +254,40 @@ history
 Updates should support `insert`, `patch`, `remove`, `archive` and
 `supersedes`. User-visible memory editing is a required product feature.
 
+## Ambient secondary memory
+
+System audio and screen observations are optional evidence, not another user
+conversation. A bounded pipeline keeps raw capture transient, stores short
+working observations, and later compresses related observations into an
+ambient episode. Only a JAWL-owned promotion step may turn an episode into a
+canonical fact or relation.
+
+```text
+system-audio loopback ─┐
+                       ├─ segment/ASR ─┐
+screen keyframe/delta ─┘               ├─ CPU/RAM triage ── T1/T2 episode
+                                       └─ no direct USER_FINAL/tool/speech
+microphone ── VoiceMem conversational path ── USER_PARTIAL/VOICE_TURN
+```
+
+The initial policy is: capture off by default, raw audio/frames RAM-only,
+working observations with a bounded TTL (target about 30 minutes), and
+configurable short-lived episodes (target about 7 days). Audio from the PC is
+kept in a separate session from microphone ASR so game, browser or media
+speech cannot impersonate the user. The same ASR implementation may be
+reused behind that separate stream boundary.
+
+The delayed triage model is a replaceable CPU/RAM profile. Candidate local
+models are benchmarked for Russian quality, memory use and throughput; model
+names are not hard-coded into the architecture. Triage returns importance,
+bounded summary, confidence, source and provenance. It cannot directly alter
+persona, speak, call HostOS or write a durable fact.
+
+The user can pause or clear ambient buffers, set separate audio/visual
+retention and disable promotion. Sensitive applications/windows are filtered
+before storage. This path is distinct from explicit `vision__look` and from
+the proactive `SPEAK_INTENT` path.
+
 ## Turn priority
 
 ```text
