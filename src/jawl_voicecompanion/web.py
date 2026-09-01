@@ -395,6 +395,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 enabled = payload.get("enabled")
                 if not isinstance(enabled, bool):
                     raise ValueError("enabled must be boolean")
+                if not enabled and self.server.ambient_audio is not None:
+                    self.server.ambient_audio.stop()
                 self._json({"ok": True, "state": self.server.ambient_memory.set_enabled(enabled)})
                 return
             if self.path == "/api/ambient-audio/start":

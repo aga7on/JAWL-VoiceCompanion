@@ -47,7 +47,10 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(health["mode"], "phase1_mock_brain")
         with urlopen(self.base + "/", timeout=2) as response:
-            self.assertIn(b"JAWL VoiceCompanion", response.read())
+            frontend = response.read()
+            self.assertIn(b"JAWL VoiceCompanion", frontend)
+            self.assertIn(b"ambient-audio-toggle", frontend)
+            self.assertIn(b"ambient-memory-enabled", frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
 

@@ -22,6 +22,8 @@
 - Added an isolated `AmbientAudioASRBridge` with PCM16 downmix/resampling,
   sidecar chunk bounds and final-only ambient ingestion; the loopback-to-HTTP
   path is covered by E2E without creating a user turn.
+- Added browser consent/status controls for ambient memory and explicit
+  system-audio start/stop lifecycle.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.

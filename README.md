@@ -87,7 +87,8 @@ System-audio capture is separately opt-in. Configure it with
 `--ambient-audio --voicemem-python <path>`; enable `--ambient-memory` or the
 browser toggle first, then start/stop it explicitly from the browser. The
 loopback backend is lazy and missing PyAudioWPatch is reported as degraded;
-system audio never becomes a user microphone turn.
+the browser shows the consent/running state, and system audio never becomes a
+user microphone turn.
 
 To enable local CozyVoice REST TTS (start `G:\AI\CozyVoice\rest_api.py`
 separately), add its base URL:

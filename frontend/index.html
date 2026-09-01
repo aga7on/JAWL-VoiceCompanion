@@ -59,6 +59,11 @@
       <pre id="vision-result" class="meta"></pre>
       <label><input id="attention-dnd" type="checkbox"> DND for proactive observation</label>
       <p id="attention-status" class="meta">Attention/Presence: checking...</p>
+      <h2>Системный звук (ambient)</h2>
+      <label><input id="ambient-memory-enabled" type="checkbox"> Сохранять ограниченные наблюдения</label>
+      <p id="ambient-memory-status" class="meta">Ambient memory: checking...</p>
+      <button id="ambient-audio-toggle" type="button" disabled>Системный звук не настроен</button>
+      <p id="ambient-audio-status" class="meta">Loopback: checking...</p>
       <h2>Состояние</h2>
       <pre id="health">Загрузка…</pre>
       <h2>JAWL · память и персона</h2>
@@ -85,7 +90,7 @@
       messages.scrollTop = messages.scrollHeight;
     }
     async function refresh() {
-      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, auditResponse, doctorResponse] = await Promise.all([
+      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse] = await Promise.all([
         fetch('/api/state'),
         fetch('/api/health'),
         fetch('/api/hostos/approvals', {headers: sessionHeaders}),
@@ -93,7 +98,9 @@
         fetch('/api/tts/status'),
         fetch('/api/jawl/overview', {headers: sessionHeaders}),
         fetch('/api/audit', {headers: sessionHeaders}),
-        fetch('/api/doctor')
+        fetch('/api/doctor'),
+        fetch('/api/ambient-memory', {headers: sessionHeaders}),
+        fetch('/api/ambient-audio', {headers: sessionHeaders})
       ]);
       const stateData = await state.json();
       const statusData = await status.json();
@@ -103,6 +110,8 @@
       const jawlData = jawlOverview.ok ? await jawlOverview.json() : {configured: false, status: 'unavailable'};
       const auditData = auditResponse.ok ? await auditResponse.json() : {events: []};
       const doctorData = doctorResponse.ok ? await doctorResponse.json() : {status: 'unavailable'};
+      const ambientMemoryData = ambientMemoryResponse.ok ? await ambientMemoryResponse.json() : {state: {enabled: false}};
+      const ambientAudioData = ambientAudioResponse.ok ? await ambientAudioResponse.json() : {configured: false, status: 'unavailable'};
       ttsConfigured = Boolean(ttsStatusData.configured && ttsStatusData.status !== 'offline');
       document.querySelector('#tts-status').textContent = ttsConfigured
         ? `TTS готов · ${ttsStatusData.provider || 'локальный провайдер'}`
@@ -120,6 +129,20 @@
       const attention = visionStatusData.attention || {};
       document.querySelector('#attention-dnd').checked = Boolean(attention.dnd);
       document.querySelector('#attention-status').textContent = `Attention/Presence: ${attention.last_decision || 'not_checked'} · intents ${attention.intents_last_hour || 0}/${attention.budget_per_hour || 0}`;
+      const ambientMemoryState = ambientMemoryData.state || {};
+      const ambientAudioButton = document.querySelector('#ambient-audio-toggle');
+      document.querySelector('#ambient-memory-enabled').checked = Boolean(ambientMemoryState.enabled);
+      document.querySelector('#ambient-memory-status').textContent = `Ambient memory: ${ambientMemoryState.enabled ? 'включена' : 'выключена'} · observations ${ambientMemoryState.observation_count || 0} · episodes ${ambientMemoryState.episode_count || 0}`;
+      if (!ambientAudioData.configured) {
+        ambientAudioButton.disabled = true;
+        ambientAudioButton.textContent = 'Системный звук не настроен';
+        document.querySelector('#ambient-audio-status').textContent = 'Loopback не сконфигурирован; capture не запускается.';
+      } else {
+        const running = Boolean(ambientAudioData.capture?.running);
+        ambientAudioButton.disabled = !ambientMemoryState.enabled;
+        ambientAudioButton.textContent = running ? 'Остановить системный звук' : 'Включить системный звук';
+        document.querySelector('#ambient-audio-status').textContent = `Loopback: ${running ? 'слушает' : 'остановлен'} · backend ${ambientAudioData.capture?.backend || 'not_loaded'}`;
+      }
       const approvalBox = document.querySelector('#approvals');
       approvalBox.replaceChildren();
       const pending = approvalData.approvals.filter(item => item.status === 'pending');
@@ -314,6 +337,24 @@
     document.querySelector('#attention-dnd').addEventListener('change', async (event) => {
       const response = await apiPost('/api/attention', {dnd: event.target.checked});
       if (!response.ok) event.target.checked = !event.target.checked;
+      refresh();
+    });
+    document.querySelector('#ambient-memory-enabled').addEventListener('change', async (event) => {
+      const response = await apiPost('/api/ambient-memory/config', {enabled: event.target.checked});
+      if (!response.ok) event.target.checked = !event.target.checked;
+      refresh();
+    });
+    document.querySelector('#ambient-audio-toggle').addEventListener('click', async () => {
+      const button = document.querySelector('#ambient-audio-toggle');
+      const stopping = button.textContent.startsWith('Остановить');
+      button.disabled = true;
+      try {
+        const response = await apiPost(`/api/ambient-audio/${stopping ? 'stop' : 'start'}`, {});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'system audio unavailable');
+      } catch (error) {
+        document.querySelector('#ambient-audio-status').textContent = `Loopback error: ${error.message}`;
+      }
       refresh();
     });
     document.querySelector('#mic').addEventListener('click', async () => {
