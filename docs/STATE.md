@@ -44,9 +44,8 @@ workflows, while semantic watcher tuning remains.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the microphone gate and HostOS hardening slices.
-- Latest feature commits: `7ae1ab1` (microphone gate) and `3cac12e`
-  (closed TTS stream cancellation); the current HostOS status/allow-list slice
-  is pending commit.
+- Latest feature commits: `7ae1ab1` (microphone gate), `3cac12e` (closed TTS
+  stream cancellation) and the current HostOS outcome/allow-list hardening.
 
 ## Completed in this repository
 
