@@ -24,9 +24,8 @@ storage.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: changes from the current contract/test-gate update are
-  uncommitted until the full gate passes.
-- Latest feature commit: `c7f4995` (`feat: validate Live2D asset bundles`).
+- Working tree: clean after the current full-gate verification.
+- Latest feature commit: `2112998` (`test: enforce full cross-layer gate`).
 
 ## Completed in this repository
 
@@ -186,8 +185,8 @@ turn-smoke completed an LLM request but exposed the broadcast-only terminal
 boundary; the companion returned degraded fallback as designed.
 
 Verification for the current work session:
-`scripts/run_e2e.ps1` passed 4 tests; the avatar unit tests passed 6 tests;
-the complete unit suite passed 66 tests; the full cross-layer gate is green;
+`scripts/run_full_gate.ps1` passed compilation, 67 unit tests and 4 complete
+HTTP E2E tests; the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web -> adapter -> companion API inspection smoke-test also passed.
