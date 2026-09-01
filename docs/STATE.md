@@ -21,7 +21,7 @@ UIA, focused-window OS and VLM adapters remain explicit.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `36a808c` (`feat: add browser microphone voice ingress`).
+- Latest feature commit: `a217cec` (`feat: add cancellable CozyVoice TTS path`).
 
 ## Completed in this repository
 
@@ -142,8 +142,8 @@ Verification for the current work session:
 `scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 60 tests;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings.
-The TTS changes are ready for commit; the preceding microphone slice is clean
-in `36a808c`.
+The working tree is clean after commit `a217cec`; the preceding microphone
+slice is preserved in `36a808c`.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
 model yet. The web server's default executor remains dry-run and no VLM
