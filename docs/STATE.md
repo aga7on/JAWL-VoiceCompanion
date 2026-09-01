@@ -23,7 +23,7 @@ adapters remain explicit.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `a217cec` (`feat: add cancellable CozyVoice TTS path`).
+- Latest feature commit: `751123f` (`feat: add optional Live2D asset bridge`).
 
 ## Completed in this repository
 
@@ -151,8 +151,8 @@ Verification for the current work session:
 `scripts/run_e2e.ps1` passed 3 tests; `scripts/run_tests.ps1` passed 62 tests;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings.
-The working tree is clean after commit `a217cec`; the preceding microphone
-slice is preserved in `36a808c`.
+The working tree is clean after commit `751123f`; the preceding microphone
+slice is preserved in `36a808c` and the TTS slice in `a217cec`.
 
 Known limitation: no licensed Live2D model/runtime is installed yet; the
 placeholder remains the default. The web server's default executor remains dry-run and no VLM
