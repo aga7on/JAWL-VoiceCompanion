@@ -19,8 +19,7 @@ adapters are available only through explicitly constructed/configured paths.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the current verification.
-- Latest feature commit: `307da25` (`feat: add passive screen delta e2e
-  slice`).
+- Latest feature commit: `1f1717d` (`test: exercise jawl bridge in e2e`).
 
 ## Completed in this repository
 
@@ -67,7 +66,8 @@ adapters are available only through explicitly constructed/configured paths.
   raw frame.
 - The cross-layer E2E suite drives the real loopback HTTP server and covers a
   complete visible path from chat/state through HostOS approval/execution and
-  emergency stop, plus screen capture, VLM deduplication and screen events.
+  emergency stop, plus screen capture, VLM deduplication, screen events and
+  the JAWL-compatible terminal handshake/JSON-lines path.
 
 ## Reference inventory
 
@@ -88,6 +88,9 @@ adapters are available only through explicitly constructed/configured paths.
   layer; model and integration details must be confirmed before adapter work.
 - JAWL and VoiceMem use different Python environments and should remain
   separate services initially.
+- The configured JAWL `terminal.port` is currently stale and has no listening
+  socket; the read-only probe returned `status=offline`, so live process
+  verification remains pending.
 - The JAWL `terminal.port` file currently exists, but its recorded port has no
   listening loopback socket; the new adapter therefore correctly uses its
   offline fallback until JAWL is started.
@@ -110,10 +113,11 @@ adapters are available only through explicitly constructed/configured paths.
 
 Changed the passive watcher, web API/CLI wiring, vision deduplication,
 E2E runner/tests and the related architecture/contracts/documentation in
-`307da25`.
+`307da25`; extended the JAWL adapter path in `1f1717d`.
 
 Verification: `scripts/run_e2e.ps1` passed 2 tests; `scripts/run_tests.ps1`
-passed 49 tests; `git diff --check` reported no whitespace errors.
+passed 49 tests; the stale-port degraded probe returned `status=offline`;
+`git diff --check` reported no whitespace errors.
 
 Known limitation: the avatar is a dependency-free placeholder, not a Live2D
 model yet. The web server's default executor remains dry-run and no VLM
