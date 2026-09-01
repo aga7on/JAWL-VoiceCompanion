@@ -38,7 +38,7 @@ separate CPU/RAM test completes.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the delayed audio-triage provider slice.
-- Latest feature commit: `498f1c7` (`feat: add delayed ambient audio triage contract`).
+- Latest feature commit: `327456e` (`feat: isolate ambient system audio from user turns`).
 
 ## Completed in this repository
 
@@ -276,7 +276,7 @@ and benchmark protocol with unit coverage;
 Vision/VLM remains model-neutral and paused by explicit decision.
 
 Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 97 unit tests and 5 complete HTTP E2E tests;
+`scripts/run_full_gate.ps1` passed 100 unit tests and 6 complete HTTP E2E tests;
 the full cross-layer gate is green;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
