@@ -317,6 +317,10 @@ BACKGROUND                 4
 The Turn Arbiter guarantees one active conversational turn and expires stale
 queued work. A newer user turn cancels or supersedes lower-priority work.
 
+Attention/Presence also applies an optional local-time quiet-hours window
+before creating a `SPEAK_INTENT`. It is a deterministic gate, independent of
+the vision provider, and supports windows crossing midnight.
+
 ## Voice lifecycle
 
 ```text

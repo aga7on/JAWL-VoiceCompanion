@@ -182,8 +182,9 @@ Acceptance criteria:
 - [~] Implement Attention/Presence Engine; bounded screen events now pass
   through salience, privacy, DND, cooldown and budget gates.
 - [x] Add salience levels and coalescing.
-- [~] Add proactive cooldowns and quiet hours; manual DND and cooldown are
-  implemented, while time-based quiet-hour windows remain.
+- [~] Add proactive cooldowns and quiet hours; manual DND, cooldown and a
+  validated local-time window are implemented, while user activity/focus
+  signals remain.
 - [~] Add `SPEAK_INTENT` and JAWL final wording path; explicit `.jawl_events`
   IPC is implemented, while production Heartbeat/final-wording validation
   remains.

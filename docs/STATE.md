@@ -109,6 +109,9 @@ separate CPU/RAM test completes.
   counts, loopback backend state and running/stopped status, with start/stop
   controls disabled until consent is active. It also exposes explicit triage
   and clear actions for the bounded buffer.
+- Attention/Presence now supports a validated local-time quiet-hours window
+  (`HH:MM-HH:MM`) with midnight crossing, persisted in runtime state and
+  editable from the browser.
 - `AmbientTriageProvider` now defines a bounded delayed-provider contract with
   strict provenance/schema validation. `OllamaTriageProvider` is an optional
   stdlib HTTP adapter configured CPU-first (`num_gpu=0`); it does not select,

@@ -24,6 +24,7 @@ _PRIVATE = re.compile(
     r"(?:password|passcode|api[ _-]?key|secret|token|парол|токен|секрет|ключ)",
     re.IGNORECASE,
 )
+_UNSET = object()
 
 
 def _now() -> str:
@@ -38,6 +39,8 @@ class AttentionPresence:
     cooldown_seconds: float = 30.0
     budget_per_hour: int = 6
     dnd: bool = False
+    quiet_hours: str | None = None
+    clock: Callable[[], datetime] | None = None
     intent_sink: Callable[[dict[str, Any]], Any] | None = None
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _seen: deque[str] = field(default_factory=lambda: deque(maxlen=200), init=False, repr=False)
@@ -46,11 +49,14 @@ class AttentionPresence:
     _last_intent_at: float = field(default=0.0, init=False, repr=False)
     _last_decision: str = field(default="not_checked", init=False, repr=False)
     _last_error: str | None = field(default=None, init=False, repr=False)
+    _quiet_window: tuple[int, int] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.min_significance = max(1, min(int(self.min_significance), 3))
         self.cooldown_seconds = max(0.0, min(float(self.cooldown_seconds), 3600.0))
         self.budget_per_hour = max(1, min(int(self.budget_per_hour), 100))
+        self.quiet_hours = self._normalize_quiet_hours(self.quiet_hours)
+        self._quiet_window = self._window(self.quiet_hours)
 
     def consume(self, event: dict[str, Any]) -> dict[str, Any]:
         """Evaluate one untrusted SCREEN_DELTA and never raise to the sensor."""
@@ -74,6 +80,7 @@ class AttentionPresence:
         min_significance: int | None = None,
         cooldown_seconds: float | None = None,
         budget_per_hour: int | None = None,
+        quiet_hours: str | None | object = _UNSET,
     ) -> dict[str, Any]:
         with self._lock:
             if dnd is not None:
@@ -88,6 +95,9 @@ class AttentionPresence:
                 if isinstance(budget_per_hour, bool):
                     raise ValueError("budget_per_hour must be an integer")
                 self.budget_per_hour = max(1, min(100, int(budget_per_hour)))
+            if quiet_hours is not _UNSET:
+                self.quiet_hours = self._normalize_quiet_hours(quiet_hours)  # type: ignore[arg-type]
+                self._quiet_window = self._window(self.quiet_hours)
             return self.state()
 
     def state(self) -> dict[str, Any]:
@@ -98,6 +108,8 @@ class AttentionPresence:
                 "min_significance": self.min_significance,
                 "cooldown_seconds": self.cooldown_seconds,
                 "budget_per_hour": self.budget_per_hour,
+                "quiet_hours": self.quiet_hours,
+                "quiet_hours_active": self._is_quiet(self._local_now()),
                 "intents_last_hour": len(self._intent_times),
                 "intent_count": len(self._intents),
                 "last_decision": self._last_decision,
@@ -128,6 +140,8 @@ class AttentionPresence:
             score = self._score(payload.get("significance"), summary)
             if self.dnd:
                 return {"status": "suppressed", "reason": "dnd_active", "significance": score}
+            if self._is_quiet(self._local_now()):
+                return {"status": "suppressed", "reason": "quiet_hours_active", "significance": score}
             now = time.monotonic()
             self._trim_budget(now)
             if score < self.min_significance:
@@ -184,3 +198,39 @@ class AttentionPresence:
     def _trim_budget(self, now: float) -> None:
         while self._intent_times and now - self._intent_times[0] >= 3600.0:
             self._intent_times.popleft()
+
+    def _local_now(self) -> datetime:
+        value = self.clock() if self.clock is not None else datetime.now().astimezone()
+        return value.astimezone() if value.tzinfo is not None else value.replace(tzinfo=datetime.now().astimezone().tzinfo)
+
+    def _is_quiet(self, value: datetime) -> bool:
+        if self._quiet_window is None:
+            return False
+        minute = value.hour * 60 + value.minute
+        start, end = self._quiet_window
+        return start <= minute < end if start < end else minute >= start or minute < end
+
+    @staticmethod
+    def _normalize_quiet_hours(value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str) or not re.fullmatch(r"\d{2}:\d{2}-\d{2}:\d{2}", value):
+            raise ValueError("quiet_hours must use HH:MM-HH:MM")
+        start = AttentionPresence._parse_hhmm(value[:5])
+        end = AttentionPresence._parse_hhmm(value[6:])
+        if start == end:
+            raise ValueError("quiet_hours start and end must differ")
+        return value
+
+    @staticmethod
+    def _window(value: str | None) -> tuple[int, int] | None:
+        if value is None:
+            return None
+        return AttentionPresence._parse_hhmm(value[:5]), AttentionPresence._parse_hhmm(value[6:])
+
+    @staticmethod
+    def _parse_hhmm(value: str) -> int:
+        hour, minute = (int(part) for part in value.split(":", 1))
+        if hour > 23 or minute > 59:
+            raise ValueError("quiet_hours must use valid local time")
+        return hour * 60 + minute

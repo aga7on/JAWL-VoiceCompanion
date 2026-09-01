@@ -382,7 +382,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "policy": state})
                 return
             if self.path == "/api/attention":
-                values = {key: payload[key] for key in ("dnd", "min_significance", "cooldown_seconds", "budget_per_hour") if key in payload}
+                values = {key: payload[key] for key in ("dnd", "min_significance", "cooldown_seconds", "budget_per_hour", "quiet_hours") if key in payload}
                 if not values:
                     raise ValueError("attention settings are required")
                 self._json({"ok": True, "attention": self.server.attention.configure(**values)})

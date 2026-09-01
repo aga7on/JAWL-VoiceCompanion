@@ -58,6 +58,9 @@
       <button id="vision-look">Посмотреть окно</button>
       <pre id="vision-result" class="meta"></pre>
       <label><input id="attention-dnd" type="checkbox"> DND for proactive observation</label>
+      <label for="quiet-hours">Тихие часы (HH:MM-HH:MM)</label>
+      <input id="quiet-hours" type="text" placeholder="22:00-07:00" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
+      <button id="save-quiet-hours" type="button">Сохранить тихие часы</button>
       <p id="attention-status" class="meta">Attention/Presence: checking...</p>
       <h2>Системный звук (ambient)</h2>
       <label><input id="ambient-memory-enabled" type="checkbox"> Сохранять ограниченные наблюдения</label>
@@ -130,6 +133,7 @@
         : `Vision endpoint не настроен; экран остаётся локальным (${visionStatusData.screen_enabled ? 'capture включён' : 'capture выключен'}).`;
       const attention = visionStatusData.attention || {};
       document.querySelector('#attention-dnd').checked = Boolean(attention.dnd);
+      document.querySelector('#quiet-hours').value = attention.quiet_hours || '';
       document.querySelector('#attention-status').textContent = `Attention/Presence: ${attention.last_decision || 'not_checked'} · intents ${attention.intents_last_hour || 0}/${attention.budget_per_hour || 0}`;
       const ambientMemoryState = ambientMemoryData.state || {};
       const ambientAudioButton = document.querySelector('#ambient-audio-toggle');
@@ -339,6 +343,13 @@
     document.querySelector('#attention-dnd').addEventListener('change', async (event) => {
       const response = await apiPost('/api/attention', {dnd: event.target.checked});
       if (!response.ok) event.target.checked = !event.target.checked;
+      refresh();
+    });
+    document.querySelector('#save-quiet-hours').addEventListener('click', async () => {
+      const value = document.querySelector('#quiet-hours').value.trim();
+      const response = await apiPost('/api/attention', {quiet_hours: value || null});
+      const data = await response.json();
+      if (!response.ok) document.querySelector('#attention-status').textContent = `Quiet hours error: ${data.error || 'invalid value'}`;
       refresh();
     });
     document.querySelector('#ambient-memory-enabled').addEventListener('change', async (event) => {

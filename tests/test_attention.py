@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
@@ -55,6 +56,24 @@ class AttentionTests(unittest.TestCase):
         result = attention.consume(_event("Password error", event_id="private"))
         self.assertEqual(result["reason"], "screen_summary_private")
         self.assertEqual(delivered, [])
+
+    def test_quiet_hours_suppress_proactive_intents_and_support_midnight(self):
+        attention = AttentionPresence(
+            cooldown_seconds=0,
+            quiet_hours="22:00-07:00",
+            clock=lambda: datetime(2026, 9, 1, 23, 30, tzinfo=timezone.utc),
+        )
+        result = attention.consume(_event("Ошибка", event_id="quiet"))
+        self.assertEqual(result["status"], "suppressed")
+        self.assertEqual(result["reason"], "quiet_hours_active")
+        self.assertTrue(attention.state()["quiet_hours_active"])
+
+    def test_quiet_hours_configuration_is_validated_and_preserved(self):
+        attention = AttentionPresence(quiet_hours="22:00-07:00")
+        attention.configure(dnd=True)
+        self.assertEqual(attention.state()["quiet_hours"], "22:00-07:00")
+        with self.assertRaises(ValueError):
+            attention.configure(quiet_hours="25:00-07:00")
 
 
 if __name__ == "__main__":

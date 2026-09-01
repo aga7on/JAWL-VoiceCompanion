@@ -53,6 +53,7 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"ambient-memory-enabled", frontend)
             self.assertIn(b"ambient-triage", frontend)
             self.assertIn(b"ambient-clear", frontend)
+            self.assertIn(b"quiet-hours", frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
 
@@ -101,6 +102,12 @@ class WebTests(unittest.TestCase):
             urlopen(request, timeout=2)
         self.assertEqual(context.exception.code, 403)
         context.exception.close()
+
+    def test_attention_quiet_hours_are_configurable_from_browser(self):
+        _, changed = self.post_json("/api/attention", {"quiet_hours": "22:00-07:00"})
+        self.assertEqual(changed["attention"]["quiet_hours"], "22:00-07:00")
+        _, cleared = self.post_json("/api/attention", {"quiet_hours": None})
+        self.assertIsNone(cleared["attention"]["quiet_hours"])
 
     def test_ambient_memory_requires_browser_session(self):
         request = Request(self.base + "/api/ambient-memory")

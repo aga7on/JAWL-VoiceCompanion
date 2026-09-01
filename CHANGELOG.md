@@ -27,6 +27,8 @@
 - Added an optional Windows `system-audio` package extra and ambient readiness
   entries to the doctor report; installation and capture remain explicit.
 - Added browser actions for explicit ambient triage and buffer clearing.
+- Added local-time quiet-hours gating for proactive Attention/Presence and a
+  browser setting for its `HH:MM-HH:MM` window.
 - Created the isolated `JAWL-VoiceCompanion` development repository.
 - Documented the JAWL/VoiceMem ownership boundary.
 - Restricted the current avatar scope to 2D Live2D.
