@@ -30,7 +30,7 @@ still pending.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean after the screen-attention slice.
-- Latest feature commit: `a832b67` (`feat: route screen intents through attention`).
+- Latest feature commit: `d631a12` (`fix: harden proactive event delivery`).
 
 ## Completed in this repository
 
@@ -221,9 +221,9 @@ reader close race was fixed with a focused regression test. Hidden-thought
 filtering and HTTP error-body cleanup were added with recovery coverage.
 The doctor slice now covers mock/degraded, fully configured and required-JAWL
 offline states and is preserved in `c66f088`. The current screen-attention
-slice is preserved in `a832b67` and includes unit, browser and cross-layer
-HTTP coverage for intent creation, DND and JAWL-compatible atomic event
-delivery.
+slice is preserved in `a832b67` and `d631a12` and includes unit, browser and
+cross-layer HTTP coverage for intent creation, DND, correlation and
+JAWL-compatible atomic event delivery.
 
 Verification for the current work session:
 `scripts/run_full_gate.ps1` passed 85 unit tests and 4 complete HTTP E2E tests;
