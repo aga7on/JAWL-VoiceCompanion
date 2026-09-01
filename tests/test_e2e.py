@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
 from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge, AmbientAudioService  # noqa: E402
-from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
+from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler  # noqa: E402
 from jawl_voicecompanion.asr import ExternalASRService, OpenAICompatibleASRClient  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
@@ -516,6 +516,7 @@ class LocalE2ETests(unittest.TestCase):
             f"http://127.0.0.1:{self.tts_provider.server_port}", timeout_seconds=2,
         ))
         self.ambient_memory = AmbientMemoryBuffer(enabled=True)
+        self.ambient_scheduler = AmbientTriageScheduler(self.ambient_memory, interval_seconds=1)
         self.ambient_bridge = AmbientAudioASRBridge(_AmbientVoiceMem(), self.ambient_memory)
         self.ambient_audio = AmbientAudioService(
             self.ambient_bridge,
@@ -549,6 +550,7 @@ class LocalE2ETests(unittest.TestCase):
             jawl_event_dir=self.jawl_event_dir,
             ambient_memory=self.ambient_memory,
             ambient_audio=self.ambient_audio,
+            ambient_scheduler=self.ambient_scheduler,
             activity_provider=lambda: {
                 "status": "verified",
                 "idle_seconds": 120.0,
@@ -1048,6 +1050,26 @@ class LocalE2ETests(unittest.TestCase):
         _, cleared = self.get_json("/api/ambient-memory")
         self.assertEqual(cleared["state"]["observation_count"], 0)
         self.assertEqual(cleared["state"]["episode_count"], 0)
+
+    def test_ambient_scheduler_runs_through_http_state_without_user_turn(self):
+        self.server.ambient_memory.ingest_system_audio(
+            "Важный контекст для фонового планировщика.",
+            confidence=0.9,
+            event_id="ambient-scheduler-e2e",
+        )
+        self.server.ambient_scheduler.start()
+        deadline = time.monotonic() + 3
+        while self.server.ambient_memory.state()["episode_count"] == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        _, payload = self.get_json("/api/ambient-memory")
+        scheduler = payload["state"]["scheduler"]
+        self.assertTrue(scheduler["running"])
+        self.assertEqual(scheduler["status"], "processed")
+        self.assertEqual(payload["state"]["episode_count"], 1)
+        self.assertIsNone(self.server.gateway.state()["last_turn"])
+        self.server.ambient_scheduler.stop()
+        _, stopped = self.get_json("/api/ambient-memory")
+        self.assertFalse(stopped["state"]["scheduler"]["running"])
 
     def test_system_audio_loopback_reaches_ambient_memory_without_user_turn(self):
         bridge = AmbientAudioASRBridge(_AmbientVoiceMem(), self.server.ambient_memory)
