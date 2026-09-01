@@ -125,6 +125,9 @@ separate CPU/RAM test completes.
 - Attention/Presence now supports a validated local-time quiet-hours window
   (`HH:MM-HH:MM`) with midnight crossing, persisted in runtime state and
   editable from the browser.
+- Attention/Presence can now use an explicit `--user-activity` Windows
+  adapter. It suppresses proactive screen speech after recent input and
+  exposes only bounded idle/class metadata; it is disabled by default.
 - `AmbientTriageProvider` now defines a bounded delayed-provider contract with
   strict provenance/schema validation. `OllamaTriageProvider` is an optional
   stdlib HTTP adapter configured CPU-first (`num_gpu=0`); it does not select,
@@ -339,6 +342,11 @@ The current VoiceMem follow-up hardens lazy sidecar startup and recovery:
 empty `/api/voice/end` calls do not initialize VoiceMem, a failed stream is
 evicted so the next request can recreate it, and the process lifecycle is
 included in the bounded health response. The full gate covers these paths.
+
+The current Presence follow-up adds the opt-in Windows activity signal and
+tests the public attention state through the HTTP E2E watcher path. It does
+not inspect keystrokes, titles or clipboard contents, and it does not select
+or load a VLM.
 
 The launch follow-up adds a PowerShell preflight for the selected web port;
 the observed `426 Upgrade Required` on port `8765` is now diagnosed before the

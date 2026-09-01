@@ -155,7 +155,7 @@ epistemic type and valid-time checks.
 ### `SPEAK_INTENT`
 
 An Attention/Presence proposal. The local gate applies salience, privacy,
-DND, cooldown and a bounded proactive budget. JAWL must still apply
+DND, cooldown, recent-user-activity and a bounded proactive budget. JAWL must still apply
 relevance, priority and personality before speaking.
 
 ```json

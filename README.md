@@ -65,6 +65,10 @@ budget gates. Add `--jawl-event-dir` with the active JAWL `.jawl_events`
 directory to deliver accepted `SPEAK_INTENT` events through JAWL's existing
 IPC; without it, intents remain local and inspectable.
 
+Add `--user-activity` to suppress proactive screen speech while Windows has
+recent user input. The signal is limited to idle time and foreground window
+class; it does not capture keystrokes, window titles or clipboard contents.
+
 To connect the text surface and the read-only inspection panel to JAWL's local
 web console, pass its URL:
 

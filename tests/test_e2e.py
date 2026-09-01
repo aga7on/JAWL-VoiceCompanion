@@ -464,6 +464,13 @@ class LocalE2ETests(unittest.TestCase):
             jawl_event_dir=self.jawl_event_dir,
             ambient_memory=self.ambient_memory,
             ambient_audio=self.ambient_audio,
+            activity_provider=lambda: {
+                "status": "verified",
+                "idle_seconds": 120.0,
+                "threshold_seconds": 60.0,
+                "user_active": False,
+                "foreground_class": "E2EWindow",
+            },
         )
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.server.server_port}"
@@ -987,6 +994,9 @@ class LocalE2ETests(unittest.TestCase):
             time.sleep(0.02)
         self.assertTrue(watcher.events())
         self.assertEqual(watcher.events()[0]["type"], "SCREEN_DELTA")
+        _, activity_status = self.get_json("/api/vision/status")
+        self.assertEqual(activity_status["attention"]["activity"]["status"], "verified")
+        self.assertFalse(activity_status["attention"]["activity"]["user_active"])
         self.assertNotIn("image", watcher.events()[0])
         _, event_log = self.get_json("/api/vision/events")
         self.assertEqual(event_log["events"][0]["type"], "SCREEN_DELTA")

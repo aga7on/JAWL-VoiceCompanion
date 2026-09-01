@@ -57,6 +57,30 @@ class AttentionTests(unittest.TestCase):
         self.assertEqual(result["reason"], "screen_summary_private")
         self.assertEqual(delivered, [])
 
+    def test_active_user_suppresses_proactive_screen_speech(self):
+        attention = AttentionPresence(
+            cooldown_seconds=0,
+            activity_provider=lambda: {
+                "status": "verified",
+                "user_active": True,
+                "idle_seconds": 3.2,
+                "foreground_class": "Editor",
+            },
+        )
+        result = attention.consume(_event("РћС€РёР±РєР° РІ СЂРµРґР°РєС‚РѕСЂРµ", event_id="active"))
+        self.assertEqual(result["status"], "suppressed")
+        self.assertEqual(result["reason"], "user_active")
+        self.assertEqual(attention.state()["activity"]["foreground_class"], "Editor")
+
+    def test_activity_provider_failure_is_degraded_but_does_not_break_gate(self):
+        attention = AttentionPresence(
+            cooldown_seconds=0,
+            activity_provider=lambda: (_ for _ in ()).throw(RuntimeError("unavailable")),
+        )
+        result = attention.consume(_event("РћС€РёР±РєР°", significance=3, event_id="activity-failure"))
+        self.assertEqual(result["status"], "proposed")
+        self.assertEqual(attention.state()["activity"]["status"], "degraded")
+
     def test_quiet_hours_suppress_proactive_intents_and_support_midnight(self):
         attention = AttentionPresence(
             cooldown_seconds=0,

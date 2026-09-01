@@ -102,6 +102,11 @@ class WebTests(unittest.TestCase):
         self.assertEqual(result["result"]["status"], "degraded")
         self.assertNotIn("image", result["result"])
 
+    def test_attention_reports_disabled_activity_by_default(self):
+        status, attention = self.get_json("/api/attention")
+        self.assertEqual(status, 200)
+        self.assertEqual(attention["activity"]["status"], "disabled")
+
     def test_attention_dnd_requires_browser_session(self):
         status, attention = self.get_json("/api/attention")
         self.assertEqual(status, 200)

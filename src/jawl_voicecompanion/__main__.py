@@ -18,6 +18,7 @@ from .screen_adapter import ScreenCaptureAdapter
 from .tts import CozyVoiceHttpClient, TTSService
 from .vision import OpenAICompatibleVisionClient
 from .voicemem_client import VoiceMemProcessClient
+from .user_activity import WindowsUserActivity
 from .windows_ui import WindowsUIAutomationAdapter
 from .web import create_server
 
@@ -70,6 +71,17 @@ def main() -> None:
         type=float,
         default=10.0,
         help="seconds between SCREEN_DELTA watcher polls",
+    )
+    parser.add_argument(
+        "--user-activity",
+        action="store_true",
+        help="use low-privacy Windows idle/focus signals to suppress proactive interruptions",
+    )
+    parser.add_argument(
+        "--user-activity-idle-seconds",
+        type=float,
+        default=60.0,
+        help="seconds without Windows input before the user is considered idle",
     )
     parser.add_argument(
         "--jawl-event-dir",
@@ -233,6 +245,10 @@ def main() -> None:
         jawl_event_dir=args.jawl_event_dir,
         ambient_memory=ambient_memory,
         ambient_audio=ambient_audio,
+        activity_provider=(
+            WindowsUserActivity(args.user_activity_idle_seconds).sample
+            if args.user_activity else None
+        ),
         jawl_hostos_control=args.jawl_hostos_control,
         audit_file=args.audit_file or Path(__file__).resolve().parents[2] / "runtime" / "audit.ndjson",
     )

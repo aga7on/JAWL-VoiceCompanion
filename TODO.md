@@ -202,7 +202,9 @@ Acceptance criteria:
 - [~] Add `SPEAK_INTENT` and JAWL final wording path; explicit `.jawl_events`
   IPC is implemented, while production Heartbeat/final-wording validation
   remains.
-- [ ] Add user activity/focus/fatigue signals.
+- [~] Add user activity/focus/fatigue signals; the opt-in Windows idle/focus
+  adapter and proactive suppression path are implemented, while fatigue and
+  richer focus classification remain.
 - [ ] Add optional daily journal and commitments.
 - [ ] Add gaming mode and resource backoff.
 - [x] Add a user-adjustable proactivity budget.

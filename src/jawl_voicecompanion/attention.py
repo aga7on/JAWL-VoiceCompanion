@@ -42,6 +42,7 @@ class AttentionPresence:
     quiet_hours: str | None = None
     clock: Callable[[], datetime] | None = None
     intent_sink: Callable[[dict[str, Any]], Any] | None = None
+    activity_provider: Callable[[], dict[str, Any]] | None = None
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _seen: deque[str] = field(default_factory=lambda: deque(maxlen=200), init=False, repr=False)
     _intents: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=50), init=False, repr=False)
@@ -49,6 +50,7 @@ class AttentionPresence:
     _last_intent_at: float = field(default=0.0, init=False, repr=False)
     _last_decision: str = field(default="not_checked", init=False, repr=False)
     _last_error: str | None = field(default=None, init=False, repr=False)
+    _last_activity: dict[str, Any] = field(default_factory=lambda: {"status": "disabled"}, init=False, repr=False)
     _quiet_window: tuple[int, int] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -115,6 +117,7 @@ class AttentionPresence:
                 "last_decision": self._last_decision,
                 "last_error": self._last_error,
                 "last_intent": self._intents[-1] if self._intents else None,
+                "activity": dict(self._last_activity),
             }
 
     def intents(self) -> list[dict[str, Any]]:
@@ -138,6 +141,10 @@ class AttentionPresence:
                 return {"status": "duplicate", "reason": "screen_event_seen"}
             self._seen.append(key)
             score = self._score(payload.get("significance"), summary)
+            activity = self._sample_activity()
+            self._last_activity = activity
+            if activity.get("status") == "verified" and activity.get("user_active"):
+                return {"status": "suppressed", "reason": "user_active", "significance": score}
             if self.dnd:
                 return {"status": "suppressed", "reason": "dnd_active", "significance": score}
             if self._is_quiet(self._local_now()):
@@ -162,6 +169,27 @@ class AttentionPresence:
                     self._last_error = "attention_sink_failed"
                 return {"status": "proposed", "intent": intent, "delivered": False}
         return {"status": "proposed", "intent": intent, "delivered": True}
+
+    def _sample_activity(self) -> dict[str, Any]:
+        if self.activity_provider is None:
+            return {"status": "disabled"}
+        try:
+            result = self.activity_provider()
+        except Exception:  # noqa: BLE001 - optional sensor must not break attention
+            return {"status": "degraded", "reason": "activity_provider_failed"}
+        if not isinstance(result, dict):
+            return {"status": "degraded", "reason": "activity_provider_invalid"}
+        status = str(result.get("status") or "degraded")[:40]
+        bounded: dict[str, Any] = {"status": status}
+        if isinstance(result.get("user_active"), bool):
+            bounded["user_active"] = result["user_active"]
+        for key in ("idle_seconds", "threshold_seconds"):
+            value = result.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                bounded[key] = round(max(0.0, min(float(value), 30 * 24 * 3600.0)), 1)
+        if isinstance(result.get("foreground_class"), str):
+            bounded["foreground_class"] = result["foreground_class"][:120]
+        return bounded
 
     @staticmethod
     def _summary(value: Any) -> str:

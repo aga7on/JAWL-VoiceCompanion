@@ -162,7 +162,11 @@
       const attention = visionStatusData.attention || {};
       document.querySelector('#attention-dnd').checked = Boolean(attention.dnd);
       document.querySelector('#quiet-hours').value = attention.quiet_hours || '';
-      document.querySelector('#attention-status').textContent = `Attention/Presence: ${attention.last_decision || 'not_checked'} · intents ${attention.intents_last_hour || 0}/${attention.budget_per_hour || 0}`;
+      const activity = attention.activity || {status: 'disabled'};
+      const activityText = activity.status === 'verified'
+        ? (activity.user_active ? 'user active; proactive speech suppressed' : 'user idle')
+        : `activity ${activity.status || 'disabled'}`;
+      document.querySelector('#attention-status').textContent = `Attention/Presence: ${attention.last_decision || 'not_checked'} · intents ${attention.intents_last_hour || 0}/${attention.budget_per_hour || 0} · ${activityText}`;
       const ambientMemoryState = ambientMemoryData.state || {};
       const ambientAudioButton = document.querySelector('#ambient-audio-toggle');
       document.querySelector('#ambient-memory-enabled').checked = Boolean(ambientMemoryState.enabled);

@@ -40,6 +40,17 @@ cooldowns. JAWL Heartbeat/ReAct handles durable thought and final wording.
 This prevents screen sensors and timers from launching expensive full-agent
 cycles.
 
+## ADR-004a — User activity is a low-privacy attention signal
+
+Status: Accepted
+Date: 2026-09-01
+
+The optional Windows activity adapter reads only the time since the last user
+input and the foreground window class. It does not capture keystrokes, window
+titles, clipboard contents or input payloads. When enabled, recent activity
+suppresses proactive screen speech; a sensor failure degrades to the existing
+salience gate rather than disabling the companion.
+
 ## ADR-005 — Separate service processes initially
 
 Status: Accepted

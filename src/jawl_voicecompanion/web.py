@@ -8,7 +8,7 @@ import secrets
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from .approvals import ApprovalStore
@@ -558,6 +558,7 @@ def create_server(
     avatar_assets: AvatarAssetStore | None = None,
     jawl_event_dir: Path | None = None,
     attention: AttentionPresence | None = None,
+    activity_provider: Callable[[], dict[str, Any]] | None = None,
     ambient_memory: AmbientMemoryBuffer | None = None,
     ambient_audio: AmbientAudioService | None = None,
     jawl_hostos_control: bool = False,
@@ -585,6 +586,7 @@ def create_server(
     event_sink = JawlEventFileSink(jawl_event_dir) if jawl_event_dir else None
     active_attention = attention or AttentionPresence(
         intent_sink=event_sink.publish if event_sink is not None else None,
+        activity_provider=activity_provider,
     )
     watcher = (
         ScreenDeltaWatcher(

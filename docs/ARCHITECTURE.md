@@ -147,6 +147,9 @@ This is a fast timing and salience layer, inspired by Miru's AttentionEngine.
 It receives observations and decides whether they are worth sending to JAWL
 as a possible approach. It owns temporary cooldowns and deduplication, not
 durable personality.
+An optional Windows activity adapter supplies only idle time and foreground
+window class; recent user input suppresses proactive speech without reading
+keystrokes, titles or clipboard data.
 
 ### Live2D frontend
 

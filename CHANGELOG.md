@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added an opt-in Windows activity signal for Attention/Presence; recent user
+  input suppresses proactive screen speech, while only bounded idle time and
+  foreground class metadata are exposed.
 - Added a `run_web.ps1` port preflight so a port occupied by another service
   fails with an actionable message before the Companion starts.
 - Hardened VoiceMem lifecycle handling: empty flushes stay lazy, failed stream
