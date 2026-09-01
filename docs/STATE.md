@@ -30,8 +30,8 @@ browser inspection/configuration path are now implemented. A strict,
 model-neutral delayed audio-triage contract and optional CPU-first Ollama
 adapter are now present; no model is selected or loaded by default. The
 operator's CPU/RAM benchmark selected Qwen3-VL-2B as the primary Vision
-candidate, with SmolVLM2-500M as a speed fallback; local endpoint integration
-is the next implementation step.
+candidate, with SmolVLM2-500M as a speed fallback. The local endpoint and
+explicit screen look are now smoke-tested; continuous watcher tuning remains.
 
 ## Git state
 
@@ -214,6 +214,11 @@ is the next implementation step.
   low-latency fallback; `Bonsai-1.7B` is text-only and `Qwen3-ASR-0.6B` is
   the leading audio candidate. The files live outside this repository under
   `C:\Users\ARTEM\vlm-bench\models`; no weights are copied into source.
+- A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
+  Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
+  the real Windows focused-window capture. It returned a bounded Russian
+  description in about 10.9 seconds; the raw frame was not persisted. This
+  validates the explicit path, not yet a low-latency continuous watcher.
 - The model-neutral REST TTS adapter now uses at most three concurrent
   sentence requests, merges compatible WAV chunks in source order, and
   exposes explicit cancellation. The browser aborts stale playback requests
@@ -288,8 +293,8 @@ is the next implementation step.
 - validate the TTS model selected by the external benchmark, measure startup/
   latency and decide whether an actual streaming TTS worker is needed;
 - choose the initial JAWL LLM endpoint/profile;
-- validate the local `llama-server` OpenAI-compatible endpoint with the
-  selected Qwen3-VL-2B model and mmproj;
+- tune bounded screen resizing, UIA context and coordinate calibration for the
+  selected Qwen3-VL-2B endpoint;
 - measure actual GPU contention and model residency on the target machine.
 - validate the correlated web bridge against a production JAWL model/tool
   profile that emits user-facing broadcasts and add restart/reconnect recovery
@@ -355,8 +360,8 @@ included in the bounded health response. The full gate covers these paths.
 The current Presence follow-up adds the opt-in Windows activity signal and
 tests the public attention state through the HTTP E2E watcher path. It does
 not inspect keystrokes, titles or clipboard contents, and it does not select
-or load a VLM; the next step is the separately benchmarked Qwen3-VL-2B
-endpoint.
+or load a VLM itself; explicit Vision now uses the separately benchmarked
+Qwen3-VL-2B endpoint when configured.
 
 The Vision follow-up adds a small PowerShell launcher for the benchmarked
 Qwen3-VL-2B Q4_K_M plus F16 mmproj. The launcher validates external model

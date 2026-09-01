@@ -165,10 +165,9 @@ Acceptance criteria:
   `screen.observe` adapter is present and disabled by default.
 - [ ] Prefer UI Automation for native app structure.
 - [ ] Add screenshot/OCR fallback for canvas and custom applications.
-- [~] Add explicit `vision__look` model tool; the HostOS `screen.observe`
-  capture seam exists, while the model bridge is still pending. The CPU/RAM
-  benchmark selected Qwen3-VL-2B as the primary profile and SmolVLM2-500M as
-  a speed fallback; local `llama-server` integration remains.
+- [x] Add explicit `vision__look` model tool; the HostOS `screen.observe`
+  capture seam and Qwen3-VL-2B local `llama-server` path are smoke-tested.
+  SmolVLM2-500M remains the speed fallback; continuous watcher tuning remains.
 - [ ] Add capture request/response bridge when frontend owns capture.
 - [~] Add change detection, significance and cooldown; digest deduplication,
   explicit-look cooldown, bounded `SCREEN_DELTA` production and an
