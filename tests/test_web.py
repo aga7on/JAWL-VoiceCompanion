@@ -167,6 +167,15 @@ class WebTests(unittest.TestCase):
         else:
             self.fail("JAWL persona inspection should return HTTP 403 without a session")
 
+    def test_audit_without_session_is_rejected(self):
+        try:
+            urlopen(self.base + "/api/audit", timeout=2)
+        except HTTPError as error:
+            with error:
+                self.assertEqual(error.code, 403)
+        else:
+            self.fail("audit should return HTTP 403 without a session")
+
 
 if __name__ == "__main__":
     unittest.main()

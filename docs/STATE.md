@@ -87,6 +87,9 @@ storage.
 - The optional JAWL web bridge reads existing `/api/agent/status`, `/api/tick`,
   `/api/db/stats`, `/api/drives` and `/api/config` routes, filters config
   secrets and exposes session-protected inspection routes to the browser.
+- The browser now renders the last bounded HostOS audit events; `/api/audit`
+  requires the browser session and policy audit entries exclude arguments and
+  raw command output.
 
 ## Reference inventory
 
@@ -158,11 +161,12 @@ client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
 and final-turn routing in `36a808c`.
 The current work session adds the TTS boundary and CozyVoice REST path plus
 the optional Live2D asset/runtime bridge, then adds the read-only JAWL web
-memory/persona bridge and its browser view. The follow-up validates real JAWL
-payloads and applies a drive-field allow-list.
+memory/persona bridge and its browser view, validates real JAWL payloads and
+applies a drive-field allow-list. The audit view was then added and covered
+end-to-end.
 
 Verification for the current work session:
-`scripts/run_e2e.ps1` passed 4 tests; `scripts/run_tests.ps1` passed 66 tests;
+`scripts/run_e2e.ps1` passed 4 tests; `scripts/run_tests.ps1` passed 67 tests;
 the stale-port degraded probe returned `status=offline`;
 `git diff --check` reported no whitespace errors and no Python warnings; the
 real JAWL web → adapter → companion API smoke-test also passed.

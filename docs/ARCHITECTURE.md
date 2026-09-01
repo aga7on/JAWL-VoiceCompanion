@@ -83,6 +83,10 @@ console for health, Heartbeat, bounded memory counters, drives and a filtered
 persona view. It never opens JAWL storage directly and keeps no durable copy.
 The public companion routes are read-only and session-protected.
 
+The same browser session protects the HostOS audit view. The UI displays only
+the last bounded metadata events; tool arguments and raw results remain
+excluded by the policy audit layer.
+
 ### VoiceMem gateway
 
 Owns streaming voice perception and returns structured observations. It may

@@ -191,8 +191,9 @@ Acceptance criteria:
 - [ ] Create one tool policy for JAWL, MCP, desktop and browser tools.
 - [x] Add server-side one-shot approval queue with exact request/policy
   fingerprints and allow-once/deny decisions.
-- [~] Add unified tool-call audit log with secret redaction; the initial policy
-  audit is metadata-only and broader tool coverage remains.
+- [~] Add unified tool-call audit log with secret redaction; the metadata-only
+  policy audit is now visible in the browser, while broader tool coverage
+  remains.
 - [ ] Add bounded tool-result compression.
 - [ ] Add workspace-scoped edit proposals with stale-file checks.
 - [ ] Add restart/recovery tests.

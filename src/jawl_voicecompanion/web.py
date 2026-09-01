@@ -79,6 +79,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json(self.server.gateway.state())
             return
         if path == "/api/audit":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
             self._json({"events": self.server.gateway.audit()})
             return
         if path == "/api/hostos/tools":

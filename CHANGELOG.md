@@ -57,3 +57,5 @@
   durable memory store is created.
 - Bounded JAWL drive summaries to an explicit field allow-list after validating
   the payload against the real local JAWL console.
+- Added a session-protected HostOS audit view showing bounded metadata events;
+  the browser never receives command arguments or raw execution output.

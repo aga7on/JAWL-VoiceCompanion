@@ -311,6 +311,10 @@ class LocalE2ETests(unittest.TestCase):
         _, stopped = self.post_json("/api/hostos/execute", request)
         self.assertEqual(stopped["result"]["status"], "denied")
         self.assertEqual(stopped["result"]["reason"], "emergency_stop_active")
+        _, audit = self.get_json("/api/audit")
+        self.assertTrue(audit["events"])
+        self.assertTrue(any(event["type"] == "ACCESS_LEVEL_CHANGED" for event in audit["events"]))
+        self.assertNotIn("e2e-ok", json.dumps(audit, ensure_ascii=False))
 
     def test_jawl_web_memory_and_persona_are_visible_without_secrets(self):
         _, health = self.get_json("/api/health")
