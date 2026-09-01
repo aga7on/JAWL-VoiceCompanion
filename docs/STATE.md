@@ -39,8 +39,8 @@ separate CPU/RAM test completes.
   architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the VoiceMem sidecar lifecycle hardening slice.
-- Latest feature commit: `1f94346` (`fix: harden VoiceMem sidecar lifecycle`).
+- Working tree: clean after the VoiceMem and launch-guard hardening slices.
+- Latest feature commit: `cd4a7bb` (`fix: guard web port conflicts`).
 
 ## Completed in this repository
 
@@ -153,6 +153,8 @@ separate CPU/RAM test completes.
 - The Windows desktop-pet launcher now validates the Companion HTTP `/avatar`
   page before opening Edge/Chrome, so an occupied port serving a WebSocket-only
   service fails with a clear conflict instead of a misleading upgrade error.
+- `scripts/run_web.ps1` now performs the same occupied-port preflight before
+  starting Python and reports the owning process with an alternate-port hint.
 - The optional JAWL web bridge reads existing `/api/agent/status`, `/api/tick`,
   `/api/db/stats`, `/api/drives` and `/api/config` routes, filters config
   secrets and exposes session-protected inspection routes to the browser.
@@ -337,6 +339,10 @@ The current VoiceMem follow-up hardens lazy sidecar startup and recovery:
 empty `/api/voice/end` calls do not initialize VoiceMem, a failed stream is
 evicted so the next request can recreate it, and the process lifecycle is
 included in the bounded health response. The full gate covers these paths.
+
+The launch follow-up adds a PowerShell preflight for the selected web port;
+the observed `426 Upgrade Required` on port `8765` is now diagnosed before the
+Companion starts, while the existing WebSocket-only process remains untouched.
 
 The current HostOS follow-up adds bounded file snapshots and conditional
 workspace writes with stale-file rejection, plus a browser proposal/review and
