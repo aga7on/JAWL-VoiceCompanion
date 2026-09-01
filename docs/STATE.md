@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 ## Current phase
 
@@ -18,6 +18,8 @@ and OS adapters are not connected.
   terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
   `5fdd373` (web API), `bad96dc` (state baseline);
 - Working tree: clean at the last verification.
+- Latest feature commit: `0847a8f` (`feat: add transparent OBS avatar
+  surface`).
 
 ## Completed in this repository
 
@@ -37,6 +39,8 @@ and OS adapters are not connected.
   emergency stop and redacted metadata-only audit entries.
 - Loopback browser surface supports chat, health/state display and policy-level
   selection using local session/CSRF headers.
+- Dedicated read-only `/avatar` surface renders a transparent OBS-ready
+  placeholder, bounded subtitle and response-envelope avatar state.
 - JAWL terminal adapter understands the local `terminal.port` plus
   `JAWL_HANDSHAKE` JSON-lines protocol and falls back when JAWL is offline.
 - `TurnArbiter` now models one active turn, priority lanes, stale-work
@@ -83,8 +87,8 @@ and OS adapters are not connected.
 - Choose and benchmark Russian streaming ASR;
 - confirm the OmniVoice model/API location;
 - select the first redistributable or user-supplied Live2D model;
-- decide the first web stack and local session-token mechanism;
-- define the initial HostOS tool registry and risk policy defaults.
+- finish the browser settings, memory and audit views;
+- harden the initial HostOS session lifecycle and broaden audit coverage.
 - choose the initial JAWL LLM endpoint/profile;
 - decide whether local VLM runs through the existing QWB endpoint or a new
   local service;
@@ -92,22 +96,23 @@ and OS adapters are not connected.
 
 ## Latest work session
 
-Changed `pyproject.toml`, `src/jawl_voicecompanion/`, `frontend/index.html`,
-`tests/` and `scripts/run_tests.ps1`/`scripts/run_web.ps1`.
+Changed `frontend/index.html`, `frontend/avatar.html`, `src/jawl_voicecompanion/web.py`,
+`tests/test_web.py`, `README.md`, `TODO.md`, `docs/OBS.md`, the architecture
+ADRs and `CHANGELOG.md`.
 
 Verification: `scripts/run_tests.ps1` passed 36 tests; `git diff --check`
 reported no whitespace errors.
 
-Known limitation: browser UIA calls and navigation are available through the
-live executor, but coordinate/canvas fallback and transport cancellation are
-still pending. The web server's default executor remains dry-run; live
-approval is now server-side but the browser approval UX is still minimal.
+Known limitation: the avatar is a dependency-free placeholder, not a Live2D
+model yet. The web server's default executor remains dry-run; coordinate/
+canvas fallback, screen capture and TTS/audio cancellation are still pending.
+The native always-on-top desktop-pet shell is also deferred.
 
 ## Next action
 
-Exercise the JAWL adapter against the actual local process. Then add the
-browser approval UX and bounded screen capture bridge. TTS/audio cancellation
-remains required before the voice loop.
+Exercise the JAWL adapter against the actual local process. Then implement the
+bounded screen-capture/vision bridge and select the first Live2D asset/runtime.
+TTS/audio cancellation remains required before the voice loop.
 
 ## State update protocol
 

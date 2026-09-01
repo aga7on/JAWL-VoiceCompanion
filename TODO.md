@@ -95,9 +95,10 @@ Acceptance criteria:
 - [ ] Add expression capability mapping and fallbacks.
 - [ ] Add first-run setup and component health/doctor panel.
 - [ ] Add performance profiles for low/standard/high modes.
-- [ ] Render browser control-plane pages for settings, approvals, memory and
-  audit state.
-- [ ] Add visible HostOS access-level indicator and emergency stop.
+- [~] Render browser control-plane pages for settings, approvals, memory and
+  audit state; chat, approvals, level and emergency stop are present, while
+  settings, memory and audit views remain.
+- [x] Add visible HostOS access-level indicator and emergency stop.
 
 Acceptance criteria:
 
@@ -144,21 +145,24 @@ Acceptance criteria:
 
 ## Phase 7 — tools and hardening
 
-- [ ] Add HostOS access levels 0 `SANDBOX`, 1 `OBSERVER`, 2 `OPERATOR`, 3
+- [x] Add HostOS access levels 0 `SANDBOX`, 1 `OBSERVER`, 2 `OPERATOR`, 3
   `ROOT`.
 - [x] Route initial filesystem/process/shell tool descriptors through one
   backend policy gate.
 - [x] Implement initial Windows UI Automation observation with stale element
   checks.
-- [ ] Implement bounded keyboard/mouse/window control and browser actions.
+- [~] Implement bounded keyboard/mouse/window control and browser actions;
+  initial UIA control and browser navigation adapters are present.
 - [x] Add bounded browser URL actions and UIA delegation behind `browser.act`.
-- [ ] Add level-change events, session tokens and emergency stop.
+- [~] Add level-change events, session tokens and emergency stop; the initial
+  loopback path is present, while broader session lifecycle hardening remains.
 - [ ] Add risk classes and per-class confirmation/deny-list policy.
-- [ ] Add exact approval fingerprints for commands and high-risk actions.
+- [x] Add exact approval fingerprints for commands and high-risk actions.
 - [ ] Create one tool policy for JAWL, MCP, desktop and browser tools.
 - [x] Add server-side one-shot approval queue with exact request/policy
   fingerprints and allow-once/deny decisions.
-- [ ] Add unified tool-call audit log with secret redaction.
+- [~] Add unified tool-call audit log with secret redaction; the initial policy
+  audit is metadata-only and broader tool coverage remains.
 - [ ] Add bounded tool-result compression.
 - [ ] Add workspace-scoped edit proposals with stale-file checks.
 - [ ] Add restart/recovery tests.
