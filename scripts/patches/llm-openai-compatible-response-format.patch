@@ -1,0 +1,26 @@
+﻿diff --git "a/runtime\\jawl-sources\\jawl-20260905-daily-v1\\src\\l3_agent\\llm\\providers\\openai_compatible.py.orig" "b/runtime\\jawl-sources\\jawl-20260905-daily-v1\\src\\l3_agent\\llm\\providers\\openai_compatible.py"
+index a1fac3c..add4ace 100644
+--- "a/runtime\\jawl-sources\\jawl-20260905-daily-v1\\src\\l3_agent\\llm\\providers\\openai_compatible.py.orig"
++++ "b/runtime\\jawl-sources\\jawl-20260905-daily-v1\\src\\l3_agent\\llm\\providers\\openai_compatible.py"
+@@ -4,6 +4,7 @@ from __future__ import annotations
+ 
+ import asyncio
+ import hashlib
++import os
+ import time
+ from typing import Any, Mapping
+ 
+@@ -60,7 +61,12 @@ class OpenAICompatibleProvider(LLMProvider):
+             kwargs["tools"] = [tool.as_openai_dict() for tool in request.tools]
+         if request.tool_choice is not None and "tools" in kwargs:
+             kwargs["tool_choice"] = request.tool_choice
+-        if request.tool_transport == "json_envelope" and self.capabilities.json_schema:
++        if (
++            request.tool_transport == "json_envelope"
++            and self.capabilities.json_schema
++            and os.getenv("LLM_RESPONSE_FORMAT", "json_object").strip().lower()
++            in {"json_object", "json_schema"}
++        ):
+             kwargs["response_format"] = {"type": "json_object"}
+         return kwargs
+ 

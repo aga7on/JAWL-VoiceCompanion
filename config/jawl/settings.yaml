@@ -2,15 +2,15 @@
 identity:
   agent_name: Компаньон
 llm:
-  main_model: big-pickle
-  available_models: [big-pickle]
+  main_model: ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d
+  available_models: [ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d]
   language: ru
   is_multimodal: false
   tool_transport: json_envelope
   max_react_steps: 15
   provider:
     kind: openai_compatible
-    display_name: OpenCode (test profile)
+    display_name: LM Studio (local owned baseline)
     request_timeout_seconds: 120
 system:
   timezone: 3

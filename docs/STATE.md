@@ -1,5 +1,23 @@
 # Состояние разработки
 
+Live local LLM step (2026-09-06 night): owner-provided LM Studio key works on
+`127.0.0.1:1235/v1` (one loaded model, id `ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d`,
+verified via `/v1/models` and a minimal chat completion). Owned daily baseline
+`config/jawl/settings.yaml` now targets LM Studio; profile prepared and preflight
+passes. The guarded snapshot patch
+`scripts/patches/llm-openai-compatible-response-format.patch` fixes LM Studio's
+HTTP 400 on `response_format.type=json_object` (use `LLM_RESPONSE_FORMAT=text`).
+With it, owned JAWL calls LM Studio and executes real native tools. The connected
+daily scenario remains NOT accepted: the model enters a ReAct tool loop and no
+single `--turns 1` run produced a final answer within 180–420 s (18
+tool.completed events per run; evidence `runtime/daily-live-one-turn.json`,
+`runtime/daily-live-greeting.json`). Follow-ups: bound the tool catalog /
+`max_react_steps` for one-turn acceptance, and fix the launcher cwd so
+`sandbox/` resolves to `runtime/instances/daily/sandbox` (currently the
+pinned-source sandbox, so repeated sandbox searches fail). Ollama
+`127.0.0.1:11434` (`gemma-4-12b-obliterated:latest`, no auth) is the fallback
+endpoint, not yet tried for a turn.
+
 Synthetic voice-robustness slice (P0-C foundation) is in: `ASRNoSpeech` is a
 first-class outcome — `ExternalASRService.finish` returns `no_speech`
 (injectable `clock` makes TTL eviction/disconnect tests offline-deterministic),

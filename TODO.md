@@ -1,5 +1,26 @@
 # TODO — путь к работающему компаньону
 
+Live local LLM step (2026-09-06 night): the owner provided an LM Studio key for
+`127.0.0.1:1235/v1`; the loaded model id is
+`ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d`. `config/jawl/settings.yaml`
+`main_model` now points at it, prepared + preflight pass, and owned JAWL
+successfully talks to LM Studio after the guarded provider patch
+`scripts/patches/llm-openai-compatible-response-format.patch` (LM Studio rejects
+`response_format.type=json_object`; set `LLM_RESPONSE_FORMAT=text` to drop it).
+NEXT, the connected daily scenario still fails at the very next step: the model
+enters a ReAct tool loop and a single `--turns 1` gateway run never produces a
+final answer (18 tool.completed events; 180–420 s turns cancelled/timed out;
+evidence `runtime/daily-live-one-turn.json`, `runtime/daily-live-greeting.json`).
+Two concrete fixes to try next, in order:
+1. Bound/simplify the tool catalog for the daily profile (terminal messaging
+   first, sandbox/search secondary) and/or tighten `max_react_steps` so an
+   invalid tool plan cannot stall a turn (the documented P0 contract issue).
+2. The launcher runs with the pinned-source cwd, so `sandbox/` relative paths
+   resolve to the source sandbox and the model's sandbox searches fail; switch
+   the launcher working directory to the instance home or canonicalize sandbox
+   paths. Then re-run one-turn acceptance on JAWL web console at
+   `run_native_gateway_profile.py --allow-live-turns --turns 1 ...`.
+
 Synthetic voice robustness slice (P0-C foundation) landed: `ASRNoSpeech` is now
 a first-class outcome — `ExternalASRService.finish` reports `no_speech`, the
 `/api/voice/end` endpoint returns a neutral empty transcript, and swappable

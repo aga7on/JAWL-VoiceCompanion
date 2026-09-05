@@ -1,6 +1,34 @@
 # Changelog
 
-## 2026-09-06
+## 2026-09-06 (night: live local LLM provider)
+
+- Owner provided an LM Studio API key for `http://127.0.0.1:1235/v1`; the server
+  accepts it and serves one loaded model (id `ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d`,
+  listed via `/v1/models`, minimal chat completion verified). The key is used
+  only through the process environment (`LLM_API_KEY_1`) and never committed.
+- Owned daily baseline now points at the local provider: `config/jawl/settings.yaml`
+  sets `llm.main_model` to the LM Studio model id; prepared profile and preflight
+  pass (`embedding_cache=ready`).
+- LM Studio rejects JAWL's `response_format={"type":"json_object"}` with HTTP 400
+  (only `json_schema`/`text` are accepted). Recorded the guarded provider patch
+  `scripts/patches/llm-openai-compatible-response-format.patch`: `_request_kwargs`
+  now honours `LLM_RESPONSE_FORMAT` (default `json_object` for cloud; set `text`
+  for LM Studio), applied to the owned snapshot
+  `runtime/jawl-sources/jawl-20260905-daily-v1`.
+- With the patch, owned JAWL reaches LM Studio and executes real native tool
+  calls (read terminal history, list notes, sandbox search). It still fails the
+  connected daily scenario acceptance: the model enters a prolonged ReAct tool
+  loop and no turn produced a final answer within 180–420 s (18 tool completed
+  events on a single `--turns 1` run). Live evidence:
+  `runtime/daily-live-one-turn.json`, `runtime/daily-live-greeting.json`.
+- Two P0 follow-ups identified: (1) bound/simplify the tool catalog so a single
+  user turn cannot stall in a tool loop (the documented P0 contract issue), and
+  (2) the daily launcher runs with the pinned-source cwd, so `sandbox/` relative
+  tool paths resolve to the source sandbox instead of `runtime/instances/daily/sandbox`
+  and the model's repeated sandbox searches fail; switch the launcher working
+  directory to the instance home (or canonicalize sandbox paths).
+- Ollama `127.0.0.1:11434` (no auth, `gemma-4-12b-obliterated:latest`) remains a
+  fallback endpoint candidate, not yet tried for a user turn.
 
 - Synthetic voice robustness slice (P0-C foundation): `ASRNoSpeech` now
   distinguishes "no speech" from transport failure in the final-utterance ASR
