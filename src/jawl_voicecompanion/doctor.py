@@ -10,12 +10,16 @@ def _health(provider: Any | None) -> dict[str, Any]:
         return {"status": "not_configured"}
     checker = getattr(provider, "health", None)
     if not callable(checker):
-        return {"status": "ready"}
+        return {"status": "configured"}
     try:
         value = checker()
     except Exception:  # noqa: BLE001 - doctor must never break the control plane
         return {"status": "offline", "reason": "health check failed"}
-    return value if isinstance(value, dict) else {"status": "degraded"}
+    if not isinstance(value, dict) or any(
+        key in value and value[key] is not True for key in ("ok", "ready")
+    ):
+        return {"status": "degraded"}
+    return value
 
 
 def _check(
@@ -49,6 +53,7 @@ def build_doctor_report(
     avatar_assets: Any | None = None,
     ambient_memory: Any | None = None,
     ambient_audio: Any | None = None,
+    resource_governor: Any | None = None,
 ) -> dict[str, Any]:
     """Return bounded component readiness without exposing paths or secrets."""
     health = gateway.health()
@@ -61,7 +66,7 @@ def build_doctor_report(
         "jawl", "mock" if mock_mode else jawl_status,
         "Text-only mock brain is available" if mock_mode else "JAWL chat transport",
         required=not mock_mode,
-        ready=not mock_mode and jawl_status in {"connected", "online", "configured"},
+        ready=not mock_mode and jawl_status in {"connected", "online"},
         action="Configure --jawl-web-url or --jawl-port-file" if mock_mode else (
             "Check JAWL process and its correlated chat stream" if jawl_status not in {"connected", "online"} else None
         ),
@@ -78,7 +83,7 @@ def build_doctor_report(
     asr_status = str(asr_health.get("status", "degraded"))
     checks.append(_check(
         "asr", asr_status, "External final-utterance ASR" if asr is not None else "External ASR is disabled",
-        ready=asr is None or asr_status in {"connected", "online", "ready", "ok"},
+        ready=asr is not None and asr_status in {"connected", "online", "ready", "ok"},
         action="Configure --asr-url and --asr-model for Qwen3-ASR" if asr is None else None,
     ))
 
@@ -90,12 +95,13 @@ def build_doctor_report(
     ))
 
     vision_status = vision.status() if callable(getattr(vision, "status", None)) else {"configured": False}
-    vision_ready = bool(vision_status.get("configured")) and bool(vision_status.get("screen_enabled"))
+    # status() exposes configuration, not a live capture/model readiness probe.
+    vision_configured = vision_status.get("configured") is True
     checks.append(_check(
-        "vision", "ready" if vision_ready else "not_configured",
-        "Focused-window vision capture and VLM",
-        ready=vision_ready,
-        action="Enable --hostos-live, --screen-enabled and a VLM endpoint" if not vision_ready else None,
+        "vision", "configured" if vision_configured else "not_configured",
+        "Vision configured; live capture/model not verified" if vision_configured else "Vision is disabled",
+        ready=False,
+        action="Validate the selected Vision profile" if vision_configured else "Vision selection is deferred; text/voice can work without it",
     ))
 
     avatar = avatar_assets.config() if avatar_assets is not None else {"ready": False}
@@ -127,11 +133,21 @@ def build_doctor_report(
     if ambient_audio is not None:
         audio_state = ambient_audio.state()
         configured = bool(audio_state.get("configured"))
+        capture = audio_state.get("capture", {})
+        running = configured and capture.get("running") is True and not capture.get("last_error")
         checks.append(_check(
-            "ambient_audio", "ready" if configured else "not_configured",
-            "System-audio loopback is configured" if configured else "System-audio loopback is not configured",
-            ready=configured,
-            action="Configure --ambient-audio and start it explicitly from the browser" if not configured else None,
+            "ambient_audio", "running" if running else "configured" if configured else "not_configured",
+            "System-audio capture is running; ASR acceptance is separate" if running else "System-audio capture is not running",
+            ready=running,
+            action="Review consent and start system-audio capture explicitly" if not running else None,
+        ))
+
+    if resource_governor is not None:
+        resource_state = resource_governor.state()
+        checks.append(_check(
+            "resources", "ready", "Bounded speech/vision/ambient resource governor",
+            ready=True,
+            action="Review the active resource profile" if resource_state.get("gaming_mode") else None,
         ))
 
     required_failures = [item for item in checks if item["required"] and not item["ready"]]
@@ -140,7 +156,7 @@ def build_doctor_report(
     return {
         "schema_version": 1,
         "status": overall,
-        "text_mode_available": True,
+        "text_mode_available": mock_mode or jawl_status in {"connected", "online"},
         "checks": checks,
         "recommendations": [item["action"] for item in warnings if item.get("action")][:8],
     }

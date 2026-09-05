@@ -1,5 +1,7 @@
 import json
+import inspect
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -10,10 +12,66 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
-from jawl_voicecompanion.web import create_server  # noqa: E402
+from jawl_voicecompanion.jawl_web import JawlWebUnavailable  # noqa: E402
+from jawl_voicecompanion.web import create_presentation_server, create_server  # noqa: E402
+
+
+class _NativeSkillStub:
+    token = "native-token"
+
+    def __init__(self):
+        self.calls = []
+
+    def execute_hostos_skill(self, skill, arguments):
+        self.calls.append((skill, arguments))
+        return {
+            "status": "native",
+            "result": {"is_success": True, "skill": skill},
+        }
+
+
+class _FakeJawlMemory:
+    token = "native-token"
+
+    def __init__(self):
+        self.calls = []
+
+    def remember_memory(self, **payload):
+        self.calls.append(payload)
+        return {"status": "synchronized", "memory": {"is_success": True}}
+
+    def autonomy_journal(self, limit=20, state=None):
+        self.calls.append(("journal", limit, state))
+        return {
+            "configured": True,
+            "status": "ok",
+            "native": True,
+            "source": "jawl.action_journal",
+            "plans": [{"plan_id": "p1", "state": state or "completed"}],
+        }
+
+
+class _UnavailableJawlControl:
+    token = "native-token"
+
+    def emergency_stop(self, **_kwargs):
+        raise JawlWebUnavailable("native stop unavailable")
+
+    def stop_agent(self):
+        raise JawlWebUnavailable("native agent stop unavailable")
+
+    def reset_emergency_stop(self, **_kwargs):
+        raise JawlWebUnavailable("native reset unavailable")
+
+    def start_agent(self):
+        raise JawlWebUnavailable("native agent start unavailable")
 
 
 class WebTests(unittest.TestCase):
+    def test_default_ports_keep_control_and_presentation_separate(self):
+        self.assertEqual(inspect.signature(create_server).parameters["port"].default, 2367)
+        self.assertEqual(inspect.signature(create_presentation_server).parameters["port"].default, 8766)
+
     def setUp(self):
         self.server = create_server(port=0, frontend_dir=Path(__file__).parents[1] / "frontend", gateway=TextGateway())
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -52,6 +110,7 @@ class WebTests(unittest.TestCase):
         status, health = self.get_json("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(health["mode"], "phase1_mock_brain")
+        self.assertEqual(health["resources"]["profile"], "standard")
         with urlopen(self.base + "/", timeout=2) as response:
             frontend = response.read()
             self.assertIn(b"JAWL VoiceCompanion", frontend)
@@ -59,11 +118,13 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"ambient-memory-enabled", frontend)
             self.assertIn(b"ambient-triage", frontend)
             self.assertIn(b"ambient-clear", frontend)
+            self.assertIn(b"ambient-disable-erase", frontend)
             self.assertIn(b"quiet-hours", frontend)
             self.assertIn(b"unattended", frontend)
             self.assertIn(b"save-denylist", frontend)
             self.assertIn(b"/api/tts/cancel", frontend)
             self.assertIn(b"/api/tts/stream", frontend)
+            self.assertIn(b"/api/ambient-audio/playback", frontend)
             self.assertIn(b"ReadableStream", frontend)
             self.assertIn(b"decodeAudioData", frontend)
             self.assertIn(b"/api/chat/stream", frontend)
@@ -81,6 +142,9 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"requestAnimationFrame", frontend)
             self.assertIn(b"tts-voice", frontend)
             self.assertIn(b"tts-speed", frontend)
+            self.assertIn(b"emotion", frontend)
+            self.assertIn(b"/api/jawl/journal?limit=10", frontend)
+            self.assertIn(b"jawl-journal", frontend)
             self.assertIn(b"voice: ttsVoice.value.trim()", frontend)
             self.assertIn(b"Analyser", frontend)
             self.assertIn(b"/api/avatar/audio", frontend)
@@ -107,14 +171,65 @@ class WebTests(unittest.TestCase):
         self.assertEqual(checks["hostos"]["status"], "dry_run")
         self.assertNotIn("G:\\", json.dumps(doctor))
 
+    def test_attention_preferences_survive_server_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "presence.json"
+            first = create_server(
+                port=0,
+                frontend_dir=Path(__file__).parents[1] / "frontend",
+                gateway=TextGateway(),
+                presence_file=path,
+            )
+            first.attention.configure(dnd=True, quiet_hours="22:00-07:00")
+            first._persist_presence_preferences()
+            first.server_close()
+
+            second = create_server(
+                port=0,
+                frontend_dir=Path(__file__).parents[1] / "frontend",
+                gateway=TextGateway(),
+                presence_file=path,
+            )
+            try:
+                self.assertTrue(second.attention.state()["dnd"])
+                self.assertEqual(second.attention.state()["quiet_hours"], "22:00-07:00")
+            finally:
+                second.server_close()
+
     def test_session_endpoint_exposes_local_bootstrap_tokens(self):
         status, session = self.get_json("/api/session")
         self.assertEqual(status, 200)
-        self.assertTrue(session["session_token"])
         self.assertTrue(session["csrf_token"])
+        self.assertNotIn("session_token", session)
+
+    def test_stream_chat_is_bounded_observation_api(self):
+        status, result = self.post_json("/api/stream-chat", {
+            "event": {
+                "id": "chat-web-1",
+                "platform": "twitch",
+                "author": "viewer",
+                "text": "привет из чата",
+                "ignored": "not forwarded",
+            },
+            "url_metadata": {"url": "https://example.test/watch?token=hidden"},
+        })
+        self.assertEqual(status, 202)
+        self.assertTrue(result["ok"])
+        deadline = time.monotonic() + 1.0
+        state = {}
+        while time.monotonic() < deadline:
+            _, state = self.get_json_auth("/api/stream-chat")
+            if state["stats"]["delivered"] == 1:
+                break
+            time.sleep(0.01)
+        self.assertEqual(state["stats"]["delivered"], 1)
+        event = state["recent_events"][0]
+        self.assertEqual(event["type"], "CHAT_MESSAGE")
+        self.assertNotIn("ignored", json.dumps(event, ensure_ascii=False))
+        self.assertNotIn("hidden", json.dumps(event, ensure_ascii=False))
 
     def test_avatar_audio_is_bounded_ephemeral_and_session_bound(self):
-        _, initial = self.get_json("/api/state")
+        _, initial = self.get_json_auth("/api/state")
         self.assertFalse(initial["avatar_audio"]["speaking"])
         request = Request(
             self.base + "/api/avatar/audio",
@@ -135,13 +250,14 @@ class WebTests(unittest.TestCase):
         self.assertFalse(stopped["avatar_audio"]["speaking"])
         self.post_json("/api/avatar/audio", {"amplitude": 0.5, "speaking": True, "timestamp_ms": 12})
         time.sleep(0.8)
-        _, expired = self.get_json("/api/state")
+        _, expired = self.get_json_auth("/api/state")
         self.assertFalse(expired["avatar_audio"]["speaking"])
 
     def test_vision_status_and_dry_run_look_are_available(self):
         status, vision = self.get_json("/api/vision/status")
         self.assertEqual(status, 200)
         self.assertFalse(vision["configured"])
+        self.assertEqual(vision["plan_execution"], "local_hostos")
         self.assertIn("attention", vision)
         self.post_json("/api/hostos/level", {"level": 1})
         status, result = self.post_json("/api/vision/look", {"prompt": "Что видно?"})
@@ -149,6 +265,18 @@ class WebTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["result"]["status"], "degraded")
         self.assertNotIn("image", result["result"])
+
+    def test_vision_execute_requires_explicit_confirmation_and_validates_plan(self):
+        with self.assertRaises(HTTPError) as context:
+            self.post_json("/api/vision/execute", {"plan": {}})
+        self.assertEqual(context.exception.code, 400)
+        context.exception.close()
+        status, result = self.post_json(
+            "/api/vision/execute", {"confirm": True, "plan": {}}
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["result"]["status"], "denied")
 
     def test_attention_reports_disabled_activity_by_default(self):
         status, attention = self.get_json("/api/attention")
@@ -197,6 +325,17 @@ class WebTests(unittest.TestCase):
         self.assertFalse(status["configured"])
         self.assertEqual(status["status"], "not_configured")
 
+    def test_tts_playback_marker_is_ephemeral(self):
+        status, started = self.post_json(
+            "/api/ambient-audio/playback", {"active": True, "ttl_seconds": 5}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(started["playback"]["active"])
+        _, stopped = self.post_json(
+            "/api/ambient-audio/playback", {"active": False}
+        )
+        self.assertFalse(stopped["playback"]["active"])
+
     def test_ambient_memory_is_off_until_explicitly_enabled(self):
         request = Request(self.base + "/api/ambient-memory", headers=self.session_headers)
         with urlopen(request, timeout=2) as response:
@@ -206,6 +345,56 @@ class WebTests(unittest.TestCase):
         self.assertTrue(enabled["state"]["enabled"])
         _, disabled = self.post_json("/api/ambient-memory/config", {"enabled": False})
         self.assertFalse(disabled["state"]["enabled"])
+
+    def test_ambient_disable_and_erase_requires_confirmation_and_clears(self):
+        self.server.ambient_memory.set_enabled(True)
+        self.server.ambient_memory.ingest_system_audio(
+            "Важное событие", confidence=0.9, event_id="erase-e2e"
+        )
+        with self.assertRaises(HTTPError) as context:
+            self.post_json("/api/ambient-memory/config", {
+                "mode": "disable_and_erase",
+            })
+        self.assertEqual(context.exception.code, 400)
+        context.exception.close()
+
+        _, erased = self.post_json("/api/ambient-memory/config", {
+            "mode": "disable_and_erase", "confirm": True,
+        })
+        self.assertEqual(erased["mode"], "disable_and_erase")
+        self.assertFalse(erased["state"]["enabled"])
+        self.assertEqual(erased["state"]["observation_count"], 0)
+
+    def test_ambient_promotion_requires_consent_and_writes_only_to_native_jawl(self):
+        native = _FakeJawlMemory()
+        self.server.gateway.jawl_web = native
+        self.server.ambient_memory.set_enabled(True)
+        self.server.ambient_memory.ingest_system_audio(
+            "Важный дедлайн, запомни эту цель.",
+            confidence=0.95,
+            event_id="episode-promote",
+            now=time.time(),
+        )
+        triaged = self.server.ambient_memory.triage()
+        episode_id = triaged["episodes"][0]["event_id"]
+        with self.assertRaises(HTTPError) as context:
+            self.post_json("/api/ambient-memory/promote", {"episode_id": episode_id})
+        self.assertEqual(context.exception.code, 400)
+        context.exception.close()
+        _, promoted = self.post_json(
+            "/api/ambient-memory/promote",
+            {"episode_id": episode_id, "confirm": True},
+        )
+        self.assertEqual(promoted["status"], "promoted")
+        self.assertTrue(promoted["episode"]["payload"]["promoted"])
+        self.assertEqual(native.calls[0]["kind"], "summary")
+        self.assertEqual(native.calls[0]["provenance"]["ambient_episode_id"], episode_id)
+        _, repeated = self.post_json(
+            "/api/ambient-memory/promote",
+            {"episode_id": episode_id, "confirm": True},
+        )
+        self.assertEqual(repeated["status"], "already_promoted")
+        self.assertEqual(len(native.calls), 1)
 
     def test_voice_status_is_explicit_when_sidecar_is_not_configured(self):
         status, voice = self.get_json("/api/voice/status")
@@ -236,11 +425,44 @@ class WebTests(unittest.TestCase):
 
     def test_emergency_stop_can_be_reset_in_local_control_plane(self):
         self.post_json("/api/emergency-stop", {})
-        _, stopped = self.get_json("/api/state")
+        _, stopped = self.get_json_auth("/api/state")
         self.assertTrue(stopped["policy"]["emergency_stop"])
         status, resumed = self.post_json("/api/emergency-stop/reset", {})
         self.assertEqual(status, 200)
         self.assertFalse(resumed["policy"]["emergency_stop"])
+
+    def test_bridge_emergency_stop_is_not_reported_ok_when_native_control_is_offline(self):
+        server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(jawl_web=_UnavailableJawlControl()),
+            jawl_hostos_control=True,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        headers = {
+            "X-Companion-Session": server.session_token,
+            "X-Companion-CSRF": server.csrf_token,
+        }
+        request = Request(
+            base + "/api/emergency-stop",
+            data=b"{}",
+            headers={"Content-Type": "application/json", **headers},
+            method="POST",
+        )
+        try:
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request, timeout=2)
+            body = json.loads(context.exception.read().decode("utf-8"))
+            self.assertEqual(context.exception.code, 503)
+            self.assertFalse(body["ok"])
+            self.assertTrue(body["policy"]["emergency_stop"])
+            self.assertEqual(body["jawl_policy"]["status"], "offline")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_hostos_registry_is_visible_and_requests_use_server_policy(self):
         status, tools = self.get_json("/api/hostos/tools")
@@ -254,6 +476,49 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(result["ok"])
         self.assertEqual(result["result"]["status"], "denied")
+
+    def test_bridge_hostos_execute_never_calls_local_executor(self):
+        native = _NativeSkillStub()
+        bridge = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(jawl_web=native),
+            jawl_hostos_control=True,
+        )
+
+        def local_must_not_run(*_args, **_kwargs):
+            raise AssertionError("bridge mode must not execute the local HostOS adapter")
+
+        bridge.hostos.execute = local_must_not_run
+        thread = threading.Thread(target=bridge.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{bridge.server_port}"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Companion-Session": bridge.session_token,
+            "X-Companion-CSRF": bridge.csrf_token,
+        }
+        request = Request(
+            base + "/api/hostos/execute",
+            data=json.dumps({
+                "request": {
+                    "skill": "HostOSReader.read_file_range",
+                    "arguments": {"filepath": "README.md"},
+                }
+            }).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=2) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(payload["ok"])
+            self.assertTrue(payload["native"])
+            self.assertEqual(native.calls[0][0], "HostOSReader.read_file_range")
+        finally:
+            bridge.shutdown()
+            bridge.server_close()
+            thread.join(timeout=2)
 
     def test_browser_approval_queue_is_server_side_and_one_shot(self):
         self.post_json("/api/hostos/level", {"level": 3})
@@ -349,6 +614,23 @@ class WebTests(unittest.TestCase):
         else:
             self.fail("JAWL persona inspection should return HTTP 403 without a session")
 
+    def test_jawl_autonomy_journal_is_bounded_and_session_bound(self):
+        native = _FakeJawlMemory()
+        self.server.gateway.jawl_web = native
+        status, body = self.get_json_auth("/api/jawl/journal?limit=3&state=failed")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["plans"][0]["state"], "failed")
+        self.assertEqual(native.calls[-1], ("journal", 3, "failed"))
+
+        request = Request(
+            self.base + "/api/jawl/journal?limit=0",
+            headers=self.session_headers,
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 400)
+        context.exception.close()
+
     def test_audit_without_session_is_rejected(self):
         try:
             urlopen(self.base + "/api/audit", timeout=2)
@@ -357,6 +639,66 @@ class WebTests(unittest.TestCase):
                 self.assertEqual(error.code, 403)
         else:
             self.fail("audit should return HTTP 403 without a session")
+
+
+class PresentationWebTests(unittest.TestCase):
+    def setUp(self):
+        self.control = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+            legacy_presentation=False,
+        )
+        self.presentation = create_presentation_server(self.control, port=0)
+        self.control_thread = threading.Thread(target=self.control.serve_forever, daemon=True)
+        self.presentation_thread = threading.Thread(target=self.presentation.serve_forever, daemon=True)
+        self.control_thread.start()
+        self.presentation_thread.start()
+        self.base = f"http://127.0.0.1:{self.presentation.server_port}"
+
+    def tearDown(self):
+        self.presentation.shutdown()
+        self.presentation.server_close()
+        self.control.shutdown()
+        self.control.server_close()
+        self.presentation_thread.join(timeout=2)
+        self.control_thread.join(timeout=2)
+
+    def test_presentation_origin_has_only_bounded_read_only_state(self):
+        with urlopen(self.base + "/api/presentation/state", timeout=2) as response:
+            state = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+            self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+        self.assertEqual(state["schema_version"], 1)
+        self.assertIn("avatar", state)
+        self.assertIn("subtitle", state)
+        self.assertIn("avatar_audio", state)
+        for secret_field in ("session_token", "csrf_token", "policy", "last_turn", "recent_turns"):
+            self.assertNotIn(secret_field, state)
+
+    def test_presentation_origin_serves_avatar_but_cannot_mutate_control(self):
+        with urlopen(self.base + "/avatar", timeout=2) as response:
+            self.assertIn(b"JAWL Avatar", response.read())
+        request = Request(
+            self.base + "/api/presentation/state",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 405)
+        context.exception.close()
+        with self.assertRaises(HTTPError) as context:
+            urlopen(f"http://127.0.0.1:{self.control.server_port}/avatar", timeout=2)
+        self.assertEqual(context.exception.code, 404)
+        context.exception.close()
+
+    def test_http_servers_reject_non_loopback_binds(self):
+        with self.assertRaises(ValueError):
+            create_server(host="0.0.0.0", port=0, gateway=TextGateway())
+        with self.assertRaises(ValueError):
+            create_presentation_server(self.control, host="0.0.0.0", port=0)
 
 
 if __name__ == "__main__":

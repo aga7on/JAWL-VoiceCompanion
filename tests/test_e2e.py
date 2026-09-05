@@ -11,6 +11,7 @@ import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
@@ -187,11 +188,23 @@ class _JawlControlHandler(BaseHTTPRequestHandler):
         self._reply({"ok": True, "written": ["config/interfaces.yaml"]})
 
     def do_POST(self):  # noqa: N802 - stdlib handler API
-        if self.path not in {"/api/agent/stop", "/api/agent/start"}:
+        if self.path not in {
+            "/api/agent/stop",
+            "/api/agent/start",
+            "/api/hostos/emergency-stop",
+            "/api/hostos/emergency-stop/reset",
+        }:
             self.send_error(404)
             return
         _JawlControlHandler.calls.append(("POST", self.path, self.headers.get("X-Console-Token")))
-        self._reply({"ok": True, "pid": 42} if self.path.endswith("start") else {"ok": True, "forced": False})
+        if self.path.endswith("emergency-stop"):
+            self._reply({"ok": True, "policy": {"emergency_stop": True}})
+        elif self.path.endswith("reset"):
+            self._reply({"ok": True, "policy": {"emergency_stop": False}})
+        elif self.path.endswith("start"):
+            self._reply({"ok": True, "pid": 42})
+        else:
+            self._reply({"ok": True, "forced": False})
 
     def _reply(self, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -433,6 +446,206 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
         return
 
 
+class _NativeCompanionHandler(BaseHTTPRequestHandler):
+    """Small typed native-JAWL fixture used only through the Companion HTTP API."""
+
+    protocol_version = "HTTP/1.1"
+    condition = threading.Condition()
+    write_lock = threading.Lock()
+    active_streams = set()
+    turns = []
+    cancellations = []
+    connections = []
+    event_seq = 0
+
+    @classmethod
+    def reset(cls):
+        with cls.condition:
+            cls.active_streams = set()
+            cls.turns = []
+            cls.cancellations = []
+            cls.connections = []
+            cls.event_seq = 0
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        parsed = urlsplit(self.path)
+        if parsed.path != "/api/companion/stream":
+            self.send_error(404)
+            return
+        try:
+            after = int(parse_qs(parsed.query).get("after", ["0"])[0])
+        except (TypeError, ValueError):
+            self.send_error(400)
+            return
+        if after < 0:
+            self.send_error(400)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.after = after
+        self.close_connection = False
+        with self.condition:
+            self.active_streams.add(self)
+            self.connections.append(after)
+            pending = self.turns[-1] if self.turns else None
+        try:
+            self._write_event([], {"after": after})
+            if after and pending is not None:
+                self._write_event([pending["completion"]])
+                self.close_connection = True
+                return
+            while not self.close_connection:
+                with self.condition:
+                    self.condition.wait(0.05)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError, ValueError):
+            self.close_connection = True
+        finally:
+            with self.condition:
+                self.active_streams.discard(self)
+
+    def do_POST(self):  # noqa: N802 - stdlib handler API
+        parsed = urlsplit(self.path)
+        if parsed.path not in {"/api/companion/turn", "/api/companion/cancel"}:
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if parsed.path.endswith("/cancel"):
+            turn_id = payload.get("turn_id")
+            self.cancellations.append(turn_id)
+            with self.condition:
+                target = next(
+                    (stream for stream in self.active_streams if getattr(stream, "turn_id", None) == turn_id),
+                    None,
+                )
+                _NativeCompanionHandler.event_seq += 1
+                event = {
+                    "schema_version": 1,
+                    "event_seq": _NativeCompanionHandler.event_seq,
+                    "turn_id": turn_id,
+                    "type": "turn.cancelled",
+                    "payload": {"reason": "cancelled by e2e"},
+                }
+            if target is not None:
+                target._write_event([event])
+                target.close_connection = True
+                with self.condition:
+                    self.condition.notify_all()
+            self._json({"ok": True, "turn_id": turn_id})
+            return
+
+        turn_id = payload.get("turn_id")
+        text = payload.get("text")
+        with self.condition:
+            _NativeCompanionHandler.event_seq += 1
+            started = {
+                "schema_version": 1,
+                "event_seq": _NativeCompanionHandler.event_seq,
+                "turn_id": turn_id,
+                "type": "turn.started",
+                "payload": {"source": "native-e2e"},
+            }
+            record = {"turn_id": turn_id, "text": text, "completion": None}
+            if text == "native reconnect":
+                completion = self._completion_event(turn_id, reconnect=True)
+                record["completion"] = completion
+                self.turns.append(record)
+                targets = [
+                    stream for stream in self.active_streams
+                    if stream.after == 0 and getattr(stream, "turn_id", None) is None
+                ]
+            elif text == "native failure":
+                _NativeCompanionHandler.event_seq += 1
+                error = {
+                    "schema_version": 1,
+                    "event_seq": _NativeCompanionHandler.event_seq,
+                    "turn_id": turn_id,
+                    "type": "turn.error",
+                    "payload": {"reason": "native provider failed"},
+                }
+                record["completion"] = error
+                self.turns.append(record)
+                targets = [
+                    stream for stream in self.active_streams
+                    if stream.after == 0 and getattr(stream, "turn_id", None) is None
+                ]
+            elif text == "native wait":
+                self.turns.append(record)
+                targets = [
+                    stream for stream in self.active_streams
+                    if stream.after == 0 and getattr(stream, "turn_id", None) is None
+                ]
+            else:
+                completion = self._completion_event(turn_id, reconnect=False)
+                record["completion"] = completion
+                self.turns.append(record)
+                targets = [
+                    stream for stream in self.active_streams
+                    if stream.after == 0 and getattr(stream, "turn_id", None) is None
+                ]
+        for target in targets:
+            target.turn_id = turn_id
+            if text in {"native reconnect", "native wait"}:
+                target._write_event([started])
+            else:
+                target._write_event([record["completion"]])
+            if text != "native wait":
+                target.close_connection = True
+        with self.condition:
+            self.condition.notify_all()
+        self._json({"ok": True, "turn_id": turn_id})
+
+    @classmethod
+    def _completion_event(cls, turn_id, *, reconnect):
+        if reconnect:
+            cls.event_seq += 1
+        else:
+            cls.event_seq += 1
+        response = {
+            "schema_version": 1,
+            "response_id": f"response-{turn_id}",
+            "turn_id": turn_id,
+            "text": "native envelope survived reconnect",
+            "speak": True,
+            "emotion": {"id": "happy", "intensity": 0.7, "confidence": 0.9},
+            "avatar": {"expression": "smile", "motion": "wave", "state": "speaking"},
+            "voice": {"provider": "native-e2e", "voice_id": "ru-test", "rate": 1.0, "style": "warm"},
+            "actions": [{"action_id": "a1", "tool": "noop", "type": "test"}],
+            "interruptible": True,
+            "proactive": False,
+        }
+        return {
+            "schema_version": 1,
+            "event_seq": cls.event_seq,
+            "turn_id": turn_id,
+            "type": "assistant.final",
+            "payload": {"response": response},
+        }
+
+    def _write_event(self, events, cursor=None):
+        payload = {"events": events}
+        if cursor is not None:
+            payload["cursor"] = cursor
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        with self.write_lock:
+            self.wfile.write(b"data: " + body + b"\n\n")
+            self.wfile.flush()
+
+    def _json(self, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        return
+
+
 class LocalE2ETests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -583,6 +796,99 @@ class LocalE2ETests(unittest.TestCase):
         self.jawl.server_close()
         self.temp.cleanup()
 
+    def test_native_jawl_gateway_round_trip_reconnect_and_terminal_error(self):
+        _NativeCompanionHandler.reset()
+        native_provider = ThreadingHTTPServer(("127.0.0.1", 0), _NativeCompanionHandler)
+        threading.Thread(target=native_provider.serve_forever, daemon=True).start()
+        adapter = JawlWebChatAdapter(
+            f"http://127.0.0.1:{native_provider.server_port}",
+            timeout_seconds=2,
+            chat_timeout_seconds=2,
+            native_gateway=True,
+        )
+        previous_responder = self.gateway.responder
+        previous_brain = self.gateway.brain_name
+        try:
+            self.gateway.responder = adapter
+            self.gateway.brain_name = "native_e2e"
+            status, response = self.post_json("/api/chat", {"text": "native reconnect"})
+            self.assertEqual(status, 200)
+            self.assertEqual(response["text"], "native envelope survived reconnect")
+            self.assertTrue(response["speak"])
+            self.assertEqual(response["emotion"]["id"], "happy")
+            self.assertEqual(response["avatar"]["motion"], "wave")
+            self.assertEqual(response["voice"]["provider"], "native-e2e")
+            self.assertEqual(response["actions"], [{"action_id": "a1", "tool": "noop", "type": "test"}])
+            self.assertEqual(adapter.chat_status(), "connected")
+            self.assertEqual(len(_NativeCompanionHandler.turns), 1)
+            self.assertEqual(_NativeCompanionHandler.connections[:2], [0, 1])
+
+            status, failed = self.post_json("/api/chat", {"text": "native failure"})
+            self.assertEqual(status, 200)
+            self.assertFalse(failed["speak"])
+            self.assertEqual(failed["emotion"]["id"], "error")
+            self.assertEqual(failed["avatar"]["state"], "error")
+            self.assertEqual(failed["actions"], [])
+            self.assertEqual(adapter.chat_status(), "offline")
+            self.assertEqual(_NativeCompanionHandler.connections, [0, 1, 0])
+        finally:
+            self.gateway.responder = previous_responder
+            self.gateway.brain_name = previous_brain
+            native_provider.shutdown()
+            native_provider.server_close()
+
+    def test_native_jawl_gateway_cancellation_reaches_native_endpoint(self):
+        _NativeCompanionHandler.reset()
+        native_provider = ThreadingHTTPServer(("127.0.0.1", 0), _NativeCompanionHandler)
+        threading.Thread(target=native_provider.serve_forever, daemon=True).start()
+        adapter = JawlWebChatAdapter(
+            f"http://127.0.0.1:{native_provider.server_port}",
+            timeout_seconds=2,
+            chat_timeout_seconds=2,
+            native_gateway=True,
+        )
+        previous_responder = self.gateway.responder
+        previous_brain = self.gateway.brain_name
+        result = {}
+
+        def run_first_turn():
+            try:
+                result["value"] = self.post_json("/api/chat", {"text": "native wait"})
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                result["error"] = exc
+
+        first_thread = threading.Thread(target=run_first_turn, daemon=True)
+        try:
+            self.gateway.responder = adapter
+            self.gateway.brain_name = "native_cancel_e2e"
+            first_thread.start()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                with _NativeCompanionHandler.condition:
+                    ready = any(
+                        getattr(stream, "turn_id", None)
+                        for stream in _NativeCompanionHandler.active_streams
+                    )
+                if ready:
+                    break
+                time.sleep(0.01)
+            self.assertTrue(ready, "native wait turn did not reach the typed stream")
+
+            status, replacement = self.post_json("/api/chat", {"text": "native complete"})
+            self.assertEqual(status, 200)
+            self.assertEqual(replacement["text"], "native envelope survived reconnect")
+            first_thread.join(timeout=3)
+            self.assertFalse(first_thread.is_alive())
+            self.assertNotIn("error", result)
+            self.assertIn("отмен", result["value"][1]["text"].lower())
+            self.assertEqual(len(_NativeCompanionHandler.cancellations), 1)
+        finally:
+            self.gateway.responder = previous_responder
+            self.gateway.brain_name = previous_brain
+            first_thread.join(timeout=3)
+            native_provider.shutdown()
+            native_provider.server_close()
+
     def get_json(self, path):
         request = Request(self.base + path, headers=self.headers)
         with urlopen(request, timeout=3) as response:
@@ -611,14 +917,17 @@ class LocalE2ETests(unittest.TestCase):
     def test_chat_avatar_approval_execution_and_emergency_stop(self):
         status, session = self.get_json("/api/session")
         self.assertEqual(status, 200)
-        self.assertEqual(session["session_token"], self.server.session_token)
+        self.assertTrue(session["csrf_token"])
+        self.assertNotIn("session_token", session)
         _, doctor = self.get_json("/api/doctor")
         doctor_checks = {item["id"]: item for item in doctor["checks"]}
-        self.assertEqual(doctor["status"], "ready")
-        self.assertTrue(doctor_checks["jawl"]["ready"])
+        self.assertEqual(doctor["status"], "blocked")
+        self.assertFalse(doctor_checks["jawl"]["ready"])
+        self.assertFalse(doctor["text_mode_available"])
         self.assertTrue(doctor_checks["voicemem"]["ready"])
         self.assertTrue(doctor_checks["tts"]["ready"])
-        self.assertTrue(doctor_checks["vision"]["ready"])
+        self.assertFalse(doctor_checks["vision"]["ready"])
+        self.assertEqual(doctor_checks["vision"]["status"], "configured")
         self.assertTrue(doctor_checks["avatar"]["ready"])
         self.assertTrue(doctor_checks["hostos"]["ready"])
         self.assertNotIn("must-not-cross", json.dumps(doctor, ensure_ascii=False))
@@ -640,6 +949,9 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(avatar_config["enabled"])
         self.assertTrue(avatar_config["ready"])
         self.assertEqual(avatar_config["validation"]["missing"], [])
+        self.assertTrue(avatar_config["capabilities"]["lip_sync"])
+        self.assertEqual(avatar_config["capabilities"]["motion_groups"], ["Idle"])
+        self.assertEqual(avatar_config["capabilities"]["fallback_expressions"][0], "neutral")
         with urlopen(self.base + "/avatar-assets/model3.json", timeout=3) as response:
             self.assertEqual(response.read().decode("utf-8"), self.avatar_model)
 
@@ -648,6 +960,12 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(chat["text"], "JAWL E2E: проверка e2e")
         self.assertEqual(_JawlHandler.messages, [{"text": "проверка e2e"}])
         self.assertEqual(self.jawl_adapter.last_status, "connected")
+        _, connected_doctor = self.get_json("/api/doctor")
+        connected_checks = {item["id"]: item for item in connected_doctor["checks"]}
+        self.assertEqual(connected_doctor["status"], "degraded")
+        self.assertTrue(connected_doctor["text_mode_available"])
+        self.assertTrue(connected_checks["jawl"]["ready"])
+        self.assertFalse(connected_checks["vision"]["ready"])
         status, state = self.get_json("/api/state")
         self.assertEqual(state["last_turn"]["response"]["text"], chat["text"])
         stream_request = Request(
@@ -677,6 +995,9 @@ class LocalE2ETests(unittest.TestCase):
         _, degraded = self.post_json("/api/chat", {"text": "no broadcast"})
         self.assertIn("fallback", degraded["text"])
         self.assertEqual(self.jawl_adapter.status(), "no_broadcast")
+        _, failed_doctor = self.get_json("/api/doctor")
+        self.assertEqual(failed_doctor["status"], "blocked")
+        self.assertFalse(failed_doctor["text_mode_available"])
         self.jawl_adapter.timeout = 2
 
         self.gateway.responder = self.jawl_chat_adapter
@@ -1051,7 +1372,7 @@ class LocalE2ETests(unittest.TestCase):
             self.assertEqual(resumed["jawl_agent"], {"status": "started", "pid": 42})
             self.assertFalse(resumed["policy"]["emergency_stop"])
             self.assertEqual(_JawlControlHandler.calls[-1], (
-                "POST", "/api/agent/start", "e2e-console-token",
+                "POST", "/api/hostos/emergency-stop/reset", "e2e-console-token",
             ))
         finally:
             control_server.shutdown()
@@ -1123,12 +1444,11 @@ class LocalE2ETests(unittest.TestCase):
             backend=_AmbientBackend(),
             queue_size=2,
         )
-        capture.start()
+        service = AmbientAudioService(bridge, capture=capture)
+        service.start()
         capture.backend.last.stream.callback(b"\x01\x00" * 1600, 48000, {}, None)
-        deadline = time.monotonic() + 2
-        while self.server.ambient_memory.state()["observation_count"] == 0 and time.monotonic() < deadline:
-            time.sleep(0.01)
-        capture.stop()
+        stopped = service.stop()
+        self.assertEqual(stopped["flush"]["status"], "flushed")
         _, ambient = self.get_json("/api/ambient-memory")
         self.assertEqual(ambient["state"]["observation_count"], 1)
         self.assertEqual(ambient["observations"][0]["event_id"], "ambient-loopback-e2e")

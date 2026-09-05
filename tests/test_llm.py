@@ -60,6 +60,22 @@ class LLMTests(unittest.TestCase):
         self.assertEqual(body["model"], "z-ai/glm-5.3-free")
         self.assertEqual(body["messages"][-1]["content"], "Проверь контур")
 
+    def test_optional_user_agent_is_sent_and_rejects_header_injection(self):
+        requests = []
+
+        def opener(request, timeout):
+            del timeout
+            requests.append(request)
+            return _Response({"choices": [{"message": {"content": "ok"}}]})
+
+        client = OpenAICompatibleChatClient(
+            "http://127.0.0.1:8000/v1", "big-pickle", user_agent="OpenCode/1.18.11", opener=opener,
+        )
+        self.assertEqual(client.respond("ping"), "ok")
+        self.assertEqual(requests[0].get_header("User-agent"), "OpenCode/1.18.11")
+        with self.assertRaises(ValueError):
+            OpenAICompatibleChatClient("http://127.0.0.1:8000/v1", "model", user_agent="bad\nvalue")
+
     def test_client_health_uses_models_endpoint(self):
         def opener(request, timeout):
             self.assertEqual(request.full_url, "http://127.0.0.1:8000/v1/models")

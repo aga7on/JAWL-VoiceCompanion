@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from jawl_voicecompanion.asr import ExternalASRService, OpenAICompatibleASRClient
+from jawl_voicecompanion.asr import ASRNoSpeech, ASRUnavailable, ExternalASRService, OpenAICompatibleASRClient
 
 
 class _Response:
@@ -34,6 +34,26 @@ class _Provider:
     def transcribe(self, wav_bytes):
         self.audio = wav_bytes
         return "тестовая фраза"
+
+
+class _NoSpeechProvider:
+    def __init__(self):
+        self.calls = 0
+
+    def health(self):
+        return {"status": "online", "model": "test-asr"}
+
+    def transcribe(self, wav_bytes):
+        self.calls += 1
+        raise ASRNoSpeech("ASR endpoint returned no speech text")
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
 
 
 class ASRTests(unittest.TestCase):
@@ -102,6 +122,47 @@ class ASRTests(unittest.TestCase):
         result = ExternalASRService(provider).finish("missing")
         self.assertEqual(result["status"], "empty")
         self.assertIsNone(provider.audio)
+
+    def test_service_expires_stale_disconnected_session_and_never_calls_provider(self):
+        provider = _NoSpeechProvider()
+        clock = _FakeClock()
+        service = ExternalASRService(provider, session_ttl_seconds=10.0, clock=clock)
+        service.feed_audio(b"\x01\x00" * 64, sample_rate=16000, channels=1, session_id="stale")
+        self.assertEqual(service.state()["active_sessions"], 1)
+        clock.now = 20.0
+        state = service.state()
+        self.assertEqual(state["active_sessions"], 0)
+        self.assertEqual(provider.calls, 0, "a disconnected session must never reach the provider")
+        result = service.finish("stale")
+        self.assertEqual(result["status"], "empty")
+        self.assertEqual(provider.calls, 0)
+        service.feed_audio(b"\x02\x00" * 64, sample_rate=16000, channels=1, session_id="fresh")
+        self.assertEqual(service.state()["active_sessions"], 1, "a new session must work after eviction")
+
+    def test_service_maps_absent_speech_to_no_speech_outcome(self):
+        provider = _NoSpeechProvider()
+        service = ExternalASRService(provider)
+        service.feed_audio(b"\x01\x00" * 64, sample_rate=16000, channels=1, session_id="quiet")
+        result = service.finish("quiet")
+        self.assertEqual(result["status"], "no_speech")
+        self.assertEqual(result["text"], "")
+        self.assertEqual(service.state()["active_sessions"], 0)
+
+    def test_transcribe_empty_reply_raises_asr_no_speech(self):
+        def opener(request, timeout):
+            return _Response({"text": ""})
+
+        client = OpenAICompatibleASRClient("http://127.0.0.1:8984/v1", "qwen", opener=opener)
+        with self.assertRaises(ASRNoSpeech):
+            client.transcribe(b"RIFF-test", filename="quiet.wav")
+
+    def test_translate_transport_failure_still_raises_asr_unavailable(self):
+        def opener(request, timeout):
+            raise OSError("connection refused")
+
+        client = OpenAICompatibleASRClient("http://127.0.0.1:8984/v1", "qwen", opener=opener)
+        with self.assertRaises(ASRUnavailable):
+            client.transcribe(b"RIFF-test", filename="utterance.wav")
 
 
 if __name__ == "__main__":

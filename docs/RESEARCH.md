@@ -1,5 +1,12 @@
 # Repository Research
 
+Historical research snapshot, not a current runtime instruction. Native gateway
+findings and provider/model choices below may have been superseded; consult
+[PRODUCT.md](PRODUCT.md), [STATE.md](STATE.md), and [DECISIONS.md](DECISIONS.md).
+Do not execute old probes against the protected JAWL-Coding reference or assume
+its dirty additions exist in a clean upstream checkout.
+
+
 Research snapshot: 2026-09-01. Reference repositories were downloaded as
 shallow clones for inspection under `G:\AI\_tmp\companion-repos`.
 

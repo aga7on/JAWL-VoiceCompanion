@@ -1,19 +1,23 @@
 # Local model test record
 
-Last updated: 2026-09-02
+Measurements below: historical 2026-09-01/02 snapshot.
+Product-selection clarification: 2026-09-05 (no new model runs).
+See [PRODUCT.md](PRODUCT.md) for current intent and [STATE.md](STATE.md) for
+later evidence. Timings are profile-specific, not end-to-end guarantees.
 
 These tests use files already present on the workstation. No model weights are
 copied into this repository.
 
-## Selected baseline
+## Candidate inventory and current preference
 
 | Role | Profile | Decision |
 | --- | --- | --- |
-| Vision and UI grounding | Qwen3-VL-2B Q4_K_M + F16 mmproj | Primary CPU profile |
+| Vision and UI grounding | Qwen3-VL-2B Q4_K_M + F16 mmproj | Strong CPU candidate; permanent selection deferred by owner |
 | Final ASR bridge | Qwen3-ASR-0.6B Q8_0 + mmproj | Primary audio profile |
-| Streaming ASR/VAD | VoiceMem sidecar | Remains the default streaming owner |
+| Streaming ASR/VAD | VoiceMem sidecar | Bundled streaming path is not accepted for Russian; external final-ASR enriches asynchronously |
 | Fast text fallback | Bonsai-1.7B | Retained from the benchmark; text-only |
-| TTS | TeraTTSv2 (current) | Best current CPU/Russian clarity candidate; voice cloning deferred |
+| Desired primary TTS | Qwen3-TTS 0.6B Base | Clone worker present; slow CPU, no accepted emotional clone control |
+| Fast TTS fallback | TeraTTSv2 | Still the CLI default; explicit low-latency profile alongside Qwen |
 
 ## Qwen3-VL-2B from the moved benchmark directory
 
@@ -57,9 +61,15 @@ The benchmark passed on the moved files with 1.48 GB RSS:
 | 12 s clean English speech | 1.75 s | 0.15 |
 | 30 s Nyan audio | 4.68 s | 0.16 |
 
-The clean speech transcript was exact. The music sample was not treated as
-speech; the model produced humming-like output, which is acceptable for the
-ambient triage boundary but not a music-description model.
+The clean speech transcript was exact. The music sample produced humming-like output. This must not be accepted as
+speech, a factual caption or a user instruction; it is negative/uncertain
+non-speech evidence, not a passed music-description capability.
+
+The moved GGUF/mmproj pair was additionally served through the repository's
+OpenAI-compatible HTTP boundary and called by `OpenAICompatibleASRClient`.
+On Russian TeraTTSv2 samples the final-utterance requests completed in 0.431 s
+(`welcome.wav`) and 1.473 s (`poem.wav`) and returned Russian text. This is an
+HTTP integration smoke, not a real microphone or streaming-partial acceptance.
 
 The same ASR was tested on local Russian TTS-generated samples. Short welcome
 phrases from Qwen3-TTS and Chatterbox were transcribed correctly. Pushkin
@@ -83,11 +93,11 @@ exact welcome transcript and a mostly correct poem at RTF about 1.25–1.27 with
 not intelligible to the Russian ASR check. These are acoustic intelligibility
 checks, not a subjective prosody or first-audio benchmark.
 
-Decision: use TeraTTSv2 as the current TTS provider. Keep
-Qwen3-TTS/Chatterbox/XTTS-v2 available as alternatives until voice identity,
-prosody and real-device playback are revisited; voice cloning is not a current
-requirement. The Companion path still measures startup, first-audio latency,
-cancellation and avatar lip-sync independently of this choice.
+Historical decision was Tera for speed/clarity. The later user request
+supersedes the preference: Qwen3-TTS 0.6B primary, Tera alongside as fast
+fallback. Existing Qwen Base clone weights/worker are already available;
+CPU latency, emotion and cancellation remain limitations, not grounds to
+silently discard the requested profile. Measure full pipeline and lip-sync.
 
 The installed TeraTTSv2 implementation also exposes a streaming generator. A
 warm CPU run with the distilled model and `chunk_frames=16` produced the first

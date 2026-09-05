@@ -40,6 +40,43 @@ class JawlEventFileSink:
                 "raw_frame_persisted": False,
             },
         }
+        return self._write_event(event, event_id)
+
+    def publish_chat(self, chat_event: dict[str, Any]) -> dict[str, Any]:
+        """Write a bounded chat observation for JAWL's existing event intake."""
+        if not isinstance(chat_event, dict) or chat_event.get("type") != "CHAT_MESSAGE":
+            raise ValueError("only CHAT_MESSAGE events can cross the JAWL IPC sink")
+        payload = chat_event.get("payload")
+        if not isinstance(payload, dict):
+            raise ValueError("CHAT_MESSAGE payload is required")
+        text = str(payload.get("text") or "").replace("\x00", "").strip()[:500]
+        if not text:
+            raise ValueError("CHAT_MESSAGE text is required")
+        event_id = str(chat_event.get("event_id") or uuid4())[:200]
+        forwarded: dict[str, Any] = {
+            "source": "jawl_voicecompanion",
+            "event_type": "CHAT_MESSAGE",
+            "chat_text": text,
+            "observed_event_id": event_id,
+        }
+        for source, target, limit in (
+            ("platform", "platform", 40),
+            ("author", "author", 120),
+            ("channel_id", "channel_id", 160),
+            ("message_id", "message_id", 160),
+        ):
+            value = str(payload.get(source) or "").replace("\x00", "").strip()[:limit]
+            if value:
+                forwarded[target] = value
+        return self._write_event(
+            {
+                "message": "A bounded stream-chat observation is available.",
+                "payload": forwarded,
+            },
+            event_id,
+        )
+
+    def _write_event(self, event: dict[str, Any], event_id: str) -> dict[str, Any]:
         self.event_dir.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".companion-", suffix=".tmp", dir=self.event_dir)
         try:

@@ -1,111 +1,116 @@
-# Ambient secondary memory
+# Ситуационная (ambient) память
 
-## Decision
+Актуально: 2026-09-05. Требование — помнить полезный окружающий контекст, не
+мешая разговору и не занимая VRAM без необходимости. Это часть одного
+компаньона, не второй агент. [PRODUCT.md](PRODUCT.md) и [TODO.md](../TODO.md)
+разделяют целевое поведение и незавершённые задачи.
 
-The idea is useful, but it must be implemented as a low-priority perception
-and memory pipeline rather than as another conversational input. System audio
-and screen observations can preserve context that the user never addresses
-directly, while delayed analysis avoids spending VRAM or interrupting the main
-conversation on every clip.
+## Слои и владелец
 
-Ambient observations must not directly trigger a user turn, speech, tool call,
-personality change or canonical fact write. They are evidence. JAWL remains
-the owner of durable memory, final wording and action policy.
-
-## Memory tiers
-
-```text
-T0  transient capture     RAM only; raw audio/frame while a bounded operation runs
-T1  working observation   transcript/description; roughly 30-minute TTL by default
-T2  ambient episode        compressed summary; configurable short retention, e.g. 7 days
-T3  canonical memory       JAWL fact/episode after provenance and promotion rules
-```
-
-The exact TTLs are configuration, not a promise. T0 must be discarded after
-ASR/VLM processing or cancellation. T1 and T2 must be bounded by count and
-bytes. T3 must use JAWL's existing memory ownership and correction history;
-the companion must not create a second durable memory database.
-
-## Signals and separation
+Важно не смешивать два разных значения слова «эпизод». `ambient episode` ниже —
+это временный сжатый кандидат из фоновых наблюдений (обычно с TTL), а не
+канонический эпизодический журнал JAWL. Канонический JAWL сохраняет отдельно
+задачи, рабочие заметки, факты/предпочтения/черты/сводки, mental states, drives,
+hypotheses, ticks/timelines и daily journal. Эти сущности не должны сводиться к
+одному полю `episode` в UI.
 
 ```text
-Windows WASAPI loopback --> segmenter/ASR --\
-                                              +--> delayed triage --> episode
-Focused window/screen --> keyframe/VLM -----/
-
-Microphone --> VoiceMem conversational path --> USER_PARTIAL/FINAL
+T0: ограниченный raw audio/frame в RAM → ASR/description → удалить raw
+T1: наблюдение (текст, время, источник, уверенность) → короткий TTL
+T2: сжатый эпизод → полезное удержать, шум забыть, ограничить объём/срок
+T3: JAWL память → provenance/validity/corrections/retrieval
 ```
 
-System audio is a separate stream with its own session and correlation IDs.
-It must never be sent through the microphone's conversational finalization
-path. The same ASR engine may be reused if it accepts a separate stream type,
-but VoiceMem's user-turn state must not be polluted by game, browser or media
-audio.
+VoiceMem также не является заменой JAWL memory owner. Его left brain даёт
+фактический semantic/graph recall, а right brain — `heartnote`,
+`response_experience`, interaction profile и evidence для эмоциональных
+ситуаций. Audio-память VoiceMem может хранить VAD/attribution, speaker identity,
+scene/place/routine/music и abnormal-sound observations. Это perceptual context
+и кандидаты; окончательная durable запись, task, journal и forget/revise остаются
+у JAWL.
 
-The visual side should reuse the existing focused-window/change-detection
-path. It should emit bounded descriptions or keyframe observations, not a
-permanent video recording. UI Automation metadata is preferred where it is
-available; screenshots/OCR/VLM remain fallbacks for custom surfaces.
+Около 30 минут для деталей и недели для эпизода — предложенные владельцем
+ориентиры, а не жёсткий «биологический» алгоритм. Настраивать TTL, count/bytes,
+приоритет и правила консолидации по полезности и нагрузке.
 
-## Delayed triage
+Текущие T1/T2/consent preferences — process memory, не переживают restart.
+Существующая ручная `/api/ambient-memory/promote` передаёт confirmed candidate
+в JAWL structured_memories с source/validity/standard tier. Это реализованный
+минимум, **не запрет на автоматическую консолидацию** в будущем.
 
-The triage worker runs in batches or during idle periods. It may use a small
-local model in CPU/RAM, leaving VRAM for the main chat, ASR and TTS models.
-Prism-ML and Ternary-Bonsai-8B are candidate profiles only; availability,
-Russian quality, RAM use, quantization and throughput must be measured before
-they become dependencies.
+Целевой обычный профиль: после первичной настройки источников/разрешений
+восприятие включено, наблюдения регистрируются по мере поступления, JAWL консолидирует
+подходящие эпизоды автоматически по выбранной политике; manual review
+остаётся опцией. Хранение эпизода не означает изменение личности или
+признание услышанного фактом о владельце. Слова из видео не равны словам
+пользователя. Пользователь может просматривать, исправлять, исключать
+источники, задавать сроки и отключать продвижение.
 
-The worker should return strict structured data:
+## Раздельные потоки
 
 ```text
-importance: ignore | retain | promote_candidate
-summary: bounded Russian text
-topics: bounded labels
-confidence: 0..1
-source: system_audio | screen | mixed
-observed_at / retention_until
-provenance: source event IDs and application context
+Микрофон → ASR → один пользовательский turn JAWL + async VoiceMem enrichment
+Звук ПК → segmenter → ASR + [будущий sound/music captioner] → triage
+Экран → change/keyframe/UIA + [VLM после выбора] → triage
+triage → attributed episodes → JAWL consolidation/recall
 ```
 
-`ignore` is dropped. `retain` stays in T1 or is merged into T2. A
-`promote_candidate` is still not a fact: it enters a JAWL-controlled promotion
-queue and must carry its source, confidence, epistemic type and valid-time
-fields. Low-confidence or contradictory observations remain evidence instead
-of becoming personality or memory truth.
+Фоновое аудио имеет отдельные session/correlation IDs. Оно никогда не
+превращается в USER_FINAL и напрямую не запускает речь/инструменты.
+Наблюдение может повлиять на последующий ответ/уместный SPEAK_INTENT только
+через JAWL, Attention/DND и общую политику, не как скрытая команда сенсора.
 
-## Privacy and behavior rules
+ASR распознаёт речь. Музыка, шум окружения и оценка тембра/настроения требуют
+своих capabilities и проверки. AudioDescriptionService — существующий
+bounded adapter seam, принятого captioning model нет. Qwen3-ASR не captioner;
+его пустой non-speech ответ не доказывает понимание музыки. Affect — оценка с
+неопределённостью, не диагноз, идентичность или устойчивый trait.
 
-- Ambient capture is off until explicitly enabled and visibly indicated.
-- Deny-listed applications and sensitive window titles produce no ambient
-  record; credentials, tokens, calls and private chats are never an intended
-  memory source.
-- Raw system audio and raw frames are not written to durable storage by the
-  companion by default.
-- Ambient memory cannot bypass DND, the Turn Arbiter, HostOS policy or approval
-  gates. It does not cause proactive speech in the first implementation.
-- User microphone turns, explicit screen looks and ambient observations remain
-  distinguishable in logs and in the browser controls.
-- A user can pause, clear the working buffer, shorten retention and disable
-  promotion independently for audio and visual sources.
+## Текущие ограничения
 
-## Implementation slices
+- Qwen final-ASR path копит bounded PCM и flush выполняется при Stop.
+  Для повседневной фоновой памяти нужен segmenter с регулярной ротацией,
+  backpressure и recovery; бесконечный один session buffer непригоден.
+- Self-TTS suppression основано на времени playback. Это может убрать
+  одновременно звучащую чужую речь; нужны тесты overlap/эхо и учёт потерь.
+- Default-output WASAPI смешивает приложения. Без достоверной per-app
+  attribution нельзя обещать privacy-фильтр по foreground window. На время
+  приватного звука — пауза либо выбранный/раздельный output; source-aware
+  capture остаётся задачей.
+- `memory_sync=queued` подтверждает только enqueue, не завершённое сохранение/
+  recall. Важные user commitments принадлежат durable JAWL tasks, не только
+  droppable VoiceMem очереди.
+- UI `disable` останавливает новый capture; `disable_and_erase` очищает
+  transient buffer после подтверждения. Продвинутые JAWL записи отдельно.
+  Native append-only forget/archive — логическое забывание, не стирание
+  старого содержимого/индексов/backup.
+- Объём контекста/RAM должен оставаться ограниченным при долгом audio +
+  разговоре + игре. Одиночный RTF не доказывает совместную производительность.
 
-1. Define event envelopes and a fake capture source; test the complete delayed
-   path without hardware or model weights.
-2. Add the bounded working buffer and deterministic importance/coalescing rules.
-3. Benchmark CPU/RAM triage candidates on Russian audio-text examples; keep
-   Vision/VLM selection separate until its dedicated benchmark is complete.
-4. Use the `SystemAudioLoopback` adapter with an optional PyAudioWPatch
-   backend, behind an explicit permission and an isolated ASR session. The
-   `AmbientAudioASRBridge` now handles bounded mono/resample input and accepts
-   only final VoiceMem turns; live backend startup remains pending.
-5. Add idle consolidation into JAWL promotion candidates, with correction and
-   forget controls.
-6. Run the full compile, unit, HTTP E2E and diff gate after every cross-layer
-   runtime change. The expected result is: raw inputs are bounded and dropped,
-   observations are attributable, and no ambient event becomes an unapproved
-   action.
+## Delayed triage и JSON
 
-The benchmark protocol is in `docs/AMBIENT_TRIAGE_BENCHMARK.md`. The current
-`OllamaTriageProvider` is only an optional CPU-first adapter with strict output
-validation; no model is selected or loaded by default.
+CPU/RAM worker получает ограниченный текст с источниками, без raw media,
+секретов, tools или полномочий. Bonsai-1.7B — испытанный кандидат для этого
+слоя; Prism-ML/Ternary-Bonsai-8B из ранней идеи не обязательные зависимости.
+Резидентность и unload — выбор профиля, не скрытый расход ресурсов.
+
+Результат: `importance=ignore|retain|promote_candidate`, краткое summary,
+topics, confidence, source_event_ids, observed interval, retention.
+Схема валидируется, выдуманные provenance/инструкции отвергаются.
+Противоречивое остаётся неопределённым свидетельством до уточнения.
+Модельная JSON-оценка не выдаёт ей право менять canonical facts.
+
+## Проверка результата
+
+1. Synthetic speech/music/тишина/наложения → правильные раздельные events.
+2. Несколько последовательных сегментов без ручного Stop и без переполнения RAM.
+3. Delayed triage не задерживает пользовательский ответ; потери видны.
+4. Ни один ambient event не стал командой/чужой персоной; private sources
+   действительно исключены или capture честно приостановлен.
+5. Полезный эпизод найден по вопросу позже, с корректным источником.
+6. TTL/консолидация/revise/forget/restart работают в одном JAWL memory owner.
+7. Обычный auto mode после настройки источников сохраняет полезное без ручного подтверждения;
+   его правила прозрачны и отменяемы пользователем.
+
+Протокол измерения — [AMBIENT_TRIAGE_BENCHMARK.md](AMBIENT_TRIAGE_BENCHMARK.md);
+модельные исторические прогоны — [MODEL-TESTS.md](MODEL-TESTS.md).

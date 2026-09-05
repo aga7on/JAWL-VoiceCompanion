@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "profile_id": "integrated-attended",
+  "paths": {
+    "config": "config",
+    "data": "runtime/data",
+    "logs": "runtime/logs",
+    "cache": "runtime/cache",
+    "sandbox": "runtime/sandbox"
+  },
+  "ports": {
+    "control": 2367,
+    "presentation": 8766,
+    "reserved": [8765]
+  },
+  "components": {
+    "jawl": {"enabled": false, "version": "pending-owned-runtime", "provider": "configured-in-jawl"},
+    "voicemem": {"enabled": false, "version": "pending", "provider": "sidecar"},
+    "asr": {"enabled": false, "version": "Qwen3-ASR-0.6B", "provider": "local-http"},
+    "tts": {"enabled": false, "version": "Qwen3-TTS-0.6B", "provider": "local-http"},
+    "vision": {"enabled": false, "version": "deferred", "provider": "none"}
+  },
+  "consent": {
+    "microphone": false,
+    "system_audio": false,
+    "screen": false,
+    "unattended": false,
+    "social_publish": false
+  }
+}

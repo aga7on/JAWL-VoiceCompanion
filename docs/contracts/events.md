@@ -1,6 +1,10 @@
 # Event Contract
 
-All events are JSON objects with this base shape:
+Companion domain events use the conceptual JSON shape below. This is not one
+identical wire envelope for every transport: VoiceMem stdin/stdout uses
+request/session IDs, while native JAWL SSE uses turn_id/event_seq. Adapters
+preserve correlation across them; see [voice](voice.md) and [JAWL](jawl.md).
+Binary media is not part of durable domain events.
 
 ```json
 {
@@ -61,9 +65,11 @@ The user speaks while output is active.
 
 ### `VOICE_TURN`
 
-The VoiceMem gateway's correlated result. It may include transcript, affect,
-speaker and retrieved context. JAWL should consume the final event rather than
-trusting uncorrelated partial messages.
+A correlated final voice result. In bundled mode VoiceMem produces it; in
+external final-ASR mode Companion adapts authoritative ASR text immediately and
+enqueues VoiceMem enrichment separately. It may include optional transcript,
+affect, speaker and context; unsupported capabilities remain absent. JAWL
+consumes one final event, never a second turn from late enrichment.
 
 ### `VOICE_DEGRADED`
 

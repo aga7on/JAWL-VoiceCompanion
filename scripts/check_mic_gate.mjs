@@ -2,6 +2,13 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
 const html = fs.readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8');
+const worklet = fs.readFileSync(new URL('../frontend/mic-processor.js', import.meta.url), 'utf8');
+
+assert.match(html, /AudioWorkletNode/);
+assert.doesNotMatch(html, /createScriptProcessor/);
+assert.match(html, /requestMicWorkletFlush/);
+assert.match(worklet, /registerProcessor\('jawl-mic-processor'/);
+assert.match(worklet, /event\.data\.type === 'flush'/);
 
 function extractFunction(name) {
   const marker = `function ${name}(`;
@@ -64,4 +71,26 @@ assert.equal(active.gate.open, false);
 result = gate(active, [0.01], 0.01);
 assert.equal(result.capture, undefined, 'closed gate must stop forwarding noise');
 
-console.log('PASS synthetic microphone gate: pre-roll, hysteresis and release');
+const queue = new Function(
+  `const MAX_PENDING_AUDIO_CHUNKS = 8;
+  const micGateStatus = { textContent: '' };
+  const pcm16Base64 = () => 'stub';
+  const downsample = samples => samples;
+  let voiceQueue = Promise.resolve();
+  const apiPost = async () => ({ ok: true, json: async () => ({ responses: [] }) });
+  const addMessage = () => {};
+  const speak = () => {};
+  const document = { querySelector: () => ({ textContent: '' }) };
+  ${extractFunction('queueVoiceChunk')}
+  return { queueVoiceChunk: queueVoiceChunk, micGateStatus: micGateStatus };`
+)();
+
+const saturated = { pendingUploads: 7, droppedChunks: 0 };
+assert.equal(queue.queueVoiceChunk([0.2, 0.2], 16000, 'synthetic', saturated), true, 'upload accepted below the cap');
+assert.equal(saturated.pendingUploads, 8, 'accepted upload must reserve a slot');
+assert.equal(queue.queueVoiceChunk([0.2, 0.2], 16000, 'synthetic', saturated), false, 'saturated queue must reject the chunk');
+assert.equal(saturated.pendingUploads, 8, 'rejected chunk must not reserve a slot');
+assert.equal(saturated.droppedChunks, 1, 'rejected chunk must be counted as dropped');
+assert.match(queue.micGateStatus.textContent, /dropped 1/, 'drop must surface in the mic status line');
+
+console.log('PASS synthetic microphone gate: pre-roll, hysteresis, release and backpressure');

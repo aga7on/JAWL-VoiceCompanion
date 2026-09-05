@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import time
 from typing import Any, Callable
 
 from .models import AccessLevel, RiskClass, ToolDecision, ToolRequest
@@ -68,30 +69,59 @@ class HostOSPolicy:
     deny_risks: set[RiskClass] = field(default_factory=set)
     audit_sink: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False, compare=False)
     _audit: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _policy_revision: int = field(default=1, init=False, repr=False, compare=False)
+    _autonomy_lease_expires_at: float = field(default=0.0, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # Direct construction is used by the local compatibility tests.  Give
+        # such a state the same bounded lifetime as an explicit UI lease.
+        if self.unattended:
+            self._autonomy_lease_expires_at = time.time() + 3600
 
     def set_access_level(self, level: AccessLevel | int, actor: str = "user") -> dict[str, Any]:
+        self._expire_unattended()
         new_level = AccessLevel.from_value(level)
         old_level = self.active_level
         self.active_level = new_level
+        self._policy_revision += 1
         self._record(
             "ACCESS_LEVEL_CHANGED",
             {"from": int(old_level), "to": int(new_level), "actor": actor},
         )
         if new_level < AccessLevel.ROOT and self.unattended:
             self.unattended = False
+            self._autonomy_lease_expires_at = 0.0
+            self._policy_revision += 1
             self._record("UNATTENDED_CHANGED", {"enabled": False, "actor": "access_level_downgrade"})
         return self.snapshot()
 
     def set_emergency_stop(self, enabled: bool = True, actor: str = "user") -> dict[str, Any]:
+        self._expire_unattended()
         self.emergency_stop = bool(enabled)
+        self._policy_revision += 1
+        if self.emergency_stop and self.unattended:
+            self.unattended = False
+            self._autonomy_lease_expires_at = 0.0
+            self._policy_revision += 1
+            self._record("UNATTENDED_CHANGED", {"enabled": False, "actor": "emergency_stop"})
         self._record("EMERGENCY_STOP_CHANGED", {"enabled": self.emergency_stop, "actor": actor})
         return self.snapshot()
 
-    def set_unattended(self, enabled: bool, actor: str = "user") -> dict[str, Any]:
+    def set_unattended(
+        self,
+        enabled: bool,
+        actor: str = "user",
+        ttl_seconds: int = 3600,
+    ) -> dict[str, Any]:
+        self._expire_unattended()
         enabled = bool(enabled)
         if enabled and self.active_level < AccessLevel.ROOT:
             raise ValueError("unattended mode requires ROOT access level")
+        if enabled and (isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 60 <= ttl_seconds <= 86400):
+            raise ValueError("unattended lease TTL must be an integer from 60 to 86400 seconds")
         self.unattended = enabled
+        self._autonomy_lease_expires_at = time.time() + ttl_seconds if enabled else 0.0
+        self._policy_revision += 1
         self._record("UNATTENDED_CHANGED", {"enabled": enabled, "actor": actor})
         return self.snapshot()
 
@@ -110,6 +140,7 @@ class HostOSPolicy:
         return self.snapshot()
 
     def authorize(self, request: ToolRequest, has_approval: bool = False) -> ToolDecision:
+        self._expire_unattended()
         if self.emergency_stop:
             return ToolDecision(
                 status="denied",
@@ -161,15 +192,34 @@ class HostOSPolicy:
         )
 
     def snapshot(self) -> dict[str, Any]:
+        self._expire_unattended()
+        expires_at = self._autonomy_lease_expires_at if self.unattended else None
         return {
+            "schema_version": 1,
+            "authority": "companion-fallback",
+            "policy_revision": self._policy_revision,
             "active_level": int(self.active_level),
             "active_name": self.active_level.name,
             "emergency_stop": self.emergency_stop,
             "unattended": self.unattended,
+            "autonomy_lease": {
+                "active": self.unattended,
+                "expires_at": expires_at,
+            },
             "approvals_required": {key.value: value for key, value in self.approvals_required.items()},
             "deny_tools": sorted(self.deny_tools),
             "deny_risks": sorted(item.value for item in self.deny_risks),
         }
+
+    def _expire_unattended(self) -> None:
+        if not self.unattended or self._autonomy_lease_expires_at <= 0:
+            return
+        if time.time() < self._autonomy_lease_expires_at:
+            return
+        self.unattended = False
+        self._autonomy_lease_expires_at = 0.0
+        self._policy_revision += 1
+        self._record("UNATTENDED_EXPIRED", {"actor": "lease_timeout"})
 
     @staticmethod
     def _normalize_tools(values: Any) -> set[str]:

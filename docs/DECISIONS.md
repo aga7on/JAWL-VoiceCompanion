@@ -1,5 +1,11 @@
 # Architecture Decisions
 
+Product clarification: 2026-09-05. These decisions describe intent, not live
+readiness. [PRODUCT.md](PRODUCT.md) is the current product specification;
+[STATE.md](STATE.md) records implemented/verified limits. Later clarifications
+below supersede older conflicting descriptions, not the user's original goal.
+
+
 ## ADR-001 — JAWL is the canonical cognitive core
 
 Status: Accepted
@@ -132,18 +138,19 @@ deferred and must be designed as a separate authenticated deployment.
 Status: Accepted
 Date: 2026-09-01
 
-The companion exposes `/avatar` as a dedicated transparent browser surface.
-The operator panel remains at `/`; both surfaces consume the same backend
+The companion exposes `/avatar` on a dedicated loopback presentation server.
+The operator panel remains at `/`; both surfaces consume the same bounded
 state, while only the operator panel exposes state-changing controls. This
 keeps OBS and desktop-pet presentation independent from the control-plane
 layout and prevents an OBS source from becoming an authorization boundary.
 
-The first implementation is a dependency-free placeholder that polls the
-bounded `/api/state` endpoint at a short interval. It is intentionally not a
-Live2D runtime yet. A later Live2D renderer will replace the placeholder in
-the same route and will use response-envelope avatar state, expression and
-subtitle fields. Native always-on-top window chrome is deferred until the web
-surface and Live2D lifecycle are stable.
+The first implementation is a dependency-free placeholder that polls only
+`/api/presentation/state`. An optional user-owned Live2D renderer replaces the
+placeholder behind the same tiny adapter. The configuration reports runtime
+capabilities and the browser maps unsupported expressions/motions to a
+neutral fallback. Native always-on-top window chrome is available through the
+bounded launcher; transparency, click-through and long soak remain live
+acceptance items.
 
 ## ADR-012 — Provider-neutral explicit vision bridge
 
@@ -195,9 +202,10 @@ It does not open JAWL's SQLite/Vector/Graph stores and does not create a
 parallel durable memory database. This keeps corrections, reflection and
 forgetting in one authority and makes JAWL outages an explicit degraded mode.
 
-The first bridge is read-only. Memory and persona writes require a versioned
-JAWL API with provenance, audit and correction semantics before they can be
-exposed in the companion UI.
+Canonical structured-memory reads and mutations now use JAWL's versioned
+`/api/memory` route and allowlisted `memory.*` control actions. Records carry
+provenance, source, confidence and append-only correction semantics. The
+Companion may present and request an edit, but JAWL remains the only writer.
 
 ## ADR-015 - Keep the Live2D renderer behind a tiny asset plugin
 
@@ -233,7 +241,7 @@ gate. Emergency stop, deny-tools, deny-risk classes and OS errors remain
 authoritative. Downgrading below ROOT turns unattended mode off, and every
 change is included in the bounded audit and approval policy fingerprint.
 
-## ADR-017 - Opt-in native JAWL HostOS level bridge
+## ADR-017 - Opt-in native JAWL HostOS and skill bridge
 
 Status: Accepted
 Date: 2026-09-01
@@ -242,14 +250,17 @@ The companion does not duplicate JAWL's native HostOS SkillRegistry. When
 `--jawl-hostos-control` is explicitly enabled with a JAWL console token, the
 browser level selector writes only the allowlisted native `enabled` and
 `access_level` fields, then calls JAWL's authenticated agent stop/start
-routes. The local companion policy changes only after all three operations
-succeed. In bridge mode, emergency stop also calls JAWL's authenticated agent
-stop route, but this is explicitly a whole-agent stop rather than per-tool
-cancellation. JAWL's native Heartbeat remains the autonomous caller;
-companion unattended and approval state are not reported as native JAWL state
-until JAWL exposes matching contracts.
-The browser recovery action starts native JAWL before clearing the local
-emergency-stop latch, so a failed native start leaves local execution blocked.
+routes. Native HostOS/HostTerminal skills and structured-memory mutations are
+also proxied through JAWL's authenticated control routes. The local companion
+fallback executor is not used for those model-originated operations in bridge
+mode.
+
+The local policy changes only after the native operation succeeds. Emergency
+stop also calls JAWL's authenticated stop route while cancelling
+Companion-owned work locally; this is a whole-agent native stop, not a claim
+of per-tool cancellation. The browser recovery action starts native JAWL
+before clearing the local emergency-stop latch, so a failed native start
+leaves local execution blocked.
 
 ## ADR-018 - Bounded metadata-only audit persistence
 
@@ -276,9 +287,11 @@ parallel, then merges them in source order. This reduces total synthesis time
 without exposing provider-specific state or committing to a model before the
 external benchmark is complete.
 
-The HTTP endpoint still returns one bounded WAV, so this decision does not
-claim first-audio streaming. Streaming playback, barge-in and the final model
-choice remain separate validation work.
+The compatibility synthesize endpoint returns a bounded WAV. Companion now
+also offers sentence-level NDJSON/WebAudio streaming, but its Tera/Qwen workers
+still generate whole-WAV requests. Transport cancellation is not guaranteed
+inference cancellation; first audible and worker release require acceptance.
+Model preference is clarified by ADR-032.
 
 ## ADR-020 - Keep the desktop pet as a presentation shell
 
@@ -292,19 +305,19 @@ OBS uses the same surface directly for transparency. This keeps the core
 lightweight and avoids introducing a second native UI runtime before a real
 Live2D bundle and compositing requirements are validated.
 
-## ADR-021 - Use Qwen3-VL-2B as the primary local Vision profile
+## ADR-021 - Benchmark Qwen3-VL-2B as a Vision candidate
 
-Status: Accepted
+Status: Superseded by explicit deferral
 Date: 2026-09-01
 
-The operator's CPU/RAM benchmark selected Qwen3-VL-2B Q4_K_M with the
-matching F16 mmproj as the first Vision profile. It produced the best overall
-and UI-automation results in the supplied comparison while remaining within
-the target CPU/RAM envelope. SmolVLM2-500M remains the low-latency fallback
-when response time matters more than video/UI quality.
+The operator's CPU/RAM benchmark identified Qwen3-VL-2B Q4_K_M with the
+matching F16 mmproj as the strongest current candidate for overall/UI quality,
+with SmolVLM2-500M as a low-latency candidate. The operator explicitly
+deferred selecting a permanent VLM until the remaining CPU/RAM and integration
+testing is complete.
 
 The model weights are user-owned files outside this repository and are not
-copied or redistributed by the project. The integration target is a local
+copied or redistributed by the project. If a candidate is selected later, the integration target is a local
 loopback `llama-server` OpenAI-compatible endpoint. Full-resolution screen
 capture must remain bounded because the benchmark showed materially higher
 latency; resizing, UIA structure and calibrated coordinates remain part of
@@ -354,7 +367,9 @@ candidate. The local `llama-server` endpoint was verified with multipart
 partial-ASR contract. Therefore the Companion keeps VoiceMem's streaming path
 as the default and adds Qwen only as an opt-in, bounded final-utterance
 adapter. Audio is held in RAM for one short session, transcribed once on
-explicit end, forwarded as one final VoiceMem partial, and discarded.
+explicit end and discarded after ASR. Companion adapts the final text into
+one immediate JAWL VOICE_TURN and asynchronously queues the same text for
+VoiceMem enrichment, without waiting for the sidecar or emitting a second turn.
 
 ## ADR-025 - Keep pixel actions separate from semantic UIA actions
 
@@ -368,3 +383,173 @@ foreground bounds. HostOS rechecks the foreground window before conversion,
 uses the normal interactive approval/unattended policy, and reports pointer
 dispatch separately from application acceptance. This avoids pretending that
 a cursor event proves a UI state transition.
+
+## ADR-026 - Make JAWL the single model-action policy authority
+
+Status: Accepted
+Date: 2026-09-02
+
+The existing Companion `HostOSPolicy`/`HostOSExecutor` and JAWL native HostOS
+cannot remain independent production authorities. JAWL owns every
+model-originated tool decision and exposes versioned policy, approval, audit,
+cancellation and emergency-stop state to Companion. Companion becomes the
+operator/control UI and may retain only bounded operations intrinsically owned
+by that control plane.
+
+This authority includes Debug Broker. Its seven stable skills and all dynamic
+provider operations remain native to JAWL and receive canonical risk/minimum-
+level metadata. Companion must not reimplement, filter or bypass the catalog.
+At ROOT, every operation available to the launched Windows account remains
+reachable subject to the same policy and real OS/provider/EULA constraints.
+
+## ADR-027 - Isolate control and avatar presentation capabilities
+
+Status: Accepted
+Date: 2026-09-02
+
+A page is not read-only merely because it has no controls. Same-origin
+JavaScript can call the origin's APIs, and the current public session bootstrap
+means user-supplied Live2D code cannot share the privileged control origin.
+
+The production UI therefore separates a session/CSRF-protected control origin
+from a minimal presentation origin or capability channel. Avatar/OBS receives
+only expression, motion, subtitle and short-lived audio-amplitude events. It
+does not receive session material, approvals, HostOS state or conversation
+history. Non-loopback binding is rejected until a separately designed remote
+authentication mode exists.
+
+## ADR-028 - Explicit unattended authorization and crash recovery
+
+Status: Clarified 2026-09-05 (implementation uses a bounded ROOT lease)
+Date: 2026-09-02
+
+The required outcome is overnight unattended work, including recovery from a
+worker crash within the user's authorized period. ROOT capability and unattended
+authorization are distinct; neither means asking for every allowed action.
+Emergency stop, explicit exclusions and OS constraints stay authoritative.
+
+The current implementation persists an expiring, revocable lease atomically.
+Recovery is allowed only while the lease and level-3 policy remain valid;
+pending one-shot approvals do not survive restart. Exact duration, renewal UX
+and chosen profile are implementation decisions still to be accepted. A lease
+must visibly cover the requested work period, not unexpectedly end overnight.
+The model cannot authorize its own renewal; any unattended renewal policy would
+need separate operator configuration.
+
+Task checkpoints/outcomes must survive independently of one-shot approvals.
+After a crash, reconcile uncertain effects before resuming; event replay is not
+permission to repeat mutations. Target-machine recovery evidence remains open.
+
+## ADR-029 - Name the evidence level of every quality claim
+
+Status: Accepted
+Date: 2026-09-02
+
+The project distinguishes unit, fake-provider HTTP E2E, synthetic media, live
+provider and live target-hardware evidence. `scripts/run_full_gate.ps1` is a
+required regression gate but currently uses fake providers and is not a release
+certification. A production claim requires the applicable browser, JAWL,
+voice, TTS, Vision, HostOS, Debug Broker, memory and soak profiles listed in
+`TECHNICAL_AUDIT.md`.
+
+## ADR-030 - Grant remote-provider consent per data class
+
+Status: Accepted
+Date: 2026-09-02
+
+An explicitly configured remote text LLM inside JAWL does not imply consent to
+send microphone audio, system audio, screenshots or ambient observations to a
+remote service. ASR, TTS, Vision and ambient processing remain local by
+default, each with a separate future opt-in if remote processing is desired.
+
+## ADR-031 - One companion product, protected reference repositories
+
+Status: Accepted clarification
+Date: 2026-09-05
+
+JAWL, Companion and VoiceMem are one user's application with one persona,
+memory and agentic task lifecycle. Process boundaries isolate dependencies,
+not product ownership or separate "brains". The main experience is a mint Aero
+2D scene, dialogue and tasks, with clear settings; diagnostic pages are secondary.
+
+Existing external JAWL changes must be inventoried, not silently edited,
+reset or treated as a shipped dependency. A compatible pinned runtime needs
+its own configuration/data/logs/cache. Selecting/copying an owned fork is still
+pending agreement; the protected JAWL-Coding tree remains read-only even for
+test-produced state. See TODO P0-A.
+
+## ADR-032 - Preserve the user's model preference and memory direction
+
+Status: Accepted clarification; integration incomplete
+Date: 2026-09-05
+
+Qwen3-TTS 0.6B is the desired primary, with TeraTTSv2 alongside as the explicit
+fast CPU fallback. Current CLI default Tera and slow Qwen Base clone are facts,
+not a change to the user's preference. Capability reporting, emotional speech,
+cancellation and automatic failover require separate evidence.
+
+Qwen3-ASR is final speech ASR, not music/sound/affect analysis. Vision remains
+deferred pending the owner's model decision. Big Pickle is a temporary JAWL
+test provider; later local/QWB replacement preserves JAWL JSON/tool contracts.
+
+Ambient observations are lower-priority evidence. Manual promotion is current
+behavior; JAWL-controlled automatic consolidation after opt-in is planned.
+The suggested 30-minute/one-week tiers are configurable examples. Logical
+forget/archive is not physical erasure; do not imply deletion of revision
+history, derived indexes or backups.
+
+## ADR-033 - Prove connected user scenarios, not independent surfaces
+
+Status: Accepted
+Date: 2026-09-05
+
+RC requires a complete daily conversation/task/voice/UI scenario on a known
+runtime. A release claim requires the applicable matrix in TECHNICAL_AUDIT.
+HTTP 200, configured=true, catalog counts, queued memory and DOM markers prove
+only their narrow boundaries. Keep profile/version/run ID and failures.
+
+A docs-only audit checks documents and links without launching external agents.
+Do not repeat unchanged wheel builds or passing smoke loops in lieu of
+implementing the next incomplete product slice.
+
+## ADR-034 - Evolve a coherent behavioral core, not a framework collection
+
+Status: Accepted product clarification
+Date: 2026-09-05
+
+Biology/psychology inform a simple perception-attention-decision-action-feedback
+cycle, not a literal brain simulation. Reuse JAWL state/EventBus/Heartbeat/
+memory and only the necessary VoiceMem perception/recall mechanisms.
+One authority is necessary but not sufficient: bounded shared context,
+correlated outcomes and coherent text/voice/avatar expression must be tested.
+
+Framework origins do not freeze module boundaries. Audit overlapping cognitive
+loops before adapting/replacing them in the owned version. No duplicate persona,
+motivational scheduler or memory writer; no new "brain region" service without
+an observable behavior, resource budget and acceptance test. Protected upstream
+remains read-only. This does not authorize runtime self-modification of code
+or access policy.
+
+## ADR-035 - Perception and experience as normal-profile behavior
+
+Status: Accepted product requirement; implementation pending
+Date: 2026-09-05
+
+Clarifies ADR-032: after explicit first-run source selection and OS/browser
+permissions, normal operation enables microphone/system audio/screen perception
+and automatic attributed observations plus JAWL-controlled consolidation.
+Manual promotion remains optional, not the ultimate memory architecture.
+No raw media archive or remote media transfer is implicitly authorized.
+Missing VLM/device remains visibly unavailable; no final VLM is selected here.
+
+Default level 0 must support useful isolated workspace/browser CDP work under
+native policy, not unrestricted host control disguised as sandbox. A browser
+profile is not by itself an OS isolation boundary. Social read/draft/publish
+capabilities belong to explicitly connected accounts and scoped policy;
+authorized unattended work must reconcile outcomes before retrying mutations.
+
+One capability/focus/task state informs cognition and UI. A separate Live2D OBS
+page presents the same character without private chat/memory/control tokens.
+Biological metaphors guide coherence, not claims of sentience or artificial
+distress to retain user engagement. This decision does not start capture or
+external account actions during development.

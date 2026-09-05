@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import threading
@@ -63,7 +64,12 @@ class HostOSToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             sandbox = Path(directory) / "sandbox"
             sandbox.mkdir()
-            executor = HostOSExecutor(HostOSPolicy(), sandbox, dry_run=False)
+            executor = HostOSExecutor(
+                HostOSPolicy(active_level=AccessLevel.ROOT, unattended=True),
+                sandbox,
+                host_roots=(sandbox,),
+                dry_run=False,
+            )
             result = executor.execute(
                 ToolRequest(
                     tool="sandbox.write",
@@ -108,6 +114,62 @@ class HostOSToolTests(unittest.TestCase):
             ))
             self.assertEqual(stale["status"], "stale_file")
             self.assertEqual(path.read_text(encoding="utf-8"), "external change")
+
+    def test_mutations_are_idempotent_and_conflicting_retries_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = Path(directory) / "sandbox"
+            sandbox.mkdir()
+            executor = HostOSExecutor(HostOSPolicy(), sandbox, dry_run=False)
+            first = ToolRequest(
+                tool="sandbox.write",
+                risk=RiskClass.WORKSPACE_WRITE,
+                request_id="same-request",
+                arguments={"path": "note.txt", "text": "first"},
+            )
+            again = executor.execute(first)
+            replay = executor.execute(first)
+            self.assertEqual(again, replay)
+            conflict = executor.execute(ToolRequest(
+                tool="sandbox.write",
+                risk=RiskClass.WORKSPACE_WRITE,
+                request_id="same-request",
+                arguments={"path": "note.txt", "text": "second"},
+            ))
+            self.assertEqual(conflict["status"], "conflict")
+            self.assertEqual((sandbox / "note.txt").read_text(encoding="utf-8"), "first")
+
+    def test_delete_is_recoverable_by_default_and_permanent_is_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = Path(directory) / "sandbox"
+            sandbox.mkdir()
+            target = sandbox / "keep.txt"
+            target.write_text("recover me", encoding="utf-8")
+            executor = HostOSExecutor(
+                HostOSPolicy(active_level=AccessLevel.ROOT, unattended=True),
+                sandbox,
+                host_roots=(sandbox,),
+                dry_run=False,
+            )
+            result = executor.execute(ToolRequest(
+                tool="filesystem.delete",
+                risk=RiskClass.DESTRUCTIVE,
+                request_id="delete-1",
+                arguments={"path": str(target)},
+            ))
+            self.assertTrue(result["result"]["recoverable"])
+            quarantine = Path(result["result"]["quarantine_path"])
+            self.assertFalse(target.exists())
+            self.assertEqual(quarantine.read_text(encoding="utf-8"), "recover me")
+
+            target.write_text("permanent", encoding="utf-8")
+            permanent = executor.execute(ToolRequest(
+                tool="filesystem.delete",
+                risk=RiskClass.DESTRUCTIVE,
+                request_id="delete-2",
+                arguments={"path": str(target), "permanent": True},
+            ))
+            self.assertFalse(permanent["result"]["recoverable"])
+            self.assertFalse(target.exists())
 
     def test_registry_risk_overrides_model_supplied_risk(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -200,6 +262,32 @@ class HostOSToolTests(unittest.TestCase):
             ))
             self.assertEqual(result["status"], "timeout")
             self.assertEqual(executor._processes, {})
+
+    def test_shell_timeout_terminates_owned_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = HostOSPolicy(active_level=AccessLevel.ROOT)
+            policy.set_unattended(True)
+            executor = HostOSExecutor(policy, Path(directory), dry_run=False)
+            code = (
+                "import subprocess,sys,time; "
+                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+                "print(child.pid, flush=True); time.sleep(30)"
+            )
+            result = executor.execute(ToolRequest(
+                tool="shell.exec",
+                risk=RiskClass.SHELL,
+                arguments={"argv": [sys.executable, "-c", code], "timeout_sec": 1},
+            ))
+            self.assertEqual(result["status"], "timeout")
+            child_pid = int(result["result"]["stdout"].strip())
+            for _ in range(20):
+                try:
+                    os.kill(child_pid, 0)
+                except OSError:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("shell timeout left an owned descendant running")
 
     def test_managed_process_allowlist_matches_the_exact_executable_path(self):
         with tempfile.TemporaryDirectory() as directory:

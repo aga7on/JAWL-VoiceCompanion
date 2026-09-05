@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import time
+from uuid import uuid4
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from .jawl_adapter import JawlTurnCancelled, JawlUnsafeResponse, filter_user_response
@@ -22,6 +23,7 @@ class JawlWebAdapter:
     """Read safe JAWL summaries and optionally control its local lifecycle."""
 
     _MAX_RESPONSE_BYTES = 128 * 1024
+    _LIFECYCLE_TIMEOUT_SECONDS = 120.0
     _SAFE_CONFIG = (
         "settings:identity.agent_name",
         "settings:llm.language",
@@ -45,7 +47,13 @@ class JawlWebAdapter:
             raise ValueError("JAWL web URL must be an HTTP(S) URL")
         if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("JAWL web URL must point to the local machine")
-        self.base_url = base_url.rstrip("/") + "/"
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError(
+                "JAWL web URL cannot contain credentials, query parameters or fragments"
+            )
+        self.base_url = urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "")
+        ) + "/"
         self.token = token or ""
         self.timeout_seconds = max(0.2, min(float(timeout_seconds), 10.0))
         self._opener = opener
@@ -90,11 +98,160 @@ class JawlWebAdapter:
     def memory(self) -> dict[str, Any]:
         stats = self._get("/api/db/stats")
         drives = self._get("/api/drives")
-        return {
+        result = {
             "configured": True,
             "status": "ok",
             "database": self._memory_stats(stats),
             "drives": self._bounded_drives(drives),
+        }
+        try:
+            result["structured"] = self.structured_memory(limit=50)["memory"]
+        except (JawlWebUnavailable, KeyError, TypeError):
+            # Older JAWL consoles remain usable as a read-only compatibility
+            # source; absence of the new route is visible to the caller.
+            result["structured"] = {"available": False}
+        return result
+
+    def structured_memory(self, kind: str | None = None, limit: int = 50) -> dict[str, Any]:
+        """Read the canonical versioned memory projection from native JAWL."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("memory limit must be an integer from 1 to 100")
+        query = urlencode({key: value for key, value in {"kind": kind or "", "limit": limit}.items() if value != ""})
+        payload = self._get("/api/memory" + (f"?{query}" if query else ""))
+        records = payload.get("memory")
+        if payload.get("native") is not True or not isinstance(records, dict):
+            raise JawlWebUnavailable("JAWL returned no native structured memory")
+        return {"configured": True, "status": "ok", "memory": records}
+
+    def _memory_mutation(self, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if operation not in {"remember", "revise", "forget", "archive"}:
+            raise ValueError("unsupported memory operation")
+        if not self.token:
+            raise JawlWebUnavailable("JAWL memory control requires a console token")
+        response = self._request_json(
+            "/api/memory", method="POST", payload={"operation": operation, **payload}
+        )
+        result = response.get("memory")
+        if response.get("ok") is not True or response.get("native") is not True or not isinstance(result, dict):
+            raise JawlWebUnavailable("JAWL rejected the memory operation")
+        if result.get("is_success") is not True:
+            message = str(result.get("message") or "JAWL rejected the memory operation")[:300]
+            raise JawlWebUnavailable(message)
+        return {"status": "synchronized", "memory": result}
+
+    def remember_memory(self, **payload: Any) -> dict[str, Any]:
+        """Create one canonical memory item through JAWL's allowlisted control path."""
+        return self._memory_mutation("remember", payload)
+
+    def revise_memory(self, memory_key: str, **payload: Any) -> dict[str, Any]:
+        """Append a corrected canonical memory revision."""
+        return self._memory_mutation("revise", {"memory_key": memory_key, **payload})
+
+    def forget_memory(self, memory_key: str, reason: str = "") -> dict[str, Any]:
+        """Append a canonical forgotten revision without deleting history."""
+        return self._memory_mutation("forget", {"memory_key": memory_key, "reason": reason})
+
+    def archive_memory(self, memory_key: str, reason: str = "") -> dict[str, Any]:
+        """Append a canonical archived revision without deleting history."""
+        return self._memory_mutation("archive", {"memory_key": memory_key, "reason": reason})
+
+    def autonomy_journal(
+        self, limit: int = 20, state: str | None = None
+    ) -> dict[str, Any]:
+        """Read JAWL's bounded public projection of autonomous action plans."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ValueError("journal limit must be an integer from 1 to 50")
+        allowed_states = {
+            None, "completed", "failed", "cancelled", "error",
+            "in_progress", "interrupted", "reconciled",
+        }
+        if state not in allowed_states:
+            raise ValueError("unsupported journal state")
+        params = {"limit": limit}
+        if state is not None:
+            params["state"] = state
+        payload = self._get("/api/agent/journal?" + urlencode(params))
+        journal = payload.get("journal")
+        plans = journal.get("plans") if isinstance(journal, dict) else None
+        if payload.get("native") is not True or not isinstance(journal, dict) or not isinstance(plans, list):
+            raise JawlWebUnavailable("JAWL returned no native action journal")
+        return {
+            "configured": True,
+            "status": "ok",
+            "native": True,
+            "source": "jawl.action_journal",
+            "plans": plans[:50],
+        }
+
+    def execute_hostos_skill(self, skill: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Execute one native JAWL HostOS skill; policy stays in JAWL."""
+        if not isinstance(skill, str) or not skill.startswith(("HostOS", "HostTerminal")):
+            raise ValueError("only native HostOS/HostTerminal skills are allowed")
+        if not isinstance(arguments, dict):
+            raise ValueError("arguments must be an object")
+        if not self.token:
+            raise JawlWebUnavailable("JAWL HostOS control requires a console token")
+        response = self._request_json(
+            "/api/hostos/skill", method="POST", payload={"skill": skill, "arguments": arguments}
+        )
+        result = response.get("result")
+        if response.get("ok") is not True or response.get("native") is not True or not isinstance(result, dict):
+            raise JawlWebUnavailable("JAWL rejected the native HostOS skill")
+        return {"status": "native", "result": result}
+
+    def execute_debug_skill(self, skill: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Execute one of JAWL's stable native Debug Broker skills."""
+        allowed = {
+            "DebugBroker.list_providers",
+            "DebugBroker.search_operations",
+            "DebugBroker.start_session",
+            "DebugBroker.call_operation",
+            "DebugBroker.wait_session",
+            "DebugBroker.session_snapshot",
+            "DebugBroker.stop_session",
+        }
+        if skill not in allowed:
+            raise ValueError("only native DebugBroker skills are allowed")
+        if not isinstance(arguments, dict):
+            raise ValueError("arguments must be an object")
+        if not self.token:
+            raise JawlWebUnavailable("JAWL Debug Broker control requires a console token")
+        response = self._request_json(
+            "/api/debug/skill", method="POST", payload={"skill": skill, "arguments": arguments}
+        )
+        result = response.get("result")
+        if response.get("ok") is not True or response.get("native") is not True or not isinstance(result, dict):
+            raise JawlWebUnavailable("JAWL rejected the native Debug Broker skill")
+        return {"status": "native", "result": result}
+
+    def native_skill_catalog(
+        self,
+        prefixes: tuple[str, ...] = ("HostOS", "HostTerminal", "DebugBroker"),
+        limit: int = 256,
+    ) -> dict[str, Any]:
+        """Read JAWL's current native registry without creating a local copy."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 512:
+            raise ValueError("skill catalog limit must be an integer from 1 to 512")
+        if not isinstance(prefixes, tuple) or not prefixes:
+            raise ValueError("skill catalog prefixes must be a non-empty tuple")
+        if any(prefix not in {"HostOS", "HostTerminal", "DebugBroker"} for prefix in prefixes):
+            raise ValueError("unsupported native skill namespace")
+        query = urlencode({"limit": limit}, doseq=False)
+        for prefix in dict.fromkeys(prefixes):
+            query += "&" + urlencode({"prefix": prefix})
+        payload = self._get("/api/skills/catalog?" + query)
+        catalog = payload.get("catalog")
+        skills = catalog.get("skills") if isinstance(catalog, dict) else None
+        if payload.get("native") is not True or not isinstance(catalog, dict) or not isinstance(skills, list):
+            raise JawlWebUnavailable("JAWL returned no native skill catalog")
+        return {
+            "configured": True,
+            "status": "ok",
+            "native": True,
+            "schema_version": catalog.get("schema_version", 1),
+            "prefixes": catalog.get("prefixes", []),
+            "skills": skills[:512],
         }
 
     def persona(self) -> dict[str, Any]:
@@ -110,13 +267,92 @@ class JawlWebAdapter:
         level = settings.get("interfaces:host.os.access_level")
         if isinstance(level, bool) or not isinstance(level, int) or level not in range(4):
             level = None
-        return {
+        result = {
             "configured": True,
             "status": "ok" if level is not None else "not_exposed",
             "enabled": settings.get("interfaces:host.os.enabled"),
             "access_level": level,
             "access_name": ("SANDBOX", "OBSERVER", "OPERATOR", "ROOT")[level] if level is not None else None,
         }
+        # The config route is only a persisted setting.  When the native
+        # runtime is alive, prefer its versioned policy snapshot so the UI does
+        # not mistake configuration for effective authority.
+        try:
+            native = self.native_policy()
+        except (JawlWebUnavailable, KeyError):
+            native = None
+        if native is not None:
+            native_level = native.get("access_level")
+            if isinstance(native_level, int) and native_level in range(4):
+                result.update({
+                    "status": "ok",
+                    "access_level": native_level,
+                    "access_name": ("SANDBOX", "OBSERVER", "OPERATOR", "ROOT")[native_level],
+                })
+            result["native_policy"] = native
+        return result
+
+    def native_policy(self) -> dict[str, Any]:
+        """Read the effective policy from JAWL's native control authority."""
+        payload = self._get("/api/hostos/policy")
+        policy = payload.get("policy")
+        if not isinstance(policy, dict) or payload.get("native") is not True:
+            raise JawlWebUnavailable("JAWL returned no native HostOS policy")
+        return policy
+
+    def set_unattended(
+        self,
+        enabled: bool,
+        *,
+        ttl_seconds: int = 3600,
+        actor: str = "companion",
+    ) -> dict[str, Any]:
+        """Issue or revoke the bounded native ROOT autonomy lease."""
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be boolean")
+        if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int):
+            raise ValueError("ttl_seconds must be an integer")
+        if not self.token:
+            raise JawlWebUnavailable("JAWL HostOS control requires a console token")
+        payload = self._request_json(
+            "/api/hostos/autonomy",
+            method="POST",
+            payload={
+                "enabled": enabled,
+                "confirm": True if enabled else None,
+                "ttl_seconds": ttl_seconds,
+                "actor": str(actor)[:80],
+            },
+        )
+        if payload.get("ok") is not True or not isinstance(payload.get("policy"), dict):
+            raise JawlWebUnavailable("JAWL rejected the autonomy lease change")
+        return {"status": "synchronized", "policy": payload["policy"]}
+
+    def emergency_stop(self, *, actor: str = "companion", reason: str = "") -> dict[str, Any]:
+        """Latch the native emergency stop and stop native managed sessions."""
+        if not self.token:
+            raise JawlWebUnavailable("JAWL HostOS control requires a console token")
+        payload = self._request_json(
+            "/api/hostos/emergency-stop",
+            method="POST",
+            payload={"actor": str(actor)[:80], "reason": str(reason)[:2000]},
+        )
+        if payload.get("ok") is not True or not isinstance(payload.get("policy"), dict):
+            raise JawlWebUnavailable("JAWL rejected the emergency stop")
+        return {"status": "stopped", "policy": payload["policy"]}
+
+    def reset_emergency_stop(self, *, actor: str = "companion") -> dict[str, Any]:
+        """Clear the native emergency latch only after explicit confirmation."""
+        if not self.token:
+            raise JawlWebUnavailable("JAWL HostOS control requires a console token")
+        payload = self._request_json(
+            "/api/hostos/emergency-stop/reset",
+            method="POST",
+            payload={"confirm": True, "actor": str(actor)[:80]},
+        )
+        if payload.get("ok") is not True or not isinstance(payload.get("policy"), dict):
+            raise JawlWebUnavailable("JAWL rejected the emergency-stop reset")
+        return {"status": "reset", "policy": payload["policy"]}
 
     def set_hostos_level(self, level: int) -> dict[str, Any]:
         """Persist and apply JAWL's native HostOS level through its web API."""
@@ -156,7 +392,10 @@ class JawlWebAdapter:
         """Stop JAWL's native agent through its authenticated web control API."""
         if not self.token:
             raise JawlWebUnavailable("JAWL agent control requires a console token")
-        stopped = self._request_json("/api/agent/stop", method="POST", payload={})
+        stopped = self._request_json(
+            "/api/agent/stop", method="POST", payload={},
+            request_timeout=self._LIFECYCLE_TIMEOUT_SECONDS,
+        )
         if stopped.get("ok") is not True:
             raise JawlWebUnavailable("JAWL agent did not accept the stop request")
         return {"status": "stopped", "forced": bool(stopped.get("forced", False))}
@@ -165,11 +404,41 @@ class JawlWebAdapter:
         """Start JAWL's native agent through its authenticated web API."""
         if not self.token:
             raise JawlWebUnavailable("JAWL agent control requires a console token")
-        started = self._request_json("/api/agent/start", method="POST", payload={})
+        started = self._request_json(
+            "/api/agent/start", method="POST", payload={},
+            request_timeout=self._LIFECYCLE_TIMEOUT_SECONDS,
+        )
         if started.get("ok") is not True:
             raise JawlWebUnavailable("JAWL agent did not accept the start request")
         pid = started.get("pid")
         return {"status": "started", **({"pid": pid} if isinstance(pid, int) else {})}
+
+    def restart_agent(self) -> dict[str, Any]:
+        """Restart JAWL through the two authenticated native lifecycle calls."""
+
+        stopped = self.stop_agent()
+        started = self.start_agent()
+        deadline = time.monotonic() + min(30.0, max(5.0, self.timeout_seconds * 6))
+        last_error = ""
+        while time.monotonic() < deadline:
+            try:
+                status = self._request_json(
+                    "/api/agent/status",
+                    request_timeout=self._LIFECYCLE_TIMEOUT_SECONDS,
+                )
+                if status.get("running") is True and status.get("starting") is not True:
+                    return {
+                        "status": "restarted",
+                        "stopped": stopped,
+                        "started": started,
+                        "agent_ready": True,
+                    }
+            except JawlWebUnavailable as exc:
+                last_error = str(exc)
+            time.sleep(0.25)
+        raise JawlWebUnavailable(
+            "JAWL agent did not become ready after restart" + (f": {last_error}" if last_error else "")
+        )
 
     def _get(self, path: str) -> dict[str, Any]:
         return self._request_json(path)
@@ -180,6 +449,7 @@ class JawlWebAdapter:
         *,
         method: str = "GET",
         payload: dict[str, Any] | None = None,
+        request_timeout: float | None = None,
     ) -> dict[str, Any]:
         if method != "GET" and not self.token:
             raise JawlWebUnavailable("JAWL control requires a console token")
@@ -190,7 +460,9 @@ class JawlWebAdapter:
             **({"X-Console-Token": self.token} if self.token else {}),
         }, data=data, method=method)
         try:
-            with self._opener(request, timeout=self.timeout_seconds) as response:
+            with self._opener(
+                request, timeout=request_timeout or self.timeout_seconds
+            ) as response:
                 raw = response.read(self._MAX_RESPONSE_BYTES + 1)
         except HTTPError as exc:
             exc.close()
@@ -277,6 +549,10 @@ class _SseReader:
         except Empty:
             return None
 
+    def has_pending(self) -> bool:
+        """Return whether an already-read SSE packet still awaits delivery."""
+        return not self._events.empty()
+
     def stop(self) -> None:
         self._stop.set()
         with self._lock:
@@ -339,11 +615,11 @@ class _SseReader:
         try:
             self._events.put_nowait(event)
         except Exception:
-            try:
-                self._events.get_nowait()
-                self._events.put_nowait(event)
-            except Empty:
-                pass
+            # Dropping the oldest packet can hide a final/error event.  Stop
+            # with an explicit integrity error so the caller can reconnect or
+            # surface a terminal failure instead of inventing success.
+            self.error = JawlWebUnavailable("JAWL chat stream event queue overflowed")
+            self._stop.set()
 
 
 class JawlWebChatAdapter(JawlWebAdapter):
@@ -357,10 +633,12 @@ class JawlWebChatAdapter(JawlWebAdapter):
         token: str | None = None,
         timeout_seconds: float = 2.0,
         chat_timeout_seconds: float = 120.0,
+        native_gateway: bool = False,
         opener: Callable[..., Any] = urlopen,
     ):
         super().__init__(base_url, token=token, timeout_seconds=timeout_seconds, opener=opener)
         self.chat_timeout_seconds = max(1.0, min(float(chat_timeout_seconds), 300.0))
+        self.native_gateway = bool(native_gateway)
         self.last_chat_status = "not_checked"
         self.last_chat_error = ""
 
@@ -369,10 +647,16 @@ class JawlWebChatAdapter(JawlWebAdapter):
             return self.status()
         return self.last_chat_status
 
+    @property
+    def supports_native_envelope(self) -> bool:
+        return self.native_gateway
+
     def respond(self, text: str, cancel_event: Event | None = None) -> str:
         clean = str(text or "").strip()
         if not clean:
             raise ValueError("JAWL chat text must not be empty")
+        if self.native_gateway:
+            return self.respond_envelope(clean, cancel_event=cancel_event)["text"]
         request = Request(urljoin(self.base_url, "/api/chat/stream"), headers={
             "Accept": "text/event-stream",
             "Cache-Control": "no-cache",
@@ -398,6 +682,180 @@ class JawlWebChatAdapter(JawlWebAdapter):
         finally:
             reader.stop()
 
+    def respond_envelope(self, text: str, cancel_event: Event | None = None) -> dict[str, Any]:
+        """Return JAWL's validated native ResponseEnvelope without rebuilding it."""
+        clean = str(text or "").strip()
+        if not clean:
+            raise ValueError("JAWL chat text must not be empty")
+        if not self.native_gateway:
+            raise JawlWebUnavailable("native JAWL envelope mode is disabled")
+        return self._respond_native(clean, cancel_event)
+
+    def _respond_native(self, text: str, cancel_event: Event | None) -> dict[str, Any]:
+        """Use JAWL's typed correlated stream; no sequence/broadcast scraping."""
+
+        turn_id = f"turn-{uuid4().hex}"
+        deadline = time.monotonic() + self.chat_timeout_seconds
+        self.last_chat_status = "starting"
+        self.last_chat_error = ""
+        after = 0
+        submitted = False
+        for attempt in range(3):
+            self._last_native_event_seq = max(0, after)
+            stream_url = urljoin(self.base_url, "/api/companion/stream")
+            if after:
+                stream_url += "?" + urlencode({"after": str(after)})
+            request = Request(stream_url, headers={
+                "Accept": "text/event-stream",
+                "Cache-Control": "no-cache",
+                **({"X-Console-Token": self.token} if self.token else {}),
+            })
+            reader = _SseReader(self._opener, request, self.chat_timeout_seconds)
+            reader.start()
+            try:
+                while not reader.ready.is_set() and time.monotonic() < deadline:
+                    self._check_cancel(cancel_event)
+                    time.sleep(0.01)
+                if reader.error:
+                    raise reader.error
+                if not reader.ready.is_set():
+                    raise JawlWebUnavailable("JAWL Companion stream did not start")
+                if not submitted:
+                    self._post_native(text, turn_id)
+                    submitted = True
+                return self._wait_for_native(reader, turn_id, deadline, cancel_event)
+            except JawlTurnCancelled:
+                if cancel_event is not None and cancel_event.is_set():
+                    self._post_native_cancel(turn_id)
+                self.last_chat_status = "cancelled"
+                raise
+            except JawlWebUnavailable as exc:
+                self.last_chat_error = str(exc)
+                next_after = max(after, int(getattr(self, "_last_native_event_seq", after)))
+                reconnectable = (
+                    self.last_chat_status == "no_broadcast"
+                    and reader.done.is_set()
+                    and reader.error is None
+                )
+                if reconnectable and time.monotonic() < deadline and attempt < 2:
+                    after = next_after
+                    continue
+                self.last_chat_status = "offline"
+                raise
+            finally:
+                reader.stop()
+
+    def _post_native(self, text: str, turn_id: str) -> None:
+        body = json.dumps({"text": text, "turn_id": turn_id}, ensure_ascii=False).encode("utf-8")
+        request = Request(urljoin(self.base_url, "/api/companion/turn"), data=body,
+                          method="POST", headers={
+                              "Accept": "application/json",
+                              "Content-Type": "application/json",
+                              **({"X-Console-Token": self.token} if self.token else {}),
+                          })
+        try:
+            with self._opener(request, timeout=self.timeout_seconds) as response:
+                raw = response.read(self._MAX_CHAT_RESPONSE_BYTES + 1)
+        except (HTTPError, URLError, OSError, TimeoutError) as exc:
+            self.last_chat_status = "offline"
+            raise JawlWebUnavailable("JAWL Companion turn request is not reachable") from exc
+        if len(raw) > self._MAX_CHAT_RESPONSE_BYTES:
+            raise JawlWebUnavailable("JAWL Companion turn response exceeds the bounded limit")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise JawlWebUnavailable("JAWL Companion turn returned invalid JSON") from exc
+        if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("turn_id") != turn_id:
+            raise JawlWebUnavailable("JAWL did not acknowledge the Companion turn")
+
+    def _post_native_cancel(self, turn_id: str) -> bool:
+        """Forward local cancellation so JAWL stops the live ReAct task too."""
+
+        body = json.dumps({"turn_id": turn_id}, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            urljoin(self.base_url, "/api/companion/cancel"),
+            data=body,
+            method="POST",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                **({"X-Console-Token": self.token} if self.token else {}),
+            },
+        )
+        try:
+            with self._opener(request, timeout=self.timeout_seconds) as response:
+                raw = response.read(self._MAX_CHAT_RESPONSE_BYTES + 1)
+        except HTTPError as exc:
+            exc.close()
+            self.last_chat_error = "JAWL Companion cancel request returned HTTP error"
+            return False
+        except (URLError, OSError, TimeoutError):
+            # The caller is already cancelling locally; network failure must
+            # not turn a successful local cancellation into a hard error.
+            self.last_chat_error = "JAWL Companion cancel request is not reachable"
+            return False
+        if len(raw) > self._MAX_CHAT_RESPONSE_BYTES:
+            self.last_chat_error = "JAWL Companion cancel response exceeds the bounded limit"
+            return False
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.last_chat_error = "JAWL Companion cancel returned invalid JSON"
+            return False
+        if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("turn_id") != turn_id:
+            self.last_chat_error = "JAWL Companion cancel was not acknowledged for this turn"
+            return False
+        return True
+
+    def _wait_for_native(
+        self, reader: _SseReader, turn_id: str, deadline: float, cancel_event: Event | None,
+    ) -> dict[str, Any]:
+        from .jawl_gateway_contract import JawlGatewayEvent
+
+        while time.monotonic() < deadline:
+            self._check_cancel(cancel_event)
+            event = reader.get(min(0.1, max(0.01, deadline - time.monotonic())))
+            self._check_cancel(cancel_event)
+            if event is not None:
+                cursor = event.get("cursor")
+                if isinstance(cursor, dict) and cursor.get("gap") is True:
+                    self.last_chat_status = "cursor_gap"
+                    raise JawlWebUnavailable(
+                        "JAWL Companion event cursor is too old; a fresh turn is required"
+                    )
+                if isinstance(cursor, dict) and isinstance(cursor.get("after"), int):
+                    self._last_native_event_seq = max(
+                        self._last_native_event_seq, cursor["after"]
+                    )
+                for raw_event in event.get("events", []) if isinstance(event.get("events"), list) else []:
+                    try:
+                        parsed = JawlGatewayEvent.from_mapping(raw_event)
+                    except ValueError as exc:
+                        self.last_chat_status = "invalid_response"
+                        raise JawlWebUnavailable("JAWL returned an invalid Companion event") from exc
+                    self._last_native_event_seq = max(self._last_native_event_seq, parsed.event_seq)
+                    if parsed.turn_id != turn_id:
+                        continue
+                    if parsed.type == "assistant.final":
+                        response = dict(parsed.payload["response"])
+                        self.last_chat_status = "connected"
+                        response["text"] = filter_user_response(response["text"])
+                        return response
+                    if parsed.type == "turn.cancelled":
+                        self.last_chat_status = "cancelled"
+                        raise JawlTurnCancelled(parsed.payload.get("reason", "JAWL cancelled the turn"))
+                    if parsed.type == "turn.error":
+                        self.last_chat_status = "error"
+                        raise JawlWebUnavailable(parsed.payload.get("reason", "JAWL turn failed"))
+            self._check_cancel(cancel_event)
+            if reader.error:
+                raise reader.error
+            if reader.done.is_set() and not reader.has_pending():
+                self.last_chat_status = "no_broadcast"
+                raise JawlWebUnavailable("JAWL Companion stream closed without a final event")
+        self.last_chat_status = "no_broadcast"
+        raise JawlWebUnavailable("JAWL produced no final Companion event before timeout")
+
     def _wait_until_online(
         self, reader: _SseReader, deadline: float, cancel_event: Event | None,
     ) -> None:
@@ -411,7 +869,7 @@ class JawlWebChatAdapter(JawlWebAdapter):
                     return
             if reader.error:
                 raise reader.error
-            if reader.done:
+            if reader.done.is_set() and not reader.has_pending():
                 raise JawlWebUnavailable("JAWL chat stream closed before becoming online")
         self.last_chat_status = "offline"
         raise JawlWebUnavailable("JAWL chat stream did not become online before timeout")
@@ -473,7 +931,7 @@ class JawlWebChatAdapter(JawlWebAdapter):
             self._check_cancel(cancel_event)
             if reader.error:
                 raise reader.error
-            if reader.done:
+            if reader.done.is_set() and not reader.has_pending():
                 self.last_chat_status = "no_broadcast"
                 raise JawlWebUnavailable("JAWL chat stream closed without an agent broadcast")
         self.last_chat_status = "no_broadcast"

@@ -4,11 +4,15 @@ HostOS is the single side-effect boundary for the companion. Model output,
 the browser and other services can request actions, but only HostOS may
 perform them.
 
+Production meaning: JAWL's native HostOS policy is the single authority for
+model-originated calls. The current separate Companion executor is a prototype
+and does not yet satisfy this contract across JAWL, MCP and Debug Broker.
+
 ## Access levels
 
 ```text
-0 SANDBOX  — read/write inside companion sandbox only
-1 OBSERVER — bounded host/UI/screen read access; no input or side effects
+0 SANDBOX  — operations confined to the configured native/development sandbox
+1 OBSERVER — bounded host/UI/screen read; sandbox writes may remain permitted
 2 OPERATOR — approved workspace/process/desktop operations
 3 ROOT     — full access available to the current Windows user
 ```
@@ -25,6 +29,11 @@ selected access level
 
 Level 3 does not elevate the process, bypass the secure desktop or grant
 rights beyond the Windows account that launched the companion.
+
+Level 3 also must not become an adapter-curated subset. It exposes all native
+JAWL/Debug Broker capabilities available to that Windows account. Explicit
+data-class policy, emergency stop, destructive/external-effect rules and real
+OS/EULA/UAC constraints still apply.
 
 `ROOT` is an OS capability level, not an instruction to ask the operator for
 every action. An explicit `UNATTENDED` policy switch may be enabled only at
@@ -59,12 +68,26 @@ over unattended execution; downgrading below level 3 disables it.
 `requested_access_level` is informational. The backend uses the active policy
 level, never a model-supplied value, to authorize the request.
 
+For every mutating operation, `idempotency_key` is mandatory and enforced.
+The authority keeps a bounded result record for the key and exact normalized
+request fingerprint. An identical retry returns the prior result; reusing the
+key with a different request fails closed. The current prototype carries this
+field and now enforces a bounded cache for supported fallback mutations.
+This is not evidence of durable native idempotency for every JAWL tool or
+crash recovery. The requirement above remains to be verified per native path.
+
 For `filesystem.write`, an optional `arguments.expected_sha256` enables a
 conditional workspace write. `filesystem.read` returns `sha256` when the
 bounded result contains the complete file. If the expected digest does not
 match the current file, or the file cannot be compared safely, no write is
 performed and the result status is `stale_file`. Omitting the digest is allowed
 for callers that deliberately accept last-write-wins behavior.
+
+Autonomous production writes use a temporary sibling plus atomic replace where
+the filesystem supports it. Deletion defaults to a recoverable trash/quarantine
+operation; permanent deletion is a separately named destructive request. A
+secrets/sensitive-data capability is explicit in policy rather than an
+undocumented hard-coded exception at ROOT.
 
 ## Tool result
 
@@ -102,8 +125,11 @@ argv boundary for full-current-user compatibility.
 ## Screen observation result
 
 The initial `screen.observe` adapter is an explicit focused-window snapshot.
-When enabled, its bounded result may contain a transient JPEG for a vision
-adapter:
+It may be configured with `--screen-ocr` for bounded transient OCR grounding
+and repeated `--screen-redact-rect L,T,R,B` values for opaque pixel redaction.
+Sensitive OCR regions are redacted before JPEG encoding; OCR output is
+untrusted metadata and is never durable state. When enabled, its bounded
+result may contain a transient JPEG for a vision adapter:
 
 ```json
 {
@@ -145,6 +171,12 @@ lived `element_ref`, its `element_sha256`, bounded name/class/control type and
 depth; sensitive elements are omitted. The reference is not authority: a
 later `desktop.act` must still pass HostOS fingerprint revalidation.
 
+Production observations also return an opaque, short-lived server token bound
+to HWND, PID/process identity, capture/UIA digest, bounds and expiry. UIA,
+pointer and keyboard actions consume or revalidate this token immediately
+before input. Class and bounds alone do not establish that the observed target
+is still active.
+
 For canvas or game surfaces without UI Automation nodes, `desktop.pointer`
 accepts a bounded pointer operation. Image-space targets must include the
 captured image dimensions and exact foreground-window bounds so HostOS can
@@ -179,6 +211,11 @@ request can bind the action to the expected foreground class and bounds; the
 result reports that the foreground window stayed unchanged, not that the
 application consumed the keystrokes.
 
+Every interactive operation declares an observable postcondition or returns
+only `dispatched`. A fresh screenshot/UIA state is required before reporting
+`verified`; cursor position or unchanged foreground identity is insufficient
+proof that the application accepted input.
+
 ## Risk classes
 
 The initial classes are:
@@ -207,7 +244,8 @@ values. The model cannot change any of them through a tool request.
 - never accept access-level changes as authority inside a tool request;
 - expose current mode, pending approvals, emergency stop and audit status;
 - expose a bounded redacted review for each proposal and allow the browser to
-  execute an approved proposal exactly once without resending its arguments;
+  consume an approved proposal once without resending its arguments; reconcile
+  uncertain side effects after crashes rather than claiming exactly-once execution;
 - treat approvals and unattended state as runtime-only; a fresh server starts
   with no pending approvals and safe default policy;
 - optionally persist bounded policy/lifecycle events as metadata-only JSONL;

@@ -41,6 +41,18 @@ class AvatarAssetStore:
             "runtime_url": f"/avatar-assets/{self.runtime.as_posix()}" if runtime_file else None,
             "model_url": f"/avatar-assets/{self.model.as_posix()}" if model_file else None,
             "adapter": "Live2DCompanionRuntime" if runtime_file else None,
+            "capabilities": {
+                "expressions": int(validation["expression_count"]),
+                "motion_groups": list(validation["motion_groups"]),
+                "physics": bool(validation["physics"]),
+                "pose": bool(validation["pose"]),
+                "display_info": bool(validation["display_info"]),
+                "lip_sync": True,
+                "fallback_expressions": [
+                    "neutral", "attentive", "concerned", "confused",
+                    "happy", "sad", "angry", "surprised",
+                ],
+            },
             "validation": validation,
         }
 
@@ -86,6 +98,9 @@ class AvatarAssetStore:
             "warnings": [],
             "motion_groups": [],
             "expression_count": 0,
+            "physics": False,
+            "pose": False,
+            "display_info": False,
         }
         if model_file is None:
             result["warnings"] = ["model file is missing"]
@@ -125,8 +140,19 @@ class AvatarAssetStore:
         if isinstance(textures, list):
             for texture in textures[:64]:
                 check("Texture", texture, True)
-        for kind in ("Physics", "Pose", "DisplayInfo"):
-            check(kind, references.get(kind), False)
+        for kind, capability in (
+            ("Physics", "physics"),
+            ("Pose", "pose"),
+            ("DisplayInfo", "display_info"),
+        ):
+            reference = references.get(kind)
+            check(kind, reference, False)
+            if isinstance(reference, str) and reference:
+                try:
+                    relative = self._relative(reference)
+                except ValueError:
+                    continue
+                result[capability] = self._model_file(model_file, relative) is not None
 
         expressions = references.get("Expressions", [])
         if isinstance(expressions, list):

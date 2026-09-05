@@ -1,431 +1,213 @@
-# Architecture
+# Архитектура единого агента-компаньона
 
-## Goals
+Разбор prompt-модулей JAWL, повторной отправки `SOUL` и правил переноса:
+[JAWL_PROMPT_ARCHITECTURE.md](JAWL_PROMPT_ARCHITECTURE.md).
 
-- Natural Russian voice conversation;
-- stable character identity and long-term memory;
-- responsive 2D Live2D presence;
-- safe optional screen awareness;
-- gradual, inspectable proactivity;
-- local-first operation with replaceable model providers.
+Актуально: 2026-09-05. [PRODUCT.md](PRODUCT.md) задаёт результат,
+[STATE.md](STATE.md) — фактическую готовность. Ниже целевые границы и
+подтверждённые кодом адаптеры; наличие схемы не означает завершение интеграции.
 
-## Non-goals for the first version
-
-- 3D avatar;
-- unrestricted computer control by default;
-- VLM inference on every frame;
-- multiple competing personality systems;
-- mobile synchronization.
-
-## Runtime topology
+## Одна платформа, один агентный контур
 
 ```text
-Microphone
-   ↓
-Voice Gateway: VAD + ASR + AEC + playback cancellation
-   ↓
-VoiceMem Gateway
-   ├─ partial transcript
-   ├─ speculative recall
-   ├─ audio affect evidence
-   └─ final VOICE_TURN
-          ↓
-      JAWL EventBus
-          ↓
-  Attention/Presence Engine
-   ├─ coalesce low-value signals
-   ├─ apply salience and cooldown
-   └─ create SPEAK_INTENT
-          ↓
-      Turn Arbiter
-          ↓
-      JAWL Heartbeat/ReAct
-   ├─ persona and traits
-   ├─ structured state and drives
-   ├─ Vector/Graph memory
-   ├─ tools and approvals
-   └─ vision__look
-          ↓
-     ResponseEnvelope
-          ↓
-  sentence parser + ordered TTS queue
-          ↓
-       audio + amplitude
-          ↓
-       Live2D frontend
-
-Screen Sensor
-   ├─ active window / UI Automation
-   ├─ screenshot / OCR fallback
-   └─ VLM only after policy and change detection
-          ↓
-       SCREEN_DELTA → JAWL
+Микрофон → gate/ASR ───────────────→ пользовательский turn
+                    └→ VoiceMem ─→ контекст/наблюдения
+Системный звук → сегменты/ASR ─────→ ambient buffer/triage
+Экран/UIA → capture/[будущий VLM] ─→ наблюдения/Attention
+                                             │
+Панель/голос → Companion Gateway ──────────────┤
+                                             ▼
+                         JAWL: persona, память, Heartbeat, задачи, ReAct
+                             │                        │
+                       JSON ответ                native policy 0–3
+                             │                        │
+                    TTS + avatar state        HostOS/Terminal/Debug/MCP
+                             │                        │
+               Панель · отдельное окно · OBS     Windows/приложения
 ```
 
-The default focused-window image profile is 960×720 with a 1 MB transient
-JPEG cap. Resizing is part of the capture boundary, and the adapter returns a
-bounded coordinate scale for future UIA actions; the scale does not itself
-authorize input.
+Companion — интеграционная часть того же продукта, не замена JAWL и не
+«вырезание агента». Отдельные процессы изолируют тяжёлые зависимости.
+Единый пользовательский профиль запуска/остановки пока предстоит завершить.
 
-## Service boundaries
+## Согласованный цикл вместо параллельных «мозгов»
 
-### JAWL gateway
+В прочитанных локальных JAWL `docs/architecture.md` и
+`docs/yaml/settings/sql/drives.md` уже есть state L0, memory L1,
+interfaces L2, core L3, общий EventBus и Heartbeat. Их используем как
+отправную точку, не имитируя мозг буквально.
 
-Owns the canonical character state and exposes a local API for:
-
-- `USER_FINAL` and text turns;
-- `SPEAK_INTENT`;
-- screen observations;
-- memory promotion and reflection;
-- tool execution;
-- health and state inspection.
-
-JAWL remains the sole authority for final wording and whether a proactive
-intent becomes spoken output.
-
-The companion's optional `JawlWebAdapter` reads JAWL's existing loopback web
-console for health, Heartbeat, bounded memory counters, drives and a filtered
-persona view. `JawlWebChatAdapter` uses the same console's `/api/chat` POST and
-`/api/chat/stream` SSE: the POST returns the user's sequence, and the adapter
-accepts only a later non-user message. It never opens JAWL storage directly
-and keeps no durable copy. Inspection routes are read-only and
-session-protected; chat remains loopback/token protected by JAWL.
-
-The same browser session protects the HostOS audit view. The UI displays only
-the last bounded metadata events; tool arguments and raw results remain
-excluded by the policy audit layer. The CLI may persist the same metadata to a
-bounded JSONL file for recovery inspection.
-
-`GET /api/doctor` is the first-run readiness surface. It aggregates only
-bounded component states and remediation hints; it does not expose paths or
-secrets and does not change runtime configuration. Optional VoiceMem, TTS,
-vision and Live2D failures keep text-only chat available.
-
-The JAWL adapters also apply one user-output filter before text enters the
-gateway envelope: paired hidden reasoning/tool blocks are removed, while
-unclosed blocks and line-level internal markers fail closed. This keeps
-subtitles, avatar state and TTS from exposing internal control text.
-
-### VoiceMem gateway
-
-Owns streaming voice perception and returns structured observations. It may
-perform fast retrieval, but it cannot directly mutate JAWL personality traits.
-
-The adapter supports the stable semantic boundaries:
+Целевая эволюция — один цикл выбора поведения:
 
 ```text
-feed_partial(text, ended=False)
-feed_partial(text, ended=True)
-feed_audio(pcm16, sample_rate=16000)
-end_audio()
+Observation → attention/context snapshot → JAWL decision
+    ↑                                      ↓
+Memory/task/state update ← verified outcome ← native action / expression
 ```
 
-The current VoiceMem repository provides this method on `VoiceStream`, but its
-bundled WebSocket demo is not treated as the production protocol. The small
-loopback sidecar runner in `services/voicemem_sidecar.py` owns the VoiceMem
-environment and translates its results into `USER_PARTIAL`/`VOICE_TURN`
-events. The JAWL process receives only bounded observations and final user
-text through the authenticated `/api/voice/partial`, `/api/voice/audio` and
-`/api/voice/end` endpoints. The browser microphone is only an input surface;
-VoiceMem remains responsible for streaming ASR and VAD in its own environment.
+Это целевой поток, не новый wire API и не утверждение, что каждый переход
+сейчас интегрирован. Распределение уже существующих обязанностей:
 
-### Voice Gateway
+- Sensory workers извлекают признаки/текст, normalizers добавляют время,
+  источник и корреляцию. Ни worker, ни сенсорный timer не запускает свой ReAct.
+- Attention сокращает/ранжирует события; Heartbeat решает когнитивное пробуждение
+  и учитывает drives/задачи. Это не два независимых планировщика личности.
+- TurnArbiter обеспечивает речь/отмену/приоритет транспорта, не выбирает цели.
+  ResourceGovernor ограничивает ресурсы, не ведёт второй цикл мотивации.
+- JAWL Context Builder читает bounded snapshot текущего фокуса, задачи,
+  наблюдений и recall. Долговременный источник истины — native memory/tasks;
+  frontend и sidecars получают только нужные проекции.
+- Один валидированный выбранный response state проецируется на text/voice/avatar.
+  Feedback о playback, tool outcome и interrupted состоянии возвращается
+  в соответствующий owner; старый snapshot не перекрывает новый.
+- Проверенный результат меняет task/episode, consolidation отбирает опыт.
+  Самоотчёт модели «я сделала» не заменяет результат инструмента/проверку.
 
-Owns microphone capture, VAD, ASR lifecycle, audio playback and interruption.
-The gateway must be able to cancel both playback and in-flight synthesis.
+Перед добавлением нового механизма составить карту перекрытий JAWL/VoiceMem/
+Companion: что оставить, отключить в профиле, адаптировать или заменить.
+Решение должно уменьшать дублирование и улучшать наблюдаемый сценарий, а не
+сохранять фреймворки целиком любой ценой. Число процессов — вопрос dependency/
+crash isolation, не количество личностей.
 
-### TTS worker
+Drives — ограниченные подсказки инициативе, не источник прав или повод
+занимать CPU/тревожить владельца. Реальные мотиваторы/параметры сначала
+оставить в существующем JAWL; новые вводить лишь с поведением, бюджетом и тестом.
 
-Provides a common interface for CozyVoice 2 and OmniVoice. The worker should
-support sentence-level requests and cancellation. TTS output is not allowed
-to contain internal thoughts or control markup.
+## Владение состоянием
 
-The current implementation keeps that boundary small: `TTSService` applies
-latest-request-wins cancellation and can emit bounded sentence WAVs in source
-order, while `CozyVoiceHttpClient` calls the separate local REST wrapper and
-returns bounded transient WAV data. The browser's NDJSON/WebAudio path starts
-at the first completed sentence and falls back to the whole-WAV endpoint when
-needed; this is not token-level provider streaming. The web process never
-imports CozyVoice or its torch/model dependency tree. OmniVoice
-will implement the same provider interface after its runtime/API is confirmed.
-
-### Attention/Presence Engine
-
-This is a fast timing and salience layer, inspired by Miru's AttentionEngine.
-It receives observations and decides whether they are worth sending to JAWL
-as a possible approach. It owns temporary cooldowns and deduplication, not
-durable personality.
-An optional Windows activity adapter supplies only idle time and foreground
-window class; recent user input suppresses proactive speech without reading
-keystrokes, titles or clipboard data.
-
-### Live2D frontend
-
-The frontend renders:
-
-- avatar model;
-- idle/listening/thinking/speaking states;
-- expression and motion;
-- lip-sync;
-- subtitles and speech bubble;
-- settings and approval UI.
-
-The frontend never owns canonical memory or personality state.
-
-### Local Web Control Plane
-
-The browser is the main operator interface. It may be used on the same machine
-to chat with the companion, inspect health, change persona and memory settings,
-select HostOS access level, review approvals, stop active work and inspect the
-audit trail. The first implementation may render the avatar in the browser as
-well; a transparent desktop-pet window remains an optional presentation mode,
-not a separate source of truth.
-
-The web UI talks only to a loopback backend. Every action is authorized again
-on the backend against the current policy, session, tool risk and access level.
-The UI cannot grant itself permissions by sending a different level in a
-request.
-
-### Avatar presentation surface and OBS
-
-The presentation layer has two browser surfaces backed by the same local
-state:
-
-- `/` is the operator control plane for chat, HostOS level, approvals and
-  emergency stop;
-- `/avatar` is a transparent, read-only surface intended for a desktop window
-  or an OBS Browser Source.
-
-The avatar surface polls `/api/state` and renders the last response's bounded
-text, state and expression. It has no state-changing controls and does not
-receive session credentials. When an explicit asset bundle passes backend
-model validation, a tiny `Live2DCompanionRuntime` adapter replaces only the
-reactive 2D fallback; otherwise the dependency-free fallback remains visible.
-JAWL, policy and memory ownership stay in the backend. `?debug=1` enables
-small diagnostics for local troubleshooting.
-
-The control plane generates the same-origin OBS URL. OBS should use a Browser
-Source with a transparent background and a fixed canvas size selected for the
-chosen model. A native always-on-top desktop-pet window remains a later shell
-around this surface, not a second runtime or authority.
-
-### HostOS Tool Plane
-
-HostOS is the only layer allowed to create desktop or operating-system side
-effects. JAWL can request a tool, but it cannot directly call `subprocess`,
-Windows input APIs or filesystem primitives. HostOS resolves the request,
-checks policy and returns a bounded, structured result.
-
-The access levels follow the local JAWL HostOS model:
-
-| Level | Name | Capability boundary |
+| Компонент | Владеет | Не должен делать |
 |---|---|---|
-| 0 | `SANDBOX` | Read/write only inside the companion sandbox; no host control. |
-| 1 | `OBSERVER` | Read host/UI state and screen observations; writes remain sandbox-scoped; no desktop input. |
-| 2 | `OPERATOR` | Work with approved project/workspace files and managed processes; desktop/browser actions are policy- and approval-aware. |
-| 3 | `ROOT` | Full access available to the current Windows user, including host file operations, GUI input and raw shell compatibility tools. |
+| JAWL runtime | Персона, факты/дневник/задачи, Heartbeat/ReAct, провайдер главной LLM, registry/policy/audit | Делегировать власть model-controlled полям ответа |
+| Companion | UI/API, turn transport, очереди ASR/TTS, transient sensing, presentation, ресурсные приоритеты | Второй мозг, второй tool registry или durable persona DB |
+| VoiceMem sidecar | Голосовые наблюдения и дополнительный recall по контракту | Независимо изменять характер; задерживать final-ASR ответ холодной загрузкой |
+| ASR/TTS/VLM/triage workers | Ограниченный inference с явными capabilities | Выполнять инструменты или самостоятельно утверждать факты |
+| Presentation | Рендер состояния персонажа | Токены control plane, управление ПК или второй аудиовывод |
 
-Level 3 does not mean Windows elevation: the process cannot cross the secure
-desktop or exceed the rights of the user who launched it. It remains a
-deliberate expert mode with a visible indicator, emergency stop, audit log and
-deny-list. A separate explicit `unattended` switch is available only at level
-3, allowing Heartbeat/background work to run without an operator prompt for
-each action. Lowering the level disables that switch.
+Компоненты affect/speaker/speculative recall — возможности контракта, не
+подтверждённые функции выбранного VoiceMem акустического профиля.
 
-The browser, keyboard/mouse, filesystem, process and shell tools all pass
-through the same policy gate. This prevents a lower-risk tool from becoming a
-side door around the selected HostOS level.
+## Где находится код JAWL
 
-JAWL already has a native `HostOSClient` and SkillRegistry. The companion
-executor covers companion-side browser/control requests, and the opt-in
-authenticated bridge synchronizes level 0–3 and whole-agent emergency stop
-with native JAWL. Native per-tool approval/unattended state remains owned by
-JAWL until it exposes a matching contract. The companion must not create a
-second JAWL tool registry. See `docs/contracts/jawl-hostos.md`.
+`G:\AI\JAWL-Coding` и `G:\AI\VoiceMem` — внешние reference/upstream,
+не неявные write-targets. В текущем JAWL checkout есть изменённые и untracked
+gateway/memory/autonomy файлы. По git status нельзя назначить им автора.
+Проверки на таком checkout не доказывают совместимость с чистым upstream.
 
-## Memory ownership
+Целевой путь: зафиксированная версия совместимого JAWL и собственный runtime
+с config/data/logs/cache. Если нужен перенос native additions в owned fork/
+dependency, сначала инвентаризация diff, лицензий и согласование способа.
+Не откатывать, не копировать секреты и не «чинить» protected upstream автоматически.
+Версия/capability handshake и воспроизводимая установка — P0 в TODO.
 
-```text
-Persona config       → JAWL
-Traits / drives      → JAWL SQL
-Facts / relations    → JAWL Vector + Graph + structured fact records
-Conversation archive → JAWL + VoiceMem session layer
-Audio affect         → VoiceMem evidence, then optional JAWL promotion
-Daily reflection     → JAWL background jobs
-```
+`G:\RE` остаётся внешней нативной toolchain. Junctions `x64dbg`,
+`x64dbgMCP-source`, `ghidra_12.1.2_PUBLIC` не заменяются копиями.
 
-Always-injected context must be hard-capped. Detailed memory is retrieved only
-when relevant.
+## Диалог, JSON и конкуренция
 
-Canonical fact records should support:
+Нативный путь: `POST /api/companion/turn`, SSE
+`GET /api/companion/stream`, точная отмена turn. События коррелированы
+`turn_id` и `event_seq`; финал — валидированный ResponseEnvelope.
+См. [JAWL](contracts/jawl.md), [ответ](contracts/response-envelope.md).
 
-```text
-key
-text
-status: active | stale | archived
-epistemic: fact | self_report | preference | inferred
-source
-confidence
-occurred_at
-valid_from
-invalidated_at
-history
-```
+JAWL provider JSON/tool-envelope и UI ResponseEnvelope — разные уровни.
+Непустой plain-text ответ, обёрнутый Companion, не доказывает сохранение
+эмоций, tool calls и поведения JAWL. Смена Big Pickle на QWB/local выполняется
+в JAWL provider path и проверяется по контракту. `--llm-url` в Companion —
+явный non-agentic test mode, не регулярная платформа.
 
-Updates should support `insert`, `patch`, `remove`, `archive` and
-`supersedes`. User-visible memory editing is a required product feature.
+JSON используется для управления, текстовых наблюдений и метаданных.
+Текущие transport-контракты местами несут bounded base64 PCM/WAV и image_url;
+это совместимость, не требование кодировать все медиапотоки в JSON.
+Новый binary transport допустим лишь при измеренной пользе.
 
-## Ambient secondary memory
+Приоритет: emergency stop → пользователь/отмена речи → интерактивный turn →
+фоновая задача → ambient/консолидация. TurnArbiter управляет откликом, JAWL —
+жизнью задач. Нельзя потерять поручение только потому, что пользователь сказал
+новую фразу. Replay-dedup событий не означает exactly-once побочных эффектов;
+повторные mutations требуют native idempotency/reconciliation.
 
-System audio and screen observations are optional evidence, not another user
-conversation. A bounded pipeline keeps raw capture transient, stores short
-working observations, and later compresses related observations into an
-ambient episode. Only a JAWL-owned promotion step may turn an episode into a
-canonical fact or relation.
+Нативные lifecycle summaries могут приходить после действия/финала. UI не
+должен выдавать их за достоверный pre-dispatch progress; реальные streaming
+deltas JAWL — отдельная capability, не гарантия наличия SSE.
 
-```text
-system-audio loopback ─┐
-                       ├─ segment/ASR ─┐
-screen keyframe/delta ─┘               ├─ CPU/RAM triage ── T1/T2 episode
-                                       └─ no direct USER_FINAL/tool/speech
-microphone ── VoiceMem conversational path ── USER_PARTIAL/VOICE_TURN
-```
+## Голосовой путь
 
-The initial policy is: capture off by default, raw audio/frames RAM-only,
-working observations with a bounded TTL (target about 30 minutes), and
-configurable short-lived episodes (target about 7 days). Audio from the PC is
-kept in a separate session from microphone ASR so game, browser or media
-speech cannot impersonate the user. The same ASR implementation may be
-reused behind that separate stream boundary.
+Browser AudioWorklet → software gate/pre-roll → bounded PCM → ASR final →
+transport-only VOICE_TURN → JAWL. Тот же текст идёт в bounded VoiceMem queue,
+не дожидаясь её завершения. Очередь — дополнительный контекст; важные обещания
+и факты не должны существовать только в droppable transient задаче.
 
-The delayed triage model is a replaceable CPU/RAM profile. Candidate local
-models are benchmarked for Russian quality, memory use and throughput; model
-names are not hard-coded into the architecture. Triage returns importance,
-bounded summary, confidence, source and provenance. It cannot directly alter
-persona, speak, call HostOS or write a durable fact.
+Qwen3-ASR работает после end-of-utterance. Hands-free endpointing есть как
+RMS heuristic, true partial streaming и реальные AEC/barge-in не приняты.
+Нужны измерения всей цепочки: конец речи → endpoint → ASR → LLM → первый
+слышимый звук. Скорость 2–3 слова/с не превращается напрямую в LLM tok/s.
 
-The user can pause or clear ambient buffers, set separate audio/visual
-retention and disable promotion. Sensitive applications/windows are filtered
-before storage. This path is distinct from explicit `vision__look` and from
-the proactive `SPEAK_INTENT` path.
+Желаемый основной TTS — Qwen3-TTS 0.6B Base/clone, быстрый профиль — Tera.
+Нынешние workers выдают complete WAV; Companion умеет sentence streaming.
+Отмена HTTP/playback ещё не гарантирует остановку inference и освобождение
+worker. Нужны capabilities и явный fallback, не фиктивные эмоции.
+См. [voice](contracts/voice.md), [tts](contracts/tts.md).
 
-The first implementation is `AmbientMemoryBuffer`: it is disabled by default,
-accepts only normalized audio/visual text events, applies private-text
-suppression plus TTL/count/byte bounds, and forms deterministic
-`AMBIENT_EPISODE_CANDIDATE` records. The browser exposes authenticated
-inspection, explicit enable/disable, triage and clear operations at
-`/api/ambient-memory`. `AmbientTriageScheduler` is an opt-in periodic wrapper
-around the same triage operation; it is disabled unless an interval is supplied
-and it stops with the server. Hardware capture and model-backed triage remain
-separate replaceable adapters.
+## Ситуационная и долговременная память
 
-The first hardware boundary is `SystemAudioLoopback`. It lazy-loads the
-optional PyAudioWPatch-compatible backend, selects the default WASAPI loopback
-device, queues bounded PCM16 chunks in RAM and sends them to a consumer with a
-separate session ID. `AmbientAudioASRBridge` converts stereo/rates to bounded
-mono PCM16 for an isolated VoiceMem session and ingests only final
-`VOICE_TURN` observations into ambient memory. It is never started by the web
-server automatically; live backend permission/startup remains pending.
+Звук ПК не является микрофоном владельца. В целевом обычном профиле capture
+включён после первичного выбора источников/разрешений, с видимой паузой/отзывом;
+нынешний opt-in код ещё предстоит привести к этому поведению.
+Raw media ограничены и transient. CPU/RAM triage возвращает attributed
+наблюдения и кандидаты, JAWL решает консолидацию. Планируемый авто-режим после
+согласия не означает автоматическое принятие чужой речи за факт.
 
-## Turn priority
+Сейчас ambient ASR завершается при flush/stop; длительное наблюдение требует
+segmenter с ротацией сессий, backpressure и измерением потерь. T1/T2 находятся
+в RAM и не обеспечивают неделю памяти после перезапуска.
+JAWL structured_memories содержит версии, provenance, validity и дневник
+`journal:YYYY-MM-DD`; задачи не дублируются. Доступность graph backend зависит
+от конкретного environment, импорт-заглушка не равен реальному Graph RAG.
 
-```text
-USER_FINAL / BARGE_IN     0
-TOOL_APPROVAL              1
-PROACTIVE                  2
-SCREEN_DELTA               3
-BACKGROUND                 4
-```
+Default-output WASAPI смешивает приложения. Без per-app attribution нельзя
+обещать надёжное исключение звука частного приложения по одному foreground
+window. Пауза/отдельное устройство/выбранный источник — явные варианты до
+полноценной реализации. Подавление self-TTS по времени может убрать и
+одновременно звучащую чужую речь. См. [SECONDARY_MEMORY.md](SECONDARY_MEMORY.md).
 
-The Turn Arbiter guarantees one active conversational turn and expires stale
-queued work. A newer user turn cancels or supersedes lower-priority work.
+## Действия, экран и автономность
 
-Attention/Presence also applies an optional local-time quiet-hours window
-before creating a `SPEAK_INTENT`. It is a deterministic gate, independent of
-the vision provider, and supports windows crossing midnight.
+JAWL — единая authority для HostOS, Terminal, Debug Broker, MCP и browser.
+Level 0 — default. Изолированный CDP browser/workspace дают полезную работу
+внутри native policy; browser profile не заменяет OS sandbox. Общий desktop
+требует соответствующих native прав. Аккаунты и автономные публикации получают
+явный scope; результаты внешних mutations сверяются перед retry.
+В bridge mode отказ native route не вызывает local fallback. Представительский
+каталог HostOS/Terminal/Debug не является полным каталогом всех MCP providers.
 
-## Voice lifecycle
+Full Access сохраняет все настроенные нативные возможности, unattended
+убирает per-action prompts для разрешённого профиля. Emergency stop, сроки
+lease, OS/UAC/EULA и выбранные исключения сохраняются. При сомнении после
+сбоя проверять итог действия, а не автоматически повторять его.
 
-```text
-idle → listening → partial transcript → final transcript
-     → thinking → streaming response → speaking → idle
-```
+UIA/CLI/API позволяют делать полезные дела без VLM. Экранная capture/Vision
+граница уже есть, окончательная модель отложена. Observation token,
+координаты и postcondition нужны для действия по изображению; прежний кадр
+после собственного клика может устареть — многошаговый цикл требует свежего
+наблюдения, а не бесконечного повтора старого плана.
+См. [HostOS](contracts/hostos.md), [native bridge](contracts/jawl-hostos.md).
 
-At any point, `BARGE_IN` can transition the system to `listening` after
-cancelling output.
+## UI, окно, OBS и ресурсы
 
-Interruption categories:
+Основная панель — сцена/диалог/задачи с настройками, а не вывод внутренних API.
+Планшет/телефон используют адаптивную версию той же панели. Явный LAN-профиль
+добавляет HTTPS и вход перед control UI/API, сохраняя session/CSRF/origin;
+настройка сертификата и устройства описана в [LAN.md](LAN.md).
+Персона/черты и журнал работы должны быть доступны из неё. Control origin
+2367 изолирован от presentation origin 8766. Встроенное отображение реального
+Live2D должно использовать безопасную presentation-границу; текущая inline
+CSS-фигура — fallback, ещё не зеркало загруженного model3.
 
-- backchannel — resume;
-- correction — discard and listen;
-- amend — revise the current answer;
-- new question — start a new turn;
-- unclassified — conservative fallback.
+Аудио воспроизводит один выбранный клиент; окно/OBS получают только состояние
+и amplitude. Backend задачи не зависят от вкладки; текущий browser mic/playback
+зависит. Persisted audio owner без браузера — отдельный будущий adapter.
 
-## Screen policy
-
-Default policy:
-
-- off until explicitly enabled;
-- focused window before entire screen;
-- exclude the companion's own window;
-- use UI Automation for native controls;
-- use screenshots/OCR/VLM for custom surfaces;
-- rate-limit and deduplicate observations;
-- discard raw screenshots after analysis;
-- store bounded textual descriptions and metadata;
-- deny-list sensitive applications and windows.
-
-Screen observation and screen control are separate permissions. `OBSERVER`
-may inspect bounded UI/screen state when enabled, but cannot click or type.
-`OPERATOR` and `ROOT` may use desktop interaction tools according to the
-current approval policy.
-
-Native controls use the UIA `desktop.act` path. Custom/canvas surfaces use the
-bounded `desktop.pointer` fallback: Vision supplies image coordinates plus the
-frame dimensions and foreground-window bounds, and HostOS rechecks those
-bounds before converting to screen coordinates. Dispatch and application
-acceptance remain separate postconditions.
-Custom surfaces can likewise use `desktop.keyboard` for bounded Unicode text
-or hotkeys, with the same foreground-window binding and interactive policy.
-
-There are two separate paths:
-
-1. passive sensor path for meaningful screen changes;
-2. explicit `vision__look` tool when the model or user genuinely needs a
-   fresh frame.
-
-The current implementation provides the second path through
-`/api/vision/look`. It invokes the HostOS `screen.observe` snapshot, hashes
-the transient image in memory, suppresses identical frames and enforces a
-short cooldown before a new VLM request. A provider-neutral
-OpenAI-compatible client sends the image as a bounded `image_url` payload and
-returns only a bounded description. An explicit `--screen-watch` option now
-adds the first ambient producer: an arbiter-aware, bounded in-memory
-`ScreenDeltaWatcher` publishes `SCREEN_DELTA` events through
-`/api/vision/events`. Attention/Presence applies salience, privacy, DND,
-coalescing and a proactive budget, exposing `SPEAK_INTENT` through
-`/api/vision/intents`. With an explicit `--jawl-event-dir`, accepted intents
-are atomically written to JAWL's existing event IPC; JAWL still owns final
-wording and whether to speak.
-
-## Model profiles
-
-The runtime should distinguish:
-
-- main chat/reasoning model;
-- fast attention model;
-- memory/consolidation model;
-- vision model;
-- Russian ASR model;
-- TTS provider.
-
-Each profile needs health, readiness, latency and fallback reporting. Missing
-optional models must result in a degraded mode, not a broken startup.
-
-The current benchmark profile is Qwen3-VL-2B for Vision/UI grounding and
-Qwen3-ASR-0.6B for audio. The latter is available in the Companion as an
-explicit final-utterance adapter while VoiceMem remains the default streaming
-ASR path. A temporary OpenAI-compatible chat URL (currently TokenRouter/GLM
-for testing) is a transport probe only; it does not replace JAWL's JSON action
-envelope, persona, memory or Heartbeat.
+Python stdlib core и небольшие frontend-модули — предпочтительный путь.
+Разделение больших файлов по ответственности допустимо без добавления
+тяжёлого framework. Бюджеты очередей/RAM/CPU и pause ambient в игровом режиме
+измеряются под одновременной нагрузкой, а не по одиночному benchmark.

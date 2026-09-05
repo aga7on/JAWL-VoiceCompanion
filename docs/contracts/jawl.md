@@ -1,120 +1,167 @@
 # JAWL bridge contract
 
-The companion treats JAWL as the only owner of persona, traits, drives,
-Heartbeat and durable memory. The companion never opens JAWL's SQLite,
-Vector or Graph stores directly.
+JAWL is the only owner of persona, Heartbeat, ReAct, HostOS side effects and
+durable memory. Companion never opens JAWL SQLite/Vector/Graph storage and
+never runs a second model/tool loop.
 
-## Optional connection
+## Deployment prerequisite
 
-The web bridge is enabled with:
+This contract describes the intended native counterpart and the code inspected
+in the local dirty JAWL checkout, not universal upstream support. Deployment
+requires a pinned compatible version/capability check and an owned runtime.
+`G:\AI\JAWL-Coding` remains read-only, including state/log directories. See
+[architecture](../ARCHITECTURE.md) and [audit](../TECHNICAL_AUDIT.md).
 
-```powershell
-.\scripts\run_web.ps1 --jawl-web-url "http://127.0.0.1:8770"
+## Native Companion Gateway v1
+
+JAWL emits a correlated SSE stream at `GET /api/companion/stream` and accepts a
+turn at `POST /api/companion/turn`:
+
+```json
+{"text":"Привет","turn_id":"turn-123"}
 ```
 
-The optional JAWL console token is read from `JAWL_WEB_TOKEN` (or the
-variable named by `--jawl-web-token-env`). Only loopback URLs are accepted.
+Each event has this shape:
 
-## Read-only upstream routes
+```json
+{
+  "schema_version": 1,
+  "event_seq": 42,
+  "turn_id": "turn-123",
+  "type": "assistant.final",
+  "payload": {"response": {"schema_version": 1}}
+}
+```
 
-The adapter consumes these existing JAWL routes:
+Supported types are `turn.started`, `assistant.delta`, `tool.requested`,
+`tool.started`, `tool.completed`, `assistant.final`, `turn.cancelled` and
+`turn.error`. `assistant.final` is emitted once and carries one strict
+`ResponseEnvelope`. `POST /api/companion/cancel` addresses exactly one
+`turn_id`; it cannot cancel another turn by text or sequence guess.
 
-| Route | Use |
+The Companion parser rejects unknown fields, malformed IDs, oversized payloads,
+model-supplied access levels and final events for another turn. JAWL keeps a
+bounded persistent native event journal and accepts `JAWL_GATEWAY <event_seq>`
+on its terminal transport; the web stream returns cursor metadata and sets
+`gap: true` instead of silently claiming an unavailable replay. Corrupt or
+unreadable journal state also fails closed as a gap. A native Gateway client
+is not an operator CLI session and does not emit terminal-open/close presence
+events. This supports replay and duplicate suppression, not exactly-once
+native side effects. Mutations need authority-owned idempotency and recovery
+reconciliation; a crash after dispatch can leave an uncertain outcome.
+
+Provider selection stays inside JAWL. QWB-JAWL, GPT Luna, TokenRouter or a
+local model must satisfy JAWL's own provider/tool contract; Companion receives
+only the native event/envelope.
+
+## Native control routes
+
+JAWL's web console proxies these authenticated actions through the native
+localhost control socket:
+
+| HTTP route | Native action |
 |---|---|
-| `GET /api/agent/status` | process health |
-| `GET /api/tick` | Heartbeat phase and current step |
-| `GET /api/db/stats` | bounded SQL/vector/graph counters |
-| `GET /api/drives` | bounded drive summary |
-| `GET /api/config` | selected persona/Heartbeat settings |
+| `GET /api/hostos/policy` | `hostos.policy.get` |
+| `POST /api/hostos/autonomy` | `hostos.autonomy.issue/revoke` |
+| `POST /api/hostos/emergency-stop` | `hostos.emergency_stop` |
+| `POST /api/hostos/emergency-stop/reset` | `hostos.emergency_stop.reset` |
+| `POST /api/hostos/skill` | `hostos.skill` |
+| `POST /api/debug/skill` | `debug.skill` |
+| `GET /api/skills/catalog` | `skills.catalog` |
+| `GET /api/memory` | `memory.list` |
+| `POST /api/memory` | allowlisted memory operation |
+| `GET /api/agent/journal` | bounded read-only action-plan projection |
 
-`/api/config` is filtered to a small allow-list. Environment values, API
-keys, provider URLs and unknown fields never cross into the companion API.
-Drive objects are also reduced to a fixed field allow-list and bounded
-description before reaching the browser.
-The bridge keeps no durable copy and returns `offline`/`degraded` when JAWL
-is unavailable.
+`hostos.skill` accepts only registered `HostOS*` or `HostTerminal*` skills;
+their native `require_access` decorators and JAWL policy remain authoritative.
+It does not copy wrappers into Companion. At ROOT the available capabilities
+are those of the current Windows account, subject to OS/provider/EULA limits.
+`debug.skill` similarly accepts only JAWL's seven stable Debug Broker skills;
+the provider operation catalog remains dynamic and native to the broker.
 
-## Correlated web chat
+`GET /api/skills/catalog` is a bounded read-only discovery route. It returns
+the currently registered native HostOS, HostTerminal and Debug Broker skill
+names, signatures, minimum HostOS level and current availability. It is not a
+second registry: execution still goes through `hostos.skill`/`debug.skill` and
+the native JAWL SkillRegistry.
 
-When `--jawl-web-url` is configured, the companion uses these existing JAWL
-routes for user turns:
+`GET /api/agent/journal?limit=20&state=failed` exposes only the public summary
+of recent native action plans: plan state, timing, action identities, bounded
+outcomes and unresolved actions. The web console obtains it through the native
+`agent.journal` control action and returns it under `journal`. It never
+enables execution and does not include the original action parameters or full
+lifecycle event stream. The Companion displays this as an inspection surface;
+JAWL's append-only journal remains the only source of truth.
 
-| Route | Use |
-|---|---|
-| `GET /api/chat/stream` | SSE status and bounded message events |
-| `POST /api/chat` | enqueue one user message and return its `message.seq` |
+## Canonical structured memory
 
-The adapter opens the SSE first, waits for the bridge to report `online`, then
-sends the POST. It returns the first non-`User` message whose `seq` is greater
-than the acknowledged user sequence. This filters history and other earlier
-turns without opening JAWL's `history.json` or databases. A stream failure,
-missing acknowledgement or missing agent message becomes a validated
-degraded fallback; the observable chat status is `connected`, `offline`,
-`cancelled` or `no_broadcast`.
+`structured_memories` is append-only per `memory_key`. A record has:
 
-## Legacy terminal response boundary
+```json
+{
+  "memory_key":"user.language",
+  "revision":2,
+  "kind":"fact",
+  "subject":"user",
+  "predicate":"speaks",
+  "value":"Russian",
+  "source":"conversation",
+  "confidence":0.9,
+  "provenance":{"turn_id":"turn-123"},
+  "supersedes_id":"...",
+  "valid_from":"2026-09-02T12:00:00+00:00",
+  "valid_until":null,
+  "retention_tier":"long"
+}
+```
 
-The JAWL `HostTerminalClient` channel remains an uncorrelated compatibility
-transport. A JSON line sent by the companion queues a user message; a
-user-facing response is emitted only when JAWL broadcasts a message through
-its terminal skill. The legacy adapter consumes the first broadcast on a
-short-lived loopback connection and marks a missing one as `no_broadcast`.
-This path must never present a native JAWL thought with no terminal broadcast
-as an assistant reply.
+`memory.remember` creates a key; `memory.revise` appends a new active revision;
+`memory.forget` and `memory.archive` append terminal revisions without
+destroying history. This is logical forgetting, not physical erasure of old
+values, embeddings or backups. A separate erasure policy/path is still required.
+Only the latest active revision is projected into JAWL
+context. A row is projected only while its UTC validity interval contains the
+current time. `retention_tier` is one of `short`, `standard`, `long` or
+`permanent`; it is policy metadata for the native retention maintenance job and
+does not erase append-only history. Ambient promotion uses `standard` and keeps
+the observed start time as `valid_from`. Ambient promotion is not automatic in the current manual route and must carry
+consent/source metadata. Future JAWL-controlled automatic consolidation after
+opt-in is planned; this is not a permanent manual-only product boundary.
 
-The web adapter is preferred when its URL is supplied because its sequence
-acknowledgement provides the stronger correlation boundary.
+Daily consolidation uses the same native table through
+`record_daily_journal(day, summary, commitment_ids)`. The deterministic key is
+`journal:YYYY-MM-DD`; repeated consolidation revises that row. `commitment_ids`
+are bounded references to existing JAWL tasks, not a copied task database.
+`list_daily_journal` returns a bounded read-only projection.
 
-Before either JAWL transport returns text, the companion removes paired
-`<think>`, `<analysis>`, `<reasoning>`, `<reflection>` and tool-control blocks.
-An unclosed block or line-level internal marker is rejected as
-`invalid_response` and becomes the normal degraded fallback; internal text is
-never forwarded to the response envelope or TTS.
+## Compatibility transports
 
-## Companion routes
+`GET/POST /api/chat` and the `HostTerminalClient` remain compatibility paths.
+They may be used by legacy clients, but a missing broadcast is not proof of a
+completed native turn. New Companion deployments use the correlated Gateway.
 
-These read-only routes require the normal browser session and CSRF headers:
+The optional VoiceMem/JAWL event directory accepts bounded `SPEAK_INTENT`; JAWL
+still decides final wording, DND and tool policy. Raw frames, credentials and
+hidden reasoning never cross the public bridge.
 
-- `GET /api/jawl/status`
-- `GET /api/jawl/overview`
-- `GET /api/jawl/memory`
-- `GET /api/jawl/persona`
+For action-bearing ReAct ticks, native JAWL emits ordered safe lifecycle
+summaries (`tool.requested`, `tool.started`, `tool.completed`) containing only
+bounded action identity and result summary; arguments remain inside JAWL. These summaries may arrive after dispatch or even after the final answer;
+their order does not prove pre-dispatch timing. The current loop does not
+fabricate `assistant.delta` events: that type is reserved
+for a provider-backed streaming implementation.
 
-They are inspection surfaces, not a second memory editor. Writes to persona,
-traits, drives or facts will be added only after a versioned JAWL write
-contract and audit path are agreed.
+## Vision execution boundary
 
-The current JAWL web server confirms the boundary: it exposes `PUT
-/api/config` for allow-listed YAML settings and `PUT /api/drives` for custom
-drive tuning, but it has no HTTP CRUD route for `personality_traits`, facts or
-vector/graph records. Trait CRUD currently lives inside JAWL's SQL skill and
-the operator database screen. The companion therefore does not reach into
-JAWL's SQLite/Vector/Graph files or invent a parallel fact store. A future
-write adapter must be versioned against an upstream JAWL endpoint or event
-contract and must carry its own audit/correction semantics.
-
-The unauthenticated loopback `GET /api/doctor` surface is separate from JAWL
-inspection. It reports bounded readiness states for all configured components,
-with `text_mode_available=true` whenever the companion gateway can still serve
-the deterministic text path.
-
-## Proactive event IPC
-
-The optional screen watcher can deliver accepted `SPEAK_INTENT` events to an
-explicit JAWL `.jawl_events` directory with `--jawl-event-dir`. The companion
-writes the same `{message, payload}` shape used by JAWL's `framework_api.py`
-and performs an atomic rename. The payload is bounded to a screen summary,
-significance and correlation metadata; it contains no image or local path.
-Omitting the option keeps Attention/Presence local-only. This wakes JAWL's
-existing event/Heartbeat path but does not bypass JAWL's final wording, DND or
-tool policy.
-
-The file shape and downstream routing were verified on 2026-09-01 in an
-isolated temporary directory using JAWL's actual `DaemonsPoller`, `EventBus`
-and `EventBridge` classes: one sink file was consumed, one
-`HOST_OS_SANDBOX_EVENT` reached `Heartbeat.answer_to_event`, and the bounded
-payload contained no image or local path. This proves IPC acceptance, not a
-spoken reply. A final user-facing message still depends on the active JAWL
-ReAct model calling its terminal-message skill; a local production-profile
-smoke previously completed the LLM request without such a broadcast and is
-therefore reported as `no_broadcast`.
+`VisionActionPlan` is a proposal, not authority. The Companion execution seam
+revalidates its signed observation token and frame digest before each action,
+sends each action through the normal HostOS policy executor, and stops on
+denied/failed/stale results. Dispatch is not success: a native adapter result
+or explicit bounded postcondition verifier must prove the declared condition.
+`POST /api/vision/execute` is a session/CSRF-protected explicit bridge for an
+already-produced plan and requires `confirm:true`; it does not call a VLM.
+When JAWL control mode is enabled, the bridge maps supported actions to native
+`HostOSDesktop` skills, so policy and side effects remain in JAWL. Pointer
+operations `move`, `click`, `double_click`, `right_click` and `middle_click`,
+keyboard `type`/`hotkey` and UIA `click`/`focus`/`set_value` are mapped
+explicitly. Unsupported operations fail closed.

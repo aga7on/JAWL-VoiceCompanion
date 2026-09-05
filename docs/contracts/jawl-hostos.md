@@ -1,66 +1,99 @@
 # JAWL ↔ HostOS ownership contract
 
-JAWL already contains a native HostOS implementation:
+JAWL is the only production authority for model-originated computer actions.
+Its native runtime owns ReAct/Heartbeat, the SkillRegistry, HostOS policy,
+approvals, audit, cancellation and the emergency stop:
 
 ```text
 JAWL ReAct / Heartbeat
         ↓ native SkillRegistry
-JAWL HostOS skills
-        ↓
-JAWL HostOSClient / access_level 0..3
-        ↓
-Windows, filesystem, processes and desktop
+JAWL HostOS / HostTerminal / Debug Broker skills
+        ↓ native policy and access level 0..3
+Windows, filesystem, processes, desktop and debug providers
 ```
 
-Its `HostOSClient` loads the configured level at JAWL startup and guards the
-native skills. Level 3 is full access available to the Windows account that
-launched JAWL; it is not elevation beyond that account.
+`ROOT` (level 3) means the capability of the Windows account that launched
+JAWL. It does not bypass UAC, the secure desktop, OS ACLs, provider failures,
+TTD EULA requirements or external permissions.
 
-The companion also has a separate, lightweight `HostOSPolicy` and
-`HostOSExecutor` for its browser/control-plane tools. By default this remains
-an independent dry-run or explicitly live path. When the companion is started
-with `--jawl-hostos-control`, its level endpoint additionally controls native
-JAWL through the authenticated local web console.
+## Deployment and product scope
 
-## Production target
+This is one framework's internal boundary, not removal of the agent from the
+Companion product. Native additions currently depend on a dirty external JAWL
+checkout; a pinned compatible version and owned runtime are not yet accepted.
+Do not write or launch state-producing tests in `G:\AI\JAWL-Coding`.
 
-JAWL remains the canonical executor for JAWL-native model skills. The browser
-control plane becomes a session-protected controller for the same authority:
+Full Access/unattended is required for the owner's overnight work. A configured
+lease must cover and display the requested interval; exact duration/renewal UX
+is unfinished. Authorized unattended actions do not need per-action prompts.
+A browser closing must not stop backend tasks; browser-owned microphone/audio
+is a separate capability. See [PRODUCT.md](../PRODUCT.md).
 
-```text
-browser / companion UI
-        ↓ authenticated local control bridge
-JAWL HostOS policy + approval/audit state
-        ↓
-JAWL HostOSClient and registered skills
-```
+## Companion bridge
 
-The control bridge is opt-in and performs one bounded transaction for a level
-change: write only the HostOS `enabled`/`access_level` allowlisted fields,
-stop the JAWL agent, then start it. A failed stop or start is reported as a
-503 and the companion policy is not changed. The JAWL console token is
-required even when the JAWL web server itself is configured without a token.
-The bridge does not open JAWL databases or duplicate its SkillRegistry.
-Model-originated tool calls remain inside JAWL and use its native policy.
+With `--jawl-hostos-control` and a local JAWL console token, the Companion is
+the browser/control surface for that native authority:
 
-`ROOT` is the full capability of the Windows account that launched JAWL. The
-companion's `unattended` switch controls only companion-side approvals; JAWL
-Heartbeat is already an autonomous native caller and has no equivalent
-companion toggle in its current web API. In bridge mode, emergency stop also
-best-effort calls JAWL's authenticated `/api/agent/stop`; local Companion
-processes are stopped regardless of JAWL availability. This stops native
-Heartbeat, but is not yet a per-tool native cancellation contract.
+- level changes are written to JAWL and take effect only after native
+  stop/start succeeds;
+- unattended mode is represented by JAWL's expiring ROOT autonomy lease;
+- emergency stop affects JAWL and Companion-owned work; recovery starts JAWL
+  before clearing the local latch;
+- `POST /api/hostos/skill` forwards registered `HostOS*` and `HostTerminal*`
+  skills to JAWL without copying their wrappers;
+- `POST /api/debug/skill` forwards the seven stable Debug Broker skills while
+  leaving provider discovery and operation execution in JAWL;
+- `GET /api/skills/catalog` reads the current native registry for the HostOS,
+  HostTerminal and Debug Broker namespaces without copying or executing it;
+- structured memory mutations use JAWL's allowlisted `memory.*` actions;
+- Debug Broker remains native and keeps its dynamic provider catalog and
+  operation metadata.
 
-`POST /api/emergency-stop/reset` is the explicit recovery path. In bridge
-mode it starts native JAWL first and clears the local stop only after that
-request succeeds; without the bridge it clears only the local Companion
-stop.
+Native desktop annotations follow the same matrix: `HostOSDesktop` observation
+and bounded waits require `OBSERVER` (1), while pointer, keyboard, UIA action,
+window and system-effect methods require `OPERATOR` (2). `ROOT` (3) retains
+the full configured native capability set. Native Windows pointer primitives
+return bounded cursor-position verification when available; this proves only
+that the pointer reached the requested coordinates, not that the foreground
+application accepted the input. Vision plans still need an app-level fresh
+postcondition for that stronger claim.
 
-Without the opt-in bridge, companion-side HostOS execution and JAWL-native
-execution are two explicitly labelled paths. The browser's
-`/api/jawl/hostos` endpoint reports whether control is enabled. With control
-enabled, a successful level response includes `jawl_hostos.status =
-synchronized`, and the endpoint can verify the restarted native level.
+The Companion's local executor exists only for explicit standalone/mock or
+control-plane-owned compatibility paths. In bridge mode a model-originated
+operation must not silently fall back to it. A failed native request is a
+visible degraded/error result.
 
-Vision/VLM is unrelated to this ownership boundary and remains provider-neutral
-until the operator's CPU/RAM model test selects a model.
+## Native action requirements
+
+Every native side effect must pass the JAWL registry and its decorators. The
+effective policy revision, risk/minimum-level metadata, approval decision,
+idempotency where applicable and bounded redacted audit result stay in JAWL.
+The Companion never receives raw credentials, hidden reasoning, TTD memory or
+unbounded tool arguments.
+
+Vision is only an evidence source. The current Companion Vision executor
+revalidates the signed token and its frame digest before each action, then
+submits one policy-gated desktop request at a time and requires a verified
+postcondition. The native JAWL adapter is the intended execution path when
+JAWL control mode is enabled; coordinates never authorize an operation.
+
+Automatic process recovery follows the same native boundary: the JAWL
+supervisor may restart a crashed instance only while that instance has a
+currently valid, bounded ROOT autonomy lease and its current HostOS policy is
+enabled at level 3. Manual operator start is a separate explicit transition.
+At runtime startup, unfinished one-shot coding approvals are invalidated and
+cannot be consumed after the restart; the approval CLI does not perform this
+invalidation when merely inspecting the registry.
+
+## External tools
+
+The repository's JAWL reverse-engineering toolchain remains native to JAWL's
+Debug Broker. `G:\RE` is an external workspace with sensitive TTD traces;
+the Companion does not copy it, accept EULAs, request elevation or invent
+replacement wrappers. Provider availability, permissions and licensing are
+reported as explicit runtime conditions.
+
+The current exposed catalog covers HostOS/HostTerminal/Debug Broker only.
+MCP/browser and other JAWL tools remain in the native agent, but complete
+product compatibility needs their own discovery/execution acceptance. Catalog
+counts and provider readiness are not proof of every operation executing.

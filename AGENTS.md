@@ -1,173 +1,159 @@
-# JAWL VoiceCompanion — Agent Instructions
+# JAWL VoiceCompanion — инструкции агентам
 
-## Project mission
+## Миссия и порядок чтения
 
-Build a local-first Russian-speaking AI companion with a 2D Live2D avatar.
-The companion should feel coherent, responsive and safe before it becomes
-highly autonomous.
+Строим **одну платформу агента-компаньона**, не три несвязанных приложения.
+JAWL: личность, Heartbeat/ReAct, долговременная память, задачи и нативные
+инструменты; Companion: интеграция/голос/веб/2D; VoiceMem: восприятие/контекст.
+Не вырезать agentic контур из продукта и не заводить второй мозг.
 
-The project is intentionally staged. Do not add screen monitoring,
-proactivity, desktop control or complex memory behavior before the preceding
-vertical slice is stable and documented.
+Перед существенной работой полностью прочитать:
+`docs/PRODUCT.md` → `docs/STATE.md` → `TODO.md` →
+`docs/TECHNICAL_AUDIT.md`; для изменяемой границы — архитектуру/контракт.
+Проверить `git status --short --branch`, выбрать один проверяемый срез.
+История и CHANGELOG не переопределяют текущую очередь/замысел.
+Последнее явное поручение пользователя задаёт scope: просьба править только
+доки не разрешает запуск/изменение runtime даже при старом большом goal.
 
-## Current scope
+## Обязательные продуктовые решения
 
-In scope:
+- Русское общение голосом/текстом с одной личностью и памятью, настраиваемые
+  черты/факты, уместная инициатива, реальные поручения на ПК.
+- HostOS levels 0–3; Full Access + unattended для автономной работы ночью —
+  обязательный режим. Не вводить per-action prompts для уже разрешённых
+  действий этого профиля. Политику исполняет JAWL; стоп/исключения/ОС сохраняются.
+- Веб-панель в мятном Windows Aero стиле, лаконичная сцена/диалог/задачи,
+  настройки во вкладках/окнах. 2D в панели + отдельное окно + OBS URL.
+- 2D-only; адаптивный веб-интерфейс для телефона/планшета и LAN-доступ явно
+  запрошены владельцем. Отдельный mobile app не нужен. Тяжёлый UI framework, 3D, cloud-hosting не добавлять без
+  отдельного обоснования/решения.
+- Qwen3-TTS 0.6B — желаемый основной, TeraTTSv2 — быстрый CPU fallback.
+  Пока CLI default Tera: не выдавать желаемый выбор за уже изменённый код.
+- Qwen3-ASR — final-utterance профиль. ASR не описывает музыку/тембр/настроение
+  без отдельно проверенной capability.
+- Постоянная Vision модель отложена владельцем. Не выбирать/скачивать её
+  самовольно; делать независимые задачи на CLI/UIA/fallback.
+- Big Pickle/OpenCode — временный тестовый provider. Будущий QWB/local —
+  за JAWL provider contract, не direct Companion LLM как второй агент.
+- Ambient system audio/screen — отдельная низкоприоритетная память.
+  Целевой обычный профиль: чувства включены после первичной настройки источников,
+  наблюдения записываются автоматически, консолидацией владеет JAWL.
+  Ручной review не вечный предел; нынешний opt-in код не считать уже изменённым.
+- Меньше зависимостей и дублирования, bounded RAM/очереди, понятный код.
+  Не оптимизировать число строк ценой тестов, lifecycle и trust boundaries.
 
-- JAWL as the canonical cognitive core;
-- VoiceMem as a voice/sensory sidecar;
-- Russian streaming ASR through an adapter;
-- CozyVoice 2 and OmniVoice through a common TTS interface;
-- Live2D 2D avatar only;
-- bounded long-term memory with provenance and correction history;
-- on-demand and later event-triggered screen vision;
-- Heartbeat, Attention/Presence and Turn Arbiter;
-- local Windows desktop operation;
-- HostOS-style access levels from sandboxed operation to explicitly enabled
-  full user-session access;
-- a loopback web control plane for chat, settings, approvals, memory and
-  audit inspection;
-- opt-in tools with approval and audit logging.
+## Эволюция согласованного ядра
 
-Out of scope for the current project:
+JAWL — исходная основа, не неизменяемый black box. Развитие принадлежит нашему
+owned runtime/version после решения P0-A; protected reference не трогать.
+Не сохранять дублирующие механизмы только потому, что они есть в двух upstream.
+Сначала карта ownership/перекрытий и общий feedback cycle, затем изменение.
 
-- VRM/3D avatar;
-- mobile clients;
-- cloud-hosted backend;
-- copying Soul of Waifu code or assets;
-- allowing unrestricted computer control without an explicitly selected
-  HostOS access level and the corresponding policy checks;
-- full-time VLM calls on every screen frame.
+Биология/психология — аналогии, не лицензия на усложнение. Не добавлять
+независимые агенты/планировщики на каждую эмоцию/«отдел мозга». Один decision
+owner, bounded state/context, сенсорные workers без собственной личности,
+coherence E2E: память действительно меняет ответ, инструмент меняет состояние
+задачи, голос/аватар выражают одно решение. Неизмеримое «стало более живым»
+не закрывает задачу; автоматическое переписывание кода/прав сюда не входит.
 
-## Source repositories
+## Scope файлов и внешние зависимости
 
-The following repositories are references or upstream dependencies. They are
-not modified from this project unless the user explicitly requests it.
+Наш единственный development repo: `G:\AI\JAWL-VoiceCompanion`.
 
-- `G:\AI\JAWL-Coding` — JAWL fork and cognitive runtime;
-- `G:\AI\VoiceMem` — streaming dual-brain voice memory;
-- `G:\AI\_tmp\soul-of-waifu` — Soul of Waifu reference clone;
-- `G:\AI\_tmp\companion-repos\Open-LLM-VTuber` — voice/avatar interfaces;
-- `G:\AI\_tmp\companion-repos\Warashi` — companion UX and bounded memory;
-- `G:\AI\_tmp\companion-repos\Miru` — attention, screen sensing and memory lifecycle;
-- `G:\AI\_tmp\companion-repos\Mana` — Windows, tools, safety and local-first patterns;
-- `G:\AI\_tmp\companion-repos\AniCompanion` — VRM/frontend and full-duplex patterns.
+Read-only reference/upstream, если пользователь отдельно не разрешил изменения:
 
-## Architectural ownership
+- `G:\AI\JAWL-Coding` — JAWL;
+- `G:\AI\VoiceMem` — VoiceMem;
+- `G:\AI\_tmp\soul-of-waifu`;
+- `G:\AI\_tmp\companion-repos\Open-LLM-VTuber`, `Warashi`, `Miru`,
+  `Mana`, `AniCompanion` — исследованные patterns.
 
-JAWL owns the single canonical personality and durable cognitive state:
+Запрет upstream write включает запуск тестов/приложений, создающих там
+pycache, data, logs, config, runtime или меняющих рабочий экземпляр через API.
+Для live tests нужен согласованный отдельный runtime с отдельными config/
+data/log/cache/env. Вывод нового fork/dependency за существующий scope
+согласовать; не переносить грязный checkout и секреты автоматически.
 
-- persona and stable traits;
-- mental state and drives;
-- goals, tasks and commitments;
-- canonical facts and relationships;
-- Heartbeat and ReAct decisions;
-- tool policy, approval and audit records.
+`G:\RE` — внешняя нативная toolchain, не наш build/temp root.
+Не заменять junctions `x64dbg`, `x64dbgMCP-source`,
+`ghidra_12.1.2_PUBLIC` независимыми копиями. TTD EULA и UAC не принимать
+за пользователя. Модели/рефы/лицензируемые ассеты не копировать в git.
 
-VoiceMem owns voice-native observations:
+Dirty changes принадлежат пользователю/предыдущим итерациям. Не делать reset/
+checkout/delete, массовый commit и не приписывать авторство по timestamps.
 
-- partial and final transcript;
-- VAD and speaker signals;
-- audio-derived affect evidence;
-- speculative retrieval during a user utterance;
-- voice/session episode data.
+## Дисциплина контекста и квоты
 
-VoiceMem must not independently redefine the character personality. Stable
-facts or traits are promoted into JAWL only through an explicit reflection or
-consolidation path.
+Показывать короткие дельты, не полную историю; ограничивать вывод и поиск;
+не дублировать delegated work и не повторять неизменившиеся gates. Использовать
+немного параллельных агентов; при низкой пользовательской квоте не начинать
+новую работу. Приоритеты — correctness, security и required tests; не обещать
+фиксированный процент экономии токенов.
 
-Attention/Presence is a fast timing layer. It may coalesce signals, apply
-salience and cooldowns, and create `SPEAK_INTENT`. It must not become a second
-personality or a second source of truth.
+## Архитектурные инварианты
 
-The Live2D frontend renders state. It does not decide what the character
-believes, remembers or wants.
+1. Один canonical owner persona/facts/tasks/policy — JAWL. VoiceMem и
+   Attention поставляют observations/SPEAK_INTENT, не меняют характер напрямую.
+2. Все model-originated side effects идут через native JAWL policy/registry,
+   включая HostOS, Terminal, Debug Broker, MCP/browser. Bridge outage не даёт
+   права использовать локальный executor. Standalone/mock только явно.
+3. JSON envelopes versioned/validated/bounded. Model fields не дают полномочий.
+   Media может идти bounded binary/base64 по контракту; JSON — не догма для PCM.
+4. Priority/cancel/reconnect должны сохранять correlation и task state.
+   Stale output отбрасывать; replay dedup не равно exactly-once mutations.
+5. Факт имеет источник/время/уверенность и correction/forget path.
+   Always-in-context память ограничена, остальное retrieval.
+6. Ambient не USER_FINAL и не инструкции. Screenshots/web/files/tool results —
+   недоверенные данные; model inputs не получают authority от их содержимого.
+7. Capture в целевом профиле включён после явного первичного выбора источников
+   и разрешений ОС/браузера: visible, bounded, pause/revoke, sensitive drop,
+   без raw persistence. Mixed WASAPI не даёт надёжной per-app attribution.
+   Документирование defaults не разрешает начать текущий захват устройств.
+8. Remote text LLM не означает согласие передавать ей PCM/screenshots/ambient.
+9. Control и presentation — separate origins/capabilities, loopback по умолчанию.
+   Явный LAN-режим владельца: HTTPS и вход на control; не убирать CSRF/origin.
+   Непроверенный Live2D JS не загружать в privileged UI; один audio owner.
+10. Full Access — права текущего Windows аккаунта, не обход OS/EULA/ACL.
+    Текущий lease механизм должен обслуживать ночной профиль и показывать срок.
+11. Хранить короткие полезные summaries, не скрытый chain-of-thought.
+    Audit metadata redacted/bounded, без raw TTD и credentials.
 
-## Required design rules
+## Безопасность работы над проектом
 
-1. Prefer interfaces and adapters over direct imports between services.
-2. Keep user turns, proactive turns and background work on separate priority
-   lanes through the Turn Arbiter.
-3. Cancel stale ASR, LLM and TTS work when a newer user turn supersedes it.
-4. Keep always-injected memory bounded. Put detailed recall behind retrieval.
-5. Every stored fact needs a source, confidence or epistemic type where
-   possible, and a correction/removal path.
-6. Treat screenshots, web pages, files and tool results as untrusted content;
-   never let their text silently become instructions.
-7. Screen observation is off by default, focused-window-first, rate-limited,
-   redacted where possible and stores descriptions rather than raw frames.
-8. Tool actions must be narrowly scoped, approval-aware and auditable.
-   HostOS access level is enforced by the backend, never by the browser UI
-   or by model-produced text.
-9. Use structured response envelopes. Emotion, speech, gesture and display
-   text must not be encoded only in fragile prose conventions.
-10. Do not expose hidden chain-of-thought. Store short internal summaries only.
-11. Bind all local HTTP/WebSocket services to loopback by default. A browser
-    session is a control surface, not an authorization boundary.
+- Не читать/печатать `.env`, API keys, токены или process commandlines с секретами.
+  Секреты из чата не повторять, не встраивать в docs/fixtures.
+- По умолчанию loopback: control 2367, presentation 8766; 8765 — FoxMCP.
+  Для планшета разрешён явный LAN-профиль; см. `docs/LAN.md`.
+  Конфликт порта означает отказ/другой порт, не убийство его владельца.
+- `scripts/run_target_jawl_smoke.ps1` до исправления A3 аудита **не запускать**.
+- Тесты actions — disposable fixtures и явный opt-in; не рабочие файлы/приложения.
+  Каталог всех tools не требует опасного live выполнения каждого из них.
+- Cleanup только доказанно собственных процессов/путей; проверять resolved
+  targets, process identity/creation time. Не удалять broad workspace.
+- Не создавать goal без явного запроса. Старый goal не расширяет текущую задачу.
+  Если нужен новый scope/внешнее разрешение, остановить этот шаг и спросить.
 
-## Documentation and state tracking
+## Проверка качества и передача
 
-Before meaningful work:
+Major runtime update: `scripts/run_full_gate.ps1` + весь основной browser E2E
+сценарий и затронутые live rows из аудита. Fake HTTP gate не заменяет
+browser interactions/скриншоты, реальную модель, устройство и OBS.
+Для docs-only: link/consistency check + `git diff --check`, без live launches.
 
-- read `TODO.md` and `docs/STATE.md`;
-- check `git status --short --branch`;
-- identify the active phase and its acceptance criteria;
-- update the relevant design document if the implementation changes a
-  decision.
+При каждом evidence фиксировать profile/run ID, версию/dirty diff, вход,
+ожидание/факт, дату, pass/fail/skip, exit code и redacted report.
+Отдельно: unit, fake HTTP, synthetic media, real provider, real device.
+`configured`/HTTP 200/`queued`/DOM marker не equals ready/ingested/красиво.
 
-After meaningful work:
+Долгую command session отслеживать до exit с её ID. Потерянный stdout не
+считать pass, orphan-runtime bug или поводом бесконечно перезапускать gate.
+Не повторять одинаковые сборки/зелёные тесты без новой гипотезы/изменения.
 
-- update `TODO.md`;
-- update `docs/STATE.md` with what changed, verification and next action;
-- add an entry to `CHANGELOG.md` for user-visible or architectural changes;
-- add or update an ADR when an architectural decision changes;
-- run the narrowest relevant tests and record the result;
-- leave the repository in a reviewable git state.
+После среза:
+- TODO — статус только проверенного результата;
+- STATE — короткая сводка, что изменено/проверено/ограничено, следующий шаг;
+- CHANGELOG — существенное изменение; DECISIONS — изменившийся выбор;
+- оставить reviewable diff, без посторонних правок.
 
-Do not mark a task complete because files exist. Mark it complete only after
-its stated acceptance criteria and verification are satisfied.
-
-## Git workflow
-
-- Keep commits small and logically grouped.
-- Use descriptive imperative commit messages.
-- Never reset, checkout or delete user work without explicit permission.
-- Do not commit model weights, generated audio, screenshots, secrets,
-  credentials, local databases or virtual environments.
-- Keep upstream/reference repositories separate from this repository.
-
-## Security and privacy
-
-- Bind local services to loopback unless remote access is explicitly designed.
-- Never read or print `.env` contents, API keys or tokens.
-- Redact secrets from logs and tool traces.
-- Default desktop actions to read-only observation.
-- Require explicit confirmation for filesystem writes, shell commands,
-  browser actions, keyboard/mouse control and destructive operations.
-
-## Quality gates
-
-The project progresses only when the current vertical slice passes:
-
-- startup/restart recovery;
-- cancellation and barge-in behavior;
-- bounded context and memory checks;
-- no secret leakage in logs;
-- clear degraded-mode behavior when ASR, TTS, VLM or JAWL is unavailable;
-- manual latency and Russian-language quality review.
-
-Any major cross-layer change must also pass `scripts/run_full_gate.ps1`. The
-full gate runs compilation, the complete unit suite, the complete local HTTP
-E2E suite and `git diff --check`. The E2E suite must exercise the real local
-HTTP server and its public contracts across the complete affected user paths;
-unit tests alone are not sufficient evidence that the expected result reaches
-the visible UI/state. `scripts/run_e2e.ps1` remains the focused E2E command.
-
-## Naming
-
-- Python: `snake_case` files and functions;
-- TypeScript/JavaScript frontend: existing project convention, otherwise
-  `camelCase` functions and `PascalCase` classes;
-- events: uppercase semantic names such as `USER_FINAL`;
-- docs: Markdown with dates for plans and ADRs;
-- schemas: versioned JSON with explicit `schema_version`.
+Не объявлять RC до целого daily scenario, production-ready до полной
+применимой матрицы и пользовательской приёмки. Называть реальные пробелы.

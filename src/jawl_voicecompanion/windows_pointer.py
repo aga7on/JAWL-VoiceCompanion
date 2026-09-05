@@ -13,6 +13,8 @@ import os
 from ctypes import wintypes
 from typing import Any, Callable, Mapping
 
+from .screen_adapter import verify_observation_token
+
 
 _OPERATIONS = {"move", "click", "double_click", "right_click", "middle_click"}
 _MOUSE_FLAGS = {
@@ -57,7 +59,7 @@ class _Win32Foreground:
         bounds = [int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)]
         if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
             return {"status": "degraded", "reason": "foreground_window_has_no_bounds"}
-        return {"status": "verified", "class_name": class_name.value[:120], "bounds": bounds}
+        return {"status": "verified", "hwnd": int(hwnd), "class_name": class_name.value[:120], "bounds": bounds}
 
 
 class _Win32Pointer:
@@ -94,9 +96,11 @@ class WindowsPointerAdapter:
         *,
         foreground_provider: Callable[[], Mapping[str, Any]] | None = None,
         pointer_backend: Any | None = None,
+        require_fresh_token: bool = False,
     ) -> None:
         self._foreground = foreground_provider or _Win32Foreground()
         self._pointer = pointer_backend
+        self.require_fresh_token = bool(require_fresh_token)
         if self._pointer is None and os.name == "nt":
             self._pointer = _Win32Pointer()
 
@@ -116,6 +120,22 @@ class WindowsPointerAdapter:
         current_bounds = _bounds(current.get("bounds"))
         if current_bounds is None:
             return {"status": "degraded", "reason": "foreground_window_has_no_bounds"}
+
+        token = target.get("observation_token")
+        if self.require_fresh_token and not isinstance(token, str):
+            return {"status": "stale_target", "reason": "fresh_observation_token_required"}
+        if token is not None:
+            claims = verify_observation_token(token)
+            if claims is None:
+                return {"status": "stale_target", "reason": "invalid_or_expired_observation_token"}
+            if claims["class_name"] != str(current.get("class_name") or "") or claims["bounds"] != list(current_bounds):
+                return {"status": "stale_target", "reason": "observation_window_changed"}
+            current_hwnd = current.get("hwnd")
+            if current_hwnd is not None and int(current_hwnd) != claims["hwnd"]:
+                return {"status": "stale_target", "reason": "observation_window_identity_changed"}
+            expected_digest = target.get("observation_digest")
+            if expected_digest is not None and str(expected_digest).casefold() != claims["digest"]:
+                return {"status": "stale_target", "reason": "observation_digest_changed"}
 
         expected_class = target.get("window_class", target.get("class_name"))
         if expected_class is not None:

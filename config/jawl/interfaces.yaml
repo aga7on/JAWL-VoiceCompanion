@@ -1,0 +1,37 @@
+# Start with native sandbox actions. Other capabilities are enabled per runtime profile.
+host:
+  os:
+    enabled: true
+    access_level: 0
+    env_access: false
+    desktop_interactions: false
+    coding_execution_backend: disabled
+  terminal:
+    enabled: true
+telegram:
+  telethon: {enabled: false}
+  aiogram: {enabled: false}
+github: {enabled: false}
+email: {enabled: false}
+calendar: {enabled: false}
+code_graph: {enabled: false}
+web:
+  http: {enabled: false}
+  search: {enabled: false}
+  browser: {enabled: false}
+  hooks: {enabled: false}
+  rss: {enabled: false}
+meta:
+  enabled: false
+  custom_skills_enabled: false
+multimodality: {enabled: false}
+mcp: {enabled: false}
+debug_broker: {enabled: false}
+voice:
+  stt:
+    cloud:
+      whisper: {enabled: false}
+  tts:
+    cloud:
+      elevenlabs: {enabled: false}
+      edge: {enabled: false}

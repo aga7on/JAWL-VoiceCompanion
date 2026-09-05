@@ -3,6 +3,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
@@ -70,7 +71,10 @@ class SystemAudioTests(unittest.TestCase):
     def test_capture_is_explicit_and_missing_backend_degrades(self):
         capture = SystemAudioLoopback(lambda *_: None)
         self.assertFalse(capture.state()["running"])
-        with self.assertRaises(SystemAudioUnavailable):
+        with patch(
+            "jawl_voicecompanion.system_audio.importlib.import_module",
+            side_effect=ImportError,
+        ), self.assertRaises(SystemAudioUnavailable):
             capture.start()
         self.assertEqual(capture.state()["last_error"], "pyaudiowpatch_not_installed")
 

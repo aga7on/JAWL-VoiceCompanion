@@ -106,6 +106,12 @@ class JawlWebTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             JawlWebAdapter("https://example.invalid", token="secret")
 
+    def test_url_credentials_and_query_are_rejected(self):
+        with self.assertRaises(ValueError):
+            JawlWebAdapter("http://user:pass@127.0.0.1:8770", token="secret")
+        with self.assertRaises(ValueError):
+            JawlWebAdapter("http://127.0.0.1:8770/?token=secret", token="secret")
+
     def test_hostos_control_writes_config_and_restarts_agent_with_token(self):
         calls = []
         responses = {
@@ -142,6 +148,120 @@ class JawlWebTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tokened.set_hostos_level(True)
 
+    def test_structured_memory_uses_native_jawl_routes(self):
+        calls = []
+        responses = {
+            ("GET", "/api/memory?kind=fact&limit=3"): {
+                "ok": True, "native": True, "memory": {"memories": [{"memory_key": "user.lang"}]}
+            },
+            ("POST", "/api/memory"): {
+                "ok": True, "native": True, "memory": {"is_success": True, "message": "stored"}
+            },
+        }
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            payload = json.loads(request.data.decode("utf-8")) if request.data else None
+            calls.append((request.method, path, payload))
+            return _Response(responses[(request.method, path)])
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        result = adapter.structured_memory("fact", 3)
+        self.assertEqual(result["memory"]["memories"][0]["memory_key"], "user.lang")
+        adapter.remember_memory(kind="fact", subject="user", predicate="lang", value="ru")
+        self.assertEqual(calls[1][2]["operation"], "remember")
+
+    def test_autonomy_journal_uses_bounded_native_projection(self):
+        calls = []
+
+        def opener(request, timeout):
+            del timeout
+            calls.append(request.full_url)
+            return _Response({
+                "ok": True,
+                "native": True,
+                "journal": {
+                    "source": "jawl.action_journal",
+                    "plans": [{"plan_id": "p1", "state": "completed"}],
+                },
+            })
+
+        adapter = JawlWebAdapter(
+            "http://127.0.0.1:8770", token="secret", opener=opener
+        )
+        result = adapter.autonomy_journal(limit=3, state="completed")
+        self.assertEqual(result["plans"][0]["plan_id"], "p1")
+        self.assertEqual(calls, ["http://127.0.0.1:8770/api/agent/journal?limit=3&state=completed"])
+        with self.assertRaises(ValueError):
+            adapter.autonomy_journal(limit=0)
+
+    def test_structured_memory_rejects_native_skill_failure(self):
+        def opener(request, timeout):
+            del timeout
+            return _Response({
+                "ok": True,
+                "native": True,
+                "memory": {"is_success": False, "message": "duplicate key"},
+            })
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        with self.assertRaises(JawlWebUnavailable):
+            adapter.remember_memory(
+                kind="fact", subject="user", predicate="lang", value="ru"
+            )
+
+    def test_native_hostos_skill_is_forwarded_without_local_execution(self):
+        def opener(request, timeout):
+            del timeout
+            self.assertEqual(request.method, "POST")
+            self.assertEqual(request.full_url, "http://127.0.0.1:8770/api/hostos/skill")
+            payload = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(payload["skill"], "HostOSWriter.write_file")
+            return _Response({"ok": True, "native": True, "result": {"is_success": True}})
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        result = adapter.execute_hostos_skill(
+            "HostOSWriter.write_file", {"filepath": "x", "content": "y"}
+        )
+        self.assertEqual(result["status"], "native")
+
+    def test_native_debug_skill_is_forwarded_without_local_execution(self):
+        def opener(request, timeout):
+            del timeout
+            self.assertEqual(request.method, "POST")
+            self.assertEqual(request.full_url, "http://127.0.0.1:8770/api/debug/skill")
+            payload = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(payload["skill"], "DebugBroker.search_operations")
+            return _Response({"ok": True, "native": True, "result": {"is_success": True}})
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        result = adapter.execute_debug_skill(
+            "DebugBroker.search_operations", {"query": "x64dbg"}
+        )
+        self.assertEqual(result["status"], "native")
+
+    def test_native_skill_catalog_uses_current_jawl_registry(self):
+        def opener(request, timeout):
+            del timeout
+            self.assertEqual(
+                request.full_url,
+                "http://127.0.0.1:8770/api/skills/catalog?limit=4&prefix=HostOS&prefix=DebugBroker",
+            )
+            return _Response({
+                "ok": True,
+                "native": True,
+                "catalog": {
+                    "schema_version": 1,
+                    "prefixes": ["HostOS", "DebugBroker"],
+                    "skills": [{"name": "HostOSReader.read_file_range", "available": True}],
+                },
+            })
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", opener=opener)
+        result = adapter.native_skill_catalog(("HostOS", "DebugBroker"), limit=4)
+        assert result["skills"][0]["name"] == "HostOSReader.read_file_range"
+
     def test_stop_agent_returns_bounded_native_stop_result(self):
         def opener(request, timeout):
             del timeout
@@ -161,6 +281,27 @@ class JawlWebTests(unittest.TestCase):
 
         adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
         self.assertEqual(adapter.start_agent(), {"status": "started", "pid": 42})
+
+    def test_restart_agent_uses_stop_then_start(self):
+        calls = []
+
+        def opener(request, timeout):
+            del timeout
+            calls.append(request.full_url)
+            if request.full_url.endswith("/api/agent/status"):
+                return _Response({"ok": True, "running": True, "starting": False})
+            if request.full_url.endswith("/api/agent/stop"):
+                return _Response({"ok": True, "forced": False})
+            self.assertTrue(request.full_url.endswith("/api/agent/start"))
+            return _Response({"ok": True, "pid": 42})
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        self.assertEqual(adapter.restart_agent()["status"], "restarted")
+        self.assertEqual(calls, [
+            "http://127.0.0.1:8770/api/agent/stop",
+            "http://127.0.0.1:8770/api/agent/start",
+            "http://127.0.0.1:8770/api/agent/status",
+        ])
 
     def test_chat_post_and_sse_are_correlated_by_sequence(self):
         stream = _SseResponse()
@@ -253,6 +394,153 @@ class JawlWebTests(unittest.TestCase):
             "http://127.0.0.1:8770", opener=opener, chat_timeout_seconds=2,
         )
         self.assertEqual(adapter.respond("Тест"), "visible")
+
+
+    def test_native_gateway_returns_only_matching_typed_final_event(self):
+        stream = _SseResponse()
+        calls = []
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            calls.append(path)
+            if path == "/api/companion/stream":
+                return stream
+            self.assertEqual(path, "/api/companion/turn")
+            request_payload = json.loads(request.data.decode("utf-8"))
+            turn_id = request_payload["turn_id"]
+            response = {
+                "schema_version": 1,
+                "response_id": "resp-native-1",
+                "turn_id": turn_id,
+                "text": "Ответ из JAWL",
+                "speak": True,
+                "emotion": {"id": "attentive", "intensity": 0.45, "confidence": 0.8},
+                "avatar": {"expression": "attentive", "motion": "soft_nod", "state": "speaking"},
+                "voice": {"provider": "jawl", "voice_id": "main_ru", "rate": 1.0},
+                "actions": [],
+                "interruptible": True,
+                "proactive": False,
+            }
+            stream.lines.put(
+                (
+                    "data: "
+                    + json.dumps({
+                        "events": [{
+                            "schema_version": 1,
+                            "event_seq": 2,
+                            "turn_id": turn_id,
+                            "type": "assistant.final",
+                            "payload": {"response": response},
+                        }]
+                    })
+                    + "\n"
+                ).encode("utf-8")
+            )
+            stream.lines.put(b"\n")
+            return _Response({"ok": True, "turn_id": turn_id})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770",
+            native_gateway=True,
+            chat_timeout_seconds=2,
+            opener=opener,
+        )
+        self.assertEqual(adapter.respond("Привет"), "Ответ из JAWL")
+        self.assertEqual(calls[:2], ["/api/companion/stream", "/api/companion/turn"])
+
+    def test_native_gateway_reconnects_from_last_cursor_without_resubmitting_turn(self):
+        first = _SseResponse()
+        second = _SseResponse()
+        streams = [first, second]
+        calls = []
+        turn_id_holder = {}
+
+        first.lines.put((
+            "data: " + json.dumps({"events": [{
+                "schema_version": 1,
+                "event_seq": 5,
+                "turn_id": "other-turn",
+                "type": "turn.started",
+                "payload": {},
+            }], "cursor": {"after": 5}}) + "\n"
+        ).encode("utf-8"))
+        first.lines.put(b"\n")
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            calls.append(path)
+            if path.startswith("/api/companion/stream"):
+                stream = streams.pop(0)
+                if stream is second:
+                    response = {
+                        "schema_version": 1,
+                        "response_id": "resp-reconnect",
+                        "turn_id": turn_id_holder["turn_id"],
+                        "text": "reconnected",
+                        "speak": True,
+                        "emotion": {"id": "attentive", "intensity": 0.4, "confidence": 0.9},
+                        "avatar": {"expression": "attentive", "motion": "soft_nod", "state": "speaking"},
+                        "voice": {"provider": "jawl", "voice_id": "main_ru", "rate": 1.0},
+                        "actions": [],
+                        "interruptible": True,
+                        "proactive": False,
+                    }
+                    stream.lines.put((
+                        "data: " + json.dumps({"events": [{
+                            "schema_version": 1,
+                            "event_seq": 6,
+                            "turn_id": turn_id_holder["turn_id"],
+                            "type": "assistant.final",
+                            "payload": {"response": response},
+                        }], "cursor": {"after": 6}}) + "\n"
+                    ).encode("utf-8"))
+                    stream.lines.put(b"\n")
+                return stream
+            self.assertEqual(path, "/api/companion/turn")
+            turn_id_holder["turn_id"] = json.loads(request.data.decode("utf-8"))["turn_id"]
+            first.close()
+            return _Response({"ok": True, "turn_id": turn_id_holder["turn_id"]})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770",
+            native_gateway=True,
+            chat_timeout_seconds=2,
+            opener=opener,
+        )
+        self.assertEqual(adapter.respond("resume"), "reconnected")
+        self.assertEqual(len([path for path in calls if path == "/api/companion/turn"]), 1)
+        self.assertIn("after=5", calls[2])
+
+    def test_native_gateway_forwards_local_cancellation(self):
+        stream = _SseResponse()
+        cancel = threading.Event()
+        calls = []
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            calls.append(path)
+            if path == "/api/companion/stream":
+                return stream
+            if path == "/api/companion/turn":
+                cancel.set()
+                payload = json.loads(request.data.decode("utf-8"))
+                return _Response({"ok": True, "turn_id": payload["turn_id"]})
+            self.assertEqual(path, "/api/companion/cancel")
+            payload = json.loads(request.data.decode("utf-8"))
+            return _Response({"ok": True, "turn_id": payload["turn_id"]})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770",
+            native_gateway=True,
+            chat_timeout_seconds=2,
+            opener=opener,
+        )
+        with self.assertRaises(JawlTurnCancelled):
+            adapter.respond("Отмени", cancel_event=cancel)
+        self.assertIn("/api/companion/cancel", calls)
 
 
 if __name__ == "__main__":

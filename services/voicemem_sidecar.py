@@ -19,7 +19,8 @@ MAX_TEXT_CHARS = 12_000
 MAX_CONTEXT_CHARS = 6_000
 MAX_SESSIONS = 32
 MAX_AUDIO_BYTES = 48 * 1024
-END_AUDIO_SILENCE_SECONDS = 0.5
+END_AUDIO_SILENCE_SECONDS = 0.8
+END_AUDIO_FRAME_SECONDS = 0.032
 
 
 def _now() -> str:
@@ -31,7 +32,7 @@ def _text(value: Any, limit: int = MAX_TEXT_CHARS) -> str:
 
 
 class VoiceMemSidecar:
-    """Translate bounded requests into VoiceMem ``feed_partial`` calls."""
+    """Translate bounded requests into VoiceMem calls."""
 
     def __init__(self, stream_factory: Callable[[str], Any], audio_sample_rate: int = 16000):
         self._stream_factory = stream_factory
@@ -40,14 +41,35 @@ class VoiceMemSidecar:
         self._audio_sample_rate = int(audio_sample_rate)
         self._status = "ready"
         self._last_error = ""
+        self._audio_models_loaded = False
 
     async def handle(self, request: dict[str, Any]) -> list[dict[str, Any]]:
         request_id = _text(request.get("request_id"), 100) or str(uuid4())
         if request.get("type") == "health":
             return [{"type": "health", "request_id": request_id, **self.health()}]
         request_type = request.get("type")
-        if request_type not in {"feed_partial", "feed_audio", "end_audio"}:
+        if request_type not in {"warmup", "feed_partial", "feed_audio", "end_audio"}:
             return [self._error(request_id, "unsupported_request")]
+
+        if request_type == "warmup":
+            kind = request.get("kind", "text")
+            if kind not in {"text", "audio"}:
+                return [self._error(request_id, "warmup_kind_must_be_text_or_audio")]
+            warmup = getattr(self._stream_factory, "warmup", None)
+            if not callable(warmup):
+                return [self._error(request_id, "warmup_not_supported")]
+            try:
+                await asyncio.to_thread(warmup, kind == "audio")
+                self._status, self._last_error = "ready", ""
+                if kind == "audio":
+                    self._audio_models_loaded = True
+            except Exception:
+                self._status, self._last_error = "degraded", "voicemem_warmup_failed"
+                return [self._error(request_id, self._last_error)]
+            return [self._event(request_id, "local", "VOICE_READY", {
+                "mode": kind,
+                "audio_models_loaded": kind == "audio",
+            })]
 
         session_id = _text(request.get("session_id"), 200) or "local"
         text = ""
@@ -78,9 +100,26 @@ class VoiceMemSidecar:
             if request_type == "feed_partial":
                 state = await stream.feed_partial(text, ended=ended)
             elif request_type == "end_audio":
-                state = await stream.feed(b"\0" * int(self._audio_sample_rate * END_AUDIO_SILENCE_SECONDS * 2))
+                # VoiceMem's VAD is frame-oriented. Feeding one large silence
+                # block can be classified as a single ambiguous frame and
+                # leave the stream without its required turn-over transition.
+                # Flush bounded 32 ms frames and stop as soon as VoiceMem
+                # confirms the turn; this keeps end latency low and works for
+                # both the bundled sherpa and injected test streams.
+                frame_bytes = max(
+                    2,
+                    int(self._audio_sample_rate * END_AUDIO_FRAME_SECONDS * 2) & ~1,
+                )
+                state = None
+                for _ in range(max(1, int(END_AUDIO_SILENCE_SECONDS / END_AUDIO_FRAME_SECONDS))):
+                    state = await stream.feed(b"\0" * frame_bytes)
+                    if getattr(state, "turn", None) is not None:
+                        break
+                if state is None:
+                    raise RuntimeError("VoiceMem silence flush produced no state")
             else:
                 state = await stream.feed(audio)
+                self._audio_models_loaded = True
             self._status, self._last_error = "ready", ""
         except Exception:
             self._status, self._last_error = "degraded", "voicemem_stream_failed"
@@ -115,7 +154,7 @@ class VoiceMemSidecar:
             "status": self._status,
             "streams": len(self._streams),
             "last_error": self._last_error,
-            "audio_models_loaded": False,
+            "audio_models_loaded": self._audio_models_loaded,
             "audio_input": "pcm16",
             "audio_sample_rate": self._audio_sample_rate,
         }
@@ -203,26 +242,68 @@ class VoiceMemSidecar:
 
     @staticmethod
     def _write(payload: dict[str, Any]) -> None:
-        sys.stdout.buffer.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-        sys.stdout.buffer.flush()
+        # ``VoiceMem`` prints speculative-search diagnostics to stdout. The
+        # sidecar's stdout is a machine-readable JSON-lines channel, so the
+        # protocol must use the original stream explicitly after ``main``
+        # redirects ordinary model diagnostics to stderr.
+        stream = getattr(sys, "__stdout__", sys.stdout)
+        buffer = getattr(stream, "buffer", stream)
+        buffer.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
+        buffer.flush()
 
 
 def _voice_mem_factory(args: argparse.Namespace) -> Callable[[str], Any]:
     vm = None
 
-    def make_stream(_session_id: str) -> Any:
+    def ensure_vm() -> Any:
         nonlocal vm
-        if vm is None:
-            from voicemem import VoiceMem
+        if vm is not None:
+            return vm
+        from voicemem import VoiceMem
 
-            vm = VoiceMem(
-                mode=args.mode,
-                memory_root=args.memory_root,
-                user_id=args.user_id,
-                base_url=args.base_url,
-                api_key=os.environ.get(args.api_key_env, "") or None,
-            )
-        return vm.stream(src_rate=args.audio_sample_rate)
+        overrides: dict[str, Any] = {}
+        if args.local_memory:
+            # VoiceMem's convenience constructor leaves the default
+            # QuerySlotClassifier on its network-backed path. In a
+            # Companion sidecar that would make a local audio turn fail
+            # late during VAD confirmation when no OpenAI key exists.
+            # Inject both local pieces explicitly so speculation/search
+            # stays offline and uses the same E5 weights.
+            from voicemem.leftbrain.cognitive_graph.local_query_classifier import LocalQueryClassifier
+            from voicemem.leftbrain.local_e5_embedder import LocalE5Embedder
+
+            overrides = {
+                "schema": lambda: LocalQueryClassifier(),
+                "embedding": lambda: LocalE5Embedder(),
+            }
+        # The local VoiceMem cognitive components still construct an
+        # OpenAI-compatible client even when the actual classifier
+        # and embedder are injected locally. A non-secret sentinel
+        # keeps that construction valid; local-memory mode never
+        # sends it to a provider.
+        vm = VoiceMem(
+            mode=args.mode,
+            memory_root=args.memory_root,
+            user_id=args.user_id,
+            base_url=args.base_url,
+            api_key=(
+                os.environ.get(args.api_key_env, "")
+                or ("local_dummy_key" if args.local_memory else "")
+                or None
+            ),
+            **overrides,
+        )
+        return vm
+
+    def make_stream(_session_id: str) -> Any:
+        return ensure_vm().stream(src_rate=args.audio_sample_rate)
+
+    def warmup(audio: bool = False) -> None:
+        ensure_vm().warmup(audio=bool(audio), verbose=False)
+
+    # Keep the runner small while exposing one explicit lifecycle hook to the
+    # sidecar; it is intentionally not a second public model interface.
+    make_stream.warmup = warmup  # type: ignore[attr-defined]
 
     return make_stream
 
@@ -259,11 +340,19 @@ def main() -> None:
     parser.add_argument("--memory-root", default=None)
     parser.add_argument("--user-id", default="voice_user")
     parser.add_argument("--base-url", default=None)
+    parser.add_argument(
+        "--local-memory",
+        action="store_true",
+        help="use VoiceMem's local E5 classifier/embedder without an LLM request",
+    )
     parser.add_argument("--api-key-env", default="VOICEMEM_API_KEY")
     parser.add_argument("--test-stub", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     factory = _stub_factory if args.test_stub else _voice_mem_factory(args)
     try:
+        # Keep third-party/model prints out of the JSON-lines protocol. The
+        # protocol writer above retains the original stdout pipe.
+        sys.stdout = sys.stderr
         asyncio.run(VoiceMemSidecar(factory, audio_sample_rate=args.audio_sample_rate).run_stdio())
     except Exception as exc:
         print(f"VoiceMem sidecar failed: {type(exc).__name__}", file=sys.stderr, flush=True)

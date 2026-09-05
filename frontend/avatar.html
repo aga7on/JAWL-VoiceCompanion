@@ -74,6 +74,7 @@
       happy: 'happy', sad: 'sad', angry: 'angry', surprised: 'surprised'
     };
     let live2d = null;
+    let runtimeCapabilities = {expression: false, motion: false, lip_sync: false};
     let live2dError = '';
     let audioAmplitude = 0;
     let audioSpeaking = false;
@@ -119,7 +120,7 @@
     } catch (_) { /* /api/state polling remains available */ }
     async function mountLive2D() {
       try {
-        const response = await fetch('/api/avatar/config', {cache: 'no-store'});
+        const response = await fetch('/api/presentation/config', {cache: 'no-store'});
         const config = await response.json();
         if (!config.ready) {
           if (showDebug) {
@@ -136,6 +137,11 @@
         if (typeof factory !== 'function') throw new Error('runtime не предоставил Live2DCompanionRuntime.create');
         live2d = await factory({canvas, modelUrl: config.model_url});
         if (!live2d) throw new Error('runtime не создал модель');
+        runtimeCapabilities = {
+          expression: typeof live2d.setExpression === 'function',
+          motion: typeof live2d.setMotion === 'function',
+          lip_sync: typeof live2d.setLipSync === 'function'
+        };
         avatar.classList.add('hidden');
         canvas.classList.remove('hidden');
       } catch (error) {
@@ -145,9 +151,13 @@
     }
 
     function render(state) {
-      const turn = state.last_turn || {};
-      const response = turn.response || {};
-      const avatarState = response.avatar || {state: 'idle', expression: 'neutral'};
+      const response = {
+        text: state.subtitle || '',
+        speak: state.speak === true,
+        emotion: state.emotion || {},
+        avatar: state.avatar || {state: 'idle', expression: 'neutral'}
+      };
+      const avatarState = response.avatar;
       const expression = safeExpression(avatarState.expression || response.emotion?.id);
       const backendAudio = state.avatar_audio;
       if (backendAudio) acceptAudioEvent({...backendAudio, type: 'avatar.audio'});
@@ -164,12 +174,17 @@
           if (showDebug) debug.textContent = `Live2D neutral fallback · ${error.message}`;
         }
       }
-      if (showDebug) debug.textContent = `${avatarState.state || 'idle'} · ${expression} · ${state.policy.active_name}`;
+      if (showDebug) {
+        const runtime = live2d
+          ? `Live2D e:${runtimeCapabilities.expression ? 'on' : 'off'} m:${runtimeCapabilities.motion ? 'on' : 'off'} l:${runtimeCapabilities.lip_sync ? 'on' : 'off'}`
+          : '2D fallback';
+        debug.textContent = `${avatarState.state || 'idle'} · ${expression} · ${runtime} · isolated presentation`;
+      }
     }
 
     async function refresh() {
       try {
-        const response = await fetch('/api/state', {cache: 'no-store'});
+        const response = await fetch('/api/presentation/state', {cache: 'no-store'});
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         render(await response.json());
       } catch (error) {

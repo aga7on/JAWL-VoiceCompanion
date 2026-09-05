@@ -39,6 +39,7 @@ class OpenAICompatibleChatClient:
         api_key: str = "",
         timeout_seconds: float = 120.0,
         system_prompt: str = "Ты локальный AI-компаньон. Отвечай по-русски, кратко и естественно.",
+        user_agent: str | None = None,
         opener: Callable[..., Any] = urlopen,
     ) -> None:
         self.endpoint = _chat_url(endpoint)
@@ -48,6 +49,9 @@ class OpenAICompatibleChatClient:
         self.api_key = str(api_key or "")
         self.timeout_seconds = max(2.0, min(float(timeout_seconds), 300.0))
         self.system_prompt = str(system_prompt or "").strip()[:4000]
+        self.user_agent = str(user_agent or "").strip()
+        if "\r" in self.user_agent or "\n" in self.user_agent or len(self.user_agent) > 200:
+            raise ValueError("LLM user agent is invalid or exceeds its limit")
         self._opener = opener
 
     def health(self) -> dict[str, Any]:
@@ -169,7 +173,10 @@ class OpenAICompatibleChatClient:
         return self.endpoint.rsplit("/chat/completions", 1)[0].rsplit("/v1", 1)[0] + "/v1/models"
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        if self.user_agent:
+            headers["User-Agent"] = self.user_agent
+        return headers
 
     @staticmethod
     def _check_cancel(cancel_event: threading.Event | None) -> None:

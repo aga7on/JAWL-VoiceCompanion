@@ -36,6 +36,25 @@ class JawlEventSinkTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 JawlEventFileSink(root).publish({"type": "SCREEN_DELTA"})
 
+    def test_writes_bounded_chat_observation_without_forwarding_unknown_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            sink = JawlEventFileSink(root)
+            result = sink.publish_chat({
+                "type": "CHAT_MESSAGE",
+                "event_id": "chat-1",
+                "payload": {
+                    "text": "  привет зрители  ",
+                    "platform": "twitch",
+                    "author": "viewer",
+                    "secret": "must not cross",
+                },
+            })
+            payload = json.loads(next(Path(root).glob("*.json")).read_text(encoding="utf-8"))
+            self.assertEqual(result["event_id"], "chat-1")
+            self.assertEqual(payload["payload"]["event_type"], "CHAT_MESSAGE")
+            self.assertEqual(payload["payload"]["chat_text"], "привет зрители")
+            self.assertNotIn("secret", json.dumps(payload, ensure_ascii=False))
+
     def test_event_id_cannot_escape_event_directory(self):
         with tempfile.TemporaryDirectory() as root:
             sink = JawlEventFileSink(Path(root) / "events")

@@ -1,5 +1,6 @@
 # Python
 .venv/
+.wheel-smoke/
 venv/
 __pycache__/
 *.py[cod]
@@ -49,7 +50,11 @@ logs/
 # Temporary files
 tmp/
 temp/
+.tmp-wheel/
 *.tmp
 *.bak
 .DS_Store
 Thumbs.db
+
+# VoiceMem generated demo memory space (biometric voiceprints and vector stores)
+voicemem_memoryspace/demo/

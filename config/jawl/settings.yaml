@@ -1,0 +1,39 @@
+# Owned baseline for the connected daily scenario. Provider credentials are external.
+identity:
+  agent_name: Компаньон
+llm:
+  main_model: big-pickle
+  available_models: [big-pickle]
+  language: ru
+  is_multimodal: false
+  tool_transport: json_envelope
+  max_react_steps: 15
+  provider:
+    kind: openai_compatible
+    display_name: OpenCode (test profile)
+    request_timeout_seconds: 120
+system:
+  timezone: 3
+  heartbeat_interval: 600
+  continuous_cycle: false
+  proactive_guidance: false
+  goal_mode:
+    enabled: true
+    task_ledger_enabled: true
+  lifecycle_hooks:
+    enabled: false
+  swarm:
+    enabled: false
+  tree_of_thoughts:
+    enabled: false
+  subconscious:
+    enabled: false
+  event_acceleration:
+    # A user voice/chat turn must preempt an autonomous heartbeat. Deferring
+    # here lets a slow provider monopolize the single JAWL ReAct lane and makes
+    # live voice appear hung; the native arbiter preserves cancellation state.
+    active_cycle_policy: interrupt
+    queue_max_events: 100
+    coalesce_window_sec: 2.0
+    coalesce_payload_samples: 3
+    critical_multiplier: 0.0

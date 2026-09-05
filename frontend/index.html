@@ -3,109 +3,352 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JAWL VoiceCompanion</title>
+  <title>JAWL · VoiceCompanion</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
-    body { max-width: 960px; margin: 0 auto; padding: 24px; background: #15161a; color: #f1f3f5; }
-    main { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
-    section { background: #22242b; border: 1px solid #3b3e49; border-radius: 12px; padding: 16px; }
-    #messages { min-height: 260px; max-height: 52vh; overflow: auto; white-space: pre-wrap; }
-    .message { padding: 8px 0; border-bottom: 1px solid #353843; }
-    .meta { color: #aeb4c2; font-size: 0.85rem; }
-    textarea { width: 100%; box-sizing: border-box; margin-top: 12px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 10px; }
-    button, select { margin-top: 8px; padding: 8px 10px; border-radius: 7px; border: 1px solid #656b7b; background: #303440; color: inherit; cursor: pointer; }
-    button.danger { background: #742f38; }
-    code { color: #a9d4ff; }
-    .mic-gate { margin-top: 12px; padding: 10px; border: 1px solid #3b3e49; border-radius: 8px; background: #1b1d23; }
-    .mic-gate input[type="range"] { width: 100%; accent-color: #69d18b; }
-    .mic-meter { position: relative; height: 12px; margin: 8px 0 4px; overflow: hidden; border-radius: 99px; background: #101115; border: 1px solid #444957; }
-    #mic-level { height: 100%; width: 0; background: linear-gradient(90deg, #4f9d69, #d6c34f 72%, #e06060); transition: width 80ms linear; }
-    #mic-peak { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: #fff; box-shadow: 0 0 4px #fff; }
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      --ink: #173c3a;
+      --muted: #5d7775;
+      --mint: #b7eadb;
+      --mint-strong: #57bda7;
+      --mint-deep: #207f73;
+      --glass: rgba(255, 255, 255, .68);
+      --glass-strong: rgba(255, 255, 255, .84);
+      --line: rgba(44, 126, 116, .18);
+      --shadow: 0 18px 46px rgba(41, 111, 100, .16), 0 2px 8px rgba(22, 72, 67, .08);
+      --danger: #a64658;
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: #c8eee1; }
+    body {
+      min-height: 100vh; margin: 0; color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 2%, rgba(255,255,255,.9) 0, rgba(255,255,255,0) 30%),
+        radial-gradient(circle at 92% 8%, rgba(137,223,201,.65) 0, rgba(137,223,201,0) 32%),
+        linear-gradient(135deg, #dff8ef 0%, #b9e6da 49%, #d4f4ea 100%);
+    }
+    body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .22; background-image: linear-gradient(115deg, transparent 0 48%, rgba(255,255,255,.55) 49% 50%, transparent 51%); background-size: 18px 18px; }
+    button, input, select, textarea { font: inherit; }
+    button, select { border: 1px solid rgba(40, 121, 112, .28); border-radius: 11px; min-height: 38px; padding: 8px 13px; color: var(--ink); background: rgba(255,255,255,.72); box-shadow: 0 2px 7px rgba(33, 105, 94, .08); cursor: pointer; transition: .18s ease; }
+    button:hover, select:hover { background: #fff; border-color: var(--mint-strong); transform: translateY(-1px); }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(54, 173, 151, .32); outline-offset: 2px; }
+    button.primary { color: #fff; border-color: var(--mint-deep); background: linear-gradient(135deg, #48b79f, #238c80); }
+    button.primary:hover { background: linear-gradient(135deg, #39a88f, #19786d); }
+    button.danger { color: #fff; border-color: #963b4d; background: linear-gradient(135deg, #bd6271, var(--danger)); }
+    input[type="text"], input[type="number"], input[type="search"], textarea { width: 100%; border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; color: var(--ink); background: rgba(255,255,255,.78); box-shadow: inset 0 1px 2px rgba(25, 89, 80, .05); }
+    textarea { resize: vertical; }
+    input[type="checkbox"] { accent-color: var(--mint-deep); width: 17px; height: 17px; vertical-align: -3px; }
+    input[type="range"] { width: 100%; accent-color: var(--mint-deep); }
+    .app-shell { position: relative; z-index: 1; width: min(1480px, 100%); min-height: 100vh; margin: 0 auto; padding: 18px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 68px; padding: 10px 16px; border: 1px solid rgba(255,255,255,.72); border-radius: 20px; background: rgba(255,255,255,.48); box-shadow: var(--shadow); backdrop-filter: blur(20px) saturate(1.15); }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; color: #fff; font-weight: 800; letter-spacing: -.08em; background: linear-gradient(145deg, #62ceb2, #237e75); box-shadow: inset 0 1px 2px #fff8, 0 6px 14px #258d7b44; }
+    .brand h1 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .brand p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+    .top-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+    .status-pill, .level-pill, .eyebrow, .tag { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--muted); background: rgba(255,255,255,.58); font-size: 12px; }
+    .status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--mint-strong); box-shadow: 0 0 0 4px #57bda722; }
+    .layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 18px; margin-top: 18px; }
+    .sidebar { display: flex; flex-direction: column; min-height: calc(100vh - 122px); padding: 12px; border: 1px solid rgba(255,255,255,.7); border-radius: 20px; background: rgba(255,255,255,.45); box-shadow: var(--shadow); backdrop-filter: blur(19px); }
+    .profile-chip { display: flex; align-items: center; gap: 10px; padding: 10px 9px 17px; border-bottom: 1px solid rgba(44,126,116,.12); }
+    .profile-orb { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: #fff; font-size: 18px; background: radial-gradient(circle at 35% 25%, #dcfff4, #54bca6 44%, #257e76); box-shadow: 0 4px 13px #258d7b44; }
+    .profile-chip strong { display: block; font-size: 13px; }
+    .profile-chip span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .nav-label { margin: 18px 10px 7px; color: #78918e; font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    .nav-item { display: flex; align-items: center; gap: 11px; width: 100%; margin: 2px 0; padding: 10px 11px; border: 1px solid transparent; border-radius: 11px; color: var(--muted); text-align: left; background: transparent; box-shadow: none; }
+    .nav-item:hover { color: var(--ink); background: rgba(255,255,255,.52); transform: none; }
+    .nav-item.active { color: var(--mint-deep); border-color: rgba(63,169,147,.24); background: linear-gradient(100deg, rgba(255,255,255,.92), rgba(210,246,236,.72)); box-shadow: 0 5px 14px rgba(47,140,122,.1); font-weight: 700; }
+    .nav-icon { width: 20px; text-align: center; font-size: 16px; }
+    .sidebar-foot { margin-top: auto; padding: 12px 9px 4px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .content { min-width: 0; }
+    .tab-panel { display: none; animation: panel-in .22s ease-out; }
+    .tab-panel.active { display: block; }
+    @keyframes panel-in { from { opacity: .35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin: 4px 2px 15px; }
+    .page-heading h2 { margin: 5px 0 4px; font-size: clamp(23px, 3vw, 31px); letter-spacing: -.04em; }
+    .page-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+    .eyebrow { padding: 4px 8px; color: var(--mint-deep); border-color: #57bda755; background: #dffff555; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .glass-card { min-width: 0; border: 1px solid rgba(255,255,255,.72); border-radius: 18px; padding: 17px; background: var(--glass); box-shadow: var(--shadow); backdrop-filter: blur(18px) saturate(1.12); }
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+    .card-head h3, .card-head h2 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+    .card-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .home-grid { display: grid; grid-template-columns: minmax(290px, .82fr) minmax(390px, 1.18fr); gap: 16px; align-items: stretch; }
+    .companion-card { display: flex; flex-direction: column; }
+    .stage { position: relative; min-height: 408px; overflow: hidden; border: 1px solid rgba(71,169,149,.18); border-radius: 15px; background: radial-gradient(circle at 50% 28%, #ecfff9 0 8%, transparent 40%), linear-gradient(145deg, rgba(226,252,244,.9), rgba(158,218,205,.42)); }
+    .stage::before, .stage::after { content: ""; position: absolute; border-radius: 50%; filter: blur(2px); opacity: .7; }
+    .stage::before { width: 180px; height: 180px; top: -65px; right: -44px; background: #fff9; }
+    .stage::after { width: 130px; height: 130px; bottom: -52px; left: -35px; background: #71cfb577; }
+    .mini-avatar { position: absolute; left: 50%; bottom: 35px; width: min(65%, 250px); aspect-ratio: 3 / 4; transform: translateX(-50%); transition: filter .25s ease, transform .25s ease; }
+    .mini-avatar .mini-head { position: absolute; left: 17%; top: 2%; width: 66%; aspect-ratio: 1; border: 4px solid #fff; border-radius: 50%; background: radial-gradient(circle at 50% 34%, #c2f4e6 0 18%, #64bca9 50%, #2c8179 100%); box-shadow: 0 0 28px #4fbfa044, inset 0 2px 5px #fff8; }
+    .mini-avatar .mini-head::before { content: ""; position: absolute; left: 24%; top: 14%; width: 52%; height: 16%; border-radius: 50%; background: #fff8; transform: rotate(-12deg); }
+    .mini-eye { position: absolute; top: 42%; width: 13%; height: 14%; border: 2px solid #f5fffc; border-radius: 50%; background: #fff; box-shadow: 0 0 9px #eafff9; animation: blink 5.2s infinite; }
+    .mini-eye::after { content: ""; position: absolute; left: 34%; top: 25%; width: 42%; height: 52%; border-radius: 50%; background: #236e6a; }
+    .mini-eye.left { left: 24%; } .mini-eye.right { right: 24%; }
+    .mini-mouth { position: absolute; left: 38%; top: 64%; width: 24%; height: 8%; border-bottom: 3px solid #f5fffc; border-radius: 0 0 50% 50%; }
+    .mini-body { position: absolute; left: 7%; right: 7%; bottom: 0; height: 58%; border: 4px solid #fff; border-bottom: 0; border-radius: 48% 48% 0 0; background: linear-gradient(135deg, #4ba995, #23756f 72%); box-shadow: 0 0 30px #359d8d44, inset 0 2px 6px #fff5; }
+    .mini-avatar .mini-badge { position: absolute; left: 50%; top: 58%; transform: translate(-50%, -50%); padding: 5px 9px; border: 1px solid #fff9; border-radius: 999px; color: #eafff8; background: #1d716ccc; font-size: 10px; letter-spacing: .1em; white-space: nowrap; }
+    .stage-info { position: absolute; right: 13px; bottom: 12px; left: 13px; display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
+    .stage-info span { padding: 5px 8px; border: 1px solid #fff9; border-radius: 8px; background: #ffffff80; }
+    #mini-avatar[data-expression="happy"] .mini-mouth { height: 15%; border-bottom-width: 4px; }
+    #mini-avatar[data-expression="sad"] .mini-mouth { top: 70%; border-bottom: 0; border-top: 3px solid #f5fffc; }
+    #mini-avatar[data-expression="surprised"] .mini-mouth { width: 14%; height: 14%; left: 43%; border: 3px solid #f5fffc; border-radius: 50%; }
+    #mini-avatar[data-expression="angry"] .mini-eye { transform: rotate(12deg); }
+    #mini-avatar[data-expression="concerned"] .mini-head { filter: hue-rotate(295deg) saturate(.8); }
+    #mini-avatar[data-state="thinking"] { animation: mini-thinking 1.4s ease-in-out infinite; }
+    #mini-avatar[data-state="speaking"] .mini-mouth { animation: mini-talk .16s ease-in-out infinite alternate; }
+    .companion-actions { display: flex; gap: 8px; margin-top: 13px; }
+    .companion-actions button { flex: 1; }
+    .dialog-card { display: flex; flex-direction: column; min-height: 480px; }
+    #messages { flex: 1; min-height: 300px; max-height: 52vh; overflow: auto; padding: 4px 3px; }
+    .message { margin: 8px 0; padding: 9px 11px; border: 1px solid rgba(52,148,130,.12); border-radius: 11px; background: rgba(255,255,255,.52); line-height: 1.45; white-space: pre-wrap; }
+    .message .meta { margin-bottom: 3px; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .composer { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(44,126,116,.14); }
+    .composer textarea { min-height: 73px; }
+    .composer-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .composer-actions button:first-child { min-width: 112px; }
+    .quick-hint { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .chat-tools { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+    .chat-tools button { min-width: 38px; padding: 7px 10px; }
+    .chat-tools .send-button { margin-left: auto; min-width: 108px; }
+    .attachment-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .attachment-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: rgba(255,255,255,.58); font-size: 11px; }
+    .emoji-picker { display: none; position: absolute; z-index: 4; bottom: 100%; left: 0; width: 230px; padding: 9px; border: 1px solid var(--line); border-radius: 13px; background: var(--glass-strong); box-shadow: var(--shadow); }
+    .emoji-picker.open { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+    .emoji-picker button { min-height: 30px; padding: 2px; border: 0; background: transparent; box-shadow: none; }
+    .composer { position: relative; }
+    .signal-lights { display: inline-flex; align-items: center; gap: 10px; }
+    .signal-light { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
+    .signal-light::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #9bb8b2; transition: .2s ease; }
+    .signal-light.active::before { background: #48c5a5; box-shadow: 0 0 0 5px rgba(72,197,165,.18), 0 0 13px rgba(72,197,165,.75); }
+    .device-select { width: 100%; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; margin-top: 16px; }
+    .stat { padding: 12px 13px; border: 1px solid rgba(255,255,255,.72); border-radius: 14px; background: rgba(255,255,255,.55); box-shadow: 0 7px 18px rgba(43,119,106,.08); }
+    .stat label { display: block; color: var(--muted); font-size: 11px; }
+    .stat strong { display: block; margin-top: 5px; font-size: 14px; }
+    .split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .stack { display: grid; gap: 16px; }
+    .field { display: grid; gap: 6px; margin: 11px 0; }
+    .field label { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .button-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    .button-row button { margin: 0; }
+    .mic-card { border: 1px solid #57bda744; background: linear-gradient(145deg, rgba(238,255,250,.85), rgba(201,242,232,.58)); }
+    .mic-gate { margin-top: 15px; padding: 13px; border: 1px solid rgba(54,159,139,.2); border-radius: 13px; background: rgba(255,255,255,.44); }
     .mic-gate-row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-    @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+    .mic-meter { position: relative; height: 14px; margin: 10px 0 6px; overflow: hidden; border: 1px solid rgba(39,119,108,.22); border-radius: 99px; background: #d7eee8; }
+    #mic-level { height: 100%; width: 0; background: linear-gradient(90deg, #52b99e, #d3ba55 72%, #dc6b72); transition: width 80ms linear; }
+    #mic-peak { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: #fff; box-shadow: 0 0 4px #fff, 0 0 7px #238c80; }
+    .gate-state { display: flex; justify-content: space-between; gap: 8px; }
+    details { margin-top: 12px; border-top: 1px solid rgba(44,126,116,.14); padding-top: 10px; }
+    summary { color: var(--mint-deep); cursor: pointer; font-size: 12px; font-weight: 700; }
+    pre { max-height: 320px; overflow: auto; margin: 10px 0 0; padding: 11px; border: 1px solid rgba(44,126,116,.13); border-radius: 11px; color: #345b57; background: rgba(233,250,245,.58); font: 11px/1.45 Consolas, monospace; white-space: pre-wrap; }
+    .memory-list, #approvals, #ambient-memory-candidates { max-height: 290px; overflow: auto; }
+    .memory-toolbar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+    .memory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin: 5px 0; padding: 9px 11px; border: 1px solid rgba(52,148,130,.12); border-radius: 11px; background: rgba(255,255,255,.52); line-height: 1.45; }
+    .danger-note { padding: 10px 12px; border: 1px solid #bc647344; border-radius: 11px; color: #873e4e; background: #fff0f288; font-size: 12px; }
+    .empty-state { padding: 16px; border: 1px dashed rgba(45,129,115,.25); border-radius: 11px; color: var(--muted); background: rgba(255,255,255,.32); font-size: 12px; }
+    @keyframes blink { 0%, 46%, 49%, 100% { transform: scaleY(1); } 47%, 48% { transform: scaleY(.08); } }
+    @keyframes mini-talk { from { transform: scaleY(.65); } to { transform: scaleY(1.35); } }
+    @keyframes mini-thinking { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-5px); } }
+    .brand, .card-head > div { min-width: 0; }
+    .brand-mark { flex-shrink: 0; }
+    .message, .meta, .stat strong, pre { overflow-wrap: anywhere; }
+    input, select, textarea { max-width: 100%; }
+    @media (max-width: 1100px) {
+      .app-shell { padding: 12px; }
+      .layout { display: block; margin-top: 12px; }
+      .sidebar { flex-direction: row; min-height: 0; padding: 5px; margin-bottom: 12px; gap: 3px; overflow-x: auto; }
+      .profile-chip, .nav-label, .sidebar-foot { display: none; }
+      .nav-item { flex: 1 0 auto; width: auto; justify-content: center; min-height: 44px; margin: 0; gap: 6px; padding: 8px; }
+      .home-grid { grid-template-columns: minmax(230px, .7fr) minmax(0, 1fr); }
+      .glass-card { padding: 14px; }
+      .card-head { flex-wrap: wrap; }
+      .dialog-card { min-height: 420px; }
+      #messages { min-height: 180px; }
+      .stage { min-height: 340px; }
+      .page-heading h2 { font-size: 23px; }
+    }
+    @media (max-width: 700px) {
+      .app-shell { padding: 8px 8px max(12px, env(safe-area-inset-bottom)); }
+      .topbar { padding: 9px 11px; min-height: 56px; border-radius: 15px; gap: 8px; }
+      .brand { gap: 8px; }
+      .brand h1 { font-size: 15px; }
+      .brand p, .top-actions > .tag { display: none; }
+      .brand-mark { width: 32px; height: 32px; border-radius: 10px; }
+      .top-actions { max-width: 42%; font-size: 10px; }
+      .status-pill { padding: 5px 8px; font-size: 10px; }
+      .sidebar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; border-radius: 15px; }
+      .nav-item { font-size: 12px; padding: 6px; }
+      .page-heading { gap: 8px; align-items: center; margin-bottom: 10px; }
+      .page-heading h2 { font-size: 20px; margin: 0; }
+      .page-heading .eyebrow, [data-panel="home"] > .page-heading p { display: none; }
+      [data-panel="home"] > .page-heading { display: none; }
+      .home-grid, .split-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+      .companion-card { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 10px; }
+      .companion-card .card-head { flex: 1; margin: 0; }
+      .companion-card .card-head p { display: none; }
+      .stage { order: -1; flex: 0 0 72px; min-height: 0; height: 78px; border-radius: 12px; }
+      .mini-avatar { width: 60px; height: 76px; bottom: 0; }
+      .mini-avatar .mini-head, .mini-body { border-width: 1px; }
+      .mini-avatar .mini-badge, .stage-info { display: none; }
+      .dialog-card { min-height: 0; }
+      .dialog-card .card-head p { display: none; }
+      #messages { min-height: 90px; max-height: max(90px, calc(100vh - 545px)); max-height: max(90px, calc(100dvh - 545px)); }
+      .composer textarea { min-height: 64px; font-size: 16px; }
+      .composer { margin-top: 6px; padding-top: 8px; }
+      .chat-tools { gap: 4px; }
+      .chat-tools button { min-height: 44px; min-width: 44px; padding: 6px; }
+      .chat-tools .send-button { min-width: 82px; font-size: 13px; }
+      .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+      .stat { padding: 9px; }
+      .field input, .field select, .field textarea { font-size: 16px; }
+      .button-row button { min-height: 44px; }
+      .emoji-picker { max-width: 100%; width: 328px; }
+      .emoji-picker.open { grid-template-columns: repeat(6, 1fr); }
+      .emoji-picker button { min-height: 44px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+    }
   </style>
 </head>
 <body>
-  <h1>JAWL VoiceCompanion</h1>
-  <p class="meta">Phase 1 · текстовый контур · HostOS пока в dry-run</p>
-  <main>
-    <section>
-      <h2>Диалог</h2>
-      <div id="messages"></div>
-      <h2>Doctor</h2>
-      <label><input id="hands-free" type="checkbox"> Hands-free: auto-finish after silence</label>
-      <pre id="doctor" class="meta">loading...</pre>
-      <textarea id="input" rows="3" placeholder="Напиши сообщение…"></textarea>
-      <button id="send">Отправить</button>
-      <button id="mic" type="button">🎙️ Включить микрофон</button>
-      <span id="mic-status" class="meta">Микрофон выключен.</span>
-      <div class="mic-gate">
-        <div class="mic-gate-row"><label for="mic-gate">Noise gate до VoiceMem</label><span id="mic-gate-value" class="meta">—</span></div>
-        <input id="mic-gate" type="range" min="0.005" max="0.15" step="0.005" value="0.035">
-        <div class="mic-meter" role="meter" aria-label="Уровень микрофона" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="mic-level"></div><div id="mic-peak"></div></div>
-        <div class="mic-gate-row"><span id="mic-signal" class="meta">Сигнал: —</span><span id="mic-gate-state" class="meta">Gate: closed</span></div>
-        <button id="mic-calibrate" type="button">Автокалибровка шума (1,5 с)</button>
-        <span id="mic-gate-status" class="meta">Порог применяется локально; тишина не отправляется в ASR.</span>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">J·</div>
+        <div><h1>JAWL VoiceCompanion</h1><p>Ваш игровой центр управления компаньоном</p></div>
       </div>
-      <div id="tts-status" class="meta">TTS выключен.</div>
-      <label for="tts-voice">Голос провайдера (не модель)</label>
-      <input id="tts-voice" type="text" maxlength="120" placeholder="оставить по умолчанию" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
-      <label for="tts-speed">Скорость речи</label>
-      <input id="tts-speed" type="number" min="0.5" max="2" step="0.05" value="1" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
-    </section>
-    <section>
-      <h2>HostOS</h2>
-      <p id="jawl-hostos-status" class="meta">JAWL native HostOS: status not checked.</p>
-      <p>Текущий режим: <strong id="level-name">SANDBOX</strong> (<span id="level">0</span>)</p>
-      <label for="level-select">Уровень доступа</label><br>
-      <select id="level-select">
-        <option value="0">0 · SANDBOX</option>
-        <option value="1">1 · OBSERVER</option>
-        <option value="2">2 · OPERATOR</option>
-        <option value="3">3 · ROOT</option>
-      </select><br>
-      <label><input id="unattended" type="checkbox"> Автономный режим без подтверждений</label>
-      <p id="unattended-status" class="meta">Доступен только в ROOT; включайте перед уходом.</p>
-      <label for="deny-tools">Заблокированные инструменты (через запятую)</label>
-      <input id="deny-tools" type="text" placeholder="shell.exec, filesystem.delete" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
-      <label for="deny-risks">Заблокированные классы риска (через запятую)</label>
-      <input id="deny-risks" type="text" placeholder="destructive, shell" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
-      <button id="save-denylist" type="button">Сохранить deny-list</button>
-      <button id="stop" class="danger">Аварийная остановка</button>
-      <button id="resume" type="button">Возобновить работу</button>
-      <h2>Подтверждения</h2>
-      <div id="approvals" class="meta">Нет ожидающих запросов.</div>
-      <h2>Аватар и OBS</h2>
-      <p class="meta">Прозрачная поверхность компаньона для Browser Source в OBS.</p>
-      <input id="obs-url" type="text" readonly aria-label="OBS URL" style="width: 100%; box-sizing: border-box; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
-      <button id="copy-obs-url">Скопировать ссылку</button>
-      <span id="copy-obs-status" class="meta"></span>
-      <h2>Зрение</h2>
-      <p id="vision-status" class="meta">Проверка vision-контура…</p>
-      <textarea id="vision-prompt" rows="2" placeholder="Что проверить на сфокусированном окне?"></textarea>
-      <button id="vision-look">Посмотреть окно</button>
-      <pre id="vision-result" class="meta"></pre>
-      <label><input id="attention-dnd" type="checkbox"> DND for proactive observation</label>
-      <label for="quiet-hours">Тихие часы (HH:MM-HH:MM)</label>
-      <input id="quiet-hours" type="text" placeholder="22:00-07:00" style="width: 100%; box-sizing: border-box; margin-top: 8px; background: #17181d; color: inherit; border: 1px solid #555a68; border-radius: 8px; padding: 8px;">
-      <button id="save-quiet-hours" type="button">Сохранить тихие часы</button>
-      <p id="attention-status" class="meta">Attention/Presence: checking...</p>
-      <h2>Системный звук (ambient)</h2>
-      <label><input id="ambient-memory-enabled" type="checkbox"> Сохранять ограниченные наблюдения</label>
-      <p id="ambient-memory-status" class="meta">Ambient memory: checking...</p>
-      <button id="ambient-triage" type="button">Сжать сейчас</button>
-      <button id="ambient-clear" type="button">Очистить буфер</button>
-      <button id="ambient-audio-toggle" type="button" disabled>Системный звук не настроен</button>
-      <p id="ambient-audio-status" class="meta">Loopback: checking...</p>
-      <h2>Состояние</h2>
-      <pre id="health">Загрузка…</pre>
-      <h2>JAWL · память и персона</h2>
-      <pre id="jawl-overview" class="meta">JAWL не подключён.</pre>
-      <h2>Аудит HostOS</h2>
-      <pre id="audit" class="meta">Загрузка…</pre>
-    </section>
-  </main>
+      <div class="top-actions">
+        <span id="top-connection" class="status-pill">Локальный контур</span>
+        <span class="tag">Gateway · 2367</span>
+      </div>
+    </header>
+    <div class="layout">
+      <aside class="sidebar" aria-label="Основная навигация">
+        <div class="profile-chip"><div class="profile-orb">✦</div><div><strong>Компаньон</strong><span id="sidebar-state">готов к диалогу</span></div></div>
+        <div class="nav-label">Центр</div>
+        <button class="nav-item active" data-tab="home" aria-selected="true"><span class="nav-icon">⌂</span><span>Обзор</span></button>
+        <button class="nav-item" data-tab="voice" aria-selected="false"><span class="nav-icon">◉</span><span>Голос</span></button>
+        <button class="nav-item" data-tab="perception" aria-selected="false"><span class="nav-icon">◌</span><span>Восприятие</span></button>
+        <button class="nav-item" data-tab="memory" aria-selected="false"><span class="nav-icon">▤</span><span>Память</span></button>
+        <div class="nav-label">Контроль</div>
+        <button class="nav-item" data-tab="access" aria-selected="false"><span class="nav-icon">⌁</span><span>Доступ</span></button>
+        <button class="nav-item" data-tab="system" aria-selected="false"><span class="nav-icon">⚙</span><span>Система</span></button>
+        <div class="sidebar-foot">2D avatar · OBS<br><span id="sidebar-port">presentation 8766</span></div>
+      </aside>
+      <main class="content">
+        <section class="tab-panel active" data-panel="home">
+          <div class="page-heading"><div><span class="eyebrow">Control center</span><h2>Добро пожаловать</h2><p>Состояние компаньона, диалог и быстрые действия — на одном экране.</p></div><span class="level-pill">Режим: <strong id="home-level-name">SANDBOX</strong></span></div>
+          <div class="home-grid">
+            <article class="glass-card companion-card">
+              <div class="card-head"><div><h3>Мой компаньон</h3><p>2D-персонаж · локальная презентация</p></div><span class="tag" id="mini-emotion">neutral</span></div>
+              <div class="stage" aria-label="Предпросмотр 2D-компаньона">
+                <div class="mini-avatar" id="mini-avatar"><div class="mini-head"><span class="mini-eye left"></span><span class="mini-eye right"></span><span class="mini-mouth"></span></div><div class="mini-body"></div><span class="mini-badge">2D COMPANION</span></div>
+                <div class="stage-info"><span id="mini-state">idle</span><span id="mini-motion">motion · idle</span></div>
+              </div>
+            </article>
+            <article class="glass-card dialog-card">
+              <div class="card-head"><div><h3>Чат</h3><p>Один разговор компаньона: текст, голос и вложения</p></div><div class="signal-lights"><span id="user-signal" class="signal-light">Ты</span><span id="companion-signal" class="signal-light">Компаньон</span></div></div>
+              <div id="messages"><div class="empty-state">Напишите сообщение или включите микрофон — история появится здесь.</div></div>
+              <div class="composer"><div id="emoji-picker" class="emoji-picker" aria-label="Эмодзи"></div><textarea id="input" rows="3" placeholder="Напишите компаньону… Поддерживаются /команды"></textarea><div id="attachment-list" class="attachment-list"></div><div class="chat-tools"><button id="attach" type="button" title="Добавить файл">＋</button><input id="attachment-input" type="file" hidden multiple accept=".txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.wav,.mp3,.mp4,.webm"><button id="emoji" type="button" title="Эмодзи">☺</button><button id="slash" type="button" title="Команды">/</button><button id="mic" type="button" title="Микрофон">🎙</button><button id="send" class="primary send-button">Отправить</button></div><span id="mic-status" class="meta">Микрофон выключен.</span></div>
+            </article>
+          </div>
+          <div class="stat-grid"><div class="stat"><label>Подключение</label><strong id="home-gateway-status">Проверка…</strong></div><div class="stat"><label>Голосовой вывод</label><strong id="home-tts-status">Не настроен</strong></div><div class="stat"><label>Память</label><strong id="home-memory-status">Проверка…</strong></div><div class="stat"><label>Доступ</label><strong id="home-access-status">SANDBOX</strong></div></div>
+        </section>
+
+        <section class="tab-panel" data-panel="voice">
+          <div class="page-heading"><div><span class="eyebrow">Voice lab</span><h2>Голос</h2><p>Микрофонный gate, пики сигнала и настройки синтеза речи.</p></div></div>
+          <div class="split-grid">
+            <article class="glass-card mic-card"><div class="card-head"><div><h3>Микрофон</h3><p>Gate фильтрует шум до передачи в ASR/VoiceMem.</p></div><span class="tag">локально</span></div><div class="mic-gate"><div class="mic-gate-row"><label for="mic-gate">Порог шумового gate</label><span id="mic-gate-value" class="meta">—</span></div><input id="mic-gate" type="range" min="0.005" max="0.15" step="0.005" value="0.035"><div class="mic-meter" role="meter" aria-label="Уровень микрофона" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="mic-level"></div><div id="mic-peak"></div></div><div class="gate-state"><span id="mic-signal" class="meta">Сигнал: —</span><span id="mic-gate-state" class="meta">Gate: closed</span></div><div class="button-row"><button id="mic-calibrate" type="button">Автокалибровка · 1,5 с</button><span id="mic-gate-status" class="meta">Тишина не отправляется в ASR.</span></div></div><div class="field"><label><input id="hands-free" type="checkbox"> Hands-free · завершать фразу после тишины</label></div></article>
+            <article class="glass-card"><div class="card-head"><div><h3>Озвучка ответа</h3><p>TeraTTSv2 сейчас выбран для быстрого русского CPU-режима.</p></div><span class="tag" id="tts-status">TTS выключен.</span></div><div class="field"><label for="tts-voice">Голос провайдера</label><input id="tts-voice" type="text" maxlength="120" placeholder="по умолчанию"></div><div class="field"><label for="tts-speed">Скорость речи</label><input id="tts-speed" type="number" min="0.5" max="2" step="0.05" value="1"></div><div class="button-row"><button class="primary" type="button" data-tab-target="home">← Вернуться к диалогу</button><span class="meta">Qwen3-TTS · voice clone — отдельный тестовый профиль</span></div></article>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="perception">
+          <div class="page-heading"><div><span class="eyebrow">Senses</span><h2>Восприятие</h2><p>Экран, системный звук и ограниченная ambient-память с явным контролем.</p></div></div>
+          <div class="split-grid">
+            <article class="glass-card"><div class="card-head"><div><h3>Зрение</h3><p>Сфокусированное окно · запрос по требованию.</p></div><span class="tag">opt-in</span></div><p id="vision-status" class="meta">Проверка vision-контура…</p><div class="field"><label for="vision-prompt">Что проверить на сфокусированном окне?</label><textarea id="vision-prompt" rows="3" placeholder="Например: есть ли на экране ошибка?"></textarea></div><div class="button-row"><button id="vision-look" class="primary">Посмотреть окно</button></div><pre id="vision-result" class="meta"></pre></article>
+            <article class="glass-card"><div class="card-head"><div><h3>Системный звук</h3><p>Loopback → ASR → bounded ambient memory.</p></div><span class="tag">без записи raw audio</span></div><label><input id="ambient-memory-enabled" type="checkbox"> Разрешить ограниченные наблюдения</label><p id="ambient-memory-status" class="meta">Ambient memory: checking...</p><div id="ambient-memory-candidates" class="empty-state">Нет кандидатов для сохранения в JAWL.</div><div class="button-row"><button id="ambient-audio-toggle" type="button" disabled>Системный звук не настроен</button><button id="ambient-triage" type="button">Сжать сейчас</button></div><p id="ambient-audio-status" class="meta">Loopback: checking...</p><button id="ambient-clear" type="button">Очистить буфер</button><button id="ambient-disable-erase" class="danger" type="button">Отключить и стереть</button></article>
+          </div>
+          <article class="glass-card" style="margin-top:16px"><div class="card-head"><div><h3>Присутствие</h3><p>Тихие часы и DND управляют проактивными репликами.</p></div></div><div class="split-grid"><label><input id="attention-dnd" type="checkbox"> DND для проактивного наблюдения</label><div class="field" style="margin:0"><label for="quiet-hours">Тихие часы (HH:MM-HH:MM)</label><input id="quiet-hours" type="text" placeholder="22:00-07:00"><button id="save-quiet-hours" type="button">Сохранить тихие часы</button></div></div><p id="attention-status" class="meta">Attention/Presence: checking...</p></article>
+        </section>
+
+        <section class="tab-panel" data-panel="memory">
+          <div class="page-heading"><div><span class="eyebrow">JAWL memory</span><h2>Память</h2><p>Каноническая память остаётся в JAWL; здесь только обзор и явные изменения.</p></div></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Библиотека памяти</h3><p>JAWL заполняет её сам; здесь можно найти, исправить или забыть запись.</p></div></div><pre id="jawl-overview" class="meta">JAWL не подключён.</pre><div class="memory-toolbar"><input id="jawl-memory-search" type="search" placeholder="Поиск по памяти" aria-label="Поиск по памяти"><select id="jawl-memory-filter" aria-label="Слой памяти"><option value="all">Все слои</option><option value="trait">Черты</option><option value="fact">Факты</option><option value="evidence">Evidence</option><option value="episode">Эпизоды</option></select></div><div id="jawl-memory-editor" class="memory-list empty-state">Каноническая память JAWL не подключена.</div><div class="field"><label for="jawl-memory-key">Ключ записи</label><input id="jawl-memory-key" type="text" placeholder="memory_key (для новой записи можно пусто)"></div><div class="split-grid"><div class="field"><label for="jawl-memory-kind">Слой</label><select id="jawl-memory-kind"><option value="fact">Факт</option><option value="trait">Черта</option><option value="evidence">Evidence</option><option value="episode">Эпизод</option></select></div><div class="field"><label for="jawl-memory-source">Источник</label><input id="jawl-memory-source" type="text" placeholder="user, voice, ambient…"></div></div><div class="field"><label for="jawl-memory-value">Значение</label><input id="jawl-memory-value" type="text" placeholder="Факт, черта или содержательная запись"></div><div class="button-row"><button id="jawl-memory-save" class="primary" type="button">Сохранить в JAWL</button><button id="jawl-memory-cancel" type="button" hidden>Отмена редактирования</button></div><span id="jawl-memory-status" class="meta"></span></article><article class="glass-card"><div class="card-head"><div><h3>Журнал автономности</h3><p>Решения и планы, полученные из JAWL.</p></div></div><pre id="jawl-journal" class="meta">Журнал JAWL не подключён.</pre><details><summary>Как это работает</summary><p class="meta">Companion не создаёт второго мозга: чтение, коррекция и забывание проходят через native JAWL memory API.</p></details></article></div>
+        </section>
+
+        <section class="tab-panel" data-panel="access">
+          <div class="page-heading"><div><span class="eyebrow">HostOS policy</span><h2>Доступ</h2><p>Уровень управления ПК, автономность и подтверждения — в одном месте.</p></div><span class="level-pill">Сейчас: <strong id="level-name">SANDBOX</strong> · <span id="level">0</span></span></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Режим управления ПК</h3><p id="jawl-hostos-status" class="meta">JAWL native HostOS: status not checked.</p></div></div><div class="field"><label for="level-select">Уровень доступа</label><select id="level-select"><option value="0">0 · SANDBOX</option><option value="1">1 · OBSERVER</option><option value="2">2 · OPERATOR</option><option value="3">3 · ROOT</option></select></div><div class="danger-note">ROOT даёт полный доступ к ПК. Включайте unattended только осознанно: аварийная остановка остаётся доступной.</div><div class="field"><label><input id="unattended" type="checkbox"> Автономный режим без подтверждений</label><span id="unattended-status" class="meta">Доступен только в ROOT.</span></div><div class="button-row"><button id="stop" class="danger">Аварийная остановка</button><button id="resume" type="button">Возобновить</button></div><details><summary>Ограничения инструментов</summary><div class="field"><label for="deny-tools">Заблокированные инструменты</label><input id="deny-tools" type="text" placeholder="shell.exec, filesystem.delete"></div><div class="field"><label for="deny-risks">Заблокированные классы риска</label><input id="deny-risks" type="text" placeholder="destructive, shell"></div><button id="save-denylist" type="button">Сохранить deny-list</button></details></article><article class="glass-card"><div class="card-head"><div><h3>Ожидают подтверждения</h3><p>Одноразовые разрешения для policy-sensitive действий.</p></div></div><div id="approvals" class="empty-state">Нет ожидающих запросов.</div></article></div>
+          <article class="glass-card" style="margin-top:16px"><div class="card-head"><div><h3>Аватар и OBS</h3><p>Прозрачная поверхность без control credentials и истории чата.</p></div><span class="tag">presentation</span></div><div class="field"><label for="obs-url">Browser Source URL</label><input id="obs-url" type="text" readonly aria-label="OBS URL"></div><div class="button-row"><button id="copy-obs-url" class="primary">Скопировать ссылку</button><span id="copy-obs-status" class="meta"></span><button type="button" data-tab-target="home">Открыть зеркало в панели</button></div></article>
+        </section>
+
+        <section class="tab-panel" data-panel="system">
+          <div class="page-heading"><div><span class="eyebrow">Diagnostics</span><h2>Система</h2><p>Диагностика провайдеров, ресурсы и аудит последних действий.</p></div></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Состояние контуров</h3><p>Обновляется автоматически.</p></div></div><pre id="health">Загрузка…</pre><details open><summary>Doctor</summary><pre id="doctor" class="meta">loading...</pre></details></article><article class="glass-card"><div class="card-head"><div><h3>Аудит HostOS</h3><p>Последние решения policy и результаты инструментов.</p></div></div><pre id="audit" class="meta">Загрузка…</pre></article></div>
+        </section>
+      </main>
+    </div>
+  </div>
   <script>
+    (() => {
+      const panels = [...document.querySelectorAll('[data-panel]')];
+      const tabs = [...document.querySelectorAll('[data-tab]')];
+      function selectTab(name) {
+        const selected = panels.some(panel => panel.dataset.panel === name) ? name : 'home';
+        panels.forEach(panel => panel.classList.toggle('active', panel.dataset.panel === selected));
+        tabs.forEach(tab => { const active = tab.dataset.tab === selected; tab.classList.toggle('active', active); tab.setAttribute('aria-selected', String(active)); });
+        try { history.replaceState(null, '', `#${selected}`); } catch (_) { /* embedded browsers */ }
+      }
+      tabs.forEach(tab => tab.addEventListener('click', () => selectTab(tab.dataset.tab)));
+      document.querySelectorAll('[data-tab-target]').forEach(button => button.addEventListener('click', () => selectTab(button.dataset.tabTarget)));
+      selectTab(window.location.hash.slice(1) || 'home');
+      window.renderMiniAvatar = state => {
+        const turn = state?.last_turn || {};
+        const response = turn.response || {};
+        const avatar = response.avatar || {};
+        const emotion = response.emotion || {};
+        const safe = String(avatar.expression || emotion.id || 'neutral').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'neutral';
+        const mini = document.querySelector('#mini-avatar');
+        if (mini) {
+          mini.dataset.expression = safe;
+          mini.dataset.state = String(avatar.state || 'idle').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'idle';
+        }
+        const emotionBox = document.querySelector('#mini-emotion');
+        if (emotionBox) emotionBox.textContent = safe;
+        const stateBox = document.querySelector('#mini-state');
+        if (stateBox) stateBox.textContent = String(avatar.state || 'idle');
+        const motionBox = document.querySelector('#mini-motion');
+        if (motionBox) motionBox.textContent = `motion · ${String(avatar.motion || 'idle')}`;
+        const sidebar = document.querySelector('#sidebar-state');
+        if (sidebar) sidebar.textContent = String(avatar.state || 'готов к диалогу');
+      };
+    })();
+  </script>
+  <script>
+    const micCard = document.querySelector('.mic-card');
+    const systemPanel = document.querySelector('[data-panel="system"]');
+    const visionCard = document.querySelector('#vision-look')?.closest('article');
+    const presenceCard = document.querySelector('#attention-dnd')?.closest('article');
+    if (systemPanel && visionCard) {
+      visionCard.querySelector('h3').textContent = 'Зрение · дополнительно';
+      visionCard.querySelector('.card-head p').textContent = 'Разовый анализ экрана по запросу; результат возвращается в общий чат.';
+      systemPanel.appendChild(visionCard);
+    }
+    if (systemPanel && presenceCard) {
+      presenceCard.querySelector('h3').textContent = 'Инициатива и тихие часы';
+      presenceCard.querySelector('.card-head p').textContent = 'Когда компаньон может заговорить первым.';
+      systemPanel.appendChild(presenceCard);
+    }
+    if (micCard && !document.querySelector('#mic-device')) {
+      const deviceField = document.createElement('div');
+      deviceField.className = 'field';
+      deviceField.innerHTML = '<label for="mic-device">Источник микрофона</label><select id="mic-device" class="device-select"><option value="">Системный микрофон</option></select><span id="mic-device-status" class="meta">Список устройств загружается…</span>';
+      micCard.querySelector('.mic-gate')?.before(deviceField);
+    }
     const messages = document.querySelector('#messages');
     const input = document.querySelector('#input');
     const health = document.querySelector('#health');
@@ -121,12 +364,21 @@
     const micGateState = document.querySelector('#mic-gate-state');
     const micGateStatus = document.querySelector('#mic-gate-status');
     const micCalibrate = document.querySelector('#mic-calibrate');
+    const micDevice = document.querySelector('#mic-device');
+    const userSignal = document.querySelector('#user-signal');
+    const companionSignal = document.querySelector('#companion-signal');
+    const attachmentInput = document.querySelector('#attachment-input');
+    const attachmentList = document.querySelector('#attachment-list');
+    const emojiPicker = document.querySelector('#emoji-picker');
+    const pendingAttachments = [];
     let sessionHeaders = {};
     let voice = null;
     let voiceQueue = Promise.resolve();
+    const MAX_PENDING_AUDIO_CHUNKS = 8;
     let ttsConfigured = false;
     let currentAudio = null;
     let ttsAbort = null;
+    let ambientPlaybackActive = false;
     let chatAbort = null;
     let streamSpeechActive = false;
     let speechSession = null;
@@ -142,6 +394,7 @@
     let micMeterPending = null;
     try { avatarAudioChannel = new BroadcastChannel('jawl-voicecompanion-avatar'); } catch (_) { /* backend polling remains available */ }
     function addMessage(who, text) {
+      messages.querySelector('.empty-state')?.remove();
       const item = document.createElement('div');
       item.className = 'message';
       item.innerHTML = `<div class="meta">${who}</div><div></div>`;
@@ -149,7 +402,42 @@
       messages.appendChild(item);
       messages.scrollTop = messages.scrollHeight;
     }
+    function renderAttachments() {
+      attachmentList.replaceChildren(...pendingAttachments.map((file, index) => {
+        const chip = document.createElement('span');
+        chip.className = 'attachment-chip';
+        chip.textContent = `${file.name} · ${Math.max(1, Math.round(file.size / 1024))} KB`;
+        chip.title = 'Удалить вложение';
+        chip.addEventListener('click', () => { pendingAttachments.splice(index, 1); renderAttachments(); });
+        return chip;
+      }));
+    }
+    function setSignal(element, active) { element?.classList.toggle('active', Boolean(active)); }
+    async function composeChatText(text) {
+      if (!pendingAttachments.length) return text;
+      const textFiles = pendingAttachments.filter(file => /\.(txt|md)$/i.test(file.name));
+      const unsupported = pendingAttachments.filter(file => !/\.(txt|md)$/i.test(file.name));
+      if (unsupported.length) throw new Error(`Текущий контур не анализирует этот тип вложений: ${unsupported.map(file => file.name).join(', ')}`);
+      const parts = await Promise.all(textFiles.map(async file => `[Файл: ${file.name}]\n${(await file.text()).slice(0, 12000)}`));
+      return `${text}\n\n${parts.join('\n\n')}`.slice(0, 30000);
+    }
     function clamp(value, low, high) { return Math.max(low, Math.min(high, value)); }
+    async function refreshMicDevices() {
+      if (!micDevice || !navigator.mediaDevices?.enumerateDevices) return;
+      try {
+        const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput');
+        const saved = localStorage.getItem('jawl-mic-device') || '';
+        micDevice.replaceChildren(new Option('Системный микрофон', ''));
+        devices.forEach((device, index) => micDevice.add(new Option(device.label || `Микрофон ${index + 1}`, device.deviceId)));
+        if ([...micDevice.options].some(option => option.value === saved)) micDevice.value = saved;
+        document.querySelector('#mic-device-status').textContent = `${devices.length} источник(а) доступно · выбор сохраняется в браузере`;
+      } catch (error) {
+        document.querySelector('#mic-device-status').textContent = `Список микрофонов недоступен: ${error.message}`;
+      }
+    }
+    micDevice?.addEventListener('change', () => { try { localStorage.setItem('jawl-mic-device', micDevice.value); } catch (_) {} });
+    refreshMicDevices();
+    navigator.mediaDevices?.addEventListener?.('devicechange', refreshMicDevices);
     function amplitudeDb(value) {
       return value > 0.00001 ? 20 * Math.log10(value) : -100;
     }
@@ -183,6 +471,7 @@
         micMeter.setAttribute('aria-valuenow', value.rms.toFixed(3));
         micSignal.textContent = `Сигнал: RMS ${formatDb(value.rms)} · peak ${formatDb(value.peak)}`;
         micGateState.textContent = `Gate: ${value.open ? 'open' : 'closed'}`;
+        setSignal(userSignal, value.open);
       });
     }
     function appendGatePreRoll(gate, inputSamples) {
@@ -223,6 +512,7 @@
       micPeak.style.left = '0%';
     }
     function beginStreamingMessage(who) {
+      messages.querySelector('.empty-state')?.remove();
       const item = document.createElement('div');
       item.className = 'message';
       item.innerHTML = `<div class="meta">${who}</div><div></div>`;
@@ -268,14 +558,15 @@
       return finalResponse;
     }
     async function refresh() {
-      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, jawlHostos, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse] = await Promise.all([
-        fetch('/api/state'),
+      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, jawlHostos, jawlJournal, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse] = await Promise.all([
+        fetch('/api/state', {headers: sessionHeaders}),
         fetch('/api/health'),
         fetch('/api/hostos/approvals', {headers: sessionHeaders}),
         fetch('/api/vision/status'),
         fetch('/api/tts/status'),
         fetch('/api/jawl/overview', {headers: sessionHeaders}),
         fetch('/api/jawl/hostos', {headers: sessionHeaders}),
+        fetch('/api/jawl/journal?limit=10', {headers: sessionHeaders}),
         fetch('/api/audit', {headers: sessionHeaders}),
         fetch('/api/doctor'),
         fetch('/api/ambient-memory', {headers: sessionHeaders}),
@@ -288,16 +579,25 @@
       const ttsStatusData = ttsStatus.ok ? await ttsStatus.json() : {configured: false};
       const jawlData = jawlOverview.ok ? await jawlOverview.json() : {configured: false, status: 'unavailable'};
       const jawlHostosData = jawlHostos.ok ? await jawlHostos.json() : {configured: false, status: 'unavailable'};
+      const jawlJournalData = jawlJournal.ok ? await jawlJournal.json() : {configured: false, status: 'unavailable'};
       const auditData = auditResponse.ok ? await auditResponse.json() : {events: []};
       const doctorData = doctorResponse.ok ? await doctorResponse.json() : {status: 'unavailable'};
       const ambientMemoryData = ambientMemoryResponse.ok ? await ambientMemoryResponse.json() : {state: {enabled: false}};
       const ambientAudioData = ambientAudioResponse.ok ? await ambientAudioResponse.json() : {configured: false, status: 'unavailable'};
+      window.renderMiniAvatar?.(stateData);
+      const gatewayState = String(statusData.status || 'unknown');
+      document.querySelector('#top-connection').textContent = `Локальный контур · ${gatewayState}`;
+      document.querySelector('#home-gateway-status').textContent = gatewayState;
       ttsConfigured = Boolean(ttsStatusData.configured && ttsStatusData.status !== 'offline');
       document.querySelector('#tts-status').textContent = ttsConfigured
         ? `TTS готов · ${ttsStatusData.provider || 'локальный провайдер'}`
         : 'TTS не настроен; доступен текстовый режим.';
+      document.querySelector('#home-tts-status').textContent = ttsConfigured
+        ? (ttsStatusData.provider || 'готов') : 'не настроен';
       document.querySelector('#level').textContent = stateData.policy.active_level;
       document.querySelector('#level-name').textContent = stateData.policy.active_name;
+      document.querySelector('#home-level-name').textContent = stateData.policy.active_name;
+      document.querySelector('#home-access-status').textContent = stateData.policy.active_name;
       document.querySelector('#level-select').value = stateData.policy.active_level;
       document.querySelector('#unattended').checked = Boolean(stateData.policy.unattended);
       document.querySelector('#unattended-status').textContent = stateData.policy.unattended
@@ -308,6 +608,66 @@
       health.textContent = JSON.stringify(statusData, null, 2);
       document.querySelector('#doctor').textContent = JSON.stringify(doctorData, null, 2);
       document.querySelector('#jawl-overview').textContent = JSON.stringify({...jawlData, hostos: jawlHostosData}, null, 2);
+      const journalPlans = Array.isArray(jawlJournalData.plans)
+        ? jawlJournalData.plans.map(plan => ({
+            plan_id: plan.plan_id,
+            state: plan.state,
+            started_at: plan.started_at,
+            finished_at: plan.finished_at,
+            action_count: plan.action_count,
+            last_event: plan.last_event,
+            uncertain_actions: plan.uncertain_actions,
+            outcomes: plan.outcomes,
+          }))
+        : [];
+      document.querySelector('#jawl-journal').textContent = jawlJournalData.configured
+        ? JSON.stringify({source: jawlJournalData.source, plans: journalPlans}, null, 2)
+        : 'Канонический журнал JAWL не подключён.';
+      const memoryEditor = document.querySelector('#jawl-memory-editor');
+      memoryEditor.replaceChildren();
+      const memoryRecords = jawlData.sources?.memory?.structured?.memories || [];
+      const memoryQuery = String(document.querySelector('#jawl-memory-search')?.value || '').trim().toLowerCase();
+      const memoryFilter = document.querySelector('#jawl-memory-filter')?.value || 'all';
+      document.querySelector('#home-memory-status').textContent = jawlData.configured
+        ? `${Array.isArray(memoryRecords) ? memoryRecords.length : 0} записей` : 'не подключена';
+      if (!jawlData.configured || !Array.isArray(memoryRecords) || !memoryRecords.length) {
+        memoryEditor.textContent = jawlData.configured ? 'Активных структурированных записей нет.' : 'Каноническая память JAWL не подключена.';
+      } else {
+        const visibleRecords = memoryRecords.filter(record => {
+          const haystack = [record.memory_key, record.kind, record.subject, record.predicate, record.value, record.source].join(' ').toLowerCase();
+          return (memoryFilter === 'all' || String(record.kind || 'fact').toLowerCase() === memoryFilter) && (!memoryQuery || haystack.includes(memoryQuery));
+        });
+        if (!visibleRecords.length) { memoryEditor.textContent = 'По выбранному фильтру записей нет.'; }
+        for (const record of visibleRecords.slice(0, 100)) {
+          const row = document.createElement('div');
+          row.className = 'memory-row';
+          const text = document.createElement('span');
+          text.textContent = `[${record.kind || 'fact'}] ${record.memory_key || 'без ключа'} · ${record.subject || '—'}: ${record.predicate || 'значение'} = ${record.value || '—'}`;
+          const actions = document.createElement('span');
+          const edit = document.createElement('button');
+          edit.textContent = 'Изменить';
+          edit.onclick = () => {
+            document.querySelector('#jawl-memory-key').value = record.memory_key || '';
+            document.querySelector('#jawl-memory-kind').value = record.kind || 'fact';
+            document.querySelector('#jawl-memory-source').value = record.source || '';
+            document.querySelector('#jawl-memory-value').value = record.value || '';
+            document.querySelector('#jawl-memory-save').dataset.editing = record.memory_key || '';
+            document.querySelector('#jawl-memory-cancel').hidden = false;
+            document.querySelector('#jawl-memory-status').textContent = `Редактируется ${record.memory_key || 'запись'}`;
+            document.querySelector('#jawl-memory-value').focus();
+          };
+          const forget = document.createElement('button');
+          forget.textContent = 'Забыть';
+          forget.onclick = async () => {
+            if (!window.confirm(`Забыть запись ${record.memory_key}?`)) return;
+            await apiPost('/api/jawl/memory', {operation: 'forget', memory_key: record.memory_key, reason: 'browser request'});
+            refresh();
+          };
+          actions.append(edit, ' ', forget);
+          row.append(text, actions);
+          memoryEditor.append(row);
+        }
+      }
       document.querySelector('#jawl-hostos-status').textContent = jawlHostosData.control_enabled
         ? `JAWL native HostOS: control enabled · ${jawlHostosData.access_name || 'level unknown'}`
         : 'JAWL native HostOS: diagnostics only; use --jawl-hostos-control to synchronize.';
@@ -327,6 +687,30 @@
       const ambientAudioButton = document.querySelector('#ambient-audio-toggle');
       document.querySelector('#ambient-memory-enabled').checked = Boolean(ambientMemoryState.enabled);
       document.querySelector('#ambient-memory-status').textContent = `Ambient memory: ${ambientMemoryState.enabled ? 'включена' : 'выключена'} · observations ${ambientMemoryState.observation_count || 0} · episodes ${ambientMemoryState.episode_count || 0}`;
+      const candidateBox = document.querySelector('#ambient-memory-candidates');
+      candidateBox.replaceChildren();
+      const candidates = (ambientMemoryData.episodes || []).filter(item => item.payload?.importance === 'promote_candidate' && !item.payload?.promoted);
+      if (!candidates.length) {
+        candidateBox.textContent = 'Нет кандидатов для сохранения в JAWL.';
+      } else {
+        for (const episode of candidates.slice(-8)) {
+          const row = document.createElement('div');
+          row.className = 'message';
+          const summary = document.createElement('span');
+          summary.textContent = episode.payload?.summary || episode.event_id;
+          const promote = document.createElement('button');
+          promote.textContent = 'Сохранить в JAWL';
+          promote.onclick = async () => {
+            if (!window.confirm('Сохранить этот кандидат в каноническую память JAWL?')) return;
+            promote.disabled = true;
+            const response = await apiPost('/api/ambient-memory/promote', {episode_id: episode.event_id, confirm: true});
+            if (!response.ok) promote.disabled = false;
+            refresh();
+          };
+          row.append(summary, ' ', promote);
+          candidateBox.append(row);
+        }
+      }
       if (!ambientAudioData.configured) {
         ambientAudioButton.disabled = true;
         ambientAudioButton.textContent = 'Системный звук не настроен';
@@ -374,6 +758,7 @@
       return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
     }
     function publishAvatarAudio(amplitude, speaking) {
+      setSignal(companionSignal, speaking && Number(amplitude) > 0.01);
       const event = {
         schema_version: 1,
         type: 'avatar.audio',
@@ -446,6 +831,7 @@
             return;
           }
           if (audio.paused) {
+            setSignal(companionSignal, false);
             monitor.frame = requestAnimationFrame(sample);
             return;
           }
@@ -550,12 +936,12 @@
       }
       await consume(pending);
     }
-    async function createSpeechSession(controller) {
+    async function createSpeechSession(controller, emotion = null) {
       const monitor = await startAvatarStreamMonitor();
       if (!monitor) return null;
       const session = {
         monitor, controller, nextStart: avatarAudioContext.currentTime + 0.03,
-        queue: Promise.resolve(), buffer: '', seenText: '', stopped: false
+        queue: Promise.resolve(), buffer: '', seenText: '', stopped: false, emotion
       };
       speechSession = session;
       streamSpeechActive = true;
@@ -570,7 +956,7 @@
         const response = await fetch('/api/tts/stream', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', ...sessionHeaders},
-          body: JSON.stringify({text: segment, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
+          body: JSON.stringify({text: segment, emotion: session.emotion, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
           signal: session.controller.signal
         });
         if (!response.ok || !response.body) throw new Error('TTS stream unavailable');
@@ -597,8 +983,9 @@
         if (cut <= 0) break;
       }
     }
-    async function finishSpeechSession(session, finalText) {
+    async function finishSpeechSession(session, finalText, emotion = null) {
       if (!session || session.stopped) return;
+      if (emotion) session.emotion = emotion;
       // Deltas have already filled the buffer; only flush text that did not
       // reach a punctuation/word boundary before the final envelope.
       if (finalText && !session.seenText) {
@@ -610,17 +997,17 @@
       await session.queue;
       session.monitor.streamDone = true;
     }
-    async function speakStream(text, controller) {
+    async function speakStream(text, controller, emotion = null) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass || !window.ReadableStream) return false;
-      const session = await createSpeechSession(controller);
+      const session = await createSpeechSession(controller, emotion);
       if (!session) return false;
       let response;
       try {
         response = await fetch('/api/tts/stream', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', ...sessionHeaders},
-          body: JSON.stringify({text, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
+          body: JSON.stringify({text, emotion, voice: ttsVoice.value.trim() || null, speed: Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1))}),
           signal: controller.signal
         });
       } catch (error) {
@@ -643,7 +1030,17 @@
       session.monitor.streamDone = true;
       return true;
     }
+    function setAmbientPlayback(active) {
+      if (ambientPlaybackActive === Boolean(active) && !active) return;
+      ambientPlaybackActive = Boolean(active);
+      if (!Object.keys(sessionHeaders).length) return;
+      apiPost('/api/ambient-audio/playback', {
+        active: ambientPlaybackActive,
+        ttl_seconds: 30
+      }).catch(() => { /* ambient echo protection is best-effort in text-only mode */ });
+    }
     async function stopSpeech() {
+      setAmbientPlayback(false);
       if (speechSession) speechSession.stopped = true;
       speechSession = null;
       stopAvatarAudioMonitor();
@@ -664,7 +1061,7 @@
         try { await apiPost('/api/tts/cancel', {}); } catch (_) { /* text mode remains usable */ }
       }
     }
-    async function speak(text) {
+    async function speak(text, emotion = null) {
       if (!ttsConfigured || !text) return;
       await stopSpeech();
       bargeInTriggered = false;
@@ -672,13 +1069,14 @@
       ttsSpeed.value = speed;
       const controller = new AbortController();
       ttsAbort = controller;
+      setAmbientPlayback(true);
       try {
-        const streamed = await speakStream(text, controller);
+        const streamed = await speakStream(text, controller, emotion);
         if (streamed) return;
         const response = await fetch('/api/tts/synthesize', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', ...sessionHeaders},
-          body: JSON.stringify({text, voice: ttsVoice.value.trim() || null, speed}),
+          body: JSON.stringify({text, emotion, voice: ttsVoice.value.trim() || null, speed}),
           signal: controller.signal
         });
         if (!response.ok) return;
@@ -693,6 +1091,7 @@
         if (error.name !== 'AbortError') {
           stopAvatarAudioMonitor();
           streamSpeechActive = false;
+          setAmbientPlayback(false);
         }
         if (error.name === 'AbortError') return;
         document.querySelector('#tts-status').textContent = `TTS не воспроизведён: ${error.message}`;
@@ -726,7 +1125,14 @@
       }
       return btoa(binary);
     }
-    function queueVoiceChunk(samples, sampleRate, sessionId) {
+    function queueVoiceChunk(samples, sampleRate, sessionId, active = null) {
+      if (!samples.length) return false;
+      if (active && active.pendingUploads >= MAX_PENDING_AUDIO_CHUNKS) {
+        active.droppedChunks = (active.droppedChunks || 0) + 1;
+        micGateStatus.textContent = `Audio upload backpressure: dropped ${active.droppedChunks} chunk(s).`;
+        return false;
+      }
+      if (active) active.pendingUploads += 1;
       const payload = {
         session_id: sessionId, sample_rate: 16000, channels: 1,
         pcm16_base64: pcm16Base64(downsample(samples, sampleRate, 16000))
@@ -736,24 +1142,47 @@
         const data = await response.json();
         for (const answer of data.responses || []) {
           addMessage('Компаньон', answer.text || answer.error);
-          speak(answer.text);
+          speak(answer.text, answer.emotion);
         }
         if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem недоступен');
       }).catch(error => {
         document.querySelector('#mic-status').textContent = `Ошибка микрофона: ${error.message}`;
+      }).finally(() => {
+        if (active) active.pendingUploads = Math.max(0, active.pendingUploads - 1);
       });
+      return true;
+    }
+    function flushMicSamples(active) {
+      if (!active || !active.samples.length) return;
+      const tail = active.samples.splice(0, active.samples.length);
+      queueVoiceChunk(tail, active.context.sampleRate, active.sessionId, active);
+    }
+    function requestMicWorkletFlush(active) {
+      if (!active?.processor?.port) return Promise.resolve();
+      if (active.flushPromise) return active.flushPromise;
+      active.flushPromise = new Promise(resolve => {
+        active.flushResolve = resolve;
+        window.setTimeout(() => {
+          if (active.flushResolve === resolve) {
+            active.flushResolve = null;
+            resolve();
+          }
+        }, 250);
+        active.processor.port.postMessage({type: 'flush'});
+      });
+      return active.flushPromise;
     }
     function handleVoiceResponses(data) {
       for (const answer of data.responses || []) {
         addMessage('Companion', answer.text || answer.error);
-        speak(answer.text);
+        speak(answer.text, answer.emotion);
       }
     }
     async function finishVoiceUtterance(active) {
       if (!active) return;
       if (active.finishPromise) return active.finishPromise;
       active.finalizing = true;
-      active.samples.length = 0;
+      flushMicSamples(active);
       active.finishPromise = (async () => {
         await voiceQueue;
         try {
@@ -783,9 +1212,11 @@
     async function stopMicrophone() {
       if (!voice) return;
       const active = voice;
+      await requestMicWorkletFlush(active);
       voice = null;
       if (active.gate.calibrationTimer) window.clearTimeout(active.gate.calibrationTimer);
       active.gate.calibration = null;
+      try { active.processor.port.close(); } catch (_) {}
       active.processor.disconnect();
       active.source.disconnect();
       active.stream.getTracks().forEach(track => track.stop());
@@ -803,7 +1234,7 @@
         const data = await response.json();
         for (const answer of data.responses || []) {
           addMessage('Компаньон', answer.text || answer.error);
-          speak(answer.text);
+          speak(answer.text, answer.emotion);
         }
       } catch (error) {
         document.querySelector('#mic-status').textContent = `Остановка микрофона: ${error.message}`;
@@ -829,21 +1260,39 @@
       }
     }
     async function startMicrophone() {
+      if (!window.isSecureContext) throw new Error('Для микрофона на планшете откройте панель по HTTPS с доверенным сертификатом.');
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Браузер не поддерживает микрофон');
-      const stream = await navigator.mediaDevices.getUserMedia({audio: {
-        channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false
-      }});
+      const audio = {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false};
+      if (micDevice?.value) audio.deviceId = {exact: micDevice.value};
+      const stream = await navigator.mediaDevices.getUserMedia({audio});
       const context = new AudioContext();
+      try {
+        await context.audioWorklet.addModule('/mic-processor.js');
+      } catch (error) {
+        stream.getTracks().forEach(track => track.stop());
+        await context.close();
+        throw error;
+      }
       const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(4096, 1, 1);
+      const processor = new AudioWorkletNode(context, 'jawl-mic-processor', {
+        numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1
+      });
       const mute = context.createGain();
       mute.gain.value = 0;
       const samples = [];
       const chunkSize = Math.floor(context.sampleRate * 0.2);
-      processor.onaudioprocess = event => {
-        const inputSamples = event.inputBuffer.getChannelData(0);
+      processor.port.onmessage = event => {
         const active = voice;
         if (!active || active.context !== context) return;
+        if (event.data && event.data.type === 'flushed') {
+          const resolve = active.flushResolve;
+          active.flushResolve = null;
+          if (resolve) resolve();
+          return;
+        }
+        const inputSamples = event.data instanceof ArrayBuffer
+          ? new Float32Array(event.data) : null;
+        if (!inputSamples?.length) return;
         let energy = 0;
         let peak = 0;
         for (const sample of inputSamples) {
@@ -860,10 +1309,12 @@
           }
         }
         updateVoiceVad(active, gated.open ? rms : 0);
-        if (!active.finalizing && gated.capture) {
+        if (!active.finalizing && gated.open) {
           if (gated.samples.length) samples.push(...gated.samples);
           samples.push(...inputSamples);
-          while (samples.length >= chunkSize) queueVoiceChunk(samples.splice(0, chunkSize), context.sampleRate, active.sessionId);
+          while (samples.length >= chunkSize) {
+            queueVoiceChunk(samples.splice(0, chunkSize), context.sampleRate, active.sessionId, active);
+          }
         }
       };
       source.connect(processor);
@@ -871,7 +1322,8 @@
       mute.connect(context.destination);
       voice = {
         stream, context, source, processor, samples, sessionId: `browser-mic-${Date.now()}-${++voiceSequence}`,
-        finalizing: false, finishPromise: null,
+        finalizing: false, finishPromise: null, pendingUploads: 0, droppedChunks: 0,
+        flushPromise: null, flushResolve: null,
         vad: {speaking: false, lastSpeechAt: 0, startedAt: 0},
         gate: {
           threshold: gateThreshold(), open: false, silentBlocks: 0, releaseBlocks: 3,
@@ -928,32 +1380,37 @@
     async function bootstrap() {
       const response = await fetch('/api/session', {cache: 'no-store'});
       const data = await response.json();
-      sessionHeaders = {'X-Companion-Session': data.session_token, 'X-Companion-CSRF': data.csrf_token};
+      sessionHeaders = {'X-Companion-CSRF': data.csrf_token};
       refresh();
     }
     document.querySelector('#send').addEventListener('click', async () => {
       const text = input.value.trim();
-      if (!text) return;
+      if (!text && !pendingAttachments.length) return;
+      let requestText;
+      try { requestText = await composeChatText(text || 'Проанализируй приложенные файлы.'); }
+      catch (error) { addMessage('System', error.message); return; }
       await stopSpeech();
-      addMessage('Ты', text);
+      addMessage('Ты', text || 'Проанализируй приложенные файлы.');
+      pendingAttachments.length = 0;
+      renderAttachments();
       input.value = '';
       const chatController = new AbortController();
       chatAbort = chatController;
       const speech = ttsConfigured ? await createSpeechSession(new AbortController()) : null;
       try {
-        const streamed = await streamChat(text, speech, chatController);
+        const streamed = await streamChat(requestText, speech, chatController);
         if (streamed) {
           if (speech && streamed.speak) {
-            await finishSpeechSession(speech, streamed.text);
+            await finishSpeechSession(speech, streamed.text, streamed.emotion);
           } else if (streamed.speak) {
-            speak(streamed.text);
+            speak(streamed.text, streamed.emotion);
           }
         } else {
           if (speech) await stopSpeech();
-          const response = await apiPost('/api/chat', {text});
+          const response = await apiPost('/api/chat', {text: requestText});
           const data = await response.json();
           addMessage('Компаньон', data.text || data.error);
-          if (response.ok) speak(data.text);
+          if (response.ok) speak(data.text, data.emotion);
         }
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -965,6 +1422,20 @@
       }
       refresh();
     });
+    document.querySelector('#attach')?.addEventListener('click', () => attachmentInput.click());
+    attachmentInput?.addEventListener('change', () => {
+      pendingAttachments.push(...[...(attachmentInput.files || [])].slice(0, 8 - pendingAttachments.length));
+      attachmentInput.value = '';
+      renderAttachments();
+    });
+    const emojis = ['😀','🙂','😉','😊','😍','🤔','😅','😂','🥹','😎','🤍','💚','✨','🔥','👍','👏','🙏','🎉','🌿','🐾','☕','🎮','💡','✅','❌','❤️','😴','😮'];
+    emojiPicker?.replaceChildren(...emojis.map(symbol => {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = symbol; button.addEventListener('click', () => { input.setRangeText(symbol, input.selectionStart, input.selectionEnd, 'end'); input.focus(); }); return button;
+    }));
+    document.querySelector('#emoji')?.addEventListener('click', () => emojiPicker.classList.toggle('open'));
+    document.querySelector('#slash')?.addEventListener('click', () => { input.setRangeText('/help ', input.selectionStart, input.selectionEnd, 'end'); input.focus(); });
+    document.addEventListener('click', event => { if (!event.target.closest('#emoji') && !event.target.closest('#emoji-picker')) emojiPicker?.classList.remove('open'); });
+    input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); document.querySelector('#send').click(); } });
     document.querySelector('#level-select').addEventListener('change', async (event) => {
       if (Number(event.target.value) === 3 && !window.confirm('Включить ROOT: действия получат права текущего пользователя Windows?')) {
         refresh();
@@ -998,6 +1469,9 @@
     });
     const obsUrl = document.querySelector('#obs-url');
     obsUrl.value = `${window.location.origin}/avatar`;
+    fetch('/api/avatar/config', {cache: 'no-store'}).then(response => response.json()).then(config => {
+      if (config.presentation_url) obsUrl.value = config.presentation_url;
+    }).catch(() => { /* same-origin fallback remains visible */ });
     document.querySelector('#copy-obs-url').addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(obsUrl.value);
@@ -1040,6 +1514,38 @@
       if (!response.ok) event.target.checked = !event.target.checked;
       refresh();
     });
+    document.querySelector('#jawl-memory-save').addEventListener('click', async () => {
+      const value = document.querySelector('#jawl-memory-value').value.trim();
+      if (!value) { document.querySelector('#jawl-memory-status').textContent = 'Введите значение записи.'; return; }
+      const key = document.querySelector('#jawl-memory-key').value.trim();
+      const kind = document.querySelector('#jawl-memory-kind').value;
+      const source = document.querySelector('#jawl-memory-source').value.trim() || 'browser';
+      const editing = document.querySelector('#jawl-memory-save').dataset.editing || '';
+      const response = await apiPost('/api/jawl/memory', {
+        operation: editing ? 'revise' : 'remember', memory_key: editing || key || undefined, kind,
+        subject: 'user', predicate: kind === 'trait' ? 'trait' : 'note', value, source,
+        confidence: 0.9, provenance: {actor: 'browser'}
+      });
+      if (response.ok) {
+        document.querySelector('#jawl-memory-key').value = '';
+        document.querySelector('#jawl-memory-value').value = '';
+        document.querySelector('#jawl-memory-source').value = '';
+        document.querySelector('#jawl-memory-save').dataset.editing = '';
+        document.querySelector('#jawl-memory-cancel').hidden = true;
+        document.querySelector('#jawl-memory-status').textContent = editing ? 'Запись обновлена.' : 'Запись сохранена.';
+      } else {
+        const data = await response.json();
+        document.querySelector('#jawl-memory-status').textContent = `Ошибка памяти: ${data.error || 'операция отклонена'}`;
+      }
+      refresh();
+    });
+    document.querySelector('#jawl-memory-cancel').addEventListener('click', () => {
+      document.querySelector('#jawl-memory-save').dataset.editing = '';
+      document.querySelector('#jawl-memory-cancel').hidden = true;
+      document.querySelector('#jawl-memory-status').textContent = '';
+    });
+    document.querySelector('#jawl-memory-search').addEventListener('input', () => refresh());
+    document.querySelector('#jawl-memory-filter').addEventListener('change', () => refresh());
     document.querySelector('#ambient-triage').addEventListener('click', async () => {
       const response = await apiPost('/api/ambient-memory/triage', {});
       const data = await response.json();
@@ -1051,6 +1557,17 @@
     document.querySelector('#ambient-clear').addEventListener('click', async () => {
       if (!window.confirm('Очистить кратковременную ambient memory?')) return;
       await apiPost('/api/ambient-memory/clear', {});
+      refresh();
+    });
+    document.querySelector('#ambient-disable-erase').addEventListener('click', async () => {
+      if (!window.confirm('Отключить ambient memory и безвозвратно стереть её буфер?')) return;
+      const response = await apiPost('/api/ambient-memory/config', {
+        mode: 'disable_and_erase', confirm: true
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        document.querySelector('#ambient-memory-status').textContent = `Ошибка очистки: ${data.error || 'отказано'}`;
+      }
       refresh();
     });
     document.querySelector('#ambient-audio-toggle').addEventListener('click', async () => {

@@ -1,59 +1,48 @@
-# OBS avatar surface
+# OBS and desktop-pet presentation
 
-The local service exposes a dedicated transparent presentation page at:
+The CLI starts two loopback servers:
 
-```text
-http://127.0.0.1:8765/avatar
-```
+- control UI: `http://127.0.0.1:2367/`;
+- isolated presentation/OBS surface: `http://127.0.0.1:8766/avatar`.
 
-The main control panel at `http://127.0.0.1:8765/` also displays and copies
-the same-origin URL, so a non-default port does not need to be entered by
-hand.
+Port ownership is intentional: `2367` belongs to the Companion control plane,
+`8766` to its unprivileged presentation surface, and JAWL's own web console
+normally uses `8770`. A WebSocket-only service on another port must not be
+opened as a browser URL. The launcher checks both Companion ports before
+starting.
 
-## Initial setup
+The exact presentation URL is printed at startup and copied into the control
+panel. The presentation server has no session token, CSRF route, HostOS route,
+approval store, chat history or POST endpoint. It exposes only bounded avatar
+state, presentation configuration and read-only user-supplied assets.
 
-1. Start the local service with `scripts/run_web.ps1`.
-2. In OBS, add a `Browser` source.
-3. Set the URL to `/avatar` from the running service.
-4. Enable a transparent page background and choose the canvas size for the
-   future Live2D model, for example 800x800.
-5. If the 2D fallback is too small or too large, adjust the Browser Source
-   dimensions; the surface scales to its source viewport.
+## OBS setup
 
-The page is read-only. It polls `/api/state`, displays the latest bounded
-response subtitle and maps the response envelope's avatar state/expression to
-the presentation. It does not contain a control token and cannot change the
-HostOS level, approve tools or trigger desktop actions.
+1. Start the service with `scripts/run_web.ps1`.
+2. In OBS add a `Browser` source.
+3. Use the printed `/avatar` URL.
+4. Enable a transparent background and set the required canvas size, for
+   example 800x800.
 
-When the control page is open in parallel, its TTS playback sends only a
-short-lived amplitude signal to the `avatar_audio` property. This drives the
-fallback mouth and the optional runtime's `setLipSync` hook even when OBS uses
-a separate browser context; no audio bytes are sent to or stored by this
-bridge.
+OBS is a presentation client, not an authorization boundary. Keep both
+servers on loopback and load only trusted local runtime assets. Remote binding
+is rejected by default.
 
-Add `?debug=1` temporarily to show state diagnostics in the upper-left corner:
+The current page is a dependency-free reactive 2D fallback. It displays the
+latest bounded subtitle, expression, motion and speaking state. It also uses a
+short-lived audio-amplitude signal for mouth movement; no audio bytes are sent
+to or stored by the presentation server. Add `?debug=1` to show diagnostics.
 
-```text
-http://127.0.0.1:8765/avatar?debug=1
-```
+## Optional Live2D bundle
 
-The current visual is a dependency-free reactive 2D fallback used to verify the
-transparent surface, lifecycle and envelope-driven expressions. The next avatar milestone replaces it
-with a redistributable or user-supplied 2D Live2D model without changing the
-OBS URL or backend ownership boundaries.
-
-## Optional Live2D model
-
-The repository deliberately does not ship a model or Cubism Core. To use a
-licensed user-supplied bundle, place its files below one directory, including
-`model3.json` and a bundled `live2d-runtime.js`, then start:
+The repository does not ship Cubism Core, a model, textures or a runtime. A
+licensed user-owned bundle can be supplied below one directory:
 
 ```powershell
 .\scripts\run_web.ps1 --live2d-assets "G:\AI\Live2D\companion"
 ```
 
-Custom names can be supplied with `--live2d-model` and `--live2d-runtime`.
-The runtime bundle must expose:
+The bundle must include `model3.json` and a `live2d-runtime.js` exposing:
 
 ```javascript
 window.Live2DCompanionRuntime = {
@@ -65,73 +54,38 @@ window.Live2DCompanionRuntime = {
 };
 ```
 
-The model JSON must also reference an existing Moc and at least one texture.
-The backend validates those fatal references relative to the model file and
-reports the result through `/api/avatar/config`; missing optional motion or
-expression files are warnings. The `/avatar` page loads this adapter only
-when the bundle is `ready`. Any missing or incompatible runtime keeps the
-the reactive 2D fallback active; add `?debug=1` to see the fallback reason. Model files are
-served read-only from the explicit asset root and are not copied into this
-repository. The complete contract is in [contracts/avatar.md](contracts/avatar.md).
+`--live2d-model` and `--live2d-runtime` can override the default names. The
+backend validates fatal model references (Moc and textures), prevents path
+escape and serves the asset tree read-only. Missing optional motions or an
+incompatible runtime leave the reactive fallback active. The full asset
+contract is in [contracts/avatar.md](contracts/avatar.md).
 
-## Explicit screen look
+## Integrated scene and audio ownership
 
-### Local Qwen3-VL-2B endpoint
+The product requires the same 2D character in the mint Aero control panel,
+an optional separate window and OBS. The existing inline CSS figure is a
+fallback, not yet a mirror of any installed Live2D model. Load third-party
+renderer code only through the isolated presentation boundary, never directly
+into the privileged control origin.
 
-The supplied CPU/RAM benchmark selected Qwen3-VL-2B Q4_K_M with its matching
-F16 mmproj. Start the provider in a separate terminal; the wrapper binds it
-to loopback, keeps the model on CPU and validates the external model files:
+Only one selected client plays TTS. OBS/avatar consumes state/amplitude, not
+a second audio copy; audio capture in OBS is configured separately. Closing
+the panel must not stop backend JAWL tasks, but the current browser microphone
+and playback require an open client. A headless audio owner is not implemented.
 
-```powershell
-cd G:\AI\JAWL-VoiceCompanion
-.\scripts\run_vision_server.ps1
-```
-
-The default paths target `G:\AI\VLM-RealTime-Bench`: the b10738 CPU runtime
-and the Qwen model pair under its `models` directory. Override `-ServerPath`,
-`-ModelPath` and `-MmprojPath` for another installation. The endpoint is
-`http://127.0.0.1:8983/v1`, and the model alias is `Qwen3-VL-2B`.
-
-Then start the companion in a second terminal:
+The window launcher can be inspected independently of a model:
 
 ```powershell
-.\scripts\run_web.ps1 --port 8766 --hostos-live --screen-enabled `
-  --screen-max-width 960 --screen-max-height 720 `
-  --vision-url "http://127.0.0.1:8983/v1" --vision-model "Qwen3-VL-2B"
+.\scripts\run_avatar_window.ps1 -Url 'http://127.0.0.1:8766/avatar?source=pet'
 ```
 
-The endpoint was smoke-tested with `/health`, `/v1/models` and the existing
-`OpenAICompatibleVisionClient` against `assets/ui_test.png`. Full-resolution
-screen capture remains bounded: the benchmark showed materially higher
-latency. The default profile is 960×720 and 1 MB; `screen.observe` also
-reports bounded `coordinate_scale` metadata so a later UI action can map
-model-image coordinates back to the focused-window rectangle.
+This is a browser presentation shell, not proof of native transparency,
+click-through or multi-monitor behavior. See [PRODUCT.md](PRODUCT.md).
 
-The control panel also exposes an explicit, on-demand vision request. It
-captures the focused window through HostOS and sends the transient JPEG to an
-OpenAI-compatible endpoint only when all three options are configured:
+## Acceptance still required
 
-```powershell
-.\scripts\run_web.ps1 --hostos-live --screen-enabled `
-  --vision-url "http://127.0.0.1:8000/v1" --vision-model "local-vlm"
-```
-
-The endpoint can use an API key from the environment named by
-`--vision-api-key-env` (default: `VISION_API_KEY`). The key is never rendered
-in the UI or logs. The same frame digest is not sent to the VLM twice unless
-the request is explicitly forced; the bridge keeps only a digest and the
-bounded last description in memory.
-
-Change detection and cooldown are also available as an explicit opt-in sensor:
-
-```powershell
-.\scripts\run_web.ps1 --hostos-live --screen-enabled --screen-watch `
-  --screen-watch-interval 10 --vision-url "http://127.0.0.1:8000/v1" `
-  --vision-model "local-vlm"
-```
-
-The watcher emits bounded events at `/api/vision/events`. Attention/Presence
-applies salience, DND, cooldown and a bounded budget, exposing proposals at
-`/api/vision/intents`. To wake JAWL, pass `--jawl-event-dir` for the active
-instance's `.jawl_events` directory. JAWL still decides final wording and
-whether to speak; omit the option to keep the sensor local-only.
+The isolated server boundary is covered by automated HTTP tests, but release
+still requires a real target-machine check for transparent compositing,
+click-through/drag behavior, DPI and multi-monitor scaling, OBS capture,
+audio ownership and an extended presentation soak. A supplied Live2D bundle
+also requires license and runtime compatibility review.

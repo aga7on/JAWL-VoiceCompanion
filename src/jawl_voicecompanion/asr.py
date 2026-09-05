@@ -33,6 +33,10 @@ class ASRUnavailable(ConnectionError):
     """The selected ASR provider is unavailable or returned an invalid reply."""
 
 
+class ASRNoSpeech(ValueError):
+    """The ASR provider responded without transcribing any speech."""
+
+
 def _transcription_url(value: str) -> str:
     endpoint = str(value or "").strip().rstrip("/")
     if not endpoint:
@@ -108,7 +112,7 @@ class OpenAICompatibleASRClient:
             raise ASRUnavailable("ASR endpoint returned invalid JSON") from exc
         text = self._extract_text(payload)
         if not text:
-            raise ASRUnavailable("ASR endpoint returned empty text")
+            raise ASRNoSpeech("ASR endpoint returned no speech text")
         return text[:MAX_ASR_TEXT_CHARS]
 
     def _multipart(self, boundary: str, wav_bytes: bytes, filename: str) -> bytes:
@@ -168,17 +172,19 @@ class ExternalASRService:
         *,
         max_utterance_bytes: int = MAX_UTTERANCE_BYTES,
         session_ttl_seconds: float = SESSION_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.provider = provider
         self.max_utterance_bytes = max(32 * 1024, min(int(max_utterance_bytes), MAX_UTTERANCE_BYTES)) & ~1
         self.session_ttl_seconds = max(10.0, min(float(session_ttl_seconds), 600.0))
+        self._clock = clock
         self._sessions: dict[str, _AudioSession] = {}
         self._lock = threading.RLock()
 
     def feed_audio(self, pcm16: bytes, *, sample_rate: int, channels: int, session_id: str) -> dict[str, Any]:
         self._validate_audio(pcm16, sample_rate, channels)
         session = str(session_id or "local")[:200]
-        now = time.monotonic()
+        now = self._clock()
         with self._lock:
             self._expire(now)
             current = self._sessions.get(session)
@@ -210,7 +216,10 @@ class ExternalASRService:
         if current is None or not current.data:
             return {"status": "empty", "text": "", "raw_audio_persisted": False}
         wav_bytes = self._wav(current)
-        text = self.provider.transcribe(wav_bytes)
+        try:
+            text = self.provider.transcribe(wav_bytes)
+        except ASRNoSpeech:
+            return {"status": "no_speech", "text": "", "bytes": len(current.data), "raw_audio_persisted": False}
         return {
             "status": "transcribed",
             "text": text[:MAX_ASR_TEXT_CHARS],
@@ -224,7 +233,7 @@ class ExternalASRService:
 
     def state(self) -> dict[str, Any]:
         with self._lock:
-            self._expire(time.monotonic())
+            self._expire(self._clock())
             return {
                 "configured": True,
                 "mode": "final_utterance",
@@ -264,6 +273,7 @@ class ExternalASRService:
 
 
 __all__ = [
+    "ASRNoSpeech",
     "ASRUnavailable",
     "DEFAULT_TRANSCRIPTION_PROMPT",
     "ExternalASRService",

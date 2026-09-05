@@ -84,13 +84,36 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertFalse(episode["payload"]["raw_audio_persisted"])
         self.assertFalse(episode["payload"]["raw_frame_persisted"])
 
+    def test_audio_description_is_text_only_ambient_evidence(self):
+        memory = AmbientMemoryBuffer(enabled=True)
+        result = memory.ingest_audio_description({
+            "schema_version": 1,
+            "clip_id": "music-1",
+            "kind": "music",
+            "description": "Энергичный фрагмент с ударными.",
+            "tags": ["музыка", "ударные"],
+            "mood": "энергичное",
+            "confidence": 0.86,
+            "duration_seconds": 4.5,
+        }, event_id="music-description")
+        self.assertEqual(result["status"], "retained")
+        payload = memory.observations()[0]["payload"]
+        self.assertEqual(payload["audio_kind"], "music")
+        self.assertEqual(payload["tags"], ["музыка", "ударные"])
+        self.assertEqual(payload["duration_seconds"], 4.5)
+        self.assertFalse(payload["raw_audio_persisted"])
+
     def test_private_duplicate_and_unknown_events_are_not_retained(self):
         memory = AmbientMemoryBuffer(enabled=True)
         private = memory.ingest_system_audio("Password token: secret", event_id="private", now=1)
+        sensitive_window = memory.ingest_visual(
+            "На экране обычный текст", source_app="Password Manager", event_id="sensitive-window", now=1
+        )
         unknown = memory.ingest({"type": "USER_FINAL", "payload": {"text": "not ambient"}}, now=1)
         first = memory.ingest_visual("обычное наблюдение", event_id="same", now=1)
         duplicate = memory.ingest_visual("обычное наблюдение", event_id="same", now=2)
         self.assertEqual(private["status"], "suppressed")
+        self.assertEqual(sensitive_window, {"status": "suppressed", "reason": "ambient_source_sensitive"})
         self.assertEqual(unknown["status"], "ignored")
         self.assertEqual(first["status"], "retained")
         self.assertEqual(duplicate["status"], "duplicate")

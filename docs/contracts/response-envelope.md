@@ -1,68 +1,40 @@
-# ResponseEnvelope Contract
+# Response envelope v1
 
-The cognitive core returns a versioned structured envelope. The frontend and
-voice services must not infer behavior from arbitrary prose.
+JAWL is the canonical producer of the final response envelope. The Companion
+accepts it from the native correlated Gateway and validates it before routing
+text to the browser, TTS and the presentation surface.
 
 ```json
 {
   "schema_version": 1,
-  "response_id": "uuid",
-  "turn_id": "uuid",
-  "text": "Я вижу ошибку импорта. Давай проверим путь к модулю.",
+  "response_id": "resp-123",
+  "turn_id": "turn-123",
+  "text": "Привет! Я на связи.",
   "speak": true,
-  "emotion": {
-    "id": "concerned",
-    "intensity": 0.55,
-    "confidence": 0.82
-  },
-  "avatar": {
-    "expression": "concerned",
-    "motion": "soft_nod",
-    "state": "speaking"
-  },
-  "voice": {
-    "provider": "cozyvoice2",
-    "voice_id": "main_ru",
-    "rate": 1.0,
-    "style": "calm and attentive"
-  },
+  "emotion": {"id": "warm", "intensity": 0.7, "confidence": 0.9},
+  "avatar": {"expression": "smile", "motion": "greet", "state": "speaking"},
+  "voice": {"provider": "tera", "voice_id": "ru_f1", "rate": 1.0, "style": "warm"},
   "actions": [],
   "interruptible": true,
   "proactive": false
 }
 ```
 
-## Required fields
+Required fields are `schema_version`, `response_id`, `turn_id`, `text`,
+`speak`, `emotion`, `avatar`, `voice`, `actions`, `interruptible` and
+`proactive`. IDs, text, nested strings and action arrays are bounded. Unknown
+fields, malformed types, hidden reasoning, model-supplied access levels and
+unbounded tool arguments are rejected.
 
-- `schema_version`;
-- `response_id`;
-- `turn_id`;
-- `text`;
-- `speak`;
-- `emotion`;
-- `avatar`;
-- `interruptible`;
-- `proactive`.
+`actions` are intent descriptions only. They do not authorize execution and
+must not contain an access level. A native JAWL tool decision is executed only
+through JAWL's policy, approval, audit, cancellation and emergency-stop path.
 
-## Emotion rules
+The Companion maps `voice` to the configured TTS provider and maps `emotion`
+and `avatar` to bounded presentation state. The isolated `/avatar`/OBS server
+receives only subtitle, expression, motion, speaking and short-lived audio
+amplitude; it receives no session token, approvals, HostOS state or history.
 
-The cognitive model may produce a richer emotion taxonomy than a particular
-Live2D model supports. The avatar adapter maps unsupported states to the
-nearest supported expression. TTS receives a separate prosody/style mapping.
-
-The system must never assume that an emotion label automatically changes the
-voice or avatar correctly.
-
-## Spoken text rules
-
-- Internal reasoning is never placed in `text`.
-- Control tags are removed before TTS.
-- Sentence segmentation may split `text` for playback without changing the
-  stored final response.
-- `speak: false` still allows avatar state, subtitle or silent micro-reaction.
-
-## Action rules
-
-Actions are declarative requests. They do not bypass the tool policy. Any
-filesystem, browser, shell, keyboard, mouse or external side effect requires
-the appropriate approval and audit path.
+An interrupted or cancelled turn must not be spoken as a completed response.
+The final envelope is correlated with its `turn_id`; a late envelope from an
+older turn is discarded.

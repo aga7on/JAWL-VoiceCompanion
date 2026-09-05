@@ -2,8 +2,15 @@
 
 The companion keeps the avatar renderer optional and small. The backend does
 not import Pixi, Cubism or torch; it serves a user-owned asset directory
-read-only and the `/avatar` page consumes the same response state as the
-control panel.
+read-only and the `/avatar` page consumes only bounded presentation state.
+
+The production CLI starts `/avatar` on a separate loopback presentation
+origin. It receives only bounded avatar state, subtitle, short-lived lip-sync
+values, runtime capability metadata and read-only user-supplied assets; it
+cannot fetch control tokens, approvals, HostOS routes, memory or full
+conversation state. User-supplied runtime JavaScript is treated as untrusted.
+The legacy same-origin presentation option remains a library/development
+compatibility mode and is not the production launcher profile.
 
 ## Required layout
 
@@ -69,6 +76,12 @@ signals are ignored by the avatar. A renderer receives the resulting `0..1`
 value through `setLipSync(amplitude)`; the dependency-free fallback maps it to
 mouth motion.
 
+`GET /api/state` polling is the legacy compatibility path. The isolated
+production surface polls only `/api/presentation/state`, a bounded read-only
+endpoint; it never polls broad control state. Audio ownership must also be
+explicit so OBS/pet remains animated and audible when the control page is
+closed.
+
 ## Diagnostics and fallback
 
 ```powershell
@@ -88,10 +101,9 @@ an explicit degraded state instead of a blank OBS source.
 
 ## Desktop pet launcher
 
-On Windows, `scripts/run_avatar_window.ps1` opens the local `/avatar` route as
-an app window and applies a bounded size/position plus `TOPMOST`. The window
-is read-only and receives no browser session credentials. It is a presentation
-shell over the existing backend, not a second avatar or authorization surface.
+On Windows, `scripts/run_avatar_window.ps1` opens the local presentation
+`/avatar` route as an app window and applies a bounded size/position plus
+`TOPMOST`. The window has no visible control UI and receives no credential.
 Before opening a browser process, the launcher verifies that the URL returns
 the Companion's HTML page. If the port belongs to a WebSocket-only service,
 it fails with a port-conflict message instead of showing that service's

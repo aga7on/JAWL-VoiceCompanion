@@ -9,10 +9,78 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from jawl_voicecompanion.tts import CozyVoiceHttpClient, TTSCancelled, TTSService, split_sentences  # noqa: E402
+from jawl_voicecompanion.tts import CozyVoiceHttpClient, Qwen3TTSHttpClient, TeraTTSHttpClient, TTSCancelled, TTSService, split_sentences  # noqa: E402
 
 
 class TTSServiceTests(unittest.TestCase):
+    def test_selected_tera_adapter_uses_shared_local_rest_contract(self):
+        requests = []
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(22050)
+            wav.writeframes(b"\x00\x00" * 4)
+
+        class Response:
+            def __init__(self):
+                self._sent = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit=-1):
+                if self._sent:
+                    return b""
+                self._sent = True
+                return output.getvalue()
+
+        def opener(request, timeout):
+            del timeout
+            requests.append(request)
+            return Response()
+
+        audio = TeraTTSHttpClient("http://127.0.0.1:9889", opener=opener).synthesize("Привет")
+        self.assertTrue(audio.startswith(b"RIFF"))
+        self.assertEqual(requests[0].full_url, "http://127.0.0.1:9889/tts")
+
+    def test_selected_qwen_adapter_uses_shared_local_rest_contract(self):
+        requests = []
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(24000)
+            wav.writeframes(b"\x00\x00" * 4)
+
+        class Response:
+            def __init__(self):
+                self._sent = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit=-1):
+                if self._sent:
+                    return b""
+                self._sent = True
+                return output.getvalue()
+
+        def opener(request, timeout):
+            del timeout
+            requests.append(request)
+            return Response()
+
+        audio = Qwen3TTSHttpClient("http://127.0.0.1:9890", opener=opener).synthesize("Привет")
+        self.assertTrue(audio.startswith(b"RIFF"))
+        self.assertEqual(requests[0].full_url, "http://127.0.0.1:9890/tts")
+
     def test_sentence_split_keeps_russian_punctuation_and_bounds_chunks(self):
         self.assertEqual(split_sentences("Привет. Как дела?"), ["Привет.", "Как дела?"])
         self.assertTrue(all(len(part) <= 10 for part in split_sentences("Очень длинная фраза", max_chars=10)))
@@ -172,6 +240,36 @@ class TTSServiceTests(unittest.TestCase):
             self.assertEqual(first.readframes(2), b"1" * 4)
         with wave.open(io.BytesIO(result[1]), "rb") as second:
             self.assertEqual(second.readframes(2), b"2" * 4)
+
+    def test_closing_sentence_stream_calls_provider_cancel(self):
+        cancelled = threading.Event()
+
+        def wav(marker):
+            output = io.BytesIO()
+            with wave.open(output, "wb") as result:
+                result.setnchannels(1)
+                result.setsampwidth(2)
+                result.setframerate(22050)
+                result.writeframes(marker * 4)
+            return output.getvalue()
+
+        class Provider:
+            def synthesize(self, text, *, voice=None, speed=1.0, cancel_event=None):
+                del voice, speed
+                if text == "first.":
+                    return wav(b"1")
+                while not cancel_event.is_set():
+                    time.sleep(0.005)
+                raise TTSCancelled()
+
+            def cancel(self):
+                cancelled.set()
+
+        service = TTSService(Provider())
+        stream = service.stream("first. second.")
+        next(stream)
+        stream.close()
+        self.assertTrue(cancelled.wait(1))
 
     @staticmethod
     def _capture(fn):

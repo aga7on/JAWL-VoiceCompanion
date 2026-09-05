@@ -56,6 +56,25 @@ class VoiceMemSidecarTests(unittest.TestCase):
         self.assertEqual(result[0]["type"], "VOICE_DEGRADED")
         self.assertEqual(result[0]["payload"]["reason"], "ended_must_be_boolean")
 
+    def test_explicit_warmup_uses_factory_lifecycle_hook(self):
+        calls = []
+
+        def factory(_session_id):
+            raise AssertionError("warmup must not create a stream")
+
+        def warmup(audio):
+            calls.append(audio)
+
+        factory.warmup = warmup
+        sidecar = VoiceMemSidecar(factory)
+        result = asyncio.run(sidecar.handle({
+            "request_id": "warm", "type": "warmup", "kind": "audio",
+        }))
+        self.assertEqual([event["type"] for event in result], ["VOICE_READY"])
+        self.assertEqual(result[0]["payload"], {"mode": "audio", "audio_models_loaded": True})
+        self.assertEqual(calls, [True])
+        self.assertTrue(sidecar.health()["audio_models_loaded"])
+
     def test_pcm16_audio_produces_partial_and_final_events(self):
         class FakeStream:
             async def feed(self, pcm_bytes):
@@ -85,6 +104,29 @@ class VoiceMemSidecarTests(unittest.TestCase):
         }))
         self.assertEqual(result[0]["type"], "VOICE_DEGRADED")
         self.assertEqual(result[0]["payload"]["reason"], "sample_rate does not match the sidecar input rate")
+
+    def test_end_audio_flushes_vad_in_short_frames_until_turn(self):
+        silence_frames = []
+
+        class FrameStream:
+            async def feed(self, pcm_bytes):
+                if not any(pcm_bytes):
+                    silence_frames.append(len(pcm_bytes))
+                turn = SimpleNamespace(text="готово") if len(silence_frames) == 3 else None
+                return SimpleNamespace(text="фраза", turn=turn)
+
+        sidecar = VoiceMemSidecar(lambda _session_id: FrameStream())
+        asyncio.run(sidecar.handle({
+            "request_id": "audio", "type": "feed_audio", "session_id": "s1",
+            "sample_rate": 16000, "channels": 1,
+            "pcm16_base64": base64.b64encode(b"12").decode("ascii"),
+        }))
+        result = asyncio.run(sidecar.handle({
+            "request_id": "end", "type": "end_audio", "session_id": "s1",
+        }))
+        self.assertEqual(len(silence_frames), 3)
+        self.assertEqual([event["type"] for event in result], ["VOICE_TURN"])
+        self.assertEqual(result[0]["payload"]["text"], "готово")
 
     def test_missing_runtime_is_a_degraded_event(self):
         def unavailable(_session_id):
@@ -197,6 +239,12 @@ class VoiceMemSidecarTests(unittest.TestCase):
             client.close()
         self.assertEqual(client.state()["status"], "stopped")
         self.assertFalse(client.state()["running"])
+
+    def test_client_warmup_rejects_unknown_kind_without_starting_process(self):
+        client = VoiceMemProcessClient(sys.executable, args=("--test-stub",), timeout_seconds=2)
+        with self.assertRaises(ValueError):
+            client.warmup(kind="video")
+        self.assertEqual(client.state()["status"], "not_started")
 
 
 if __name__ == "__main__":

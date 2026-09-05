@@ -18,6 +18,8 @@ from typing import Any
 from uuid import uuid4
 
 from .ambient_triage import AmbientTriageProvider, validate_triage_result
+from .audio_understanding import AUDIO_KINDS, AudioDescriptionUnavailable, validate_audio_description
+from .resources import ResourceGovernor
 
 
 _AUDIO_EVENT = "AMBIENT_AUDIO_OBSERVATION"
@@ -25,6 +27,11 @@ _VISUAL_EVENT = "AMBIENT_VISUAL_OBSERVATION"
 _EPISODE_EVENT = "AMBIENT_EPISODE_CANDIDATE"
 _PRIVATE = re.compile(
     r"password|passwd|token|secret|api[_ -]?key|парол|токен|секрет|ключ\s+api",
+    re.IGNORECASE,
+)
+_SENSITIVE_SOURCE = re.compile(
+    r"password|credential|secret|private|bank|wallet|парол|банк|кошел|2fa|otp|"
+    r"one[- ]time|auth",
     re.IGNORECASE,
 )
 _SALIENT = re.compile(
@@ -121,8 +128,8 @@ class AmbientMemoryBuffer:
         event_id = _bounded_text(event.get("event_id"), 120) or str(uuid4())
         session_id = _bounded_text(event.get("session_id"), 120) or "ambient"
         source_app = _bounded_text(payload.get("source_app"), 80)
-        if _PRIVATE.search(source_app):
-            source_app = ""
+        if _SENSITIVE_SOURCE.search(source_app):
+            return {"status": "suppressed", "reason": "ambient_source_sensitive"}
         observed_at = _bounded_text(
             payload.get("observed_at") or payload.get("captured_at") or event.get("created_at"),
             80,
@@ -137,6 +144,21 @@ class AmbientMemoryBuffer:
             "raw_frame_persisted": False,
             "retention_until": retention_until,
         }
+        if stream == "system_audio":
+            audio_kind = _bounded_text(payload.get("audio_kind"), 20)
+            if audio_kind in AUDIO_KINDS:
+                normalized_payload["audio_kind"] = audio_kind
+            tags = payload.get("tags")
+            if isinstance(tags, list):
+                normalized_payload["tags"] = [
+                    _bounded_text(item, 40) for item in tags[:8] if _bounded_text(item, 40)
+                ]
+            mood = _bounded_text(payload.get("mood"), 80)
+            if mood:
+                normalized_payload["mood"] = mood
+            duration = payload.get("duration_seconds")
+            if isinstance(duration, (int, float)) and not isinstance(duration, bool) and 0 < duration <= 30:
+                normalized_payload["duration_seconds"] = round(float(duration), 3)
         if source_app:
             normalized_payload["source_app"] = source_app
         normalized = {
@@ -187,6 +209,45 @@ class AmbientMemoryBuffer:
                 "session_id": session_id,
                 "type": _AUDIO_EVENT,
                 "payload": {"text": text, "confidence": confidence, "source_app": source_app},
+            },
+            now=now,
+        )
+
+    def ingest_audio_description(
+        self,
+        description: dict[str, Any],
+        *,
+        source_app: str | None = None,
+        event_id: str | None = None,
+        session_id: str = "ambient-audio",
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Store validated text metadata from a non-speech audio provider."""
+        clip_id = str(description.get("clip_id") or "audio-clip") if isinstance(description, dict) else "audio-clip"
+        duration = description.get("duration_seconds") if isinstance(description, dict) else 0
+        try:
+            normalized = validate_audio_description(
+                description,
+                clip_id=clip_id,
+                duration_seconds=float(duration),
+            )
+        except (AudioDescriptionUnavailable, TypeError, ValueError) as exc:
+            return {"status": "ignored", "reason": "audio_description_invalid", "error": str(exc)[:160]}
+        return self.ingest(
+            {
+                "schema_version": 1,
+                "event_id": event_id or f"{session_id}:description:{clip_id}"[:120],
+                "session_id": session_id,
+                "type": _AUDIO_EVENT,
+                "payload": {
+                    "text": normalized["description"],
+                    "confidence": normalized["confidence"],
+                    "source_app": source_app,
+                    "audio_kind": normalized["kind"],
+                    "tags": normalized["tags"],
+                    "mood": normalized["mood"],
+                    "duration_seconds": normalized["duration_seconds"],
+                },
             },
             now=now,
         )
@@ -289,6 +350,35 @@ class AmbientMemoryBuffer:
             self._prune(timestamp)
             return [dict(item) for item in self._episodes]
 
+    def episode(self, event_id: str, *, now: float | None = None) -> dict[str, Any] | None:
+        """Return one bounded episode for an explicit promotion request."""
+        key = _bounded_text(event_id, 120)
+        if not key:
+            return None
+        timestamp = time.time() if now is None else float(now)
+        with self._lock:
+            self._prune(timestamp)
+            for item in self._episodes:
+                if item.get("event_id") == key:
+                    return dict(item)
+        return None
+
+    def mark_promoted(self, event_id: str, memory_key: str) -> dict[str, Any]:
+        """Mark an episode after JAWL has acknowledged its canonical write."""
+        event_id = _bounded_text(event_id, 120)
+        memory_key = _bounded_text(memory_key, 128)
+        if not event_id or not memory_key:
+            raise ValueError("episode_id and memory_key are required")
+        with self._lock:
+            for item in self._episodes:
+                if item.get("event_id") != event_id:
+                    continue
+                payload = item.setdefault("payload", {})
+                payload["promoted"] = True
+                payload["promoted_memory_key"] = memory_key
+                return dict(item)
+        raise ValueError("ambient episode was not found or expired")
+
     def state(self, *, now: float | None = None) -> dict[str, Any]:
         timestamp = time.time() if now is None else float(now)
         with self._lock:
@@ -304,6 +394,12 @@ class AmbientMemoryBuffer:
                 "observation_ttl_seconds": self.observation_ttl_seconds,
                 "episode_ttl_seconds": self.episode_ttl_seconds,
                 "triage_provider": self._provider_name(self.triage_provider) if self.triage_provider else None,
+                "promotable_episode_count": sum(
+                    1
+                    for item in self._episodes
+                    if item.get("payload", {}).get("importance") == "promote_candidate"
+                    and not item.get("payload", {}).get("promoted")
+                ),
             }
 
     def clear(self) -> dict[str, Any]:
@@ -438,9 +534,15 @@ class AmbientMemoryBuffer:
 class AmbientTriageScheduler:
     """Opt-in bounded background triage; never creates turns or invokes tools."""
 
-    def __init__(self, memory: AmbientMemoryBuffer, interval_seconds: float = 300.0) -> None:
+    def __init__(
+        self,
+        memory: AmbientMemoryBuffer,
+        interval_seconds: float = 300.0,
+        governor: ResourceGovernor | None = None,
+    ) -> None:
         self.memory = memory
         self.interval_seconds = max(1.0, min(float(interval_seconds), 24 * 3600.0))
+        self.governor = governor
         self._stop = Event()
         self._lock = RLock()
         self._thread: Thread | None = None
@@ -477,6 +579,12 @@ class AmbientTriageScheduler:
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_seconds):
+            if self.governor is not None and not self.governor.try_acquire(
+                "ambient", background=True
+            ):
+                with self._lock:
+                    self._last = {"status": "deferred_resource", "episodes": 0, "error": None}
+                continue
             try:
                 result = self.memory.triage()
                 update = {
@@ -486,6 +594,9 @@ class AmbientTriageScheduler:
                 }
             except Exception as exc:  # keep an autonomous worker from taking down the server
                 update = {"status": "error", "episodes": 0, "error": type(exc).__name__}
+            finally:
+                if self.governor is not None:
+                    self.governor.release("ambient")
             with self._lock:
                 self._last = update
 

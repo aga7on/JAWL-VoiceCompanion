@@ -1,588 +1,483 @@
-# Project State
+# Состояние разработки
 
-Last updated: 2026-09-02
+Synthetic voice-robustness slice (P0-C foundation) is in: `ASRNoSpeech` is a
+first-class outcome — `ExternalASRService.finish` returns `no_speech`
+(injectable `clock` makes TTL eviction/disconnect tests offline-deterministic),
+and `/api/voice/end` maps it to a neutral empty transcript. The deterministic
+generator `scripts/make_synthetic_audio_cases.py` builds 12 acoustic cases
+(tempo/pause/quiet/faint/noise/phrase-end/consecutive) with a `cases.json`
+expectation manifest; `scripts/run_asr_profile.py --expects` now fails only
+when required speech is absent while tolerated noise-floor no-speech still
+counts as covered. `scripts/check_mic_gate.mjs` verifies browser backpressure at
+`MAX_PENDING_AUDIO_CHUNKS` (8). Live ASR acceptance of the matrix via
+`scripts/run_synthetic_cases_live.ps1` (local Qwen3-ASR-0.6B) is PENDING an
+ASR worker run; this slice deliberately does not yet satisfy Partial ASR
+streaming, cancellable streaming TTS, semantic barge-in or interruption E2E.
 
-## Current phase
+Local LLM check for the next live run: LM Studio `127.0.0.1:1235` answers but
+requires an API key (401); Ollama `127.0.0.1:11434` answers without auth and
+hosts `gemma-4-12b-obliterated:latest` — owned JAWL can target it via
+`LLM_API_URL=http://127.0.0.1:11434/v1` + `main_model=gemma-4-12b-obliterated:latest`.
+No live provider turn is claimed yet; full suite is green (345 pytest + 28
+subtests, synthetic Mic gate Node, diff check).
 
-Active workstream: Phase 6 — Presence and autonomy; the screen Attention/Presence
-slice and Phase 3 ambient-memory foundation are in progress.
+UI acceptance remains OPEN: [six-point audit](UI_ACCEPTANCE.md). The latest
+browser voice attempt (2026-09-06) reached the integrated profile; the user
+heard generated error speech, but Selenium hit its 120-second HTTP read timeout
+while the local CPU/OpenCode turn was still running. This is a
+failed/unaccepted live run, not a pass. The earlier 30-second async-script limit
+was changed to 180 seconds; the application turn still needs a bounded
+completion/cancellation path below the driver limit. The desktop
+screenshot supplied by the owner differs from the old narrow headless capture.
+Responsive Edge checks now pass all six tabs at six viewport sizes, including
+320px and 390px widths, with screenshots in `runtime/browser-evidence/responsive/`.
+This is mock/viewport evidence; real tablet, keyboard and microphone are pending.
+LAN/HTTPS and the first memory-library UI slice are implemented; live tablet,
+live recall and the connected daily scenario remain pending.
 
-Phase 4 — 2D Live2D product UI (asset/runtime slice in progress).
+Latest full-gate capture after the browser voice and memory-documentation
+changes is `runtime/full-gate-20260905T212025Z.json` with exit code 0. The paired log
+records 308 non-E2E tests, 16 HTTP E2E tests, compile
+and syntax checks, synthetic microphone, Node, and diff checks. Earlier gate
+artifacts remain historical evidence and are not overwritten.
 
-Repository state: architecture baseline committed. A dependency-free mock
-text/control slice is implemented. The real VoiceMem sidecar boundary now
-accepts external ASR partials and browser PCM16 microphone chunks, and the
-selected TeraTTSv2 provider is available through a local REST wrapper, and the
-`/avatar` surface can load a user-supplied Live2D bundle behind a read-only
-asset root. Real JAWL,
-production VoiceMem model startup, OmniVoice and an actual licensed Live2D
- model remain opt-in/integration work. Optional UIA, focused-window OS and VLM
- adapters remain explicit. The companion now has a loopback bridge for JAWL
- Heartbeat, persona and memory counters plus an opt-in authenticated native
- HostOS level control path; it does not duplicate JAWL storage or its tool
- registry. The screen path now has a bounded Attention/Presence gate and an
-optional explicit JAWL event-IPC sink; final production JAWL validation is
-still pending. The ambient secondary-memory design is documented separately:
-optional system-audio loopback and visual observations use bounded transient
-tiers and delayed CPU/RAM triage, while JAWL remains the only owner of
-promoted memory. The first normalized ambient buffer and authenticated
-browser inspection/configuration path are now implemented. A strict,
-model-neutral delayed audio-triage contract and optional CPU-first Ollama
-adapter are now present; no model is selected or loaded by default. The
-operator's CPU/RAM benchmark selected Qwen3-VL-2B as the primary Vision
-candidate, with SmolVLM2-500M as a speed fallback. The local endpoint and
-explicit screen look are now smoke-tested, and the optimized screen watcher
-has produced bounded `SCREEN_DELTA` events; bounded UIA context and the
-calibrated `desktop.pointer` fallback are now attached to explicit Vision
-workflows, while semantic watcher tuning remains.
+`scripts/run_browser_voice_e2e.py` provides the browser-side synthetic audio
+driver for the eventual live run. It requires an already connected real
+profile and explicit `--live`; the current refusal artifact records that live
+execution was not attempted without a provider.
 
-## Git state
+`run_local_bonsai_integrated.ps1 -RunSeconds 1` passed owned startup and
+shutdown with local Qwen3-VL-2B, Qwen3-ASR, TeraTTSv2 and VoiceMem on isolated
+ports. Evidence is `runtime/local-bonsai-integrated-profile.json`; it is
+startup-only. The new `-RunBrowserVoiceE2E` switch is available for the real
+three-WAV browser path but has not yet been accepted.
 
-- Branch: `main`;
-- Baseline commits: `abce27d` (initial workspace), `1820eec` (HostOS/web
-  architecture), `81534b2` (Phase 1 mock vertical slice), `f33b417` (JAWL
-  terminal adapter), `bc2f775` (TurnArbiter), `ad7e97f` (HostOS tools),
-  `5fdd373` (web API), `bad96dc` (state baseline);
-- Working tree: clean after the microphone gate and HostOS hardening slices.
-- Latest feature commits: `7ae1ab1` (microphone gate), `3cac12e` (closed TTS
-  stream cancellation) and the current HostOS outcome/allow-list hardening.
+The current owned-runtime preflight passes (`embedding_cache=ready`,
+`missing=[]`). A live provider run remains unavailable because no
+`LLM_API_KEY_1` is present in process, user, or machine environment; the
+credential must be supplied process-locally and must not be stored in this
+repository.
 
-## Completed in this repository
+The OpenCode Zen model catalog is reachable without credentials (HTTP 200).
+It currently advertises `big-pickle` and `deepseek-v4-flash-free`; this is
+catalog evidence only. Authenticated completion remains pending until the
+owner supplies `LLM_API_KEY_1` through the process environment.
 
-- Isolated development directory created at `G:\AI\JAWL-VoiceCompanion`.
-- Documentation policy created in `AGENTS.md`.
-- Initial work breakdown created in `TODO.md`.
-- Architecture and event/response contracts drafted.
-- 2D Live2D selected as the only current avatar target.
-- JAWL selected as canonical cognitive core.
-- VoiceMem selected as a separate voice/sensory sidecar.
-- HostOS access levels 0–3 accepted, with level 3 available as an explicit
-  full-current-user mode.
-- Browser selected as the canonical local control plane.
-- Python package `jawl-voicecompanion` and stdlib-only test runner created.
-- Deterministic mock text gateway returns and validates `ResponseEnvelope`.
-- HostOS policy gate supports access checks, approval-required decisions,
-  emergency stop, ROOT-only unattended execution, deny-list checks and
-  redacted metadata-only audit entries.
-- HostOS now tracks managed and shell subprocesses; emergency stop terminates
-  them and an interrupted shell request returns `cancelled`.
-- HostOS shell execution now reports non-zero exit codes as `failed` and kills
-  an owned process on timeout before returning `timeout`; the unit and HTTP
-  E2E paths assert these postconditions.
-- HTTP E2E now covers shutdown cleanup and safe restart defaults: owned
-  processes are stopped, unattended is off, and approvals are in-memory only.
-- Loopback browser surface supports chat, health/state display and policy-level
-  selection using local session/CSRF headers.
-- Dedicated read-only `/avatar` surface renders a transparent OBS-ready
-  reactive 2D fallback, bounded subtitle and response-envelope avatar state.
-- Explicit `screen.observe` adapter provides an opt-in focused-window JPEG
-  snapshot with size bounds, deny-list checks and no disk persistence.
-- JAWL terminal adapter understands the local `terminal.port` plus
-  `JAWL_HANDSHAKE` JSON-lines protocol and falls back when JAWL is offline.
-- VoiceMem sidecar lifecycle is bounded and observable: an empty audio flush
-  does not initialize the model, failed sessions are evicted for recovery, and
-  `/api/voice/status` reports process state without launch paths or arguments.
-- `TurnArbiter` now models one active turn, priority lanes, stale-work
-  cancellation and queue promotion; transport cancellation is still pending.
-- HostOS tool registry now contains bounded filesystem, process and argv
-  adapters. Real execution is explicit; default executor mode is dry-run.
-  Complete bounded reads expose a SHA-256 snapshot and workspace writes can
-  require that digest, returning `stale_file` instead of overwriting a changed
-  file.
-- Optional Windows UIA adapter now provides bounded foreground-tree
-  observation, semantic fingerprints and stale-target checks for control.
-- The custom-surface path now includes a policy-gated `desktop.pointer`
-  adapter. It recalibrates image coordinates against fresh foreground-window
-  bounds and reports cursor placement as a postcondition without claiming
-  that the target application accepted the input.
-- The same path now includes `desktop.keyboard` for bounded Unicode text and
-  one-to-four-key hotkeys, bound to the observed foreground window and covered
-  by injected-backend unit/E2E tests.
-- The transparent avatar fallback now renders a lightweight reactive 2D face
-  with expression, blink and speaking animation. A valid user-supplied Live2D
-  bundle still replaces it; no third-party character asset was copied.
-- The TTS browser path now derives a bounded amplitude signal with
-  `AnalyserNode`, sends it through a BroadcastChannel and ephemeral backend
-  state, and drives fallback/runtime lip-sync without storing audio.
-- Browser adapter now supports bounded HTTP(S) navigation and delegates
-  semantic actions to UIA; no browser automation runtime is installed yet.
-- Browser API exposes the tool registry and routes execution requests through
-  the same server-side HostOS policy; browser approval authority is not
-  accepted from request payloads.
-- ApprovalStore now supports session-bound one-shot decisions, expiration,
-  exact request/policy fingerprints and redacted previews.
-- Gateway user turns now receive arbiter generations; a newer user turn signals
-  the JAWL adapter to cancel its pending socket read.
-- `ScreenDeltaWatcher` provides an explicit opt-in, arbiter-aware passive
-  producer. It stores a bounded in-memory event ring and publishes only
-  `SCREEN_DELTA` summaries through the local API; it never speaks or stores a
-  raw frame.
-- `AttentionPresence` consumes screen deltas with bounded salience/privacy,
-  manual DND, cooldown and hourly-budget gates, exposing inspectable
-  `SPEAK_INTENT` proposals through `/api/vision/intents`.
-- Ambient secondary memory is documented as a separate, opt-in evidence path:
-  system audio stays separate from microphone turns, raw audio/frames are
-  transient, and delayed triage must produce attributable candidates before
-  any JAWL promotion.
-- `AmbientMemoryBuffer` now provides default-off bounded audio/visual event
-  ingestion, private-text suppression, duplicate/TTL/byte limits, deterministic
-  coalescing and `AMBIENT_EPISODE_CANDIDATE` output; `/api/ambient-memory`
-  exposes authenticated inspection, triage, clear and explicit enable/disable.
-- `SystemAudioLoopback` now defines the optional Windows WASAPI loopback
-  boundary: lazy PyAudioWPatch-compatible loading, default-device selection,
-  bounded in-memory PCM16 queue and explicit degraded behavior when the backend
-  is absent. It is not auto-started and is not wired to live capture startup.
-- `AmbientAudioASRBridge` now downmixes/resamples loopback PCM16 into an
-  isolated `ambient-audio:` VoiceMem session and ingests only final
-  `VOICE_TURN` events into the bounded ambient buffer; partials never become
-  user turns.
-- `AmbientAudioService` and the browser lifecycle routes now require explicit
-  ambient-memory consent before start, flush the isolated ASR session on stop
-  and report missing loopback backends as degraded.
-- The browser control plane now displays ambient-memory consent, observation
-  counts, loopback backend state and running/stopped status, with start/stop
-  controls disabled until consent is active. It also exposes explicit triage
-  and clear actions for the bounded buffer.
-- Attention/Presence now supports a validated local-time quiet-hours window
-  (`HH:MM-HH:MM`) with midnight crossing, persisted in runtime state and
-  editable from the browser.
-- Attention/Presence can now use an explicit `--user-activity` Windows
-  adapter. It suppresses proactive screen speech after recent input and
-  exposes only bounded idle/class metadata; it is disabled by default.
-- `AmbientTriageProvider` now defines a bounded delayed-provider contract with
-  strict provenance/schema validation. `OllamaTriageProvider` is an optional
-  stdlib HTTP adapter configured CPU-first (`num_gpu=0`); it does not select,
-  download or keep a model resident by default.
-- `JawlEventFileSink` atomically writes accepted screen intents to an
-  explicitly configured JAWL `.jawl_events` directory in the existing
-  `{message, payload}` IPC shape; raw frames and local paths are excluded.
-- The cross-layer E2E suite drives the real loopback HTTP server and covers a
-  complete visible path from chat/state through HostOS approval/execution and
-  emergency stop, plus screen capture, VLM deduplication, screen events and
-  the JAWL-compatible terminal handshake/JSON-lines path.
-- The browser microphone path converts input to bounded mono PCM16, VoiceMem
-  owns streaming ASR/VAD in its separate environment, and only final
-  `VOICE_TURN` events reach JAWL. `/api/voice/end` flushes active capture.
-- The browser microphone path now has a configurable pre-ASR noise gate with
-  hysteresis, 120 ms bounded pre-roll, three-block release, local noise-floor
-  calibration and RMS/peak visualization. Closed-gate blocks never enter the
-  HTTP audio queue; hardware-level filtering remains dependent on the browser,
-  driver and microphone interface.
-- The browser now has an opt-in half-duplex hands-free boundary: a bounded
-  local RMS silence gate finalizes an utterance through `/api/voice/end`,
-  rotates the session ID and keeps capture open; model VAD and final-turn
-  ownership remain in VoiceMem/Qwen.
-- `TTSService` provides latest-request-wins cancellation; the CozyVoice REST
-  adapter splits bounded text into sentences, merges WAV chunks and exposes
-  transient audio through `/api/tts/synthesize`. The browser plays it only
-  when the provider is configured, with provider-neutral voice and speed
-  controls.
-- The optional Live2D asset bridge serves only an explicitly configured root,
-  exposes `/api/avatar/config`, loads a user-provided runtime/model pair and
-  falls back to the reactive 2D face when the bundle is absent or incompatible.
-- The avatar bridge validates model `FileReferences` relative to the model
-  JSON, reports fatal Moc/texture gaps separately from optional warnings and
-  exposes `ready` without leaking local paths.
-- The Windows desktop-pet launcher now validates the Companion HTTP `/avatar`
-  page before opening Edge/Chrome, so an occupied port serving a WebSocket-only
-  service fails with a clear conflict instead of a misleading upgrade error.
-- `scripts/run_web.ps1` now performs the same occupied-port preflight before
-  starting Python and reports the owning process with an alternate-port hint.
-- The optional JAWL web bridge reads existing `/api/agent/status`, `/api/tick`,
-  `/api/db/stats`, `/api/drives` and `/api/config` routes, filters config
-  secrets and exposes session-protected inspection routes to the browser.
-- The upstream API audit confirms there is no stable HTTP CRUD surface for
-  JAWL personality traits or facts; those remain JAWL-internal SQL skills/UI.
-  The companion will not access the databases directly or create a duplicate
-  durable memory store.
-- The browser now renders the last bounded HostOS audit events; `/api/audit`
-  requires the browser session and policy audit entries exclude arguments and
-  raw command output. The CLI now persists allowlisted metadata to bounded
- JSONL and the browser can recover those events after restart.
-- The approval queue now exposes bounded/redacted proposal reviews and a
-  browser-only one-shot execution route; approved requests are removed from
-  memory after execution, while policy rechecks and stale-file protection stay
-  active.
-- `JawlWebChatAdapter` now treats an HTTP reader exception caused by concurrent
-  response close as normal cancellation; a regression test protects the
-  daemon reader from leaking a traceback.
-- Both JAWL transports now fail closed on internal reasoning/tool markup and
-  remove paired hidden blocks before text reaches the envelope, subtitle or
-  TTS path. The local HTTP E2E also covers upstream outage and recovery.
-- A bounded `/api/doctor` report and browser panel now expose component
-  readiness, remediation hints and continued text-only availability. The
-  report is bounded, does not expose paths or secrets, and does not change
-  runtime configuration.
+The current UI slice makes the overview a chat-first surface, removes the
+duplicate avatar action row, adds attachment/emoji/slash/microphone controls,
+and moves low-frequency vision and initiative settings into System. TXT/MD
+files are read into the text request; unsupported binary media produces an
+explicit capability error. Microphone device selection persists in browser
+storage. Edge render smoke passed with screenshots in
+`runtime/browser-evidence/20260905T195242Z/`. Browser interaction E2E also
+passed in explicit mock-brain mode; its control screenshot is retained under
+`runtime/browser-evidence/interaction/`. Neither check claims live-provider
+acceptance.
 
-## Reference inventory
+The first real local core/audio run completed one synthetic Russian WAV through
+Qwen3-ASR -> owned JAWL -> TeraTTSv2 with VoiceMem enqueue: 50 chunks, one
+VOICE_TURN, one response, and a 44.1 kHz WAV. Evidence is
+`runtime/local-live-audio-pipeline.json` with correlation ID
+`audio-profile-ebab346687a24819b7a75d72bb02bce6`. A later turn was interrupted
+by the bounded run window and is recorded as failed.
 
-- JAWL fork: `G:\AI\JAWL-Coding`;
-- VoiceMem: `G:\AI\VoiceMem`;
-- CozyVoice: `G:\AI\CozyVoice`;
-- OmniVoice: `G:\AI\OmniVoice`;
-- reference clones: `G:\AI\_tmp\companion-repos`.
+Qwen3-VL-2B-Q4_K_M was then tested text-only (Vision disabled) and returned a
+valid terminal JAWL JSON with empty actions during the real heartbeat. Gemma's
+tool output was invalid, while the ternary Bonsai GGUF cannot be loaded by the
+available llama runtime. This makes Qwen the current local candidate, pending
+a complete user-turn and native-task run.
 
-## Known local observations
+The launcher credential handoff is now environment-only for the owned JAWL
+child; targeted launcher safety tests passed. A local Bonsai integrated run
+was not claimed because this shell rejected the secret-shaped environment
+assignment before process creation.
 
-- VoiceMem has an external-ASR integration point through `feed_partial`.
-- VoiceMem `0.2.3` returns a `StreamState` from `feed_partial`; `ended=True`
-  yields a completed `Turn`, while partial text avoids loading audio models.
-- VoiceMem's bundled `web/run.py` is a demo WebSocket and not a stable
-  correlated sidecar API; the transport-neutral contract is now recorded in
-  `docs/contracts/voice.md`.
-- The minimal sidecar runner/client and `/api/voice/partial`,
-  `/api/voice/audio`, `/api/voice/end` bridges are implemented. The
-  production runner is lazy and returns `VOICE_DEGRADED` if VoiceMem is not
-  installed or cannot initialize.
-- The external CPU/RAM audio benchmark selected Qwen3-ASR-0.6B for Russian
-  speech experiments (RTF 0.13–0.15, about 1.48 GB peak RAM on the supplied
-  samples). The exact benchmark file and transcription prompt return the
-  expected text from local `llama-server`; the bounded adapter now sends that
-  prompt and forwards its final transcript to the VoiceMem
-  `feed_partial(..., ended=True)` boundary. True streaming Qwen partials and
-  live Russian microphone quality remain pending.
-- A follow-up live run sent VoiceMem's three known PCM16 samples through the
-  same Companion adapter and matched their README transcripts in Chinese.
-  This validates the multilingual request/response path, not Russian acoustic
-  quality; no Russian reference recording is present in the inspected assets.
-- The temporary OpenAI-compatible chat adapter accepts a configurable URL,
-  model and environment-held key for provider experiments. TokenRouter with
-  `z-ai/glm-5.3-free` reached HTTP 200 during the smoke, but one short request
-  returned an empty `message.content`; this profile is not treated as a
-  JAWL/QWB compatibility proof. The canonical path remains the JAWL web or
-  terminal bridge, where JAWL owns JSON tool/action envelopes, persona,
-  memory and Heartbeat.
-- The operator's 2026-09-01 CPU/RAM benchmark selected
-  `Qwen3-VL-2B-Q4_K_M.gguf` with `Qwen3-VL-2B-mmproj-F16.gguf` as the primary
-  VLM profile: approximately 28–36 tok/s, 4.1 GB peak RAM, strong image/video
-  quality and usable UI grounding after calibration. `SmolVLM2-500M` is the
-  low-latency fallback; `Bonsai-1.7B` is text-only and `Qwen3-ASR-0.6B` is
-  the leading audio candidate. The VLM files live outside this repository
-  under `G:\AI\VLM-RealTime-Bench\models`; the matching b10738 CPU runtime is
-  under its `runtime` directory, and no weights are copied into source.
-- The moved-file rerun is recorded in `docs/MODEL-TESTS.md`: Qwen3-VL-2B
-  remains the practical Vision baseline (32–40 tok/s, 4.36 GB peak RSS and
-  45.7 px calibrated UI mean error), while Qwen3.8-27B reaches good image/video
-  descriptions only at roughly 27 GB RSS and 2.8 tok/s. Qwen3.8 is therefore
-  optional on-demand, not a continuous watcher model.
-- The installed Ternary Bonsai text family was checked for the deferred
-  ambient-memory worker. Bonsai 1.7B PQ2 measured 1.29 GB peak RSS and
-  50.7 tok/s in the plain completion smoke; its chat smoke passed the four
-  basic fact/math/instruction/context checks. Bonsai 4B and 8B use 2.54 GB/
-  4.24 GB and are slower, so 1.7B is the first candidate for asynchronous
-  TTL-bounded summary/topic compression, not for importance decisions,
-  canonical chat or ASR.
-- The delayed ambient triage path now has an OpenAI-compatible JSON-schema
-  provider for local `llama-server` and similar endpoints. A live Bonsai 1.7B
-  request returned valid provenance but classified all four synthetic triage
-  cases as `ignore`. The memory layer now applies deterministic importance
-  guarding over provider output; a guarded live rerun promoted the explicit
-  error/remember cases and retained the plan/ordinary-background cases.
-  Salience calibration and JAWL promotion rules remain required before durable
-  writes.
-- The triage scheduler is now an opt-in daemon with bounded interval, duplicate
-  start protection and server-shutdown handling; `/api/ambient-memory` exposes
-  its last status. It performs no triage until the configured interval elapses.
-- Qwen3-ASR-0.6B was rerun from the moved `models/qwen3-asr` directory at
-  RTF 0.15–0.16. It transcribed local Russian TTS welcome phrases correctly;
-  synthetic poem samples still contain word/ending errors, and real Russian
-  microphone validation remains pending.
-- The native VoiceMem stream was exercised offline with its bundled sherpa
-  streaming recognizer, Silero VAD and local memory components. The shipped
-  zh-en fixture completed a real `turn_over` after 66 partial updates; the
-  Russian Qwen3-TTS WAV did not complete a turn and produced an English
-  hallucination. VoiceMem's streaming lifecycle/VAD boundary is therefore
-  usable, but its bundled recognizer is not a Russian model; Qwen3-ASR stays
-  the Russian acoustic candidate until true streaming Russian ASR is tested.
-- New external TTS samples were checked through Qwen3-ASR: TeraTTSv2 produced
-  the strongest current CPU/clarity profile (RTF 0.05–0.06, about 2.56 GB RAM,
-  exact welcome and nearly exact poem), while XTTS-v2 was slower and Pocket-TTS
-was not intelligible in Russian. TeraTTSv2 is the current selected provider;
-voice cloning is deferred, while prosody, first-audio latency, cancellation
-and actual avatar-path integration remain validation work.
-  A direct warm streaming call produced its first chunk in about 1.04 s and
-  requires `<ru>...</ru>` input. The Companion now exposes a sentence-level
-  `/api/tts/stream` NDJSON/WebAudio path, while the native Tera chunk generator
-  remains outside the provider boundary.
-- An optional `scripts/teratts_server.py` wrapper now exposes TeraTTSv2 through
-  the existing local TTS contract. A real smoke through `CozyVoiceHttpClient`
-  and `TTSService` returned valid mono 44.1 kHz WAV audio; the model release
-  remains external; the browser can now receive sentence audio incrementally
-  through `/api/tts/stream` and drives lip-sync from the playback nodes.
-- A live 2026-09-01 smoke started the Qwen endpoint on loopback, raised the
-  Companion to HostOS OBSERVER level 1 and completed `/api/vision/look` through
-  the real Windows focused-window capture. It returned a bounded Russian
-  description in about 10.9 seconds; the raw frame was not persisted. This
-  validates the explicit path, not yet a low-latency continuous watcher.
-- The optimized 2026-09-01 watcher smoke used a 960×720/1 MB profile and
-  captured a 960×520 frame (71.7 KB; coordinate scale about 2.02 on both
-  axes). It produced 3 bounded `SCREEN_DELTA` events in 12 seconds through
-  the live Qwen endpoint; raw frames remained absent from the event path.
-- The model-neutral REST TTS adapter now uses at most three concurrent
-  sentence requests, merges compatible WAV chunks in source order, and
-  exposes explicit cancellation. The browser aborts stale playback requests
-  and uses a bounded RMS activity trigger for basic barge-in; the upstream
-  `stream` path, selected model startup, latency and first-audio playback still
-  require validation.
-- The local OmniVoice directory currently does not expose a ready project/API
-  layer; model and integration details must be confirmed before adapter work.
-- The 2026-09-01 local model inventory exposed only two Ollama profiles:
-  `gemma-4-12b-obliterated:latest` and
-  `gemma-4-12b-coder-fable5-composer2.5-v1:latest`; Prism-ML and
-  Ternary-Bonsai-8B were not found locally. A hardware snapshot reported
-  about 93.7 GB physical RAM (about 55.2 GB free) and two RTX 5080 devices
-  with 16 GB each; this is an inventory, not a triage suitability benchmark.
-- No Live2D model or runtime is installed in the companion repository. The
-  reference clones contain sample assets and Pixi/Cubism patterns, but the
-  asset bridge cannot claim real rendering until a licensed bundle is supplied
-  and opened in a browser.
-- JAWL and VoiceMem use different Python environments and should remain
-  separate services initially.
-- JAWL's existing web console provides the stable read-only memory/heartbeat
-  surface; no companion-side SQLite access or second durable memory store is
-  warranted.
-- A real JAWL web console smoke-test with its agent stopped answered all five
-  upstream routes; the companion bridge then exposed the live Heartbeat,
-  database counters, drives and filtered persona through its own API.
-- A named isolated JAWL turn-smoke was started against local Ollama using a
-  copied embedding cache; the LLM request completed without changing
-  canonical JAWL data/config. Direct terminal handshake produced
-  `HOST_TERMINAL_MESSAGE` and a model response, but the native cycle emitted
-  no `send_message_to_terminal` broadcast, so the companion correctly returned
-  degraded fallback. The web POST+SSE path reached the same terminal bridge;
-  its user-facing success remains unverified for this model profile because
-  JAWL emitted no correlated agent message.
-- JAWL's web helper currently resolves its `chat.py` port/history paths from
-  its repository root rather than `JAWL_DATA_DIR`; a multi-instance launch
-  therefore needs a per-instance code root (or an upstream path fix). The
-  companion accepts only the loopback web URL and does not silently weaken this
-  boundary.
-- JAWL owns a native `HostOSClient`/SkillRegistry. An opt-in
-  `--jawl-hostos-control` bridge now writes only its allowlisted HostOS level
-  fields and restarts the JAWL agent before changing the companion policy.
-  The companion still does not create a second JAWL tool registry.
-- The `/api/jawl/hostos` bridge reports bounded native JAWL HostOS values and
-  whether control is enabled. JAWL's native Heartbeat remains autonomous;
-  companion unattended and approvals are not falsely reported as native JAWL
-  state; bridge emergency-stop also requests native `/api/agent/stop` while
-  retaining the local process cancellation path. The browser recovery route
-  starts native JAWL before clearing the local emergency latch.
-- `G:\AI\OmniVoice` was inspected and contains only a virtual environment; its
-  model/API location is an external blocker.
-- The configured JAWL `terminal.port` is currently stale and has no listening
-  socket; the read-only probe returned `status=offline`, so live process
-  verification remains pending.
+The 503 seen in the current gate is now attributed to the deliberate offline
+JAWL-control fixture: the test verifies fail-closed emergency-stop semantics,
+not an intermittent production failure. The older external QWB 503 was
+recorded as `upstream_waf_challenge`; no control retry is performed. A live
+provider-specific 503 remains untested while credentials are absent.
 
-## Current blockers / decisions needed later
+`run_audio_pipeline_profile.py` now records a per-run correlation ID and
+separate stage timings; its contract tests and local E2E remain green.
 
-- integrate and validate Qwen3-ASR-0.6B with the streaming VoiceMem boundary
-  or document a lower-latency replacement;
-- confirm the OmniVoice model/API location;
-- select and manually validate the first redistributable or user-supplied
-  Live2D model/runtime bundle;
-- finish editable browser settings, memory and audit views; the current JAWL
-  memory/persona surface is intentionally read-only;
-- harden the initial HostOS session lifecycle and broaden audit coverage.
-- add native JAWL contracts for approval state and emergency stop so those
-  controls can eventually be synchronized instead of remaining companion-only.
-- improve and benchmark semantic screen significance scoring; the current
-  heuristic gate connects `SCREEN_DELTA` to Attention/Presence and optional
-  JAWL event IPC, while production final-wording validation remains;
-- validate production VoiceMem/Qwen3-ASR audio startup in its own environment
-  and measure Russian ASR on a real microphone;
-- recheck TeraTTSv2 startup/latency and browser audio on the target machine;
-  sentence-level first-audio is implemented, while native Tera chunking is an
-  optional optimization;
-- choose the initial JAWL LLM endpoint/profile;
-- tune bounded screen resizing and coordinate calibration for the selected
-  Qwen3-VL-2B endpoint, then validate pointer actions against a real
-  custom-rendered application;
-- measure actual GPU contention and model residency on the target machine.
-- validate the correlated web bridge against a production JAWL model/tool
-  profile that emits user-facing broadcasts and add restart/reconnect recovery
-  coverage; no-broadcast remains an explicit degraded state.
+Browser interaction E2E passed against an isolated Companion mock instance:
+`runtime/browser-interaction-e2e.json`. Edge exercised real DOM controls for
+gate persistence and chat rendering and saved a screenshot. The report is
+explicitly mock-brain evidence, not live JAWL/LLM or voice acceptance.
 
-## Latest work session
+Live local audio chain evidence (2026-09-05): three Russian utterances were
+generated by TeraTTSv2 and sent to local Qwen3-ASR-0.6B on CPU. Report:
+`runtime/synthetic-questions-profile.json`, passed, median final-utterance RTF
+0.111, all three results non-empty. This does not prove browser microphone,
+streaming partials, JAWL+LLM, playback, interruption, or avatar behavior.
 
-Changed the passive watcher, web API/CLI wiring, vision deduplication,
-E2E runner/tests and the related architecture/contracts/documentation in
-`307da25`; extended the JAWL adapter path in `1f1717d`; recorded the
-VoiceMem sidecar boundary in `91ffc50`; implemented the sidecar runner,
-client and HTTP bridge in `a33f7b9`; added browser PCM16 microphone ingress
-and final-turn routing in `36a808c`.
-The current work session adds the TTS boundary and CozyVoice REST path plus
-the optional Live2D asset/runtime bridge, then adds the read-only JAWL web
-memory/persona bridge and its browser view, validates real JAWL payloads and
-applies a drive-field allow-list. The audit view was then added and covered
-end-to-end. The Live2D bridge now validates fatal model references and
-documents the minimal renderer plugin contract. A safe local-Ollama JAWL
-turn-smoke completed an LLM request but exposed the broadcast-only terminal
-boundary; the companion returned degraded fallback as designed.
-The correlated web POST+SSE adapter is now implemented and preferred when a
-JAWL web URL is supplied; sequence correlation, cancellation and degraded
-no-broadcast behavior are covered by tests. The isolated production probe then
-confirmed terminal input and local Ollama completion, but also confirmed the
-no-broadcast model behavior and the upstream root-bound web path. The SSE
-reader close race was fixed with a focused regression test. Hidden-thought
-filtering and HTTP error-body cleanup were added with recovery coverage.
-The doctor slice now covers mock/degraded, fully configured and required-JAWL
-offline states and is preserved in `c66f088`. The current screen-attention
-slice is preserved in `a832b67` and `d631a12` and includes unit, browser and
-cross-layer HTTP coverage for intent creation, DND, correlation and
-JAWL-compatible atomic event delivery.
+The integrated launcher now has an opt-in `-StartLocalAudio` path that starts
+and health-checks both local workers, wires their loopback endpoints into the
+Companion, and stops them during teardown. It has not been accepted as a full
+scenario because the live JAWL provider credential is still absent.
 
-The latest documentation update records the ambient secondary-memory decision
-in `docs/SECONDARY_MEMORY.md`, with TODO items for separated system-audio
-capture, bounded retention, delayed triage, visual keyframes and provenance.
-An isolated 2026-09-01 smoke using JAWL's actual `DaemonsPoller`, `EventBus`
-and `EventBridge` accepted one `JawlEventFileSink` file, consumed it and
-delivered one `HOST_OS_SANDBOX_EVENT` to `Heartbeat.answer_to_event`; the
-spoken final response remains model-dependent and the known `no_broadcast`
-production-profile result is preserved.
-The current implementation adds `AmbientMemoryBuffer` and authenticated
-`/api/ambient-memory` inspection, configuration, triage and clear routes;
-fake audio/visual input and the loopback-to-ambient HTTP path are covered
-end-to-end while live Windows permission/startup remains unconnected. Audio
-triage now has a strict provider contract, optional CPU-first Ollama adapter
-and benchmark protocol with unit coverage. The operator's model benchmark
-now names Qwen3-VL-2B as the primary VLM candidate and leaves model loading
-outside the repository until the local server contract is verified.
+The refreshed full gate after loopback security integration is saved at
+`runtime/full-gate-20260905T190000Z.json` with `exit_code: 0`; its paired log
+records 301 non-E2E and 16 HTTP E2E tests plus auxiliary checks.
 
-The current TTS follow-up adds bounded parallel sentence requests with
-source-order merge, explicit server cancellation, browser request abort,
-provider-neutral voice/speed controls and focused concurrency/cancellation
-regression tests. It also exposes `/api/tts/stream`: sentence WAVs are emitted
-in source order as NDJSON and scheduled by WebAudio before the full reply is
-ready; this is sentence-level, not native token streaming.
+After the loopback JAWL token policy change, web and local E2E regression
+passed 52 tests; the full gate is intentionally still pending for this change.
 
-The current model follow-up adds OpenAI-compatible SSE text streaming and an
-authenticated `/api/chat/stream` surface. Reasoning blocks stay buffered and
-only safe deltas are shown; the stream ends with one canonical response
-envelope. JAWL's current web adapter remains completion-oriented and uses the
-same endpoint's compatibility path.
+Integrated loopback control no longer needs a generated console token. Empty
+tokens are accepted only for loopback JAWL URLs; remote URLs remain token
+protected. This keeps the integrated profile secret-free at rest.
 
-The real Tera worker was then exercised synthetically through the Companion
-HTTP stream: first audio arrived in 0.87 s for a short two-sentence reply; a
-warmed four-sentence reply produced first audio in 0.39 s and finished in
-1.74 s. No microphone hardware was used. These numbers are warm local
-benchmarks and must be rechecked after the final browser/audio setup.
+Real local TeraTTSv2 CPU run passed three Russian synthesis requests. Evidence
+is `runtime/tera-live-profile.json`: median RTF 0.162, p95 complete response
+0.589 s. It remains a complete-WAV worker measurement, not first-audio,
+microphone, or full JAWL pipeline acceptance.
 
-The current VoiceMem follow-up hardens lazy sidecar startup and recovery:
-empty `/api/voice/end` calls do not initialize VoiceMem, a failed stream is
-evicted so the next request can recreate it, and the process lifecycle is
-included in the bounded health response. The full gate covers these paths.
+Installed Edge produced and visually passed control/avatar PNG evidence under
+`runtime/browser-evidence/20260905T154359Z/`. This validates browser rendering
+and the isolated 2D fallback only; it is not real Live2D/OBS acceptance.
 
-The current Presence follow-up adds the opt-in Windows activity signal and
-tests the public attention state through the HTTP E2E watcher path. It does
-not inspect keystrokes, titles or clipboard contents, and it does not select
-or load a VLM itself; explicit Vision now uses the separately benchmarked
-Qwen3-VL-2B endpoint when configured.
+The integrated launcher now checks `LLM_API_KEY_1` before creating any JAWL
+process, preventing a half-started profile when live provider configuration is
+incomplete. Credentials are never written to the repository.
 
-The Vision follow-up adds a small PowerShell launcher for the benchmarked
-Qwen3-VL-2B Q4_K_M plus F16 mmproj. The launcher validates external model
-paths, binds `llama-server` to loopback, selects one CPU slot and disables
-GPU offload. A real smoke test passed `/health`, `/v1/models`, the existing
-`OpenAICompatibleVisionClient` against `ui_test.png` and the live optimized
-screen watcher; the server was stopped after validation.
+The integrated lifecycle probe reaches the JAWL console, then the agent exits
+at provider validation because the configured OpenAI-compatible cloud provider
+requires `LLM_API_KEY_1`, absent from process/user/machine environment. The
+launcher now surfaces this exact failure and its startup log rather than
+waiting for a terminal port. No credential was written to the repository.
 
-The launch follow-up adds a PowerShell preflight for the selected web port;
-the observed `426 Upgrade Required` on port `8765` is now diagnosed before the
-Companion starts, while the existing WebSocket-only process remains untouched.
+Saved full-gate evidence: `runtime/full-gate-20260905T183500Z.json` has
+`exit_code: 0`; the paired log records 301 non-E2E and 16 HTTP E2E tests plus
+compile/syntax, synthetic mic, Node, and diff checks. This remains repository
+evidence and does not prove live provider or physical-device acceptance.
 
-The current HostOS follow-up adds bounded file snapshots and conditional
-workspace writes with stale-file rejection, plus a browser proposal/review and
-one-shot execution surface. A broader diff/transaction editor remains pending.
+## Latest technical slice
 
-The JAWL write-surface audit is intentionally conservative: configuration and
-drive endpoints exist upstream, but trait/fact CRUD is not exposed as a
-versioned web/event contract. Keep the companion bridge read-only for those
-records until that contract exists.
+The owned JAWL runtime now has a pinned source snapshot, a verified Python
+3.11 environment, and reproducible profile preparation. `SOUL.md` is staged
+at `runtime/instances/daily/prompts/personality/SOUL.md`; working config,
+data, logs, and sandbox are isolated from source and protected repositories.
+Launch JAWL with `scripts/run_daily_profile.ps1` on its separate console port
+`8770`; Companion control remains `2367`. The
+launcher never stores or prints credentials and only inherits existing
+`LLM_API_KEY_*` variables. This is not live acceptance yet: provider,
+browser E2E, physical microphone, OBS/Live2D, and the complete connected
+scenario remain open in TODO.
 
-The current voice follow-up adds an authenticated TTS cancel route, browser
-request abort and a one-shot RMS barge-in trigger. VoiceMem classification,
-AEC quality and full half-duplex behavior remain pending.
+The first process-level startup smoke on the owned profile reached SQL and
+vector initialization, then exceeded the short smoke window while downloading
+the embedding model. It was stopped deliberately. This exposes a required
+preflight/warm-cache step and readiness probe before live E2E; no provider or
+user credential was used.
 
-The latest HostOS hardening separates level 3 current-user capability from an
-explicit ROOT-only `unattended` switch. Background/Heartbeat tool calls can
-therefore run while the operator is away without per-action prompts; emergency
-stop and deny-tools/deny-risk policy checks remain authoritative. The browser
-control plane exposes these settings and the policy fingerprint includes them.
+After warming the locally available embedding cache, a second process-level
+run reached `JAWL started successfully` and completed stop-file shutdown with
+`Shutdown complete` and PID cleanup. The first shorter shutdown window was
+insufficient; the accepted profile check now has an explicit preflight instead
+of relying on timing.
 
-The latest desktop-control follow-up adds `desktop.pointer` and
-`desktop.keyboard` for custom/canvas
-surfaces. Image coordinates are recalibrated against fresh foreground bounds,
-stale windows are rejected, and pointer/keyboard dispatch is reported
-separately from application acceptance. Unit and HTTP E2E coverage use injected
-backends, so no real click or keystroke was performed during automated
-verification.
+The subsequent full gate passed 301 non-E2E and 16 HTTP E2E tests, plus
+compile/syntax, synthetic mic, Node and diff checks. Its ad-hoc capture wrapper
+had a PowerShell-version timestamp incompatibility, so the run is recorded as
+passed in the session output but not promoted as a new saved evidence artifact.
 
-The latest ASR validation re-ran the live Qwen endpoint through the Companion
-adapter against the three known VoiceMem samples and matched all expected
-transcripts. A Russian reference WAV and a real microphone run are still
-required before making a Russian-quality claim.
+Дата: 2026-09-05. Статус: **интеграционный прототип**.
+Это текущая сводка, не журнал многократно повторённых прогонов.
+[PRODUCT.md](PRODUCT.md) — замысел; [TODO.md](../TODO.md) — продолжение;
+[TECHNICAL_AUDIT.md](TECHNICAL_AUDIT.md) — риски и приёмка.
 
-The emergency-stop slice tracks live `process.managed` and `shell.exec`
-children, terminates them through the same executor, and covers the race with
-a background shell request in unit tests. Server shutdown also cleans up
-tracked children so a recovery/restart does not leave companion-owned work
-running.
+## Следующая активная цель
 
-Verification for the current work session:
-`scripts/run_full_gate.ps1` passed 150 unit tests and 13 complete HTTP E2E tests;
-the full cross-layer gate is green;
-the stale-port degraded probe returned `status=offline`;
-`git diff --check` reported no whitespace errors and no Python warnings; the
-real JAWL web -> adapter -> companion API inspection smoke-test also passed.
-The native HostOS level bridge is preserved in `36cd034`, and native emergency
-stop in `5988861`; the SSE fix and its focused regression test are preserved in
-`9363de3`; hidden
-output filtering, HTTP error cleanup and recovery coverage are preserved in
-`91342b7`; the
-preceding microphone slice is preserved in `36a808c` and the TTS slice in
-`a217cec`.
+Предыдущий goal (ambient Start/Stop, STATE, сохранённый full gate) завершён.
+Текущий приоритет — единый профиль запуска и связный сценарий из
+[TODO](../TODO.md#активная-цель--первый-связный-ежедневный-сценарий):
+голос → ответ того же JAWL → память → native поручение → проверенный результат
+→ recall/задача после restart. Критерии включают реальные модели, browser E2E,
+измерение задержек и сохранённый отчёт; синтетические входные WAV допустимы.
+Микрофон владельца, настоящий Live2D/OBS и ночная автономность остаются
+отдельными незавершёнными приёмками общего roadmap.
 
-Known limitation: no licensed Live2D model/runtime is installed yet; the
-reactive 2D fallback remains the default. The web server's default executor remains dry-run and no VLM
-endpoint is configured by default; production semantic scoring and JAWL
-final-wording delivery, real custom-app pointer acceptance and pixel-level redaction,
-real-microphone ASR quality and final Live2D lip-sync tuning,
-AEC/barge-in, native provider-level TTS chunking, OmniVoice and production
-model warmup are still pending. The desktop-pet launcher is available as a
-bounded always-on-top presentation shell; native transparent compositing is
-still deferred. The system-audio loopback adapter, permission/API wiring and
-isolated ASR consumer are implemented; backend installation and real-device
-capture/ASR quality validation remain pending. The CPU/RAM benchmark and
-opt-in triage-worker scheduling are complete; the Qwen3-VL-2B local endpoint
-integration is verified; watcher tuning, triage calibration and production
-model warmup remain.
+Главный разрыв: manifest пока только валидируется, CLI по умолчанию выбирает
+mock, совместимая поставка JAWL и единый startup/shutdown не приняты.
+Следующая работа должна замыкать эти связи и пользовательский сценарий.
 
-The current follow-up added an opt-in half-duplex hands-free boundary to the
-browser microphone path. It uses local RMS silence only for phrase finalization,
-keeps VoiceMem/Qwen as the ASR and final-turn owner, and rotates the session ID
-after each utterance. The moved benchmark directory was revalidated for both
-Qwen3-VL-2B and Qwen3-ASR-0.6B; the installed Qwen3.8-27B experiment is recorded
-as on-demand only because its CPU latency and memory footprint are too high.
-An additional read-only Windows foreground-window smoke returned real bounds,
-a bounded 960x562 JPEG snapshot and five UIA elements; mapping the captured
-image center back to screen coordinates returned `[569,331]` with no disk
-persistence. A real custom-app dispatch/postcondition test is still pending.
-The full gate remains green after the feature changes.
+Первый P0-A проход: [runtime inventory](JAWL_RUNTIME_INVENTORY.md) сопоставляет
+native routes с исходниками, фиксирует reference HEAD/MIT и выборочные хеши.
+Проверено, что main читает shared `.env`, а instance bootstrap копирует рабочие
+config и всё дерево prompts. Старые runtime dirs не доказывают независимую
+поставку исходников. Следующий шаг — собственная source dependency и профиль
+с чистыми настройками, затем launcher integration. В этом проходе запусков
+JAWL и изменений protected upstream не было.
 
-## Next action
+Первая попытка установки остановилась на конфликте upstream requirements:
+`aiogram~=3.17.0` требует `pydantic<2.11`, JAWL — `pydantic>=2.11`.
+Добавлен owned `config/jawl/requirements-runtime.txt` с aiogram 3.25.x;
+конфликт исправлен в owned profile `requirements-runtime.txt`; Python 3.11
+окружение установлено, `pip check` прошёл, точный lock сохранён.
+Импортный граф и readiness ещё нужно принять; snapshot и protected upstream
+не менялись.
 
-Validate the calibrated UIA/pointer path against a real custom application and
-the bounded Qwen3-VL-2B screen path. In parallel, validate Qwen3-ASR/VoiceMem on real
-Russian microphone audio, benchmark the selected TTS provider, and connect
-the resulting final voice path to avatar lip-sync without weakening the
-HostOS approval and emergency-stop gates.
+Следующий P0-A срез сохранил собственный source snapshot из 348 файлов в
+`runtime/jawl-sources/jawl-20260905-daily-v1` через `stage_jawl_source.py`.
+Все хеши manifest сверены; 2 теста сборщика и compileall копии прошли.
+Рабочие config/persona/secrets не переносились. До запуска остаются свой
+SOUL/config, dependency lock/import checks и интеграция launcher; runtime_ready
+в manifest явно false. Это сборка исходников, не принятый live сценарий.
 
-## State update protocol
+## Завершённый срез и evidence
 
-Every work session must update this file with:
+ Получена ревизия ambient-сегментера; гонка конкурентных `Start`/`Stop` закрыта
+ lifecycle-lock в Companion и детерминированными тестами. Предыдущий агент Luna
+ остановился из-за лимита; после сброса квоты этот срез завершён.
 
-1. active phase;
-2. files or services changed;
-3. verification performed;
-4. known failures or blockers;
-5. next concrete action;
-6. git commit or uncommitted status.
+ Targeted ambient suite: 33 теста прошли. Финальный полный gate
+ `20260905T115735Z` завершён с `exit_code: 0`: compileall, server syntax,
+ 281 non-E2E unittest, 14 HTTP E2E, synthetic mic gate, Node mic check и
+ `git diff --check` прошли. Отчёт: `runtime/full-gate-20260905T115735Z.json`;
+ полный вывод: `runtime/full-gate-20260905T115735Z.log`. Это fake/synthetic
+ evidence; live devices, provider, OBS, native JAWL runtime и production
+ acceptance не следуют из этого gate.
+
+После этого gate добавлены ещё не включённые в его отчёт изменения: Companion
+сохраняет полный native JAWL response envelope (включая emotion/voice/avatar,
+actions и response identity), различает terminal provider error и обычный
+текстовый fallback, а native SSE умеет ограниченный reconnect по `event_seq`.
+Также появился bounded transport-agnostic stream-chat ingest/API с optional
+JAWL event sink. Native изменения дополнительно прошли новый полный gate и
+HTTP E2E, но это всё ещё не доказательство live JAWL/OBS/provider приёмки.
+Реальный connector чата, moderation/attention routing и browser E2E остаются
+в TODO.
+
+Отдельно зафиксирована prompt-архитектура JAWL в
+[JAWL_PROMPT_ARCHITECTURE.md](JAWL_PROMPT_ARCHITECTURE.md): повтор system
+prompt на каждом ReAct-шаге является механизмом реконструкции, а provider
+session/cache — только оптимизацией.
+
+Свежий полный gate после этих изменений: `20260905T100007Z`,
+`exit_code: 0`. В нём прошло 295 non-E2E и 16 HTTP E2E тестов, compileall,
+ syntax checks, synthetic mic gate, Node mic check и `git diff --check`.
+Отчёт: `runtime/full-gate-20260905T100007Z.json`; полный вывод:
+`runtime/full-gate-20260905T100007Z.log`.
+
+После него добавлены versioned secret-free runtime manifest и validator:
+`config/profile.example.json` проверен без запуска сервисов и без записи
+секретов; launcher пока не читает manifest как единый startup profile.
+Актуальный полный gate после этой правки: `20260905T101615Z`,
+`exit_code: 0`, 299 non-E2E и 16 HTTP E2E; также прошли compileall,
+py_compile, synthetic mic gate, Node mic check и `git diff --check`.
+Отчёт-метаданные: `runtime/full-gate-20260905T101615Z.json`; полный вывод:
+`runtime/full-gate-20260905T101615Z.log`. Первый запуск после правки дал
+один HTTP 503 в тестовом JAWL control fixture, но отдельный и
+повторный полный E2E прошли. Причина 503 не установлена; объяснение нагрузкой
+было предположением. Расследование остаётся в TODO. Это не live evidence.
+
+В рамках native E2E обнаружен и исправлен EOF-край: закрывшийся SSE мог
+оставить уже прочитанный final в bounded queue, но клиент преждевременно
+считал поток пустым. Reader теперь сначала дренирует pending packets; это
+проверено reconnect-сценарием через HTTP Companion.
+
+## Последнее уточнение и частичный readiness-срез
+
+По уточнению владельца обычный профиль должен воспринимать звук/экран после
+первичной настройки источников, автоматически регистрировать опыт в памяти
+JAWL, давать полезную работу в default sandbox/CDP и отдельное публичное
+Live2D-представление для OBS. Добавлены требования аккаунтов/публикаций и
+самонаблюдения. Это целевой дизайн; capture defaults в runtime не переключены,
+захват устройств/аккаунтов/OBS не запускался. Protected upstream не изменялся.
+
+Предшествующий кодовый срез изменил doctor и target-release проверки:
+configured не подтверждает JAWL/Vision/ambient ready, неоднозначные dependency
+health отклоняются, native policy требует authority=jawl и корректный уровень.
+Правки в tests/test_doctor.py, test_target_release_profile.py, test_e2e.py.
+Это частичное A2, не доказательство связанного live профиля.
+
+Ранее был промежуточный full gate с 258 non-E2E pass и одним HTTP E2E fail;
+после исправления ожидания focused HTTP E2E прошёл 1/1. Финальный gate и его
+сохранённые результаты указаны выше. Live devices/provider, visual browser и
+OBS этим срезом не проверены.
+
+История делегации: docs-проход и статическая карта в
+ [CORE_OWNERSHIP.md](CORE_OWNERSHIP.md) завершены; третий revision launcher у
+ Gauss принят main как PARTIAL offline safety slice; ambient rotation и
+ lifecycle-race slice приняты как PARTIAL synthetic evidence. Baseline packaging
+ decision и live integration ещё не
+приняты; карта — предложение, не реализация, и отключение durable VoiceMem
+writes этой сводкой не утверждается. Lifecycle-гонку main завершил локально
+после ревью. Эта история не подтверждает наличие работающих субагентов сейчас.
+
+Предыдущая ревизия была отклонена из-за overwrite отчёта/записей вне root,
+protected-runtime containment gaps, PS API/type semantics и того, что pytest
+не обнаруживается unittest gate. Main проверил код и тесты launcher: unittest
+8 OK без skips, PS AST pass, diff pass; AST-extracted PS helpers проверены для CreateNew nonoverwrite,
+containment и отказа файла под junction. Убраны unsafe defaults/token argv/
+arbitrary port-owner killing; добавлены env allowlist, protected paths,
+explicit Live/owned marker и bounded profile deadline. Это не доказывает
+полную безопасность: LIVE запуск запрещён до owner-approved runtime/loader
+review и полной isolated process lifecycle validation; parent-exit cleanup race
+может оставить orphan, A3 не закрыт. Финальный local full gate имеет
+`exit_code: 0`, но это не заменяет owner-approved runtime/loader review или live
+acceptance.
+
+## Предыдущая работа: аудит документации
+
+Сопоставлены требования владельца, основные документы, контракты, startup/
+readiness/audio/profile code и доступные JSON-отчёты. Уточнены единый продукт,
+Full Access, память, UI, профили моделей, порядок реализации и уровень evidence.
+Дополнительно уточнено направление «согласованного организма»: общий цикл
+восприятия/решения/обратной связи, карта перекрывающихся механизмов и coherence
+E2E. Биология — инженерная аналогия; JAWL — база развития owned ядра.
+Runtime-код, конфигурация, веса и внешние репозитории в этом проходе не менялись.
+Модели/сервисы, микрофон, OBS, native gate и бенчмарки не запускались.
+
+Проверка документации: 25 активных Markdown-документов (исторические снимки
+исключены), 64 локальные ссылки, целевые anchors, code fences и whitespace —
+без ошибок; `git diff --check` прошёл. Поиск key-shaped `sk-…` строк в этих
+документах дал 0 совпадений; это не полный secret scan репозитория/истории.
+
+Прежние README/TODO/STATE/ARCHITECTURE/AUDIT сохранены в
+[history](history/2026-09-05-before-product-audit/README.md) с предупреждением.
+Исторические статусы и команды из них не являются текущей инструкцией.
+Рабочие code changes других итераций сохранены; аудит документации их не сертифицирует.
+
+## Где находится проект
+
+- Наш repo: `G:\AI\JAWL-VoiceCompanion`, dirty worktree, множество tracked/
+  untracked runtime/test/UI изменений. Не сбрасывать и не коммитить их пакетом.
+- `G:\AI\JAWL-Coding`: внешний protected reference. В git status есть
+  изменённые исходники и untracked gateway/structured-memory/autonomy. Это факт
+  checkout, не доказательство автора. Не утверждать «исторически никогда
+  не менялся». Текущий аудит читал только git status/исходники, ничего не писал.
+- `G:\AI\VoiceMem` и `G:\RE`: внешние зависимости; junctions сохранить.
+- Control/presentation defaults: 2367/8766; 8765 оставлен FoxMCP.
+  Наличие listener сейчас не проверялось и не гарантируется этой сводкой.
+
+## Что есть и где заканчивается доказательство
+
+| Подсистема | Наблюдаемое состояние | Открыто |
+|---|---|---|
+| UI | Mint/Aero HTML, вкладки, чат, inline CSS 2D | Качественная visual/interaction приёмка; удобное управление persona/задачами |
+| Startup | run_web с optional flags, проверкой портов | Без флагов `phase1_mock_brain`; нет принятого единого профиля |
+| JAWL adapter | Native SSE/turn/control в Companion, counterpart в dirty JAWL | Поставка версии, handshake, identity, daily integrated path |
+| Tools | Proxy HostOS/Terminal/Debug, native authority; local dev fallback | MCP/browser/full mutation/recovery parity, no-bypass end-to-end |
+| Voice | Worklet gate, final-ASR, async VoiceMem ingest | Физический микрофон, partial streaming, AEC/barge-in, реальные latency |
+| TTS | Tera и Qwen Base workers/CLI; sentence transport | Qwen default по желанию владельца, capabilities/fallback UI, эмоции и native cancellation |
+| Ambient | Capture/ASR/triage, непрерывная bounded сегментация, lifecycle fix, manual promotion | Live loopback/soak, durable episodes, автоматическая консолидация |
+| Memory | JAWL API для revisions/validity/journal | Clean-version ownership, whole-profile restart/recall/erasure acceptance |
+| Vision | Capture/UIA/plan/token seams | Выбор VLM отложен; closed loop не принят |
+| Avatar/OBS | Separate origin, fallback, optional bundle adapter | Реальный общий персонаж, OBS/audio ownership/DPI/8h |
+| Operations | Gate/profile/build tooling | Harness safety fixes, honest ready state, clean install/долгий прогон |
+
+## Evidence: читать в пределах конкретного профиля
+
+При документальном аудите прочитаны существующие отчёты; это не новые прогоны.
+Они локальные, часть не в git, не все содержат версию/хеш источников. Для новой
+конфигурации прежнее `pass` не переносится автоматически.
+
+- `runtime/native-gateway-bigpickle-20260903-fixed-100turn.json`: native
+  gateway 100-turn pass через тестовый OpenCode relay. Не полная voice/UI/PC приёмка.
+- `runtime/native-jawl-namespace-parity-20260905.json`,
+  `runtime/native-jawl-catalog-matrix-20260905.json`,
+  `runtime/native-jawl-policy-20260905-fixed.json`: catalog/projection и
+  ограниченные native probes; не выполнение всех инструментов.
+- `runtime/audio-pipeline-qwen-20260904.json`: ASR→response route→TTS, queued
+  VoiceMem, total 20.511 s; `end_seconds=0.391` — не вся голосовая задержка.
+  Harness не подтверждает identity/native LLM, выполнение memory ingest или
+  реальный playback. Нельзя называть это полной JAWL voice acceptance.
+- `runtime/target-release-profile-20260905-jawl.json`: доступность Companion
+  surfaces и отдельно JAWL status/policy с provider sink. Проверки не доказывают,
+  что именно этот Companion подключён к именно этому JAWL.
+- `runtime/restart-soak.json`: 5 коротких degraded циклов, 30 health samples;
+  суммарно около 5.45 s, не ночной нагрузочный soak.
+- Предыдущие записи о wheel/CLI и Edge DOM — ограниченное packaging/marker
+  evidence, не работа установленного приложения и не визуальное качество.
+
+Ранее в документах заявлялось «официальный full gate 252 non-E2E + 14 HTTP
+E2E»; это заменено свежим сохранённым gate выше. Один HTTP 503 в
+первом повторе не переносится в production-приёмку и не считается доказанным
+устранением причины нестабильности.
+Запись «1679 passed / 13 skipped JAWL» также историческая, не свежая проверка.
+
+## Решения, которые нельзя потерять при передаче
+
+- Один JAWL агент + Companion + VoiceMem; direct LLM adapter — только тест.
+- Full Access/unattended — требование, а не отложенный «опасный лишний контур».
+- Qwen3-TTS основной желаемый, Tera быстрый fallback; текущий CLI ещё default Tera.
+- Qwen3-ASR final mode; музыка/тембр требуют отдельных capabilities.
+- VLM не выбирать до решения владельца. Лицензированный Live2D bundle ещё нужен.
+- Ручное ambient promotion — текущее ограничение, не окончательная архитектура.
+- User-owned upstream не менять и не запускать write-producing тесты в нём.
+
+Следующий шаг — P0-A в TODO: ownership/versioned runtime и безопасные профили,
+затем демонстрируемый разговор+поручение+голос/интерфейс. Не новая серия
+одинаковых wheel builds. Полный список проверки результата — в аудите.
+## 2026-09-05 live validation correction
+
+The post-change full gate passed with exit code 0:
+`runtime/full-gate-20260905T172607Z.json` and its paired log. This validates
+the repository regression suite and auxiliary checks, not the failed extended
+live Qwen run below.
+
+The owned JAWL registry now has two explicit compatibility aliases from the
+observed historical `HostOSTerminal.*` names to the native
+`HostTerminalMessages.*` skills. They use the existing registry, parameter
+guard, RBAC and execution engine; arbitrary unknown names remain rejected.
+
+The extended local Qwen/VoiceMem run is not a three-turn acceptance. The first
+synthetic Russian question passed ASR -> owned JAWL -> TeraTTS with correlation
+`audio-profile-52faa6e52c4f46e5b72742ece4b1f6df` and 1.617 s total elapsed time.
+The second produced a final voice response but JAWL spent 120.768 s in a
+ReAct cycle, exceeded the harness's 8 s bound, and generated no TTS; its
+correlation is `audio-profile-c26bf42f9ff949f4a102697dba9ed057`. The third
+question was not executed. Logs show unavailable `HostOSTerminal.*` skill
+names, so the local model is not yet protocol-compatible for production.
+
+An isolated follow-up profile reported ASR -> response -> TeraTTS in 2.307 s
+(`runtime/alias-live-q2.json`, correlation
+`audio-profile-50a0f0262b6b448688f935283f4102bf`). The JAWL log did not capture
+an alias invocation before shutdown, so this is not proof of invalid-plan
+recovery.
+
+Native HostOS live evidence: `runtime/native-action-live-20260905202420.json`,
+correlation `native-action-1783f5b355ca457c836e07625d226c94`. Owned JAWL
+performed the disposable directory/file/metadata/monitoring sequence through
+`/api/hostos/skill`; all five actions returned HTTP 200 with `native=true` and
+cleanup removed the marker and directory. The UI/voice-originated task remains
+unverified.
+
+The next model-originated task attempt was not accepted: the owned JAWL chat
+endpoint returned HTTP 409 twice while the startup heartbeat held the agent;
+the following local Qwen call reached the provider timeout/retry boundary.
+This exposes a P0 scheduling issue between heartbeat and foreground turns,
+which must be fixed with bounded cancellation/defer semantics rather than
+blind chat retries.
+
+The web handlers now acquire the asynchronous terminal bridge and wait for
+connection readiness before sending. A fresh owned-profile POST returned HTTP
+200 with a user sequence instead of 409; the short probe ended before the
+model response, so full completion and fair heartbeat scheduling remain
+unverified. Full gate: `runtime/full-gate-20260905T174510Z.json` (exit code 0).
+
+The UI memory contract is live-verified end-to-end in
+`runtime/live-ui-memory-restart-20260905.json`: a unique preference was
+stored through Companion `/api/jawl/memory` with `native=true`, found before
+restart, native restart returned `agent_ready=true`, and a bounded follow-up
+read found the same value after restart. An immediate first read was too early
+and was repeated only after readiness.
+The subsequent regression gate passed at
+`runtime/full-gate-20260905T180113Z.json`.
+
+`JawlWebAdapter.restart_agent()` now waits up to a bounded interval for native
+JAWL status `running=true` and `starting=false`; it reports failure instead of
+claiming restart success when the console is unavailable. Regression gate
+after this change: `runtime/full-gate-20260905T180606Z.json` (exit code 0).
+
+Lifecycle timeout was corrected after logs showed native JAWL restart taking
+about 60 seconds. Stop/start/status now use a bounded 120-second timeout while
+ordinary requests keep the short timeout. Regression gate:
+`runtime/full-gate-20260905T181140Z.json` (exit code 0).
+
+An intervening gate briefly exposed a fixture race; the focused E2E passed on
+repeat and the immediate full-gate rerun passed at
+`runtime/full-gate-20260905T181942Z.json`. The failed artifact remains in
+runtime history for diagnosis.

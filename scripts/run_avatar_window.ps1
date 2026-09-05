@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Url = "http://127.0.0.1:8765/avatar?source=pet",
+    [string]$Url = "http://127.0.0.1:8766/avatar?source=pet",
     [int]$Width = 420,
     [int]$Height = 560,
     [int]$Left = 40,
