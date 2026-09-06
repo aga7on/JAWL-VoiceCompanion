@@ -22,55 +22,52 @@ is clean; full suite green (345 pytest + 28 subtests, Node mic gate, diff check)
   catalog/gateway/policy and target-release profiles, LAN/HTTPS docs+tests).
 
 ## Next steps (ordered)
-1. **Phase 2 — local LLM endpoint for owned JAWL: DONE at the provider level.**
-   - Owner provided the LM Studio key for `http://127.0.0.1:1235/v1`; it verifies
-     (`/v1/models` + minimal chat completion). Loaded model id is
-     `ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d`; `config/jawl/settings.yaml`
-     `main_model` now points at it; prepared profile + preflight pass.
-   - Provider fix: LM Studio rejects `response_format.type=json_object` (400).
-     Patch applied to the owned snapshot and recorded at
-     `scripts/patches/llm-openai-compatible-response-format.patch`; run LM Studio
-     sessions with `LLM_RESPONSE_FORMAT=text` in the environment. Key travels only
-     via `LLM_API_KEY_1` (process env), never printed or committed.
-   - REMATCH BLOCKED AT THE TURN: the Ornith model enters a ReAct tool loop and a
-     single `--turns 1` run never emits a final answer (18 tool.completed; turns
-     timed out at 180–420 s). Evidence: `runtime/daily-live-one-turn.json`,
-     `runtime/daily-live-greeting.json`. This is the P0 "bound a single user-turn"
-     contract issue and must be fixed BEFORE claiming Phase 3.
-2. **Phase 3 — fix the single-turn loop, then complete the connected loop:**
-   - Try in order: (a) trim/clamp the daily tool catalog so only terminal
-     messaging (and maybe notes) is available; (b) tighten `max_react_steps`;
-     (c) fix the launcher cwd so `sandbox/` resolves to
-     `runtime/instances/daily/sandbox` (currently it resolves to the pinned-source
-     sandbox and repeated `list_directory('sandbox/')` calls fail, feeding the
-     loop); then re-run
-     `run_native_gateway_profile.py --allow-live-turns --turns 1
-     --skip-cancel --skip-reconnect --allow-missing-tool-lifecycle
-     --prompt-template '<RU without braces>' --turn-timeout 360
-     --report runtime/daily-live-one-turn.json`
-     against a briefly started console
-     (`runtime\jawl-daily-venv\Scripts\python.exe -m src.web.server
-     --host 127.0.0.1 --port 8770 --keep-agent --no-browser` from the pinned
-     source dir with all `JAWL_*` instance env + `LLM_API_URL`/`LLM_API_KEY_1`/
-     `LLM_RESPONSE_FORMAT=text`).
-   - Then the P0-B loop: fact/preference to memory -> native action -> restart
-     and recall.
-3. **Phase 4 — live acceptance:** `scripts/run_synthetic_cases_live.ps1` (local
-   Qwen3-ASR-0.6B); cold/warm latency; `scripts/run_browser_voice_e2e.py --live`.
-4. **Phase 5 — P0-C exit criteria (still OPEN):** partial-ASR streaming,
-   cancellable native streaming TTS, semantic barge-in, interruption E2E. Update
-   `TODO.md`, `docs/STATE.md`, `CHANGELOG.md`, `docs/TECHNICAL_AUDIT.md` after
-   each slice, and apply the response-format patch again after any
-   `stage_jawl_source.py` re-staging (commit the patch re-record there).
+1. **Phase 2 complete — first live user turn is ACCEPTED.**
+   - Root blocker was NOT the model looping: LM Studio's loaded model was capped at
+     `n_ctx 15872`, and JAWL requests inflate to 16–35k tokens → HTTP 400
+     `exceed_context_size_error` (then empty answers). Fixed by reloading the
+     model with a big context: `lms load ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d
+     --context-length 65536 --yes` (CLI at `C:\Users\ARTEM\.lmstudio\bin\lms.exe`).
+     After reload the API identifier became `ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d:2`;
+     `config/jawl/settings.yaml` now targets the `:2` id. Re-run the same load
+     command after any LM Studio restart/reload (and keep `LLM_API_KEY_1` in env).
+   - Companion hardening to stop tool-driven stalls: adaptive context budget
+     (`system.context_depth.budget: enabled, skill_policy: adaptive`), `max_react_steps`
+     lowered to 8, `goal_mode` off, owned directive `config/jawl/prompts/custom/
+     RESPOND_DIRECTLY.md` (seeded by `prepare_daily_profile.py`), and a snapshot
+     patch `scripts/patches/jawl-context-budget-companion.patch` (no omitted
+     namespace index; `SkillCatalog` removed from adaptive base prefixes — a
+     companion profile must not self-discover host/coding tools for social turns).
+   - Acceptance evidence: `runtime/daily-live-64k.json` — `pass:true`,
+     `completed_turns:1`, `assistant.final:1`, full turn in ~48 s, agent made a
+     terminal answer, saved a `SQLNotes.update_note`, then requested early cycle
+     termination. Tool-loop/400 evidence in `daily-live-one-turn.json`,
+     `daily-live-greeting.json`, `daily-live-bounded.json`, `runtime/daily-live-budget*.json`.
+2. **Phase 3 — first connected live loop (P0-B):** fact/preference to memory → a
+   native action → restart-and-recall. The `SQLNotes.update_note` already fired
+   during the accepted turn; use it to seed a real memory fact, then ask the same
+   question via gateway after a console restart.
+3. **Phase 4 — live acceptance:** run `scripts/run_synthetic_cases_live.ps1`
+   (local Qwen3-ASR-0.6B on CPU) to accept the synthetic matrix; measure
+   cold/warm latencies; browser voice E2E via `scripts/run_browser_voice_e2e.py --live`
+   once the provider is live (it is now).
+4. **Phase 5 — finish P0-C exit criteria (still OPEN):** partial-ASR streaming,
+   cancellable native streaming TTS, semantic barge-in, browser/device
+   interruption E2E. Update `TODO.md`, `docs/STATE.md`, `CHANGELOG.md`,
+   `docs/TECHNICAL_AUDIT.md` after each slice. Re-apply both snapshot patches
+   (`scripts/patches/`) after any `stage_jawl_source.py` re-staging.
 
 ## Blockers / owner follow-ups
 - **Remind the owner to revoke/rotate the leaked TokenRouter key (and OpenCode
   auth).** Required, do not skip.
 - The owner's LM Studio key is used only via process env `LLM_API_KEY_1`; never
   print it, never commit it.
-- Connected daily scenario is blocked on the model's ReAct tool loop (see Phase 3
-  fixes above); no live user turn is accepted yet. Ollama `gemma-4-12b-obliterated`
-  is the fallback endpoint if LM Studio's model keeps looping.
+- LM Studio served context is set by the model load command (`--context-length
+  65536`); a plain reload in LM Studio reverts to ~16k and re-introduces the
+  400 `exceed_context_size_error`. `scripts/prepare_daily_profile.py` and the
+  launcher do not touch LM Studio — re-run the `lms load ... --context-length
+  65536` command on any reload. Model is CPU 9B (qwen35) at ~10.45 GB; ~1.5 s
+  per LLM round trip after the load (much faster than the pre-fix behaviour).
 - `voicemem_memoryspace/demo/` contains biometric voiceprints + vector stores —
   it is gitignored; do not add it back.
 - 100 live-turns, microphone/VoiceMem, OBS/Live2D soak and supervised recovery

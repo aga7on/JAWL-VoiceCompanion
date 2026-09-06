@@ -1,22 +1,22 @@
 # Состояние разработки
 
-Live local LLM step (2026-09-06 night): owner-provided LM Studio key works on
-`127.0.0.1:1235/v1` (one loaded model, id `ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d`,
-verified via `/v1/models` and a minimal chat completion). Owned daily baseline
-`config/jawl/settings.yaml` now targets LM Studio; profile prepared and preflight
-passes. The guarded snapshot patch
-`scripts/patches/llm-openai-compatible-response-format.patch` fixes LM Studio's
-HTTP 400 on `response_format.type=json_object` (use `LLM_RESPONSE_FORMAT=text`).
-With it, owned JAWL calls LM Studio and executes real native tools. The connected
-daily scenario remains NOT accepted: the model enters a ReAct tool loop and no
-single `--turns 1` run produced a final answer within 180–420 s (18
-tool.completed events per run; evidence `runtime/daily-live-one-turn.json`,
-`runtime/daily-live-greeting.json`). Follow-ups: bound the tool catalog /
-`max_react_steps` for one-turn acceptance, and fix the launcher cwd so
-`sandbox/` resolves to `runtime/instances/daily/sandbox` (currently the
-pinned-source sandbox, so repeated sandbox searches fail). Ollama
-`127.0.0.1:11434` (`gemma-4-12b-obliterated:latest`, no auth) is the fallback
-endpoint, not yet tried for a turn.
+Connected daily scenario: ACCEPTED one live user turn (owned JAWL →
+LM Studio local LLM). Evidence `runtime/daily-live-64k.json`: `pass:true`,
+`completed_turns:1`, `assistant.final:1`, turn ~48 s, terminal reply + a
+`SQLNotes.update_note`, then early cycle termination. Root cause of earlier
+failures: LM Studio had loaded the model with `n_ctx 15872` while JAWL inflates
+prompts to 16–35k → HTTP 400 `exceed_context_size_error` / empty answers; fixed
+by `lms load ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d --context-length 65536 --yes`
+(API id now `...:2`; `config/jawl/settings.yaml` targets it; re-run the load
+after any LM Studio reload). Owned hardening: adaptive context budget + owned
+directive (`config/jawl/prompts/custom/RESPOND_DIRECTLY.md` seeded by
+`scripts/prepare_daily_profile.py`) + snapshot patch
+`scripts/patches/jawl-context-budget-companion.patch` (no omitted namespace
+index, no `SkillCatalog` in base prefixes) + `max_react_steps: 8` +
+`goal_mode: false` + provider patch
+`scripts/patches/llm-openai-compatible-response-format.patch`
+(`LLM_RESPONSE_FORMAT=text`). Next: Phase 3 P0-B memory fact → restart → recall,
+then live matrix.
 
 Synthetic voice-robustness slice (P0-C foundation) is in: `ASRNoSpeech` is a
 first-class outcome — `ExternalASRService.finish` returns `no_speech`

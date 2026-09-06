@@ -38,6 +38,12 @@ def prepare() -> list[str]:
         if source.is_file() and "__pycache__" not in source.parts:
             copied += copy_missing(source, prompt_target / source.relative_to(prompt_source))
 
+    custom_source = CONFIG_ROOT / "prompts" / "custom"
+    if custom_source.is_dir():
+        for source in custom_source.rglob("*"):
+            if source.is_file():
+                copied += copy_missing(source, prompt_target / "custom" / source.name)
+
     copied += copy_missing(
         CONFIG_ROOT / "SOUL.md", prompt_target / "personality" / "SOUL.md"
     )

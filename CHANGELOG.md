@@ -1,6 +1,32 @@
 # Changelog
 
-## 2026-09-06 (night: live local LLM provider)
+## 2026-09-06 (night: first accepted live user turn)
+
+- **Accepted connected-turn milestone:** one `--turns 1` run against owned JAWL
+  (LM Studio `ea07de5...:2`, 64k context) reports `pass:true`, `completed_turns:1`,
+  `assistant.final:1` in ~48 s; the agent answered via the terminal interface and
+  saved a `SQLNotes.update_note` before requesting cycle termination.
+  Evidence: `runtime/daily-live-64k.json` (plus failing probes
+  `daily-live-one-turn.json`, `daily-live-greeting.json`,
+  `daily-live-bounded.json`, `daily-live-budget*.json`).
+- Root blocker found and fixed: LM Studio loaded the model with `n_ctx 15872`,
+  while JAWL prompts inflate to 16–35k → HTTP 400 `exceed_context_size_error`
+  (then `provider returned an empty final answer`). Fix: reload via
+  `lms load ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d --context-length 65536 --yes`;
+  the served identifier became `ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d:2` and
+  `config/jawl/settings.yaml` now targets it.
+- Companion hardening (owned profile): `system.context_depth.budget` on with
+  `skill_policy: adaptive`, `max_react_steps: 8`, `goal_mode: false`, new owned
+  directive `config/jawl/prompts/custom/RESPOND_DIRECTLY.md` (seeded by
+  `scripts/prepare_daily_profile.py`), and snapshot patch
+  `scripts/patches/jawl-context-budget-companion.patch` stopping self-discovery
+  of the host tool catalog (no omitted namespace index; `SkillCatalog` not in
+  adaptive base prefixes). Combined with the earlier
+  `scripts/patches/llm-openai-compatible-response-format.patch`
+  (`LLM_RESPONSE_FORMAT=text`), owned JAWL now reaches the local LLM correctly.
+- Keep-away helper created then removed (owner at the PC); no power/display
+  settings are modified by project tooling (screen offs were Windows display
+  idle timeouts during long waits).
 
 - Owner provided an LM Studio API key for `http://127.0.0.1:1235/v1`; the server
   accepts it and serves one loaded model (id `ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d`,

@@ -2,12 +2,12 @@
 identity:
   agent_name: Компаньон
 llm:
-  main_model: ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d
-  available_models: [ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d]
+  main_model: ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d:2
+  available_models: [ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d:2]
   language: ru
   is_multimodal: false
   tool_transport: json_envelope
-  max_react_steps: 15
+  max_react_steps: 8
   provider:
     kind: openai_compatible
     display_name: LM Studio (local owned baseline)
@@ -17,9 +17,17 @@ system:
   heartbeat_interval: 600
   continuous_cycle: false
   proactive_guidance: false
+  context_depth:
+    budget:
+      enabled: true
+      skill_policy: adaptive
+      skills_max_chars: 6000
+      max_dynamic_chars: 12000
+      recent_ticks_max_chars: 6000
+      provider_max_chars: 8000
   goal_mode:
-    enabled: true
-    task_ledger_enabled: true
+    enabled: false
+    task_ledger_enabled: false
   lifecycle_hooks:
     enabled: false
   swarm:
