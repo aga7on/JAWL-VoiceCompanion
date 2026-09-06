@@ -2,16 +2,27 @@
 identity:
   agent_name: Компаньон
 llm:
-  main_model: ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d:2
-  available_models: [ea07de5ddbf7bac67aee9db5d525e9ea830e9e0d:2]
+  main_model: jawl-gemma4-it
+  available_models: [jawl-gemma4-it]
   language: ru
   is_multimodal: false
+  # Keep the canonical JAWL JSON action envelope for local providers whose
+  # OpenAI native tool-call implementation is incomplete.
   tool_transport: json_envelope
-  max_react_steps: 8
+  max_react_steps: 15
+  # Prompt selection may be narrowed per request, while native policy remains
+  # the sole authority for all registered tools and HostOS levels 0..3.
+  native_tool_prefixes:
+  - HostOSCoding
+  - HostOSReader
+  - HostOSSearch
+  - HostOSEditor
+  native_tool_limit: 64
   provider:
     kind: openai_compatible
-    display_name: LM Studio (local owned baseline)
+    display_name: Ollama local Gemma 4 IT (temporary connected baseline)
     request_timeout_seconds: 120
+  temperature: 1.0
 system:
   timezone: 3
   heartbeat_interval: 600
@@ -21,21 +32,38 @@ system:
     budget:
       enabled: true
       skill_policy: adaptive
-      skills_max_chars: 6000
-      max_dynamic_chars: 12000
-      recent_ticks_max_chars: 6000
-      provider_max_chars: 8000
+      skills_max_chars: 16000
+      max_dynamic_chars: 60000
+      recent_ticks_max_chars: 24000
+      hypotheses_max_chars: 5000
+      provider_max_chars: 10000
+    high_ticks: 4
+    medium_ticks: 7
+    low_ticks: 10
   goal_mode:
-    enabled: false
-    task_ledger_enabled: false
+    enabled: true
+    task_ledger_enabled: true
   lifecycle_hooks:
     enabled: false
   swarm:
-    enabled: false
+    enabled: true
   tree_of_thoughts:
     enabled: false
   subconscious:
     enabled: false
+  # Drives: social stays, curiosity off to stop mid-turn OS wandering on
+  # dialogue questions where the answer already sits in the notes/context.
+  db:
+    sql:
+      drives:
+        enabled: true
+        fundamental:
+          curiosity:
+            enabled: false
+          social:
+            enabled: true
+          mastery:
+            enabled: true
   event_acceleration:
     # A user voice/chat turn must preempt an autonomous heartbeat. Deferring
     # here lets a slow provider monopolize the single JAWL ReAct lane and makes
