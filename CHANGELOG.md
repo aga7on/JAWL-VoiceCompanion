@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-15 - U4 slice two: tact and context card in settings
+
+- The «Настройки» tab gains a second card («Такт и контекст»): continuous
+  cycle toggle, heartbeat interval, timezone, the critical-event
+  acceleration multiplier, RAG depth/vector-block caps and swarm worker
+  concurrency — all through the same revision-guarded hub write with the
+  readback and restart hint.
+- Bounded scope: 13 core+context scalars migrated so far; the remaining
+  settings groups (memory caps, ToT, subconscious, drives) follow.
+
 ## 2026-09-15 - U4 slice one: native settings tab over the config hub
 
 - New «Настройки» tab (first unified-navigation section): edits the core

@@ -56,8 +56,11 @@
     температура, мин-интервал, max шагов, язык) через config hub: ревизия,
     conflict-UX с авто-перечиткой, unknown-ключи, readback, подсказка рестарта.
     HTTP round-trip тесты (запись → readback → смена ревизии → конфликт).
-  - [ ] U4 остаток: перенос остальных секций настроек (такт/RAG/память/swarm),
-    memory-редактор с evidence/provenance, интеграции с credentials,
+  - [x] Срез 2 (2026-09-15): карточка «Такт и контекст» — continuous_cycle,
+    heartbeat_interval, timezone, critical_multiplier, RAG depth/vector
+    лимиты, swarm-воркеры (тот же ревизионный write + readback).
+  - [ ] U4 остаток: перенос остальных секций (memory caps, ToT, subconscious,
+    drives), memory-редактор с evidence/provenance, интеграции с credentials,
     lifecycle/HostOS/DB-wipe отдельными блоками.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.

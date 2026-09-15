@@ -332,6 +332,14 @@
             <div class="field"><label>Язык<input type="text" id="cfg-language"></label></div>
             <div class="button-row"><button id="settings-reload" type="button">Перечитать</button><button id="settings-save" class="primary" type="button">Сохранить</button></div>
             <p id="settings-status" class="meta"></p>
+          </article><article class="glass-card"><div class="card-head"><div><h3>Такт и контекст</h3><p>Heartbeat, ускорение событий, RAG и рой.</p></div></div>
+            <div class="field"><label><input type="checkbox" id="cfg-continuous-cycle"> Непрерывный цикл (без сна)</label></div>
+            <div class="field"><label>Интервал heartbeat, сек<input type="number" id="cfg-heartbeat" min="1"></label></div>
+            <div class="field"><label>Таймзона<input type="text" id="cfg-timezone"></label></div>
+            <div class="field"><label>Множитель критических событий<input type="number" id="cfg-critical-mult" min="0" step="0.05"></label></div>
+            <div class="field"><label>RAG: глубина<input type="number" id="cfg-rag-depth" min="0"></label></div>
+            <div class="field"><label>RAG: векторных блоков<input type="number" id="cfg-rag-vector" min="0"></label></div>
+            <div class="field"><label>Swarm: одновременных воркеров<input type="number" id="cfg-swarm-workers" min="1" max="10"></label></div>
           </article></div>
         </section>
         <section class="tab-panel" data-panel="jawl">
@@ -2179,6 +2187,15 @@
         set('#cfg-min-interval', data.values['settings:llm.min_call_interval_sec']);
         set('#cfg-max-steps', data.values['settings:llm.max_react_steps']);
         set('#cfg-language', data.values['settings:llm.language']);
+        set('#cfg-continuous-cycle', data.values['settings:system.continuous_cycle'] ? '1' : '');
+        const cycleBox = document.querySelector('#cfg-continuous-cycle');
+        if (cycleBox) cycleBox.checked = data.values['settings:system.continuous_cycle'] === true;
+        set('#cfg-heartbeat', data.values['settings:system.heartbeat_interval']);
+        set('#cfg-timezone', data.values['settings:system.timezone']);
+        set('#cfg-critical-mult', data.values['settings:system.event_acceleration.critical_multiplier']);
+        set('#cfg-rag-depth', data.values['settings:system.context_depth.rag.depth_limit']);
+        set('#cfg-rag-vector', data.values['settings:system.context_depth.rag.max_vector_blocks']);
+        set('#cfg-swarm-workers', data.values['settings:system.swarm.max_concurrent_workers']);
         statusEl.textContent = `Загружено · ревизия ${String(data.revision).slice(0, 12)}…`;
       } catch (error) {
         statusEl.textContent = `Config hub недоступен: ${error.message}`;
@@ -2200,6 +2217,13 @@
           'settings:llm.min_call_interval_sec': num(document.querySelector('#cfg-min-interval')?.value || 0),
           'settings:llm.max_react_steps': num(document.querySelector('#cfg-max-steps')?.value || 15),
           'settings:llm.language': String(document.querySelector('#cfg-language')?.value || '').trim(),
+          'settings:system.continuous_cycle': !!document.querySelector('#cfg-continuous-cycle')?.checked,
+          'settings:system.heartbeat_interval': num(document.querySelector('#cfg-heartbeat')?.value || 5),
+          'settings:system.timezone': String(document.querySelector('#cfg-timezone')?.value || '').trim(),
+          'settings:system.event_acceleration.critical_multiplier': num(document.querySelector('#cfg-critical-mult')?.value || 1),
+          'settings:system.context_depth.rag.depth_limit': num(document.querySelector('#cfg-rag-depth')?.value || 0),
+          'settings:system.context_depth.rag.max_vector_blocks': num(document.querySelector('#cfg-rag-vector')?.value || 0),
+          'settings:system.swarm.max_concurrent_workers': num(document.querySelector('#cfg-swarm-workers')?.value || 3),
         },
         expected_revision: configRevision,
       };
