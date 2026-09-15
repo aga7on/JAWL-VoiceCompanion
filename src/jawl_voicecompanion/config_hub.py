@@ -28,7 +28,15 @@ _SNAPSHOT_SRC = Path(
 )
 
 
-def _load_snapshot_modules():
+def _load_snapshot_modules(env_file: Path | None = None):
+    # get_instance_paths() runs at config_io import time and can CREATE the
+    # fallback .env inside the pinned snapshot directory. Point JAWL_ENV_FILE
+    # at our target BEFORE the import so the bootstrap lands on the profile
+    # (or the test's temp dir) instead of polluting the snapshot.
+    if env_file is not None:
+        import os
+
+        os.environ["JAWL_ENV_FILE"] = str(env_file)
     if str(_SNAPSHOT_SRC) not in sys.path:
         sys.path.insert(0, str(_SNAPSHOT_SRC))
     snapshot_root = _SNAPSHOT_SRC.parent
@@ -51,7 +59,7 @@ class ConfigHub:
         self.settings_file = self.config_dir / "settings.yaml"
         self.interfaces_file = self.config_dir / "interfaces.yaml"
         self.env_file = Path(env_file) if env_file else self.config_dir.parent / ".env"
-        self.cio, self.schema = _load_snapshot_modules()
+        self.cio, self.schema = _load_snapshot_modules(self.env_file)
         # The snapshot's env helpers read a module-level ENV_FILE; this process
         # owns the snapshot import (the console is not running here), so point
         # it at OUR profile env once, at startup.

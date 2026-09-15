@@ -51,6 +51,7 @@ runtime/jawl-sources/jawl-20260906-daily-v2/**/__pycache__/
 runtime/jawl-sources/jawl-20260906-daily-v2/**/*.py[cod]
 runtime/jawl-sources/jawl-20260906-daily-v2/logs/
 runtime/jawl-sources/jawl-20260906-daily-v2/sandbox/
+runtime/jawl-sources/jawl-20260906-daily-v2/**/.env
 logs/
 *.log
 *.sqlite
