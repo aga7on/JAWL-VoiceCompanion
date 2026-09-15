@@ -1626,6 +1626,13 @@
       if (!active) return;
       if (active.finishPromise) return active.finishPromise;
       active.finalizing = true;
+      // Capture this turn's ids and rotate immediately: everything spoken
+      // after the finalize (the user often keeps talking) must accumulate in
+      // a fresh session, not in the buffer this request is about to consume.
+      const turnSession = active.sessionId;
+      const turnCorrelation = active.correlationId;
+      active.sessionId = `browser-mic-${Date.now()}-${++voiceSequence}`;
+      active.correlationId = `turn-voice-${Date.now()}-${voiceSequence}`;
       setVoiceStatus('Распознаю…');
       if (active.statusTimer) window.clearTimeout(active.statusTimer);
       active.statusTimer = window.setTimeout(() => {
@@ -1647,7 +1654,7 @@
             data = await new Promise(resolve => {
               voiceSocketPending.set('voice_end', resolve);
               socket.send(JSON.stringify({
-                action: 'voice_end', session_id: active.sessionId, correlation_id: active.correlationId,
+                action: 'voice_end', session_id: turnSession, correlation_id: turnCorrelation,
               }));
               window.setTimeout(() => {
                 if (voiceSocketPending.get('voice_end')) {
@@ -1659,7 +1666,7 @@
             if (!data.ok && data.error) throw new Error(data.error);
           } else {
             const response = await apiPost('/api/voice/end', {
-              session_id: active.sessionId, correlation_id: active.correlationId,
+              session_id: turnSession, correlation_id: turnCorrelation,
             }, {signal: entry.controller.signal});
             data = await response.json();
             if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem unavailable');
@@ -1680,17 +1687,19 @@
           if (active.finishPromise === entry.promise) active.finishPromise = null;
           if (voice === active && !entry.superseded) {
             if (active.statusTimer) { window.clearTimeout(active.statusTimer); active.statusTimer = null; }
-            active.sessionId = `browser-mic-${Date.now()}-${++voiceSequence}`;
-            active.correlationId = `turn-voice-${Date.now()}-${voiceSequence}`;
             active.finalizing = false;
-            active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false};
+            if (!active.vad.speaking) {
+              // Only reset capture state when the user is not mid-flow: the
+              // continuation owns the current session and VAD window.
+              active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false};
+              active.gate.open = false;
+              active.gate.silentBlocks = 0;
+              active.gate.preRoll.length = 0;
+              setVoiceStatus(handsFree.checked ? 'Слушаю…' : 'Микрофон слушает.');
+            }
             active.lastDraftHold = false;
             active.lastCountdown = null;
             active.backchannelSent = false;
-            active.gate.open = false;
-            active.gate.silentBlocks = 0;
-            active.gate.preRoll.length = 0;
-            setVoiceStatus(handsFree.checked ? 'Слушаю…' : 'Микрофон слушает.');
           }
         }
       })();
@@ -1913,7 +1922,10 @@
           }
         }
         updateVoiceVad(active, gated.open ? rms : 0);
-        if (!active.finalizing && gated.open && !playbackActive) {
+        // Audio keeps flowing while a previous answer is prepared: the
+        // session was rotated at finalize, so the continuation lands in a
+        // fresh buffer instead of being dropped on the floor.
+        if (gated.open && !playbackActive) {
           if (gated.samples.length) samples.push(...gated.samples);
           samples.push(...inputSamples);
           while (samples.length >= chunkSize) {

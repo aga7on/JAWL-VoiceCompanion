@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-14 - Voice capture: continuous audio and session rotation at finalize
+
+- Root cause of "said a lot, sent two words": the audio pipeline dropped
+  every chunk while an answer was being prepared (the `!active.finalizing`
+  gate in the worklet handler), so the continuation never reached the ASR
+  buffer and only the first short phrase could be sent.
+- Finalize now captures the turn ids and immediately rotates the session;
+  the request carries the captured ids and audio keeps uploading into the
+  fresh session (complete continuation), while the request's buffer stays
+  isolated from late discards.
+- The response finally no longer rotates the session and no longer resets
+  the VAD while the user is mid-flow; the endpoint countdown and live
+  transcript keep updating during that window.
+- Known limit: the live HUD transcript comes from the streaming partial
+  (rolling window, may lose the head of a long monologue); the SENT text is
+  the full batch transcription of the buffered utterance.
+
 ## 2026-09-14 - Voice HUD: live transcript, send countdown and safe interjections
 
 - The mic panel now shows the live transcript while the user speaks (draft

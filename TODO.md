@@ -1322,6 +1322,10 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
   stays one turn and nothing is dropped. Voice HUD (live transcript + send
   countdown) landed 2026-09-14; interjections now require a fresh meaningful
   draft and a superseded answer still appears in the chat silently.
+- [ ] Long-monologue retest (2026-09-14): speak continuously for ~30s with
+  breaths; the sent transcript must cover the whole utterance (session
+  rotation at finalize + continuous upload). The HUD partial may still show
+  a shorter rolling window - judge the chat message, not the HUD.
 - [ ] Sensory journal growth (~12 MB/day, no rotation): offset persistence
   landed 2026-09-14; consider journal rotation/compaction after a live day.
 - [ ] Nightly unattended soak (step 5 of the review), prepared 2026-09-14:
