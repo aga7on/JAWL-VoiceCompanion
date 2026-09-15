@@ -7,6 +7,7 @@ import base64
 import hmac
 import ipaddress
 import os
+import re
 import secrets
 import ssl
 import threading
@@ -19,7 +20,9 @@ from http.cookies import SimpleCookie
 from math import isfinite
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import parse_qs, quote, urlsplit
 from uuid import uuid4
 
 from .approvals import ApprovalStore
@@ -30,6 +33,7 @@ from .audit import AuditLog
 from .attention import AttentionPresence
 from .avatar import AvatarAssetStore
 from .doctor import build_doctor_report
+from .event_log import log_event
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .jawl_events import JawlEventFileSink
@@ -38,8 +42,10 @@ from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
 from .resources import ResourceGovernor
 from .tts import TTSService, TTSUnavailable, TTSCancelled
+from . import turn_policy
 from .vision import JawlNativeVisionExecutor, VisionLookService
 from .voicemem_client import VoiceMemAsyncIngest, VoiceMemProcessClient, VoiceMemUnavailable
+from .ws_server import WebSocketConnection, WebSocketError, is_websocket_upgrade, send_handshake_response
 from .system_audio import SystemAudioUnavailable
 from .stream_chat import StreamChatIngestor
 
@@ -73,6 +79,61 @@ def is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(value).is_loopback
     except ValueError:
         return False
+
+
+# ASR hallucination on noise/silence must never become a user turn: the model
+# can echo its own transcription prompt, emit single filler characters, switch
+# to a foreign script (throat clearing turns into CJK filler characters) or
+# just stutter one character many times on keyboard noise. These are technical
+# artifacts, not user speech.
+_ASR_PROMPT_ECHO_MARKERS = ("transcribe the audio exactly as spoken", "транскрибируй аудио")
+_MIN_MEANINGFUL_TRANSCRIPT_CHARS = 2
+
+# CJK/Hangul ranges: a Russian transcription should never contain these. When
+# Qwen3-ASR receives non-speech noise it often switches languages and emits CJK
+# filler characters ("嗯嗯嗯"), which is a hard technical-artifact signal.
+_ASR_FOREIGN_SCRIPT_RANGES = (
+    (0x2E80, 0x2EFF),  # CJK Radicals Supplement
+    (0x3040, 0x309F),  # Hiragana
+    (0x30A0, 0x30FF),  # Katakana
+    (0x31F0, 0x31FF),  # Katakana Phonetic Extensions
+    (0x3400, 0x4DBF),  # CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),  # CJK Unified Ideographs
+    (0xF900, 0xFAFF),  # CJK Compatibility Ideographs
+    (0xFF00, 0xFF5F),  # Fullwidth Forms
+    (0xAC00, 0xD7AF),  # Hangul Syllables
+)
+
+
+def _contains_foreign_script(text: str) -> bool:
+    for char in text:
+        code = ord(char)
+        for start, end in _ASR_FOREIGN_SCRIPT_RANGES:
+            if start <= code <= end:
+                return True
+    return False
+
+
+def is_meaningful_transcript(text: str) -> bool:
+    """Keep real utterances (including short ones like «Ок»), drop ASR noise."""
+    cleaned = re.sub(r"[\W_]+", "", str(text or ""), flags=re.UNICODE)
+    if not cleaned:
+        return False
+    if len(cleaned) < _MIN_MEANINGFUL_TRANSCRIPT_CHARS:
+        return False
+    lowered = cleaned.casefold()
+    for marker in _ASR_PROMPT_ECHO_MARKERS:
+        if re.sub(r"[\W_]+", "", marker, flags=re.UNICODE).casefold() in lowered:
+            return False
+    if _contains_foreign_script(cleaned):
+        # Russian speech never contains CJK/Hangul; this is an ASR language
+        # switch on noise (throat clearing, keyboard, silence).
+        return False
+    if len(set(lowered)) == 1:
+        # Single repeated character is a filler/stutter ("嗯嗯嗯", "ммм", "ааа"),
+        # not an utterance. Real short words use more than one character.
+        return False
+    return True
 
 
 def require_bind_host(host: str, *, lan_mode: bool = False) -> str:
@@ -142,17 +203,29 @@ def _security_headers(handler: BaseHTTPRequestHandler, *, presentation: bool = F
     """Apply a conservative policy to both control and presentation responses."""
     handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("Referrer-Policy", "no-referrer")
+    if presentation:
+        # The avatar page is the OBS source and is embedded by the loopback
+        # control panel. OBS loads it top-level, so framing stays restricted
+        # to loopback control origins; LAN origins must load it top-level.
+        handler.send_header("Content-Security-Policy", (
+            "default-src 'self'; object-src 'none'; base-uri 'none'; "
+            "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; "
+            "frame-ancestors http://127.0.0.1:* http://localhost:* "
+            "https://127.0.0.1:* https://localhost:*"
+        ))
+        handler.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        handler.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        return
     handler.send_header("X-Frame-Options", "DENY")
     handler.send_header("Cross-Origin-Opener-Policy", "same-origin")
     handler.send_header("Cross-Origin-Resource-Policy", "same-origin")
     handler.send_header("Content-Security-Policy", (
         "default-src 'self'; object-src 'none'; base-uri 'none'; "
-        + ("script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-           "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
-           if presentation else
-           "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-           "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
-           "frame-ancestors 'none'")
+        "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
+        "frame-src http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:*; "
+        "frame-ancestors 'none'"
     ))
 
 
@@ -172,11 +245,17 @@ class CompanionServer(ThreadingHTTPServer):
         avatar_assets: AvatarAssetStore | None = None,
         attention: AttentionPresence | None = None,
         ambient_memory: AmbientMemoryBuffer | None = None,
+        sensory_ingestor: Any | None = None,
         ambient_audio: AmbientAudioService | None = None,
         ambient_scheduler: AmbientTriageScheduler | None = None,
         jawl_hostos_control: bool = False,
         audit_log: AuditLog | None = None,
         asr_service: ExternalASRService | None = None,
+        streaming_asr: Any | None = None,
+        gigaam_transcriber: Any | None = None,
+        helper_urls: dict[str, str] | None = None,
+        proactive_feed: Any | None = None,
+        perception_fusion: Any | None = None,
         legacy_presentation: bool = True,
         resource_governor: ResourceGovernor | None = None,
         presence_file: Path | None = None,
@@ -210,6 +289,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.presence_file = Path(presence_file).resolve() if presence_file else None
         self._load_presence_preferences()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
+        self.sensory_ingestor = sensory_ingestor
         self.ambient_audio = ambient_audio
         self.ambient_scheduler = ambient_scheduler
         self.resources = resource_governor or ResourceGovernor()
@@ -221,6 +301,11 @@ class CompanionServer(ThreadingHTTPServer):
         if self.ambient_audio is not None:
             self.ambient_audio.bridge.set_playback_suppression(self.playback_suppression)
         self.asr = asr_service
+        self.streaming_asr = streaming_asr
+        self.gigaam_transcriber = gigaam_transcriber
+        self.helper_urls = dict(helper_urls or {})
+        self.proactive_feed = proactive_feed
+        self.perception_fusion = perception_fusion
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
         self.legacy_presentation = bool(legacy_presentation)
@@ -235,6 +320,10 @@ class CompanionServer(ThreadingHTTPServer):
             downstream=self._accept_stream_chat_event,
         )
         self.presentation_url: str | None = None
+        # A fresh process must invalidate browser-side speech buffers.  This is
+        # deliberately a runtime identity, not a persisted session identifier:
+        # after a restart any in-flight audio belongs to the old process.
+        self.runtime_instance_id = uuid4().hex
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -383,26 +472,75 @@ class CompanionServer(ThreadingHTTPServer):
             snapshot["speaking"] = False
         return snapshot
 
+    _SCREEN_QUERY = re.compile(
+        r"(экран|скрин|монитор|что\s+(сейчас\s+)?(происходит|видно)|опиши\s+(что|экран|кадр))",
+        re.IGNORECASE,
+    )
+
+    def enrich_turn_text(self, text: str) -> str:
+        """Ground turn text: mid-turn note + freshest perception observation."""
+        clean = str(text or "").strip()
+        if not clean:
+            return clean
+        prefix = ""
+        try:
+            active = self.gateway.arbiter.state().get("active")
+        except Exception:  # noqa: BLE001 - enrichment is best-effort
+            active = None
+        if isinstance(active, dict) and active.get("priority") == "USER_FINAL" and not active.get("cancelled"):
+            prefix = (
+                "[Примечание: это сообщение пришло, пока предыдущий ответ ещё готовился; "
+                "предыдущая реплика и это сообщение — один контекст.]\n"
+            )
+        fusion = self.perception_fusion
+        if fusion is None or not self._SCREEN_QUERY.search(clean):
+            return prefix + clean
+        try:
+            observation = fusion.compose()
+        except Exception:  # noqa: BLE001 - enrichment is best-effort
+            observation = ""
+        if not observation:
+            return prefix + clean + "\n\n[Свежих наблюдений восприятия нет: экран не наблюдался в последние минуты.]"
+        return prefix + clean + "\n\n[ВНУТРЕННИЕ НАБЛЮДЕНИЯ ВОСПРИЯТИЯ (фон, не цитировать дословно): " + observation[:900] + "]"
+
     def server_close(self) -> None:
+        errors: list[str] = []
+
+        def step(name: str, action: Any) -> None:
+            try:
+                action()
+            except Exception as exc:  # noqa: BLE001 - shutdown stays best-effort
+                errors.append(f"{name}: {type(exc).__name__}")
+
+        responder_close = getattr(self.gateway.responder, "close", None)
+        if callable(responder_close):
+            step("responder", responder_close)
         if self.screen_watcher is not None:
-            self.screen_watcher.stop()
+            step("screen_watcher", self.screen_watcher.stop)
         if self.ambient_audio is not None:
-            self.ambient_audio.stop()
-        self.playback_suppression.end()
+            step("ambient_audio", self.ambient_audio.stop)
+        step("playback_suppression", self.playback_suppression.end)
         if self.ambient_scheduler is not None:
-            self.ambient_scheduler.stop()
-        self.hostos.stop_all()
+            step("ambient_scheduler", self.ambient_scheduler.stop)
+        if self.sensory_ingestor is not None:
+            step("sensory_ingestor", self.sensory_ingestor.stop)
+        step("hostos", self.hostos.stop_all)
         if self.voice_mem_async is not None:
-            self.voice_mem_async.close()
+            step("voice_mem_async", self.voice_mem_async.close)
         if self.voice_mem is not None:
-            self.voice_mem.close()
+            step("voice_mem", self.voice_mem.close)
         if self.asr is not None:
-            self.asr.close()
+            step("asr", self.asr.close)
         if self.stream_chat is not None:
-            self.stream_chat.close()
+            step("stream_chat", self.stream_chat.close)
         if self.tts is not None:
-            self.tts.close()
-        super().server_close()
+            step("tts", self.tts.close)
+        try:
+            super().server_close()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"control_server: {type(exc).__name__}")
+        if errors:
+            raise RuntimeError("companion shutdown issues: " + ", ".join(errors))
 
     def _accept_stream_chat_event(self, event: dict[str, Any]) -> None:
         """Keep only bounded observations before optional JAWL delivery."""
@@ -423,9 +561,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         if not self._authenticate_network_request():
             return
+        if is_websocket_upgrade(self.headers):
+            self._serve_websocket()
+            return
+        if self._proxy_jawl_console():
+            return
         path = urlsplit(self.path).path
         if path == "/api/health":
             health = self.server.gateway.health()
+            health["runtime_instance_id"] = self.server.runtime_instance_id
             health["resources"] = self.server.resources.state()
             self._json(health)
             return
@@ -444,7 +588,39 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 ambient_memory=self.server.ambient_memory,
                 ambient_audio=self.server.ambient_audio,
                 resource_governor=self.server.resources,
+                streaming_asr=self.server.streaming_asr,
+                helper_urls=self.server.helper_urls,
+                sensory_ingestor=self.server.sensory_ingestor,
+                gigaam_transcriber=getattr(self.server, "gigaam_transcriber", None),
             ))
+            return
+        if path == "/api/proactive":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            feed = self.server.proactive_feed
+            if feed is None:
+                self._json({"configured": False, "status": "not_configured"})
+                return
+            self._json(feed.poll_state())
+            return
+        if path == "/api/perception/now":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            fusion = self.server.perception_fusion
+            if fusion is None:
+                self._json({"configured": False, "draft": ""})
+                return
+            try:
+                draft = fusion.compose()
+            except Exception:  # noqa: BLE001 - the hint is best-effort
+                draft = ""
+            self._json({"configured": True, "draft": draft[:1200]})
             return
         if path == "/api/session":
             self._json(
@@ -461,6 +637,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             state = self.server.gateway.state()
             state["avatar_audio"] = self.server.avatar_audio()
             self._json(state)
+            return
+        if path == "/api/history":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            history = self.server.gateway.turn_history(limit=200)
+            self._json({"ok": True, "turns": history, "count": len(history)})
             return
         if path == "/api/audit":
             try:
@@ -513,6 +698,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             state = self.server.ambient_memory.state()
             if self.server.ambient_scheduler is not None:
                 state["scheduler"] = self.server.ambient_scheduler.state()
+            if self.server.sensory_ingestor is not None:
+                state["sensory"] = self.server.sensory_ingestor.state()
             self._json({
                 "state": state,
                 "observations": self.server.ambient_memory.observations(),
@@ -650,6 +837,23 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._json({"approvals": self.server.approvals.list(self.server.session_token)})
             return
+        if path == "/mic-processor.js":
+            # AudioWorklet modules are loaded as a separate browser request;
+            # serve only the pinned frontend worker, never arbitrary files.
+            worker_path = self.server.frontend_dir / "mic-processor.js"
+            try:
+                body = worker_path.read_bytes()
+            except OSError:
+                self.send_error(HTTPStatus.NOT_FOUND, "microphone worker is not installed")
+                return
+            self.send_response(HTTPStatus.OK)
+            _security_headers(self)
+            self.send_header("Content-Type", "text/javascript; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path in ("/", "/index.html", "/avatar", "/avatar.html"):
             if path in ("/avatar", "/avatar.html") and not self.server.legacy_presentation:
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -674,6 +878,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         if not self._authenticate_network_request():
             return
         try:
+            if self._proxy_jawl_console():
+                return
             self._require_browser_session()
             payload = self._read_json()
             if self.path == "/api/avatar/audio":
@@ -695,10 +901,31 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 )})
                 return
             if self.path == "/api/chat":
-                self._json(self.server.gateway.handle_text(payload.get("text", "")))
+                self._json(self.server.gateway.handle_text(
+                    self.server.enrich_turn_text(payload.get("text", "")),
+                    session_id=str(payload.get("session_id") or self.server.session_token)[:200],
+                    correlation_id=self._correlation_id(payload),
+                ))
                 return
             if self.path == "/api/chat/stream":
-                self._stream_chat(payload.get("text", ""))
+                self._stream_chat(payload.get("text", ""), self._correlation_id(payload))
+                return
+            if self.path == "/api/proactive/settings":
+                feed = self.server.proactive_feed
+                if feed is None:
+                    self._json({"error": "proactive feed is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                feed.update_settings(muted=payload.get("muted"), speak=payload.get("speak"))
+                self._json({"ok": True, "state": feed.state()})
+                return
+            if self.path == "/api/proactive/feedback":
+                feed = self.server.proactive_feed
+                if feed is None:
+                    self._json({"error": "proactive feed is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._json(feed.note_feedback(
+                    payload.get("item_id", ""), payload.get("verdict", ""),
+                ))
                 return
             if self.path == "/api/stream-chat":
                 event = payload.get("event", payload)
@@ -721,10 +948,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(text, str) or not isinstance(ended, bool):
                     raise ValueError("text must be string and ended must be boolean")
                 session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+                correlation_id = self._correlation_id(payload)
                 events = self.server.voice_mem.feed_partial(text, ended=ended, session_id=session_id)
-                responses = self._voice_turn_responses(events, session_id)
+                responses = self._voice_turn_responses(events, session_id, correlation_id)
                 self._json({
                     "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
+                    "correlation_id": correlation_id,
                     "events": events,
                     "responses": responses,
                 })
@@ -733,72 +962,65 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 if self.server.voice_mem is None:
                     self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                encoded = payload.get("pcm16_base64", "")
-                if not isinstance(encoded, str) or not encoded:
-                    raise ValueError("pcm16_base64 must be a non-empty string")
-                try:
-                    pcm16 = base64.b64decode(encoded, validate=True)
-                except (ValueError, base64.binascii.Error) as exc:
-                    raise ValueError("pcm16_base64 is invalid") from exc
-                sample_rate = payload.get("sample_rate", 16000)
-                if isinstance(sample_rate, bool) or not isinstance(sample_rate, int):
-                    raise ValueError("sample_rate must be an integer")
-                channels = payload.get("channels", 1)
-                if isinstance(channels, bool) or not isinstance(channels, int):
-                    raise ValueError("channels must be an integer")
-                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
-                if self.server.asr is not None:
-                    buffered = self.server.asr.feed_audio(
-                        pcm16, sample_rate=sample_rate, channels=channels, session_id=session_id
-                    )
-                    self._json({"ok": True, "mode": "external_final_utterance", "events": [], "responses": [], "buffer": buffered})
+                self._json(self._feed_voice_chunk(payload))
+                return
+            if self.path == "/api/voice/draft":
+                if self.server.asr is None and self.server.streaming_asr is None:
+                    self._json({"ok": False, "draft": "", "error": "ASR is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                events = self.server.voice_mem.feed_audio(
-                    pcm16, sample_rate=sample_rate, session_id=session_id
-                )
-                responses = self._voice_turn_responses(events, session_id)
-                self._json({
-                    "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
-                    "events": events,
-                    "responses": responses,
-                })
+                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+                # Streaming lane first: sub-second partials + adaptive endpoint
+                # policy. Falls back to the slower draft re-transcription.
+                if self.server.streaming_asr is not None:
+                    snapshot = self.server.streaming_asr.snapshot()
+                    text = str(snapshot.get("text") or "").strip()
+                    if snapshot.get("active") and text:
+                        if not is_meaningful_transcript(text):
+                            self._json({"ok": True, "draft": "", "mode": "streaming", "hold": False,
+                                        "silence_ms": snapshot.get("silence_ms"), "required_ms": turn_policy.BASE_SILENCE_MS})
+                            return
+                        decision = turn_policy.decide(text, float(snapshot.get("silence_ms") or 0.0))
+                        self._json({
+                            "ok": True, "draft": text, "mode": "streaming",
+                            "hold": bool(decision["hold"]),
+                            "silence_ms": snapshot.get("silence_ms"),
+                            "required_ms": decision["required_ms"],
+                        })
+                        return
+                if self.server.asr is None:
+                    self._json({"ok": True, "draft": "", "mode": "streaming"})
+                    return
+                try:
+                    draft = self.server.asr.draft(session_id)
+                except Exception as exc:  # noqa: BLE001 - drafts never break capture
+                    self._json({"ok": False, "draft": "", "error": str(exc)[:300]})
+                    return
+                text = str(draft.get("text") or "").strip()
+                if not is_meaningful_transcript(text):
+                    self._json({"ok": True, "draft": "", "mode": "external_final_utterance"})
+                    return
+                decision = turn_policy.decide(text, 0.0)
+                self._json({"ok": True, "draft": text, "mode": "external_final_utterance",
+                            "hold": bool(decision["hold"]), "required_ms": decision["required_ms"]})
+                return
+            if self.path == "/api/reflection/note":
+                # Reflection write path: consolidation summaries enter VoiceMem
+                # through the live sidecar (it owns the local vector store, so
+                # a second process cannot open it concurrently).
+                if self.server.voice_mem is None:
+                    self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                text = str(payload.get("text") or "").strip()[:4000]
+                if not text:
+                    raise ValueError("text must be non-empty")
+                events = self.server.voice_mem.feed_partial(text, ended=True, session_id="reflection")
+                self._json({"ok": True, "mode": "reflection", "events": len(events or [])})
                 return
             if self.path == "/api/voice/end":
                 if self.server.voice_mem is None:
                     self._json({"error": "VoiceMem sidecar is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
-                if self.server.asr is not None:
-                    transcription = self.server.asr.finish(session_id)
-                    if transcription["status"] in {"empty", "no_speech"}:
-                        self._json({"ok": True, "mode": "external_final_utterance", "transcript": "", "events": [], "responses": []})
-                        return
-                    text = str(transcription["text"] or "").strip()[:12_000]
-                    events = self._external_asr_events(text, session_id)
-                    memory_sync = (
-                        self.server.voice_mem_async.enqueue_partial(
-                            text, ended=True, session_id=session_id,
-                        )
-                        if self.server.voice_mem_async is not None
-                        else {"status": "not_configured"}
-                    )
-                    responses = self._voice_turn_responses(events, session_id)
-                    self._json({
-                        "ok": memory_sync.get("status") in {"queued", "not_configured"},
-                        "mode": "external_final_utterance",
-                        "transcript": text,
-                        "events": events,
-                        "responses": responses,
-                        "memory_sync": memory_sync,
-                    })
-                    return
-                events = self.server.voice_mem.end_audio(session_id=session_id)
-                responses = self._voice_turn_responses(events, session_id)
-                self._json({
-                    "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
-                    "events": events,
-                    "responses": responses,
-                })
+                self._json(self._finish_voice_turn(payload))
                 return
             if self.path == "/api/tts/synthesize":
                 if self.server.tts is None:
@@ -946,7 +1168,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 adapter = self.server.gateway.jawl_web
                 if adapter is None:
                     raise JawlWebUnavailable("JAWL lifecycle control is not configured")
-                result = adapter.restart_agent()
+                result = adapter.restart_agent(wait_for_memory=True)
                 self._json({"ok": True, "native": True, "result": result})
                 return
             parts = urlsplit(self.path)
@@ -1232,6 +1454,300 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("JSON body must be an object")
         return decoded
 
+    def _proxy_jawl_console(self) -> bool:
+        """Reverse-proxy the JAWL console under this origin (single-origin UI).
+
+        ``/console/*`` maps to the console's own files and ``/console-api/*``
+        maps back to its ``/api/*`` namespace; console.js is rewritten so its
+        absolute API calls stay inside the proxied namespace. The console
+        token is injected server-side; the browser only needs the Companion
+        session cookie.
+        """
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        if path == "/console":
+            location = "/console/" + (("?" + parsed.query) if parsed.query else "")
+            self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+            self.send_header("Location", location)
+            self.end_headers()
+            return True
+        if not (path.startswith("/console/") or path.startswith("/console-api/")):
+            return False
+        presented = self.headers.get("X-Companion-Session") or ""
+        if not presented:
+            cookies = SimpleCookie(self.headers.get("Cookie", ""))
+            cookie = cookies.get("companion_session")
+            presented = cookie.value if cookie is not None else ""
+        if presented != self.server.session_token:
+            self._json({"error": "valid local session is required"}, status=HTTPStatus.FORBIDDEN)
+            return True
+        adapter = self.server.gateway.jawl_web
+        if adapter is None:
+            self._json({"error": "JAWL console proxy is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return True
+        if self.command == "POST":
+            origin = self.headers.get("Origin")
+            if origin and not self.server.origin_allowed(origin, self.headers.get("Host")):
+                self._json({"error": "request origin is not allowed"}, status=HTTPStatus.FORBIDDEN)
+                return True
+        if path.startswith("/console-api/"):
+            upstream_path = "/api" + path[len("/console-api"):]
+        else:
+            upstream_path = path[len("/console"):]
+        target = adapter.base_url.rstrip("/") + upstream_path
+        if parsed.query:
+            target += "?" + parsed.query
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        body = self.rfile.read(length) if length > 0 else None
+        headers = {"Host": urlsplit(adapter.base_url).netloc}
+        if adapter.token:
+            headers["X-Console-Token"] = adapter.token
+        content_type = self.headers.get("Content-Type")
+        if content_type:
+            headers["Content-Type"] = content_type
+        accept = self.headers.get("Accept")
+        if accept:
+            headers["Accept"] = accept
+        upstream = urllib_request.Request(target, data=body, headers=headers, method=self.command)
+        try:
+            response = urllib_request.urlopen(upstream, timeout=30)
+        except urllib_error.HTTPError as exc:
+            payload = exc.read()
+            self.send_response(exc.code)
+            upstream_type = exc.headers.get("Content-Type")
+            if upstream_type:
+                self.send_header("Content-Type", upstream_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return True
+        except Exception:  # noqa: BLE001 - proxy failures must fail closed
+            self._json({"error": "JAWL console upstream is unavailable"}, status=HTTPStatus.BAD_GATEWAY)
+            return True
+        with response:
+            response_type = response.headers.get("Content-Type", "application/octet-stream")
+            self.send_response(response.status)
+            self.send_header("Content-Type", response_type)
+            if "text/event-stream" in response_type:
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                try:
+                    while True:
+                        chunk = response.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return True
+            payload = response.read()
+            if "javascript" in response_type:
+                try:
+                    payload = payload.decode("utf-8").replace('"/api/', '"/console-api/').encode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        return True
+
+    def _serve_websocket(self) -> None:
+        """P2 single-connection transport: chat and voice over one socket."""
+        if urlsplit(self.path).path != "/api/ws":
+            self._json({"error": "unsupported websocket path"}, status=HTTPStatus.NOT_FOUND)
+            return
+        cookies = SimpleCookie(self.headers.get("Cookie", ""))
+        cookie = cookies.get("companion_session")
+        presented = cookie.value if cookie is not None else ""
+        origin = self.headers.get("Origin")
+        if not self.server.origin_allowed(origin, self.headers.get("Host")):
+            self._json({"error": "request origin is not allowed"}, status=HTTPStatus.FORBIDDEN)
+            return
+        if presented != self.server.session_token:
+            self._json({"error": "valid local session is required"}, status=HTTPStatus.FORBIDDEN)
+            return
+        send_handshake_response(self)
+        try:
+            self.connection.settimeout(None)
+        except OSError:
+            pass
+        connection = WebSocketConnection(self.rfile, self.connection)
+        try:
+            while not connection.closed:
+                raw = connection.read_message()
+                if raw is None:
+                    break
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    connection.send_text(json.dumps({"type": "error", "error": "invalid json"}))
+                    continue
+                if not isinstance(payload, dict):
+                    connection.send_text(json.dumps({"type": "error", "error": "payload must be an object"}))
+                    continue
+                self._handle_ws_action(connection, payload)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        except WebSocketError:
+            pass
+        finally:
+            self.close_connection = True
+            try:
+                connection.send_close()
+            except OSError:
+                pass
+
+    def _handle_ws_action(self, connection: WebSocketConnection, payload: dict[str, Any]) -> None:
+        action = str(payload.get("action") or "")
+        send = lambda data: connection.send_text(json.dumps(data, ensure_ascii=False))  # noqa: E731
+        if action == "ping":
+            send({"type": "pong"})
+            return
+        if action == "chat":
+            correlation_id = self._correlation_id(payload)
+            try:
+                for event in self.server.gateway.stream_text(
+                    self.server.enrich_turn_text(str(payload.get("text") or "")),
+                    session_id=self.server.session_token,
+                    correlation_id=correlation_id,
+                ):
+                    send(event)
+            except Exception as exc:  # noqa: BLE001 - report provider failures in-band
+                send({"type": "error", "error": str(exc)[:500], "correlation_id": correlation_id})
+            return
+        if action == "voice_chunk":
+            send({"type": "voice_ack", **self._feed_voice_chunk(payload)})
+            return
+        if action == "voice_end":
+            send({"type": "voice_final", **self._finish_voice_turn(payload)})
+            return
+        if action == "voice_reset":
+            if self.server.streaming_asr is not None:
+                try:
+                    self.server.streaming_asr.reset_utterance()
+                except Exception:
+                    pass
+            send({"type": "voice_reset_ack"})
+            return
+        send({"type": "error", "error": "unsupported_action"})
+
+    def _feed_voice_chunk(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Shared voice-chunk ingestion for /api/voice/audio and the WS transport."""
+        if self.server.voice_mem is None:
+            return {"ok": False, "error": "VoiceMem sidecar is not configured"}
+        encoded = payload.get("pcm16_base64", "")
+        if not isinstance(encoded, str) or not encoded:
+            raise ValueError("pcm16_base64 must be a non-empty string")
+        try:
+            pcm16 = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error) as exc:
+            raise ValueError("pcm16_base64 is invalid") from exc
+        sample_rate = payload.get("sample_rate", 16000)
+        if isinstance(sample_rate, bool) or not isinstance(sample_rate, int):
+            raise ValueError("sample_rate must be an integer")
+        channels = payload.get("channels", 1)
+        if isinstance(channels, bool) or not isinstance(channels, int):
+            raise ValueError("channels must be an integer")
+        session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+        if self.server.streaming_asr is not None:
+            try:
+                self.server.streaming_asr.feed(pcm16, sample_rate=sample_rate, channels=channels)
+            except Exception:
+                pass  # the streaming lane is an accelerator, never a blocker
+        if self.server.asr is not None:
+            buffered = self.server.asr.feed_audio(
+                pcm16, sample_rate=sample_rate, channels=channels, session_id=session_id
+            )
+            return {"ok": True, "mode": "external_final_utterance", "events": [], "responses": [], "buffer": buffered}
+        events = self.server.voice_mem.feed_audio(
+            pcm16, sample_rate=sample_rate, session_id=session_id
+        )
+        responses = self._voice_turn_responses(events, session_id)
+        return {
+            "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
+            "events": events,
+            "responses": responses,
+        }
+
+    def _finish_voice_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Shared utterance finalization for /api/voice/end and the WS transport."""
+        if self.server.voice_mem is None:
+            return {"ok": False, "error": "VoiceMem sidecar is not configured"}
+        session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+        if self.server.asr is not None:
+            batch_text = ""
+            transcriber = getattr(self.server, "gigaam_transcriber", None)
+            if transcriber is not None:
+                try:
+                    wav_bytes = self.server.asr.to_wav(session_id)
+                    if wav_bytes:
+                        batch_text = str(transcriber.transcribe(wav_bytes) or "").strip()[:12_000]
+                except Exception:  # noqa: BLE001 - batch lane is an accelerator
+                    batch_text = ""
+            if batch_text and is_meaningful_transcript(batch_text):
+                # GigaAM (Sber) file-mode transcription of the complete
+                # buffered utterance: measured faster and more accurate than
+                # the Qwen fallback; drop the buffer without a second call.
+                try:
+                    self.server.asr.discard(session_id)
+                except Exception:
+                    pass
+                transcription = {"status": "transcribed", "text": batch_text}
+                asr_source = "gigaam"
+            else:
+                try:
+                    transcription = self.server.asr.finish(session_id)
+                except Exception as exc:  # noqa: BLE001 - the fallback lane may be offline
+                    return {"ok": False, "error": f"ASR fallback failed: {type(exc).__name__}"}
+                asr_source = "qwen"
+            if self.server.streaming_asr is not None:
+                try:
+                    self.server.streaming_asr.reset_utterance()
+                except Exception:
+                    pass
+            if transcription["status"] in {"empty", "no_speech"}:
+                return {"ok": True, "mode": "external_final_utterance", "transcript": "", "events": [], "responses": []}
+            text = str(transcription["text"] or "").strip()[:12_000]
+            if not is_meaningful_transcript(text):
+                log_event("asr_filtered", reason="noise_hallucination", text=text, source=asr_source)
+                return {
+                    "ok": True, "mode": "external_final_utterance",
+                    "transcript": "", "events": [], "responses": [],
+                    "filtered": "asr_noise_hallucination",
+                }
+            log_event("asr_final", text=text, session=session_id[:40], source=asr_source)
+            correlation_id = self._correlation_id(payload)
+            events = self._external_asr_events(text, session_id, correlation_id)
+            memory_sync = (
+                self.server.voice_mem_async.enqueue_partial(
+                    text, ended=True, session_id=session_id,
+                )
+                if self.server.voice_mem_async is not None
+                else {"status": "not_configured"}
+            )
+            responses = self._voice_turn_responses(events, session_id)
+            return {
+                "ok": memory_sync.get("status") in {"queued", "not_configured"},
+                "mode": "external_final_utterance",
+                "correlation_id": correlation_id,
+                "transcript": text,
+                "events": events,
+                "responses": responses,
+                "memory_sync": memory_sync,
+            }
+        events = self.server.voice_mem.end_audio(session_id=session_id)
+        responses = self._voice_turn_responses(events, session_id, self._correlation_id(payload))
+        return {
+            "ok": not any(event.get("type") == "VOICE_DEGRADED" for event in events),
+            "events": events,
+            "responses": responses,
+        }
+
     def _require_browser_session(self) -> None:
         presented_session = self.headers.get("X-Companion-Session")
         if not presented_session:
@@ -1329,13 +1845,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
+        stream = self.server.tts.stream(
+            text, voice=voice, speed=speed, emotion=emotion
+        )
         try:
             count = 0
-            for index, audio in enumerate(
-                self.server.tts.stream(
-                    text, voice=voice, speed=speed, emotion=emotion
-                )
-            ):
+            for index, audio in enumerate(stream):
                 self._stream_event({
                     "type": "audio",
                     "index": index,
@@ -1358,8 +1873,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._stream_event({"type": "error", "error": str(exc)[:500]})
             except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
                 return
+        finally:
+            # A disconnected browser request must release the service-owned
+            # generator immediately; relying on frame destruction can leave
+            # the single speech slot occupied after barge-in.
+            stream.close()
 
-    def _stream_chat(self, text: str) -> None:
+    @staticmethod
+    def _correlation_id(payload: dict[str, Any]) -> str:
+        value = str(payload.get("correlation_id") or "").strip()
+        return value[:128] if value else f"turn-{uuid4().hex}"
+
+    def _stream_chat(self, text: str, correlation_id: str | None = None) -> None:
         """Stream text deltas and one final ResponseEnvelope as NDJSON."""
         self.send_response(HTTPStatus.OK)
         _security_headers(self)
@@ -1369,7 +1894,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         try:
-            for event in self.server.gateway.stream_text(text, session_id=self.server.session_token):
+            for event in self.server.gateway.stream_text(
+                self.server.enrich_turn_text(text), session_id=self.server.session_token, correlation_id=correlation_id,
+            ):
                 self._stream_event(event)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             return
@@ -1384,17 +1911,24 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.wfile.flush()
 
-    def _voice_turn_responses(self, events: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
+    def _voice_turn_responses(
+        self, events: list[dict[str, Any]], session_id: str, correlation_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         responses = []
         for event in events:
             if event.get("type") != "VOICE_TURN":
                 continue
             turn_text = event.get("payload", {}).get("text", "")
-            responses.append(self.server.gateway.handle_text(turn_text, session_id=session_id))
+            responses.append(self.server.gateway.handle_text(
+                self.server.enrich_turn_text(turn_text), session_id=session_id,
+                correlation_id=event.get("correlation_id") or correlation_id,
+            ))
         return responses
 
     @staticmethod
-    def _external_asr_events(text: str, session_id: str) -> list[dict[str, Any]]:
+    def _external_asr_events(
+        text: str, session_id: str, correlation_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Create transport events from authoritative final ASR text.
 
         The Companion is not a second cognitive runtime here: it only adapts
@@ -1411,6 +1945,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             "created_at": created_at,
             "source": "companion_external_asr",
             "priority": 0,
+            "correlation_id": correlation_id or f"turn-{uuid4().hex}",
         }
         return [
             {
@@ -1444,12 +1979,19 @@ class CompanionPresentationServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         companion: CompanionServer,
         tls_context: ssl.SSLContext | None = None,
+        presentation_access_token: str | None = None,
     ):
         self.companion = companion
         self.frontend_dir = companion.frontend_dir
         self.avatar_assets = companion.avatar_assets
         self.tls_enabled = tls_context is not None
         self.url_scheme = "https" if self.tls_enabled else "http"
+        self.remote_access = not is_loopback_host(server_address[0])
+        self.presentation_access_token = (
+            _validate_lan_access_token(presentation_access_token)
+            if self.remote_access
+            else ""
+        )
         super().__init__(server_address, CompanionPresentationRequestHandler)
         if tls_context is not None:
             self.socket = tls_context.wrap_socket(self.socket, server_side=True)
@@ -1458,8 +2000,24 @@ class CompanionPresentationServer(ThreadingHTTPServer):
 class CompanionPresentationRequestHandler(BaseHTTPRequestHandler):
     server: CompanionPresentationServer
 
+    def _require_presentation_access(self) -> bool:
+        """Authenticate remote presentation reads without affecting loopback OBS."""
+        if not self.server.remote_access:
+            return True
+        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+        candidate = self.headers.get("X-Companion-Presentation-Token") or (
+            query.get("token", [""])[0]
+        )
+        expected = self.server.presentation_access_token
+        if expected and hmac.compare_digest(str(candidate), expected):
+            return True
+        self.send_error(HTTPStatus.FORBIDDEN, "presentation access token required")
+        return False
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         path = urlsplit(self.path).path
+        if not self._require_presentation_access():
+            return
         if path == "/api/presentation/state":
             self._json(self.server.companion.presentation_state())
             return
@@ -1550,15 +2108,30 @@ def create_presentation_server(
     lan_mode: bool = False,
     tls_cert_file: str | os.PathLike[str] | None = None,
     tls_key_file: str | os.PathLike[str] | None = None,
+    access_token: str | None = None,
 ) -> CompanionPresentationServer:
-    """Create the isolated avatar/OBS server without exposing control state."""
+    """Create the isolated avatar/OBS server without exposing control state.
+
+    A remote presentation bind gets its own read-only bearer token.  The token
+    is intentionally separate from the control-plane LAN credential so an OBS
+    or tablet link cannot be upgraded into a control session.
+    """
     host = require_bind_host(host, lan_mode=lan_mode)
     tls_context = create_tls_context(tls_cert_file, tls_key_file)
     if not is_loopback_host(host) and tls_context is None:
         raise ValueError("non-loopback LAN presentation requires a trusted TLS certificate and private key")
-    server = CompanionPresentationServer((host, port), companion, tls_context=tls_context)
+    remote_token = access_token or (secrets.token_urlsafe(24) if not is_loopback_host(host) else None)
+    server = CompanionPresentationServer(
+        (host, port),
+        companion,
+        tls_context=tls_context,
+        presentation_access_token=remote_token,
+    )
     host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    companion.set_presentation_url(f"{server.url_scheme}://{host_part}:{server.server_port}/avatar")
+    url = f"{server.url_scheme}://{host_part}:{server.server_port}/avatar"
+    if server.remote_access:
+        url += "?token=" + quote(server.presentation_access_token, safe="")
+    companion.set_presentation_url(url)
     return server
 
 
@@ -1584,6 +2157,12 @@ def create_server(
     jawl_hostos_control: bool = False,
     audit_file: Path | None = None,
     asr_service: ExternalASRService | None = None,
+    streaming_asr: Any | None = None,
+    gigaam_transcriber: Any | None = None,
+    helper_urls: dict[str, str] | None = None,
+    proactive_feed: Any | None = None,
+    sensory_ingestor: Any | None = None,
+    perception_fusion: Any | None = None,
     legacy_presentation: bool = True,
     presence_file: Path | None = None,
     stream_chat: StreamChatIngestor | None = None,
@@ -1637,14 +2216,27 @@ def create_server(
     active_attention = attention or AttentionPresence(
         intent_sink=event_sink.publish if event_sink is not None else None,
         activity_provider=activity_provider,
+        turn_arbiter=active_gateway.arbiter,
+        summary_composer=(perception_fusion.compose if perception_fusion is not None else None),
     )
+
+    def _perception_sink(event: dict[str, Any]) -> Any:
+        # Feed the fusion store from every successful look so direct screen
+        # questions always have fresh data; the attention gate below only
+        # decides when the agent may be woken, not what perception remembers.
+        if perception_fusion is not None and isinstance(event, dict):
+            payload = event.get("payload")
+            if isinstance(payload, dict):
+                perception_fusion.note("screen", str(payload.get("summary") or ""))
+        return active_attention.consume(event)
+
     watcher = (
         ScreenDeltaWatcher(
             vision_service,
             active_gateway.arbiter,
             interval_seconds=screen_watch_interval,
             session_id="screen-sensor",
-            event_sink=active_attention.consume,
+            event_sink=_perception_sink,
         )
         if screen_watch
         else None
@@ -1661,11 +2253,17 @@ def create_server(
         avatar_assets,
         active_attention,
         ambient_memory=ambient_memory,
+        sensory_ingestor=sensory_ingestor,
         ambient_audio=ambient_audio,
         ambient_scheduler=ambient_scheduler,
         jawl_hostos_control=jawl_hostos_control,
         audit_log=audit_log,
         asr_service=asr_service,
+        streaming_asr=streaming_asr,
+        gigaam_transcriber=gigaam_transcriber,
+        helper_urls=helper_urls,
+        proactive_feed=proactive_feed,
+        perception_fusion=perception_fusion,
         legacy_presentation=legacy_presentation,
         resource_governor=resource_governor,
         presence_file=presence_file,
