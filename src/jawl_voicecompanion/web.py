@@ -267,12 +267,13 @@ class CompanionServer(ThreadingHTTPServer):
         asr_service: ExternalASRService | None = None,
         streaming_asr: Any | None = None,
         gigaam_transcriber: Any | None = None,
-        helper_urls: dict[str, str] | None = None,
-        proactive_feed: Any | None = None,
-        perception_fusion: Any | None = None,
-        legacy_presentation: bool = True,
-        resource_governor: ResourceGovernor | None = None,
-        presence_file: Path | None = None,
+    helper_urls: dict[str, str] | None = None,
+    proactive_feed: Any | None = None,
+    perception_fusion: Any | None = None,
+    config_hub: Any | None = None,
+    legacy_presentation: bool = True,
+    resource_governor: ResourceGovernor | None = None,
+    presence_file: Path | None = None,
         stream_chat: StreamChatIngestor | None = None,
         stream_chat_event_sink: Callable[[dict[str, Any]], Any] | None = None,
         lan_mode: bool = False,
@@ -321,6 +322,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.helper_urls = dict(helper_urls or {})
         self.proactive_feed = proactive_feed
         self.perception_fusion = perception_fusion
+        self.config_hub = config_hub
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
         self.legacy_presentation = bool(legacy_presentation)
@@ -692,6 +694,21 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._json(feed.poll_state())
             return
+        if path == "/api/config-hub":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            hub = self.server.config_hub
+            if hub is None:
+                self._json({"ok": False, "error": "config hub is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                self._json(hub.read(mask_secrets=True))
+            except Exception as exc:  # noqa: BLE001 - surface config read failures in-band
+                self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if path == "/api/perception/now":
             try:
                 self._require_browser_session()
@@ -968,6 +985,21 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._require_browser_session()
             payload = self._read_json()
+            if self.path == "/api/config-hub/save":
+                hub = self.server.config_hub
+                if hub is None:
+                    self._json({"ok": False, "error": "config hub is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                expected = payload.get("expected_revision")
+                if expected is not None and not isinstance(expected, str):
+                    raise ValueError("expected_revision must be a string or null")
+                if not isinstance(payload.get("values"), dict) and not isinstance(payload.get("lists"), dict):
+                    raise ValueError("config hub write requires a values or lists object")
+                try:
+                    self._json(hub.write(payload, expected_revision=expected))
+                except Exception as exc:  # noqa: BLE001 - surface config write failures in-band
+                    self._json({"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
             if self.path == "/api/avatar/audio":
                 if payload.get("schema_version", 1) != 1:
                     raise ValueError("unsupported avatar audio schema")
@@ -2285,6 +2317,7 @@ def create_server(
     proactive_feed: Any | None = None,
     sensory_ingestor: Any | None = None,
     perception_fusion: Any | None = None,
+    config_hub: Any | None = None,
     legacy_presentation: bool = True,
     presence_file: Path | None = None,
     stream_chat: StreamChatIngestor | None = None,
@@ -2386,6 +2419,7 @@ def create_server(
         helper_urls=helper_urls,
         proactive_feed=proactive_feed,
         perception_fusion=perception_fusion,
+        config_hub=config_hub,
         legacy_presentation=legacy_presentation,
         resource_governor=resource_governor,
         presence_file=presence_file,

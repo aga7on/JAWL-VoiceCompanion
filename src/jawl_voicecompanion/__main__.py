@@ -112,6 +112,18 @@ def main() -> None:
         help="local JAWL web console URL, for example http://127.0.0.1:8770",
     )
     parser.add_argument(
+        "--jawl-config-dir",
+        type=Path,
+        default=None,
+        help="JAWL profile config dir; enables the unified config hub (GET/POST /api/config-hub)",
+    )
+    parser.add_argument(
+        "--jawl-env-file",
+        type=Path,
+        default=None,
+        help="JAWL .env path for the config hub; defaults to the config dir's sibling .env",
+    )
+    parser.add_argument(
         "--jawl-web-token-env",
         default="JAWL_WEB_TOKEN",
         help="environment variable containing JAWL's optional console token",

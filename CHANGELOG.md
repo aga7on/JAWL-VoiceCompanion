@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-15 - U1 slice one: unified config hub with revisions and secret masking
+
+- `config_hub.py` wraps the pinned snapshot's `config_io` (the same in-place
+  YAML writer, no reimplementation) and adds the U1 layer: content-hash
+  revisions with conflict rejection, rotated `*.pre-save-N.bak` backups (5
+  slots), secret masking on read (`__SET__` round-trips without touching
+  stored values), unknown-key reporting and post-write readback.
+- Endpoints: `GET /api/config-hub` and `POST /api/config-hub/save`
+  (browser session + CSRF). The launcher passes `JAWL_CONFIG_DIR` /
+  `JAWL_ENV_FILE` to the companion; without a config dir the hub stays off.
+- Config contracts documented the same day (CONFIG_CONTRACTS.md); the hub
+  implements exactly those U1 gaps. 6 hub tests + web 53/53.
+
 ## 2026-09-15 - U0 closed: live baseline and config contracts
 
 - Live baseline captured: `docs/ui-registry/baseline/` — 11 screenshots

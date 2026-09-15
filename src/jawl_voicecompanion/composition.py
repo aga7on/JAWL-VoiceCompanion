@@ -305,6 +305,15 @@ def build_companion_runtime(
         except ValueError as exc:
             error(str(exc))
 
+    config_hub = None
+    if args.jawl_config_dir:
+        try:
+            from .config_hub import ConfigHub
+            env_file = Path(args.jawl_env_file) if args.jawl_env_file else Path(args.jawl_config_dir).parent / ".env"
+            config_hub = ConfigHub(Path(args.jawl_config_dir), env_file=env_file)
+        except Exception as exc:  # noqa: BLE001 - the hub is optional at startup
+            print(f"[config-hub] disabled: {type(exc).__name__}: {exc}")
+
     server = create_server(
         args.host,
         args.port,
@@ -328,6 +337,7 @@ def build_companion_runtime(
         helper_urls=helper_urls,
         proactive_feed=proactive_feed,
         perception_fusion=perception_fusion,
+        config_hub=config_hub,
         activity_provider=(
             WindowsUserActivity(args.user_activity_idle_seconds).sample
             if args.user_activity else None

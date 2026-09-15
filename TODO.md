@@ -22,6 +22,14 @@
     компаньона + 5 экранов консоли через iframe) + `manifest.json`; стек
     перезапущен, агент восстановлен после утреннего agent.stop.
 - [ ] U1: единые config/capability contracts, writer, secrets, revision/readback.
+  - [x] Срез 1 (2026-09-15): `config_hub.py` — ревизии (хэш трёх файлов,
+    конфликт при расхождении), маскирование секретов (`__SET__`),
+    ротируемые pre-save бэкапы (5 слотов), unknown-key отчёт, readback.
+    `GET /api/config-hub` + `POST /api/config-hub/save` (сессия+CSRF);
+    лаунчер передаёт JAWL_CONFIG_DIR/JAWL_ENV_FILE. 6 тестов.
+  - [ ] U1 остаток: restart-карта (какие ключи требуют рестарт агента),
+    effective-состояние после записи, UI-слою настроек подключить hub
+    (draft/save/conflict UX), fixture-тесты two-client конфликтов.
 - [ ] U2: общие tokens и shell: Компаньон / Задачи / Память / Настройки.
 - [ ] U3: единые status, logs, catalog, диагностика и reconnect.
 - [ ] U4: все настройки/память/интеграции с проверкой round-trip и effective state.
