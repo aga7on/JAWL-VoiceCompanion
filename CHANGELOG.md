@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U6 portion 2: block-A integrations (github/email/calendar/code_graph/meta)
+
+- Portion 2 = 17 more interface fields through the typed-card framework:
+  GitHub (enabled, agent account, timeout, history, polling), Email
+  (enabled, polling, recent limit), Calendar (enabled, polling, upcoming
+  limit), Code graph (enabled, search/structure caps), Meta (enabled,
+  access level, custom skills).
+- HTTP round-trip test over all five sections. 62/62 web tests. Parity:
+  56+17 = **73 controls** migrated (34%); the remaining large groups are
+  mcp/debug_broker/multimodality/voice/web/host.
+
 ## 2026-09-15 - U6 step two, portion 1: telegram integrations migrated
 
 - The interfaces migration framework lands: a generic typed-card renderer

@@ -370,6 +370,13 @@
             <div id="env-fields" class="meta">Загрузка…</div>
             <p class="meta">Launcher может перекрывать эти значения в текущем запуске; применяются после рестарта агента.</p>
           </article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Интеграции · блок A</h3><p>GitHub, Email, Календарь, Граф кода, Meta.</p></div></div>
+            <div id="ifc-github"></div>
+            <div id="ifc-email"></div>
+            <div id="ifc-calendar"></div>
+            <div id="ifc-code_graph"></div>
+            <div id="ifc-meta"></div>
+          </article></div>
           <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Telegram</h3><p>Telethon (чтение) и Aiogram (отправка) — по отдельности.</p></div></div>
             <div id="ifc-telegram"></div>
           </article></div>
@@ -2281,6 +2288,48 @@
       return out;
     }
     const IFACE_SECTIONS = {
+      github: {
+        title: 'GitHub',
+        fields: [
+          {key: 'interfaces:github.enabled', label: 'GitHub: включён', type: 'bool'},
+          {key: 'interfaces:github.agent_account', label: 'GitHub: агентский аккаунт', type: 'bool'},
+          {key: 'interfaces:github.request_timeout_sec', label: 'GitHub: таймаут запроса, сек', type: 'int'},
+          {key: 'interfaces:github.history_limit', label: 'GitHub: лимит истории', type: 'int'},
+          {key: 'interfaces:github.polling_interval_sec', label: 'GitHub: интервал опроса, сек', type: 'int'},
+        ],
+      },
+      email: {
+        title: 'Email',
+        fields: [
+          {key: 'interfaces:email.enabled', label: 'Email: включён', type: 'bool'},
+          {key: 'interfaces:email.polling_interval_sec', label: 'Email: интервал опроса, сек', type: 'int'},
+          {key: 'interfaces:email.recent_limit', label: 'Email: лимит недавних', type: 'int'},
+        ],
+      },
+      calendar: {
+        title: 'Календарь',
+        fields: [
+          {key: 'interfaces:calendar.enabled', label: 'Календарь: включён', type: 'bool'},
+          {key: 'interfaces:calendar.polling_interval_sec', label: 'Календарь: интервал опроса, сек', type: 'int'},
+          {key: 'interfaces:calendar.upcoming_events_limit', label: 'Календарь: лимит будущих событий', type: 'int'},
+        ],
+      },
+      code_graph: {
+        title: 'Граф кода',
+        fields: [
+          {key: 'interfaces:code_graph.enabled', label: 'Граф кода: включён', type: 'bool'},
+          {key: 'interfaces:code_graph.max_search_results', label: 'Граф кода: макс. результатов поиска', type: 'int'},
+          {key: 'interfaces:code_graph.max_structure_items', label: 'Граф кода: макс. элементов структуры', type: 'int'},
+        ],
+      },
+      meta: {
+        title: 'Meta-навыки',
+        fields: [
+          {key: 'interfaces:meta.enabled', label: 'Meta: включён', type: 'bool'},
+          {key: 'interfaces:meta.access_level', label: 'Meta: уровень доступа', type: 'int'},
+          {key: 'interfaces:meta.custom_skills_enabled', label: 'Meta: пользовательские навыки', type: 'bool'},
+        ],
+      },
       telegram: {
         title: 'Telegram',
         keys: [

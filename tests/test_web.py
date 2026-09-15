@@ -1108,7 +1108,12 @@ class SettingsHubUITests(unittest.TestCase):
         (Path(config) / "interfaces.yaml").write_text(
             "web:\n  enabled: true\n"
             "telegram:\n  telethon:\n    enabled: false\n    recent_chats_limit: 20\n"
-            "    private_chat_history_limit: 3\n    incoming_history_limit: 8\n",
+            "    private_chat_history_limit: 3\n    incoming_history_limit: 8\n"
+            "github:\n  enabled: false\n  request_timeout_sec: 15\n  polling_interval_sec: 30\n"
+            "email:\n  enabled: false\n  recent_limit: 10\n  polling_interval_sec: 60\n"
+            "calendar:\n  enabled: false\n  upcoming_events_limit: 5\n  polling_interval_sec: 60\n"
+            "code_graph:\n  enabled: false\n  max_search_results: 10\n  max_structure_items: 20\n"
+            "meta:\n  enabled: false\n  access_level: 0\n  custom_skills_enabled: false\n",
             encoding="utf-8",
         )
         (Path(self.tmp.name) / ".env").write_text(
@@ -1197,6 +1202,26 @@ class SettingsHubUITests(unittest.TestCase):
         self.assertEqual(result["readback"]["values"]["interfaces:telegram.telethon.recent_chats_limit"], 7)
         # nullable fields omitted from the payload stay untouched
         self.assertIn("interfaces:telegram.telethon.coding_approval_actor_id", state["values"])
+
+    def test_portion2_roundtrip(self):
+        state = self._get()
+        result = self._post({
+            "values": {
+                "interfaces:github.polling_interval_sec": 25,
+                "interfaces:email.recent_limit": 12,
+                "interfaces:calendar.enabled": True,
+                "interfaces:code_graph.max_search_results": 15,
+                "interfaces:meta.access_level": 1,
+            },
+            "expected_revision": state["revision"],
+        })
+        self.assertTrue(result["ok"])
+        rb = result["readback"]["values"]
+        self.assertEqual(rb["interfaces:github.polling_interval_sec"], 25)
+        self.assertEqual(rb["interfaces:email.recent_limit"], 12)
+        self.assertEqual(rb["interfaces:calendar.enabled"], True)
+        self.assertEqual(rb["interfaces:code_graph.max_search_results"], 15)
+        self.assertEqual(rb["interfaces:meta.access_level"], 1)
 
     def test_conflict_returns_conflict_status(self):
         state = self._get()
