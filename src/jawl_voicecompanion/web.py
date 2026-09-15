@@ -492,6 +492,14 @@ class CompanionServer(ThreadingHTTPServer):
         re.IGNORECASE,
     )
 
+    # Spoken preface gate: explicit screen nouns only (narrower than the
+    # background-enrichment regex) and only for a just-finished utterance.
+    PREFACE_SCREEN_QUERY = re.compile(
+        r"(экран|скрин|монитор|дисплей|кадр)",
+        re.IGNORECASE,
+    )
+    PREFACE_MAX_SILENCE_MS = 4500.0
+
     def enrich_turn_text(self, text: str) -> str:
         """Ground turn text: mid-turn note + freshest perception observation."""
         clean = str(text or "").strip()
@@ -518,16 +526,24 @@ class CompanionServer(ThreadingHTTPServer):
             return prefix + clean + "\n\n[Свежих наблюдений восприятия нет: экран не наблюдался в последние минуты.]"
         return prefix + clean + "\n\n[ВНУТРЕННИЕ НАБЛЮДЕНИЯ ВОСПРИЯТИЯ (фон, не цитировать дословно): " + observation[:900] + "]"
 
-    def voice_preface(self, partial: str) -> str:
+    def voice_preface(self, partial: str, *, silence_ms: float | None = None) -> str:
         """Build a short speakable provisional line from fresh perception.
 
         The voice lane can say this while the JAWL turn is still running, so
         the first audible reaction no longer waits for the full model answer.
-        Only screen-shaped questions qualify and the line stays bounded.
+        Only explicit screen questions qualify (a dedicated, narrower gate
+        than the background-enrichment regex), the partial must belong to the
+        just-finished utterance, and the line stays bounded.
         """
         clean = str(partial or "").strip()
         fusion = self.perception_fusion
-        if not clean or fusion is None or not self._SCREEN_QUERY.search(clean):
+        if not clean or fusion is None:
+            return ""
+        if silence_ms is not None and silence_ms > self.PREFACE_MAX_SILENCE_MS:
+            # A stale partial from an earlier utterance must never be spoken
+            # as if the user just asked about the screen.
+            return ""
+        if not self.PREFACE_SCREEN_QUERY.search(clean):
             return ""
         try:
             observation = str(fusion.compose() or "").strip()
@@ -1076,16 +1092,25 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/voice/preface":
                 # A short provisional phrase (no LLM) that can be spoken while
                 # the JAWL turn is still thinking; the authoritative answer
-                # follows it. Screen-shaped questions only, best-effort.
-                partial = ""
+                # follows it. Explicit screen questions only, best-effort.
+                snapshot: dict[str, Any] = {}
                 if self.server.streaming_asr is not None:
                     try:
                         snapshot = self.server.streaming_asr.snapshot()
                     except Exception:  # noqa: BLE001 - the preface is optional
                         snapshot = {}
-                    if isinstance(snapshot, dict) and snapshot.get("active"):
-                        partial = str(snapshot.get("text") or "").strip()
-                self._json({"ok": True, "text": self.server.voice_preface(partial)})
+                partial = ""
+                silence_ms: float | None = None
+                if isinstance(snapshot, dict) and snapshot.get("active"):
+                    partial = str(snapshot.get("text") or "").strip()
+                    try:
+                        silence_ms = float(snapshot.get("silence_ms"))
+                    except (TypeError, ValueError):
+                        silence_ms = None
+                text = self.server.voice_preface(partial, silence_ms=silence_ms)
+                if text:
+                    log_event("voice_preface", text=text, partial=partial[:160])
+                self._json({"ok": True, "text": text})
                 return
             if self.path == "/api/reflection/note":
                 # Reflection write path: consolidation summaries enter VoiceMem

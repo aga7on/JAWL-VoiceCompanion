@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-14 - Voice preface follow-up: stricter gate and background level
+
+- First voiced live test: barge-in and answer latency work, no
+  self-hearing, but the preface could fire on non-screen turns and played
+  like a full reply. The spoken preface now uses a dedicated narrow gate
+  (explicit screen nouns only: экран/скрин/монитор/дисплей/кадр) plus a
+  freshness guard (a partial older than 4.5s of silence is ignored), and
+  every spoken preface is logged to voice-events.ndjson (kind
+  voice_preface) for live debugging.
+- The provisional phrase plays at half volume as background colour and
+  never competes with the authoritative answer; barge-in still cancels it.
+
 ## 2026-09-14 - Vision back-off, VoiceMem passthrough, ASR warm-up
 
 - ScreenDeltaWatcher: consecutive unchanged screens slow the poll cadence

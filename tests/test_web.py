@@ -846,12 +846,13 @@ class PresentationWebTests(unittest.TestCase):
             create_presentation_server(self.control, host="0.0.0.0", port=0)
 
 class _FakeStreamingAsr:
-    def __init__(self, text="", active=True):
+    def __init__(self, text="", active=True, silence_ms=800.0):
         self.text = text
         self.active = active
+        self.silence_ms = silence_ms
 
     def snapshot(self):
-        return {"active": self.active, "text": self.text, "silence_ms": 800}
+        return {"active": self.active, "text": self.text, "silence_ms": self.silence_ms}
 
 
 class _FakeFusion:
@@ -866,12 +867,12 @@ class _FakeFusion:
 
 
 class VoicePrefaceTests(unittest.TestCase):
-    def _start_server(self, *, partial, fusion):
+    def _start_server(self, *, partial, fusion, silence_ms=800.0):
         server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
             gateway=TextGateway(),
-            streaming_asr=_FakeStreamingAsr(partial),
+            streaming_asr=_FakeStreamingAsr(partial, silence_ms=silence_ms),
             perception_fusion=fusion,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -913,6 +914,23 @@ class VoicePrefaceTests(unittest.TestCase):
         self._start_server(
             partial="Напиши короткое письмо коллеге",
             fusion=_FakeFusion("Экран: окно OpenCode"),
+        )
+        _, data = self._post("/api/voice/preface", {"session_id": "s1"})
+        self.assertEqual(data["text"], "")
+
+    def test_broad_phrase_without_screen_noun_is_not_spoken(self):
+        self._start_server(
+            partial="Что сейчас происходит?",
+            fusion=_FakeFusion("Экран: окно OpenCode"),
+        )
+        _, data = self._post("/api/voice/preface", {"session_id": "s1"})
+        self.assertEqual(data["text"], "")
+
+    def test_stale_partial_is_never_spoken(self):
+        self._start_server(
+            partial="Что сейчас на экране?",
+            fusion=_FakeFusion("Экран: окно OpenCode"),
+            silence_ms=30000.0,
         )
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
