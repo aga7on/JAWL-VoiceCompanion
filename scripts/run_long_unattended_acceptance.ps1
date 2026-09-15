@@ -136,6 +136,16 @@ try {
         throw "Companion health did not become available within $StartupTimeoutSeconds seconds."
     }
 
+    # Scope the soak protocol prompt to this disposable profile only; daily
+    # profiles never see it. JAWL re-reads the custom prompt dir every cycle,
+    # so copying right after the health gate covers every goal.
+    $soakPromptSource = Join-Path $repo 'config\jawl\prompts\soak\ZZ_SOAK_GOALS.md'
+    if (Test-Path -LiteralPath $soakPromptSource -PathType Leaf) {
+        $soakPromptTarget = Join-Path $repo ("runtime\instances\" + $ProfileName + "\prompts\custom\ZZ_SOAK_GOALS.md")
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $soakPromptTarget) | Out-Null
+        Copy-Item -LiteralPath $soakPromptSource -Destination $soakPromptTarget -Force
+    }
+
     $soakArgs = @(
         $soak, '--live', '--url', "http://127.0.0.1:$ControlPort",
         '--profile', $ProfileName,

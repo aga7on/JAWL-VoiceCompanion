@@ -1320,6 +1320,13 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
 - [ ] Turn-taking retest: breath hold (1.4s base / 2.6s semantic) and live
   interjection while the answer is being prepared; confirm a resumed phrase
   stays one turn and nothing is dropped.
+- [ ] Nightly unattended soak (step 5 of the review), prepared 2026-09-14:
+  `powershell -File scripts\run_long_unattended_acceptance.ps1 -DurationSeconds 28800 -JawlConsolePort 8772 -ControlPort 2368 -PresentationPort 8767`
+  (ports moved off the daily stack; model default `qwen3.8-27b-abliterated:latest`
+  via local Ollama; no voice/vision workers). The runner now injects
+  `ZZ_SOAK_GOALS` into the disposable profile only — the previous 8h-v4 attempt
+  failed cycle 13 by calling the forbidden `GoalSkills.update_goal`. Launch
+  overnight; the report lands in `runtime\qwen-ollama-unattended-<ts>.json`.
 - [ ] VoiceMem weight: with context passthrough only on its own lane, review
   after the live run whether the sidecar's embedding/graph machinery earns
   its RAM next to JAWL memory (keep JAWL canonical either way).
