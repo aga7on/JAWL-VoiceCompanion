@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-15 - U6 final slice: list editors and the guarded DB wipe
+
+- String-list editors land for the six schema lists (LLM available models,
+  code-graph exclude dirs, debug providers, coding host commands, ElevenLabs
+  and Edge voices) — one item per line, written through the hub's list
+  support with a round-trip test.
+- The critical DB-wipe surface is implemented as designed: a typed
+  confirmation phrase («УДАЛИТЬ») plus a native dialog, routed to the
+  console's owned endpoint; the UI never wipes by accident.
+- Parity: 187 scalar controls + 6 list editors = **193/213 (91%)**. The
+  remainder is object-list editors (feeds/servers/coding profiles) and the
+  custom-drives CRUD, which stay console-transitional; the iframe therefore
+  remains until those are migrated (rollback path preserved).
+
 ## 2026-09-15 - U6 close: full test battery, deploy and stability watch
 
 - Full test battery after all migration portions: **512/512 tests OK** (156s

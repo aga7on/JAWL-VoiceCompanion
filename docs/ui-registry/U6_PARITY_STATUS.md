@@ -35,6 +35,18 @@
   CRUD (SQLite /api/drives), DB-wipe решение владельца, и списочные
   редакторы консоли (feeds/servers/enabled_providers — console-transitional).
 
+## Финальный срез (2026-09-15)
+
+- **Списковые редакторы (6 строковых списков)** — ГОТОВО: LLM available
+  models, code_graph.exclude_dirs, debug_broker.enabled_providers,
+  coding_host_allowed_commands, ElevenLabs/Edge available_voices; запись
+  через hub lists с round-trip тестом.
+- **DB-wipe** — ГОТОВО как CRITICAL-поверхность: слово «УДАЛИТЬ» + нативный
+  диалог, роут к собственному эндпоинту консоли (единый owner).
+- Parity: **193/213 (91%)**. Остаток — объектные списки (feeds/servers/
+  coding-профили) и custom-drives CRUD: сознательно console-transitional,
+  iframe сохраняется как rollback-путь до их переноса.
+
 ## Оставшиеся до 100% parity
 
 1. `interfaces:*` интеграционные скаляры — **127 полей** (telegram 17, web 24,

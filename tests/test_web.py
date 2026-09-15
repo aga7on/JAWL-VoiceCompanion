@@ -1112,6 +1112,7 @@ class SettingsHubUITests(unittest.TestCase):
             "email:\n  enabled: false\n  recent_limit: 10\n  polling_interval_sec: 60\n"
             "calendar:\n  enabled: false\n  upcoming_events_limit: 5\n  polling_interval_sec: 60\n"
             "code_graph:\n  enabled: false\n  max_search_results: 10\n  max_structure_items: 20\n"
+            "  exclude_dirs:\n  - venv\n  - node_modules\n"
             "meta:\n  enabled: false\n  access_level: 0\n  custom_skills_enabled: false\n"
             "mcp:\n  enabled: false\n  startup_timeout_sec: 30\n  request_timeout_sec: 60\n"
             "  max_catalog_items: 500\n  max_result_chars: 20000\n  max_binary_bytes: 10485760\n"
@@ -1284,6 +1285,17 @@ class SettingsHubUITests(unittest.TestCase):
         self.assertEqual(rb["interfaces:web.hooks.port"], 8081)
         self.assertEqual(rb["interfaces:host.os.coding_container_memory_mb"], 4096)
         self.assertEqual(rb["interfaces:host.terminal.history_limit"], 60)
+
+    def test_list_editor_roundtrip(self):
+        state = self._get()
+        self.assertIn("lstExcludeDirs", state["lists"])
+        result = self._post({
+            "lists": {"lstExcludeDirs": ["venv", "dist", "node_modules", "build2"]},
+            "values": {},
+            "expected_revision": state["revision"],
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["readback"]["lists"]["lstExcludeDirs"], ["venv", "dist", "node_modules", "build2"])
 
     def test_conflict_returns_conflict_status(self):
         state = self._get()
