@@ -200,6 +200,8 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"prefaceVoiceTurn", frontend)
             self.assertIn(b"speakProvisional", frontend)
             self.assertIn(b"/api/voice/preface", frontend)
+            self.assertIn(b"shell-rail", frontend)
+            self.assertIn(b"pollShellStatus", frontend)
             self.assertIn(b"runtime_instance_id", frontend)
             self.assertIn("Контур перезапущен; старое аудио остановлено.".encode("utf-8"), frontend)
             self.assertIn(b"hands-free", frontend)
@@ -1000,6 +1002,42 @@ class AsrPrefetchTests(unittest.TestCase):
         )
         self.addCleanup(server.server_close)
         self.assertFalse(server.prefetch_asr_model("session-1"))
+
+
+class ShellStatusTests(unittest.TestCase):
+    def setUp(self):
+        self.server = create_server(port=0, frontend_dir=Path(__file__).parents[1] / "frontend", gateway=TextGateway())
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        self.session_headers = {
+            "X-Companion-Session": self.server.session_token,
+            "X-Companion-CSRF": self.server.csrf_token,
+        }
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def test_shell_status_is_light_and_bounded(self):
+        request = Request(self.base + "/api/shell/status", headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            status = response.status
+            data = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertIn(data["agent"]["chat_status"], {"connected", "starting", "offline"})
+        self.assertEqual(data["attention"]["dnd"], False)
+        self.assertEqual(data["resources"]["profile"], "standard")
+        self.assertFalse(data["sensory"]["running"])
+        self.assertFalse(data["screen"]["running"])
+        self.assertFalse(data["voice"]["tts"])
+
+    def test_shell_status_requires_browser_session(self):
+        with self.assertRaises(HTTPError) as context:
+            urlopen(self.base + "/api/shell/status", timeout=2)
+        self.assertEqual(context.exception.code, 403)
 
 
 if __name__ == "__main__":

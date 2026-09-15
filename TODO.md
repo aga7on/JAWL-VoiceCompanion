@@ -41,6 +41,12 @@
   - [ ] U2 остаток: regroup навигации в 4 раздела (после U4-контента),
     settings search, сохранение draft/focus, адаптивность по реальным данным.
 - [ ] U3: единые status, logs, catalog, диагностика и reconnect.
+  - [x] Срез 1 (2026-09-15): `GET /api/shell/status` — лёгкая телеметрия из
+    памяти (агент/внимание/proactive/ресурсы/сенсорика/экран/голос); статус-рейл
+    в топбаре с bounded-опросом (10с, 15с на hidden, мгновенно на visible,
+    stale-состояние). Тяжёлые проверки остаются в doctor по требованию.
+  - [ ] U3 остаток: logs/tick/journal surfaces с pagination и redaction,
+    состояния loading/empty/failed в UI, reconnect-проверки.
 - [ ] U4: все настройки/память/интеграции с проверкой round-trip и effective state.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.

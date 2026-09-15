@@ -642,6 +642,55 @@ class CompanionServer(ThreadingHTTPServer):
             "recent_events": [dict(event) for event in self._stream_chat_events],
         }
 
+    def shell_status(self) -> dict[str, Any]:
+        """Light shell telemetry: in-memory state only, no network probes.
+
+        The status rail polls this every ~10s; heavy checks stay in the
+        doctor, which runs on demand instead of on a timer.
+        """
+        attention_state = self.attention.state() if self.attention is not None else None
+        proactive_state = self.proactive_feed.state() if self.proactive_feed is not None else None
+        resources = self.resources.state() if self.resources is not None else None
+        sensory_state = self.sensory_ingestor.state() if self.sensory_ingestor is not None else None
+        screen_state = self.screen_watcher.state() if self.screen_watcher is not None else None
+        streaming_state = self.streaming_asr.snapshot() if self.streaming_asr is not None else None
+        chat_status = getattr(self.gateway, "chat_status", None)
+        chat_status = chat_status() if callable(chat_status) else "starting"
+        return {
+            "ok": True,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "agent": {"chat_status": chat_status},
+            "attention": {
+                "dnd": bool(attention_state.get("dnd")) if attention_state else False,
+                "quiet_hours_active": bool(attention_state.get("quiet_hours_active")) if attention_state else False,
+                "intents_last_hour": attention_state.get("intents_last_hour", 0) if attention_state else 0,
+            },
+            "proactive": {
+                "muted": bool(proactive_state.get("muted")) if proactive_state else None,
+                "speak": bool(proactive_state.get("speak")) if proactive_state else None,
+                "queued": len(proactive_state.get("queued", [])) if proactive_state else 0,
+            },
+            "resources": {
+                "profile": resources.get("profile") if resources else None,
+                "background_workers": resources.get("background_workers") if resources else None,
+            },
+            "sensory": {
+                "running": bool(sensory_state.get("running")) if sensory_state else False,
+                "lines": sensory_state.get("counters", {}).get("lines", 0) if sensory_state else 0,
+            },
+            "screen": {
+                "running": bool(screen_state.get("running")) if screen_state else False,
+                "next_wait_seconds": screen_state.get("next_wait_seconds") if screen_state else None,
+                "idle_polls": screen_state.get("idle_polls") if screen_state else None,
+                "event_count": screen_state.get("event_count", 0) if screen_state else 0,
+            },
+            "voice": {
+                "tts": self.tts is not None,
+                "asr": self.asr is not None,
+                "streaming_active": bool(streaming_state.get("active")) if streaming_state else False,
+            },
+        }
+
 
 class CompanionRequestHandler(BaseHTTPRequestHandler):
     server: CompanionServer
@@ -730,6 +779,14 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 {"schema_version": 1, "csrf_token": self.server.csrf_token},
                 set_session_cookie=True,
             )
+            return
+        if path == "/api/shell/status":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            self._json(self.server.shell_status())
             return
         if path == "/api/state":
             try:

@@ -65,6 +65,7 @@
     .brand p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
     .top-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
     .status-pill, .level-pill, .eyebrow, .tag { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--muted); background: rgba(255,255,255,.58); font-size: 12px; }
+    #shell-rail.stale { opacity: .55; }
     .status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--mint-strong); box-shadow: 0 0 0 4px #57bda722; }
     .layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 18px; margin-top: 18px; }
     .sidebar { display: flex; flex-direction: column; min-height: calc(100vh - 122px); padding: 12px; border: 1px solid rgba(255,255,255,.7); border-radius: 20px; background: rgba(255,255,255,.45); box-shadow: var(--shadow); backdrop-filter: blur(19px); }
@@ -247,7 +248,7 @@
       </div>
       <div class="top-actions">
         <span id="top-connection" class="status-pill">Локальный контур</span>
-        <span class="tag">Gateway · 2367</span>
+        <span id="shell-rail" class="tag" title="Живая телеметрия">агент: — · голос: — · сенсорика: —</span>
       </div>
     </header>
     <div class="layout">
@@ -2120,7 +2121,50 @@
       sessionHeaders = {'X-Companion-CSRF': data.csrf_token};
       await loadHistory();
       refresh();
+      void pollShellStatus();
+      scheduleShellStatus();
     }
+    let shellStatusTimer = null;
+    let shellStatusStale = false;
+    function renderShellStatus(data) {
+      const el = document.querySelector('#shell-rail');
+      if (!el || !data || data.ok !== true) return;
+      const agent = data.agent?.chat_status === 'connected' ? 'связь'
+        : (data.agent?.chat_status === 'starting' ? 'подключение' : 'нет связи');
+      const tts = data.voice?.tts ? 'готов' : 'выкл';
+      const sensory = data.sensory?.running ? `события: ${data.sensory.lines}` : 'тихо';
+      el.textContent = `агент: ${agent} · голос: ${tts} · сенсорика: ${sensory}`;
+      el.title = `экран: ${data.screen?.running ? 'смотрит' : 'пауза'} · внимание: ${data.attention?.dnd ? 'DND' : 'активно'}`
+        + ` · профиль: ${data.resources?.profile || '—'} · обновлено ${new Date().toLocaleTimeString()}`;
+      el.classList.remove('stale');
+    }
+    async function pollShellStatus() {
+      if (!Object.keys(sessionHeaders).length) return;
+      try {
+        const response = await fetch('/api/shell/status', {headers: sessionHeaders, cache: 'no-store'});
+        const data = await response.json();
+        shellStatusStale = false;
+        renderShellStatus(data);
+      } catch (_) {
+        const el = document.querySelector('#shell-rail');
+        if (el && !shellStatusStale) {
+          shellStatusStale = true;
+          el.textContent = 'статус: связь потеряна';
+          el.classList.add('stale');
+        }
+      }
+    }
+    function scheduleShellStatus() {
+      if (shellStatusTimer) window.clearTimeout(shellStatusTimer);
+      const delay = document.hidden ? 15000 : 10000;
+      shellStatusTimer = window.setTimeout(async () => {
+        await pollShellStatus();
+        scheduleShellStatus();
+      }, delay);
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) void pollShellStatus();
+    });
     async function loadHistory() {
       if (!Object.keys(sessionHeaders).length) return;
       try {

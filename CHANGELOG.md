@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U3 slice one: light shell telemetry and the status rail
+
+- `GET /api/shell/status` aggregates in-memory state only (agent chat
+  status, attention DND/quiet hours, proactive muted/queued, resource
+  profile, sensory counts, screen watcher cadence, voice lanes) — no
+  network probes on the timer; heavy checks stay in the on-demand doctor.
+- The topbar gains a status rail (#shell-rail): bounded 10s poll (15s while
+  the tab is hidden, instant refresh on visibility), stale state shown when
+  the poll fails. Missing methods on test gateways are tolerated.
+- 2 new web tests; 55/55 green.
+
 ## 2026-09-15 - U2 slice one: design token layer, keyboard tabs, back/forward
 
 - The token layer lands in the companion UI: status colors (success/warning/
