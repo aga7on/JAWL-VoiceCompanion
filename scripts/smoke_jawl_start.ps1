@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$source = Join-Path $repo 'runtime\jawl-sources\jawl-20260905-daily-v1'
+$source = Join-Path $repo 'runtime\jawl-sources\jawl-20260906-daily-v2'
 $py = Join-Path $repo 'runtime\jawl-daily-venv\Scripts\python.exe'
 $profileHome = Join-Path $repo 'runtime\instances\daily'
 $log = Join-Path $profileHome 'logs\startup-smoke.log'

@@ -12,8 +12,64 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
+from jawl_voicecompanion.gateway import validate_response_envelope  # noqa: E402
 from jawl_voicecompanion.jawl_web import JawlWebUnavailable  # noqa: E402
-from jawl_voicecompanion.web import create_presentation_server, create_server  # noqa: E402
+from jawl_voicecompanion.web import (  # noqa: E402
+    create_presentation_server,
+    create_server,
+    is_meaningful_transcript,
+)
+
+
+class MeaningfulTranscriptTests(unittest.TestCase):
+    def test_rejects_asr_noise_artifacts(self):
+        for junk in (
+            "嗯嗯嗯。",
+            "嗯嗯",
+            "嗯",
+            "嗯哼",
+            "Transcribe the audio exactly as spoken.",
+            "啊！",
+            "ммм",
+            "ааа",
+            ",.,",
+            "",
+        ):
+            with self.subTest(junk=junk):
+                self.assertFalse(is_meaningful_transcript(junk))
+
+    def test_keeps_real_short_utterances(self):
+        for speech in (
+            "Ок",
+            "Да",
+            "Нет",
+            "Ладно",
+            "Угу",
+            "привет, как дела?",
+            "Пойдём гулять",
+            "Windows не отвечает",
+        ):
+            with self.subTest(speech=speech):
+                self.assertTrue(is_meaningful_transcript(speech))
+
+    def test_error_envelope_is_never_voiced(self):
+        envelope = {
+            "schema_version": 1,
+            "response_id": "r-1",
+            "turn_id": "t-1",
+            "text": "JAWL недоступен: текущий turn завершён с ошибкой.",
+            "speak": True,
+            "emotion": {"id": "error", "intensity": 0.35, "confidence": 1.0},
+            "avatar": {"expression": "error", "motion": "blink", "state": "error"},
+            "voice": {"provider": "not_connected", "voice_id": "main_ru", "rate": 1.0},
+            "actions": [],
+            "interruptible": True,
+            "proactive": False,
+        }
+        normalized = TextGateway._preserve_native_envelope(envelope)
+        self.assertIs(normalized["speak"], False)
+        self.assertEqual(normalized["avatar"]["state"], "error")
+        validate_response_envelope(normalized)
 
 
 class _NativeSkillStub:
@@ -110,6 +166,9 @@ class WebTests(unittest.TestCase):
         status, health = self.get_json("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(health["mode"], "phase1_mock_brain")
+        self.assertRegex(health["runtime_instance_id"], r"^[0-9a-f]{32}$")
+        _, second_health = self.get_json("/api/health")
+        self.assertEqual(health["runtime_instance_id"], second_health["runtime_instance_id"])
         self.assertEqual(health["resources"]["profile"], "standard")
         with urlopen(self.base + "/", timeout=2) as response:
             frontend = response.read()
@@ -131,8 +190,14 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"streamChat", frontend)
             self.assertIn(b"pushSpeechDelta", frontend)
             self.assertIn(b"finishSpeechSession", frontend)
+            self.assertIn(b"discard_deltas", frontend)
+            self.assertIn(b"closest('.message')", frontend)
             self.assertIn(b"AbortController", frontend)
             self.assertIn(b"bargeInTriggered", frontend)
+            self.assertIn(b"speechPlaybackActive", frontend)
+            self.assertIn(b"(currentAudio || speechPlaybackActive)", frontend)
+            self.assertIn(b"runtime_instance_id", frontend)
+            self.assertIn("Контур перезапущен; старое аудио остановлено.".encode("utf-8"), frontend)
             self.assertIn(b"hands-free", frontend)
             self.assertIn(b"updateVoiceVad", frontend)
             self.assertIn(b"mic-gate", frontend)
@@ -148,11 +213,17 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"voice: ttsVoice.value.trim()", frontend)
             self.assertIn(b"Analyser", frontend)
             self.assertIn(b"/api/avatar/audio", frontend)
+            self.assertIn(b"dispatchLocalSlashCommand", frontend)
+            self.assertIn(b"/goal", frontend)
+            self.assertIn(b"/tab home|voice|perception|memory|access|system", frontend)
             self.assertIn(b"/api/hostos/approvals/", frontend)
             self.assertIn(b"/execute", frontend)
             self.assertIn("Выполнить предложение".encode("utf-8"), frontend)
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
             self.assertIn(b"JAWL Avatar", response.read())
+        with urlopen(self.base + "/mic-processor.js", timeout=2) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn(b"AudioWorkletProcessor", response.read())
         vision_script = (Path(__file__).parents[1] / "scripts" / "run_vision_server.ps1").read_bytes()
         asr_script = (Path(__file__).parents[1] / "scripts" / "run_asr_server.ps1").read_bytes()
         self.assertIn(b"VLM-RealTime-Bench\\runtime\\llama-b10738-cpu", vision_script)
@@ -641,6 +712,44 @@ class WebTests(unittest.TestCase):
             self.fail("audit should return HTTP 403 without a session")
 
 
+    def test_console_proxy_redirects_and_requires_session(self):
+        import http.client
+        from urllib.error import HTTPError
+
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
+        connection.request("GET", "/console")
+        response = connection.getresponse()
+        self.assertEqual(response.status, 301)
+        self.assertEqual(response.getheader("Location"), "/console/")
+        response.read()
+        request = Request(self.base + "/console/console.js")
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+        connection.request(
+            "GET", "/console/console.js",
+            headers={"X-Companion-Session": self.server.session_token},
+        )
+        response = connection.getresponse()
+        self.assertEqual(response.status, 503)
+        self.assertIn(b"not configured", response.read())
+        connection.close()
+
+
+    def test_perception_now_requires_session_and_reports_state(self):
+        from urllib.error import HTTPError
+
+        request = Request(self.base + "/api/perception/now")
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+        status, payload = self.get_json_auth("/api/perception/now")
+        self.assertEqual(status, 200)
+        self.assertIn("draft", payload)
+
+
 class PresentationWebTests(unittest.TestCase):
     def setUp(self):
         self.control = create_server(
@@ -668,13 +777,23 @@ class PresentationWebTests(unittest.TestCase):
         with urlopen(self.base + "/api/presentation/state", timeout=2) as response:
             state = json.loads(response.read().decode("utf-8"))
             self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
-            self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+            # The avatar page is the OBS source and may be embedded only by
+            # loopback control origins; framing stays denied everywhere else.
+            self.assertIn(
+                "frame-ancestors http://127.0.0.1:* http://localhost:*",
+                response.headers["Content-Security-Policy"],
+            )
+            self.assertNotIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
         self.assertEqual(state["schema_version"], 1)
         self.assertIn("avatar", state)
         self.assertIn("subtitle", state)
         self.assertIn("avatar_audio", state)
         for secret_field in ("session_token", "csrf_token", "policy", "last_turn", "recent_turns"):
             self.assertNotIn(secret_field, state)
+
+    def test_control_origin_denies_frame_ancestors(self):
+        with urlopen(f"http://127.0.0.1:{self.control.server_port}/", timeout=2) as response:
+            self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
     def test_presentation_origin_serves_avatar_but_cannot_mutate_control(self):
         with urlopen(self.base + "/avatar", timeout=2) as response:
@@ -694,12 +813,33 @@ class PresentationWebTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 404)
         context.exception.close()
 
+    def test_remote_presentation_origin_requires_its_read_only_token(self):
+        # Use the loopback test server but force the same handler policy as a
+        # remote TLS bind; this avoids generating certificates in the unit
+        # suite while exercising the actual authorization boundary.
+        self.presentation.remote_access = True
+        self.presentation.presentation_access_token = "presentation-test-token"
+        with self.assertRaises(HTTPError) as context:
+            urlopen(self.base + "/api/presentation/state", timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+        with urlopen(
+            self.base + "/api/presentation/state?token=presentation-test-token",
+            timeout=2,
+        ) as response:
+            state = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(state["schema_version"], 1)
+        with urlopen(
+            self.base + "/avatar?token=presentation-test-token",
+            timeout=2,
+        ) as response:
+            self.assertIn(b"JAWL Avatar", response.read())
+
     def test_http_servers_reject_non_loopback_binds(self):
         with self.assertRaises(ValueError):
             create_server(host="0.0.0.0", port=0, gateway=TextGateway())
         with self.assertRaises(ValueError):
             create_presentation_server(self.control, host="0.0.0.0", port=0)
-
 
 if __name__ == "__main__":
     unittest.main()

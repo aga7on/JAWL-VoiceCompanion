@@ -75,7 +75,10 @@ def stage(source: Path, name: str, *, write: bool = False) -> dict:
     files = inventory(source)
     hashes = {path.as_posix(): hashlib.sha256(data).hexdigest() for path, data in files}
     manifest = {
-        "schema_version": 1, "kind": "source-snapshot", "name": name,
+        "schema_version": 2, "kind": "source-snapshot", "name": name,
+        "source_reference": str(source),
+        "patch_chain": [],
+        "capture_policy": "selected source files only; generated state excluded",
         "files": hashes, "file_count": len(files),
         "snapshot_sha256": hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest(),
         "runtime_ready": False,
