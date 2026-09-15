@@ -370,6 +370,9 @@
             <div id="env-fields" class="meta">Загрузка…</div>
             <p class="meta">Launcher может перекрывать эти значения в текущем запуске; применяются после рестарта агента.</p>
           </article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Telegram</h3><p>Telethon (чтение) и Aiogram (отправка) — по отдельности.</p></div></div>
+            <div id="ifc-telegram"></div>
+          </article></div>
         </section>
         <section class="tab-panel" data-panel="jawl">
           <iframe class="console-frame" src="/console/" title="JAWL console" loading="lazy"></iframe>
@@ -2277,6 +2280,92 @@
       }
       return out;
     }
+    const IFACE_SECTIONS = {
+      telegram: {
+        title: 'Telegram',
+        keys: [
+          {key: 'interfaces:telegram.telethon.enabled', label: 'Telethon: включён', type: 'bool'},
+          {key: 'interfaces:telegram.telethon.session_name', label: 'Telethon: имя сессии', type: 'text'},
+          {key: 'interfaces:telegram.telethon.recent_chats_limit', label: 'Telethon: недавние чаты', type: 'int'},
+          {key: 'interfaces:telegram.telethon.private_chat_history_limit', label: 'Telethon: приватная история', type: 'int'},
+          {key: 'interfaces:telegram.telethon.incoming_history_limit', label: 'Telethon: входящая история', type: 'int'},
+          {key: 'interfaces:telegram.telethon.download_visual_media', label: 'Telethon: качать медиа', type: 'bool'},
+          {key: 'interfaces:telegram.telethon.visual_media_max_mb', label: 'Telethon: медиа максимум МБ', type: 'int'},
+          {key: 'interfaces:telegram.telethon.coding_approval_chat_id', label: 'Telethon: чат одобрений', type: 'nullable'},
+          {key: 'interfaces:telegram.telethon.coding_approval_remote_decisions', label: 'Telethon: удалённые решения', type: 'bool'},
+          {key: 'interfaces:telegram.telethon.coding_approval_actor_id', label: 'Telethon: ID актёра', type: 'nullable'},
+          {key: 'interfaces:telegram.aiogram.enabled', label: 'Aiogram: включён', type: 'bool'},
+          {key: 'interfaces:telegram.aiogram.recent_chats_limit', label: 'Aiogram: недавние чаты', type: 'int'},
+          {key: 'interfaces:telegram.aiogram.download_visual_media', label: 'Aiogram: качать медиа', type: 'bool'},
+          {key: 'interfaces:telegram.aiogram.visual_media_max_mb', label: 'Aiogram: медиа максимум МБ', type: 'int'},
+          {key: 'interfaces:telegram.aiogram.coding_approval_chat_id', label: 'Aiogram: чат одобрений', type: 'nullable'},
+          {key: 'interfaces:telegram.aiogram.coding_approval_remote_decisions', label: 'Aiogram: удалённые решения', type: 'bool'},
+          {key: 'interfaces:telegram.aiogram.coding_approval_actor_id', label: 'Aiogram: ID актёра', type: 'nullable'},
+        ],
+      },
+    };
+    function ifcInputId(key) {
+      return `ifc-${key.slice('interfaces:'.length).replace(/[._]/g, '-')}`;
+    }
+    function renderInterfacesCards() {
+      for (const [section, spec] of Object.entries(IFACE_SECTIONS)) {
+        const wrap = document.querySelector(`#ifc-${section}`);
+        if (!wrap) continue;
+        wrap.replaceChildren();
+        for (const field of spec.fields) {
+          const div = document.createElement('div');
+          div.className = 'field';
+          const label = document.createElement('label');
+          label.textContent = `${field.label} `;
+          if (field.type === 'bool') {
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.id = ifcInputId(field.key);
+            label.append(box);
+          } else {
+            const input = document.createElement('input');
+            input.type = field.type === 'int' ? 'number' : 'text';
+            input.id = ifcInputId(field.key);
+            if (field.type === 'nullable') input.placeholder = 'пусто = не менять';
+            label.append(input);
+          }
+          div.append(label);
+          wrap.append(div);
+        }
+      }
+    }
+    function fillInterfacesCards(values) {
+      for (const [section, spec] of Object.entries(IFACE_SECTIONS)) {
+        for (const field of spec.fields) {
+          const el = document.querySelector(`#${ifcInputId(field.key)}`);
+          if (!el) continue;
+          const value = values[field.key];
+          if (field.type === 'bool') el.checked = value === true;
+          else if (field.type === 'nullable') el.value = value === null || value === undefined ? '' : String(value);
+          else el.value = value === null || value === undefined ? '' : String(value);
+        }
+      }
+    }
+    function collectInterfacesCards() {
+      const out = {};
+      for (const [section, spec] of Object.entries(IFACE_SECTIONS)) {
+        for (const field of spec.fields) {
+          const el = document.querySelector(`#${ifcInputId(field.key)}`);
+          if (!el) continue;
+          if (field.type === 'bool') out[field.key] = el.checked;
+          else if (field.type === 'int') out[field.key] = Number.isFinite(Number(el.value)) ? Number(el.value) : el.value;
+          else if (field.type === 'nullable') {
+            // A nullable field is written ONLY when filled: an empty input
+            // must never turn a stored null into '' (the agent's strict
+            // models reject empty strings for StrictInt|None fields).
+            if (String(el.value).trim()) out[field.key] = el.value.trim();
+          } else {
+            out[field.key] = String(el.value).trim();
+          }
+        }
+      }
+      return out;
+    }
     async function loadSettingsHub() {
       const statusEl = document.querySelector('#settings-status');
       if (!statusEl) return;
@@ -2333,6 +2422,8 @@
         set('#cfg-soc-rate', data.values['settings:system.db.sql.drives.fundamental.social.decay.rate']);
         set('#cfg-soc-interval', data.values['settings:system.db.sql.drives.fundamental.social.decay.interval_sec']);
         renderEnvFields(data.values || {});
+        renderInterfacesCards();
+        fillInterfacesCards(data.values || {});
         statusEl.textContent = `Загружено · ревизия ${String(data.revision).slice(0, 12)}…`;
       } catch (error) {
         statusEl.textContent = `Config hub недоступен: ${error.message}`;
@@ -2349,6 +2440,7 @@
       const payload = {
         values: {
           ...collectEnvValues(),
+          ...collectInterfacesCards(),
           'settings:identity.agent_name': String(document.querySelector('#cfg-agent-name')?.value || '').trim(),
           'settings:llm.main_model': String(document.querySelector('#cfg-main-model')?.value || '').trim(),
           'settings:llm.temperature': num(document.querySelector('#cfg-temperature')?.value),

@@ -1027,7 +1027,7 @@ class ShellStatusTests(unittest.TestCase):
             data = json.loads(response.read().decode("utf-8"))
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertIn(data["agent"]["chat_status"], {"connected", "starting", "offline"})
+        self.assertIn(data["agent"]["chat_status"], {"connected", "starting", "offline", "not_connected"})
         self.assertEqual(data["attention"]["dnd"], False)
         self.assertEqual(data["resources"]["profile"], "standard")
         self.assertFalse(data["sensory"]["running"])
@@ -1105,7 +1105,12 @@ class SettingsHubUITests(unittest.TestCase):
             "identity:\n  agent_name: Компаньон\nllm:\n  main_model: deepseek-v4-flash\n  temperature: 0.4\n  language: ru\n",
             encoding="utf-8",
         )
-        (Path(config) / "interfaces.yaml").write_text("web:\n  enabled: true\n", encoding="utf-8")
+        (Path(config) / "interfaces.yaml").write_text(
+            "web:\n  enabled: true\n"
+            "telegram:\n  telethon:\n    enabled: false\n    recent_chats_limit: 20\n"
+            "    private_chat_history_limit: 3\n    incoming_history_limit: 8\n",
+            encoding="utf-8",
+        )
         (Path(self.tmp.name) / ".env").write_text(
             "LLM_API_URL=http://127.0.0.1:8891/v1\nWEBHOOK_SECRET=whsec-123\n",
             encoding="utf-8",
@@ -1176,6 +1181,22 @@ class SettingsHubUITests(unittest.TestCase):
         self.assertTrue(replace["ok"])
         self.assertEqual(replace["readback"]["values"]["env:WEBHOOK_SECRET"], "__SET__")
         self.assertIn("whsec-999", (Path(self.tmp.name) / ".env").read_text(encoding="utf-8"))
+
+    def test_telegram_portion_roundtrip(self):
+        state = self._get()
+        self.assertIn("interfaces:telegram.telethon.enabled", state["values"])
+        result = self._post({
+            "values": {
+                "interfaces:telegram.telethon.enabled": True,
+                "interfaces:telegram.telethon.recent_chats_limit": 7,
+            },
+            "expected_revision": state["revision"],
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["readback"]["values"]["interfaces:telegram.telethon.enabled"], True)
+        self.assertEqual(result["readback"]["values"]["interfaces:telegram.telethon.recent_chats_limit"], 7)
+        # nullable fields omitted from the payload stay untouched
+        self.assertIn("interfaces:telegram.telethon.coding_approval_actor_id", state["values"])
 
     def test_conflict_returns_conflict_status(self):
         state = self._get()

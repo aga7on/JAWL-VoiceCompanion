@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U6 step two, portion 1: telegram integrations migrated
+
+- The interfaces migration framework lands: a generic typed-card renderer
+  (`IFACE_SECTIONS` spec → checkbox/number/text/nullable inputs) that the
+  remaining portions reuse. The nullable rule: an empty input NEVER writes
+  (protects StrictInt|None fields from empty-string corruption); int/bool
+  round-trip through the hub's in-place writer.
+- Portion 1 = Telegram (17 fields: Telethon read side + Aiogram send side,
+  including the coding-approval chat/actor/remote-decisions trio).
+- HTTP round-trip test; 61/61 web tests. Parity: 39+17 = 56 controls.
+
 ## 2026-09-15 - U6 step one: parity status against the registry
 
 - `docs/ui-registry/U6_PARITY_STATUS.md`: the honest coverage map after
