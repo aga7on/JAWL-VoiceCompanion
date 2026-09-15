@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U4 slice five: evidence lines and archive in the memory editor
+
+- The Память tab's memory rows now show the canonical contract's provenance
+  fields as an evidence line: source, confidence, revision, created_at and
+  provenance (actor/day) — bounded display, skips empty parts.
+- The rows gain an «В архив» action next to «Забыть» (native memory.archive
+  operation); live-verified against the real memory (50 records, the
+  emerald record carries confidence/revision).
+- The editor itself (list/filter/search/revise/forget through the native
+  JAWL memory API) already existed; this slice closes the evidence gap.
+
 ## 2026-09-15 - U4 slice four: motivation (drives) card
 
 - The config hub now also maps the 14 drive settings keys

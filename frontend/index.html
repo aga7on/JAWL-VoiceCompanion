@@ -126,6 +126,7 @@
     .message .meta { margin-bottom: 3px; }
     .meta { color: var(--muted); font-size: 12px; }
     .composer { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(44,126,116,.14); }
+    .memory-meta { color: var(--muted); font-size: 11px; line-height: 1.4; margin-top: 2px; }
     .mic-live-transcript { margin-top: 8px; padding: 6px 10px; border: 1px dashed rgba(71,169,149,.45); border-radius: 10px; background: rgba(255,255,255,.55); color: #23695e; font-size: 13px; line-height: 1.45; min-height: 20px; max-height: 96px; overflow-y: auto; }
     .mic-live-transcript .draft-prefix { opacity: .6; margin-right: 6px; }
     .composer textarea { min-height: 73px; }
@@ -919,8 +920,26 @@
         for (const record of visibleRecords.slice(0, 100)) {
           const row = document.createElement('div');
           row.className = 'memory-row';
+          const textWrap = document.createElement('div');
           const text = document.createElement('span');
           text.textContent = `[${record.kind || 'fact'}] ${record.memory_key || 'без ключа'} · ${record.subject || '—'}: ${record.predicate || 'значение'} = ${record.value || '—'}`;
+          textWrap.append(text);
+          // Evidence line: provenance, confidence and revision are first-class
+          // fields of the canonical memory contract.
+          const prov = record.provenance || {};
+          const metaParts = [];
+          if (record.source) metaParts.push(`источник: ${record.source}`);
+          if (typeof record.confidence === 'number') metaParts.push(`уверенность ${record.confidence}`);
+          if (record.revision) metaParts.push(`ревизия ${record.revision}`);
+          if (record.created_at) metaParts.push(new Date(record.created_at).toLocaleString());
+          if (prov.actor) metaParts.push(`актёр: ${prov.actor}`);
+          if (prov.day) metaParts.push(prov.day);
+          if (metaParts.length) {
+            const meta = document.createElement('div');
+            meta.className = 'memory-meta';
+            meta.textContent = metaParts.join(' · ');
+            textWrap.append(meta);
+          }
           const actions = document.createElement('span');
           const edit = document.createElement('button');
           edit.textContent = 'Изменить';
@@ -941,8 +960,15 @@
             await apiPost('/api/jawl/memory', {operation: 'forget', memory_key: record.memory_key, reason: 'browser request'});
             refresh();
           };
-          actions.append(edit, ' ', forget);
-          row.append(text, actions);
+          const archive = document.createElement('button');
+          archive.textContent = 'В архив';
+          archive.onclick = async () => {
+            if (!window.confirm(`Архивировать запись ${record.memory_key}?`)) return;
+            await apiPost('/api/jawl/memory', {operation: 'archive', memory_key: record.memory_key, reason: 'browser request'});
+            refresh();
+          };
+          actions.append(edit, ' ', forget, ' ', archive);
+          row.append(textWrap, actions);
           memoryEditor.append(row);
         }
       }

@@ -65,8 +65,13 @@
   - [x] Срез 4 (2026-09-15): карточка «Мотивация» — 14 ключей drives через
     hub (DRIVES_FIELDS; значения в settings.yaml, состояния драйвов остаются
     в SQLite /api/drives). Итого 37 скаляра.
-  - [ ] U4 остаток: memory-редактор с evidence/provenance, интеграции с
-    credentials, lifecycle/HostOS/DB-wipe отдельными блоками.
+  - [x] Срез 5 (2026-09-15): evidence-строка в записях памяти (источник,
+    уверенность, ревизия, время, provenance.actor/day) + действие «В архив»
+    (native archive); редактор уже был (list/filter/search/revise/forget
+    через native API), закрыт пробел evidence-отображения. Live-проверено
+    (50 записей, emerald с confidence/revision).
+  - [ ] U4 остаток: интеграции с credentials (env-редактор с __SET__),
+    lifecycle/HostOS/DB-wipe отдельными блоками.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.
 
