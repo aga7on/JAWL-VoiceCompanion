@@ -38,6 +38,7 @@ class ScreenDeltaWatcher:
         default_factory=lambda: deque(maxlen=100), init=False, repr=False
     )
     _last_error: str | None = field(default=None, init=False, repr=False)
+    _idle_polls: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.interval_seconds = max(2.0, min(float(self.interval_seconds), 3600.0))
@@ -71,7 +72,10 @@ class ScreenDeltaWatcher:
         token = self.arbiter.begin(TurnPriority.SCREEN_DELTA)
         if not self.arbiter.is_current(token):
             self.arbiter.cancel(token, "screen_poll_deferred_for_higher_priority_work")
+            # A fresh user turn must not leave the watcher parked in back-off.
+            self._idle_polls = 0
             return {"status": "deferred", "reason": "higher_priority_work_active", "event": None}
+        result: dict[str, Any] | None = None
         try:
             result = self.vision.look(self.prompt, session_id=self.session_id)
             if token.cancelled:
@@ -99,6 +103,11 @@ class ScreenDeltaWatcher:
                 self._last_error = "screen_watcher_poll_failed"
             return {"status": "degraded", "reason": "screen_watcher_poll_failed", "event": None}
         finally:
+            status = result.get("status") if isinstance(result, dict) else None
+            if status == "unchanged":
+                self._idle_polls += 1
+            elif status == "ok":
+                self._idle_polls = 0
             self.arbiter.complete(token)
 
     def state(self) -> dict[str, Any]:
@@ -107,6 +116,8 @@ class ScreenDeltaWatcher:
             return {
                 "running": self._thread is not None and self._thread.is_alive(),
                 "interval_seconds": self.interval_seconds,
+                "idle_polls": self._idle_polls,
+                "next_wait_seconds": round(self._next_wait(), 1),
                 "event_count": len(self._events),
                 "last_event": last_event,
                 "last_error": self._last_error,
@@ -119,7 +130,20 @@ class ScreenDeltaWatcher:
     def _run(self) -> None:
         while not self._stop.is_set():
             self.poll_once()
-            self._stop.wait(self.interval_seconds)
+            self._stop.wait(self._next_wait())
+
+    def _next_wait(self) -> float:
+        """Back vision polling off while the screen stays unchanged.
+
+        One unchanged poll keeps the base cadence; consecutive unchanged
+        polls slow the watcher down to 4x, and any published change (or a
+        fresh user turn being deferred) returns it to the base interval.
+        """
+        idle = self._idle_polls
+        if idle < 2:
+            return self.interval_seconds
+        factor = min(4.0, float(idle))
+        return min(3600.0, self.interval_seconds * factor)
 
     def _make_event(self, result: dict[str, Any]) -> dict[str, Any]:
         description = str(result.get("description") or "").strip()[:4000]

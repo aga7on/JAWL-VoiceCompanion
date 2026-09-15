@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-14 - Vision back-off, VoiceMem passthrough, ASR warm-up
+
+- ScreenDeltaWatcher: consecutive unchanged screens slow the poll cadence
+  up to 4x (reset on a published change or a deferred user turn); state()
+  reports idle_polls and next_wait_seconds. VLM calls were already skipped
+  on an unchanged digest by VisionLookService, and the arbiter already
+  defers SCREEN_DELTA polls while a user turn is active.
+- VoiceMem enrichment is no longer dropped: a VOICE_TURN's memory_context
+  becomes a bounded, clearly-marked background block for the responder
+  (voice_memory_block, non-quotable). Finding: the canonical GigaAM path
+  builds its own events, so the sidecar remains a write-only memory sink
+  there; the context only flows on the VoiceMem-driven lane.
+- GigaAM batch warm-up: the crispasr file mode spawns one process per final
+  phrase; measured wall time swings 1.0-4.7s at ~0.6s CPU (I/O and
+  scheduling bound, not compute). The companion now reads the model file
+  once per session on the first audio chunk, while the user is speaking.
+
 ## 2026-09-14 - Voice preface: first audible reaction before the model answers
 
 - `/api/voice/preface` returns a short speakable provisional line built

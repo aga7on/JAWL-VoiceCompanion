@@ -30,6 +30,28 @@ class CrispASRFileTranscriber:
         self.model = str(model)
         self.timeout_seconds = max(5.0, min(float(timeout_seconds), 120.0))
 
+    def prefetch(self, chunk_bytes: int = 4 * 1024 * 1024) -> int:
+        """Read the model file once so the next crispasr spawn starts warm.
+
+        The batch transcriber spawns a fresh process per final phrase; the
+        first spawn after idle can spend seconds reloading the model from
+        disk. Reading it while the user is still speaking keeps the final in
+        the fast regime. Best-effort: returns bytes read, never raises for
+        an unreadable model.
+        """
+        chunk = max(64 * 1024, int(chunk_bytes))
+        total = 0
+        try:
+            with open(self.model, "rb") as stream:
+                while True:
+                    block = stream.read(chunk)
+                    if not block:
+                        break
+                    total += len(block)
+        except OSError:
+            return total
+        return total
+
     def transcribe(self, wav_bytes: bytes) -> str:
         if not wav_bytes:
             raise GigaAMBatchError("empty utterance")

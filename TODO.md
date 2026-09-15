@@ -1303,3 +1303,11 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
   full profile running (Bonsai first).
 - [ ] WS protocol tests (frame types: ping/pong/close/fragmentation/masking/
   oversized) before moving the WS lane back to default-on.
+- [ ] Sensory/memory (2026-09-14): vision back-off, VoiceMem memory_context
+  passthrough and ASR model prefetch are in. Live-verify: voice turn with
+  prefetch (expect the batch final in ~1s after speech ends), then decide
+  whether the canonical lane should query VoiceMem context synchronously
+  (sync feed_partial) or the sidecar stays a write-only enrichment sink.
+- [ ] VoiceMem weight: with context passthrough only on its own lane, review
+  after the live run whether the sidecar's embedding/graph machinery earns
+  its RAM next to JAWL memory (keep JAWL canonical either way).

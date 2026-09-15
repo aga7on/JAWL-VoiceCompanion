@@ -136,6 +136,20 @@ def is_meaningful_transcript(text: str) -> bool:
     return True
 
 
+def voice_memory_block(memory_context: str, *, limit: int = 800) -> str:
+    """Render VoiceMem enrichment as bounded, non-quotable background.
+
+    JAWL stays the canonical memory: this block is explicitly marked as
+    background so the responder never cites it verbatim. Empty context
+    yields an empty string, so the lanes without VoiceMem enrichment keep
+    byte-identical turn text.
+    """
+    clean = " ".join(str(memory_context or "").split())[: max(1, int(limit))]
+    if not clean:
+        return ""
+    return "\n\n[ФОНОВАЯ ПАМЯТЬ ГОЛОСА (VoiceMem, фон, не цитировать дословно): " + clean + "]"
+
+
 def require_bind_host(host: str, *, lan_mode: bool = False) -> str:
     """Validate a bind target, requiring explicit LAN mode for non-loopback."""
     value = str(host or "").strip()
@@ -303,6 +317,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.asr = asr_service
         self.streaming_asr = streaming_asr
         self.gigaam_transcriber = gigaam_transcriber
+        self._asr_prefetch_sessions: deque[str] = deque(maxlen=16)
         self.helper_urls = dict(helper_urls or {})
         self.proactive_feed = proactive_feed
         self.perception_fusion = perception_fusion
@@ -528,6 +543,35 @@ class CompanionServer(ThreadingHTTPServer):
         if len(clause) > 140:
             clause = clause[:140].rsplit(" ", 1)[0].rstrip(" ,;:-")
         return f"Смотрю: {clause}."
+
+    def prefetch_asr_model(self, session_id: str) -> bool:
+        """Warm the batch ASR model file while the user is still speaking.
+
+        The file-mode transcriber spawns crispasr per final phrase and the
+        first run after idle can take seconds while the OS reloads the model;
+        reading it once at the start of an utterance keeps the batch final in
+        the fast regime. Bounded to one prefetch per session.
+        """
+        transcriber = self.gigaam_transcriber
+        prefetch = getattr(transcriber, "prefetch", None)
+        if transcriber is None or not callable(prefetch):
+            return False
+        key = str(session_id or "local")[:200]
+        if key in self._asr_prefetch_sessions:
+            return False
+        self._asr_prefetch_sessions.append(key)
+        thread = threading.Thread(
+            target=self._run_asr_prefetch, args=(prefetch,), name="asr-model-prefetch", daemon=True,
+        )
+        thread.start()
+        return True
+
+    @staticmethod
+    def _run_asr_prefetch(prefetch: Any) -> None:
+        try:
+            prefetch()
+        except Exception:  # noqa: BLE001 - prefetch is best-effort
+            pass
 
     def server_close(self) -> None:
         errors: list[str] = []
@@ -1694,6 +1738,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         if isinstance(channels, bool) or not isinstance(channels, int):
             raise ValueError("channels must be an integer")
         session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+        self.server.prefetch_asr_model(session_id)
         if self.server.streaming_asr is not None:
             try:
                 self.server.streaming_asr.feed(pcm16, sample_rate=sample_rate, channels=channels)
@@ -1958,9 +2003,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         for event in events:
             if event.get("type") != "VOICE_TURN":
                 continue
-            turn_text = event.get("payload", {}).get("text", "")
+            payload = event.get("payload", {})
+            turn_text = payload.get("text", "")
+            enriched = self.server.enrich_turn_text(turn_text) + voice_memory_block(
+                payload.get("memory_context", "")
+            )
             responses.append(self.server.gateway.handle_text(
-                self.server.enrich_turn_text(turn_text), session_id=session_id,
+                enriched, session_id=session_id,
                 correlation_id=event.get("correlation_id") or correlation_id,
             ))
         return responses

@@ -18,6 +18,7 @@ from jawl_voicecompanion.web import (  # noqa: E402
     create_presentation_server,
     create_server,
     is_meaningful_transcript,
+    voice_memory_block,
 )
 
 
@@ -926,6 +927,61 @@ class VoicePrefaceTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as context:
             self._post("/api/voice/preface", {"session_id": "s1"}, headers={})
         self.assertEqual(context.exception.code, 403)
+
+
+class VoiceMemoryBlockTests(unittest.TestCase):
+    def test_empty_context_yields_empty_block(self):
+        for value in ("", None, "   \n\t "):
+            with self.subTest(value=value):
+                self.assertEqual(voice_memory_block(value), "")
+
+    def test_context_is_collapsed_bounded_and_marked_background(self):
+        block = voice_memory_block(
+            "Пользователь любит кофе.\n\n  Работает в  G:\\AI.", limit=40
+        )
+        self.assertTrue(
+            block.startswith(
+                "\n\n[ФОНОВАЯ ПАМЯТЬ ГОЛОСА (VoiceMem, фон, не цитировать дословно): "
+            )
+        )
+        self.assertTrue(block.endswith("]"))
+        content = block.rsplit(": ", 1)[1].rstrip("]")
+        self.assertLessEqual(len(content), 40)
+        self.assertNotIn("\n", content)
+        self.assertIn("Пользователь любит кофе.", content)
+
+
+class AsrPrefetchTests(unittest.TestCase):
+    def test_prefetch_is_bounded_to_one_per_session(self):
+        calls = []
+
+        class FakeTranscriber:
+            def prefetch(self):
+                calls.append(1)
+
+        server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+            gigaam_transcriber=FakeTranscriber(),
+        )
+        self.addCleanup(server.server_close)
+        self.assertTrue(server.prefetch_asr_model("session-1"))
+        self.assertFalse(server.prefetch_asr_model("session-1"))
+        self.assertTrue(server.prefetch_asr_model("session-2"))
+        deadline = time.monotonic() + 2
+        while len(calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(len(calls), 2)
+
+    def test_prefetch_without_transcriber_is_a_noop(self):
+        server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+        )
+        self.addCleanup(server.server_close)
+        self.assertFalse(server.prefetch_asr_model("session-1"))
 
 
 if __name__ == "__main__":
