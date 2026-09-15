@@ -9,7 +9,7 @@
 - Схема-маппинг (config/env записи): **206**
 - Без маппинга: **14** — все `settings:system.db.sql.drives.*`, пишутся через `/api/drives` (отдельный writer, осознанно)
 - Эндпоинтов консоли: **31**; вызовы console.js не выходят за роуты: **True**
-- Вызовов API в UI компаньона: **42**
+- Вызовов API в UI компаньона: **45**
 
 ## Группы DOM-контролов консоли
 
@@ -124,6 +124,8 @@
 - `/api/voice/preface` — Companion native
 
 Обёртки компаньона над консольными действиями (verdict: keep, консольные дубли не переносить):
+- `/api/config-hub` — 
+- `/api/config-hub/save` — 
 - `/api/emergency-stop` — CRITICAL-обёртка над /api/hostos/emergency-stop* — двойное подтверждение
 - `/api/emergency-stop/reset` — CRITICAL-обёртка над /api/hostos/emergency-stop* — двойное подтверждение
 - `/api/health` — 
@@ -134,6 +136,7 @@
 - `/api/jawl/journal` — нативный адаптер jawl_web (memory/journal/hostos/overview)
 - `/api/jawl/memory` — нативный адаптер jawl_web (memory/journal/hostos/overview)
 - `/api/jawl/overview` — нативный адаптер jawl_web (memory/journal/hostos/overview)
+- `/api/shell/status` — 
 
 ## Открытые вопросы U0
 

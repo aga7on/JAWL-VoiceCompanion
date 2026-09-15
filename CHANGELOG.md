@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-09-15 - U6 step one: parity status against the registry
+
+- `docs/ui-registry/U6_PARITY_STATUS.md`: the honest coverage map after
+  U0-U5 — 39 settings scalars + memory + logs + rail surfaces migrated; the
+  remaining gap is 127 interface-integration fields, custom-drives CRUD and
+  the DB-wipe owner decision. The iframe stays until 100% parity (the
+  console remains the rollback path); the closure plan orders the migration
+  in 20-30-field portions with round-trip tests, then the final acceptance
+  and the nightly soak.
+
 ## 2026-09-15 - U5 slice three: live reconnect drill and the rail transport fix
 
 - Live reconnect scenario verified end-to-end: agent stop → the gateway
