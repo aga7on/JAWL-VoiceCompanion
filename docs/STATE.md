@@ -1,5 +1,15 @@
 # Состояние разработки
 
+## План единой панели — 2026-09-15
+
+Установлены 19 UX/UI skills. По исходникам оригинальной панели JAWL и адаптеров
+Companion подготовлен [план U0–U6](UNIFIED_UI_INTEGRATION_PLAN.md): общая
+навигация, единственный writer настроек, полная parity, сохранение native policy
+и лучшего Companion voice pipeline. Iframe — только переходный механизм.
+Следующий шаг: полный реестр полей/операций и baseline (U0).
+Это документационный срез: runtime/UI не изменены, свежий browser/live gate
+не запускался; production-ready не заявляется.
+
 ## Текущий канон — 2026-09-14 (обновлять при смене канона)
 
 - Мозг: `deepseek-v4-flash` через OpenCode-релей 8891 (`-UseOpenCodeRelay`);
