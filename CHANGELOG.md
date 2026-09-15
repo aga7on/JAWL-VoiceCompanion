@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U5 slice one: background activity surfaces in the companion
+
+- The terminal gateway now captures the agent's autonomous legacy broadcast
+  lines (heartbeat-cycle messages that never come as typed events) into a
+  bounded 20-item window, exposed through the responder/gateway chain and
+  `GET /api/shell/status` as `background` (count/last_text/last_ts).
+- The shell rail surfaces each new broadcast once in the chat as a «Фон»
+  message, deduplicated by the broadcast timestamp; the tick rail keeps its
+  phase display. Tests: legacy capture/bound, event-line isolation, the
+  gateway chain; 79/79 in web+gateway, 11/11 terminal.
+
 ## 2026-09-15 - U4 slice six: integrations and secrets card
 
 - The «Настройки» tab gains an «Интеграции и секреты» card rendering all 16

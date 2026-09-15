@@ -62,6 +62,7 @@ class JawlTerminalGateway:
         self._wait_lock = threading.Condition()
         self._pending: dict[str, deque[dict[str, Any]]] = {}
         self._done_turns: OrderedDict[str, float] = OrderedDict()
+        self._broadcasts: deque[dict[str, Any]] = deque(maxlen=20)
         self._socket: socket.socket | None = None
         self._reader: threading.Thread | None = None
         self._running = False
@@ -74,6 +75,11 @@ class JawlTerminalGateway:
     def start(self) -> None:
         """Connect eagerly so health reflects the real transport state."""
         self._ensure_reader()
+
+    def recent_broadcasts(self) -> list[dict[str, Any]]:
+        """Bounded window of the agent's autonomous (background) messages."""
+        with self._wait_lock:
+            return list(self._broadcasts)
 
     def chat_status(self) -> str:
         with self._write_lock:
@@ -299,7 +305,14 @@ class JawlTerminalGateway:
             return
         event = packet.get("gateway_event")
         if not isinstance(event, dict):
-            return  # legacy broadcast lines are not part of the native contract
+            # Legacy broadcast lines ({"text","time"}) carry the agent's
+            # AUTONOMOUS messages (heartbeat cycles have no companion turn).
+            # They never arrive as typed events, so keep a bounded recent
+            # window for the shell to surface background activity.
+            text = str(packet.get("text") or "").strip()
+            if text:
+                self._broadcasts.append({"text": text[:400], "ts": round(time.time(), 3)})
+            return
         sequence = event.get("event_seq")
         if not isinstance(sequence, int) or sequence <= self._last_seq:
             return
@@ -399,6 +412,10 @@ class JawlChatRouter:
 
     def chat_status(self) -> str:
         return self.terminal.chat_status()
+
+    def recent_broadcasts(self) -> list[dict[str, Any]]:
+        get = getattr(self.terminal, "recent_broadcasts", None)
+        return get() if callable(get) else []
 
     def respond_envelope(self, text: str, cancel_event: threading.Event | None = None, correlation_id: str | None = None) -> dict[str, Any]:
         return self.terminal.respond_envelope(text, cancel_event=cancel_event, correlation_id=correlation_id)

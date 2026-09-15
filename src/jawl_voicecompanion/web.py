@@ -705,10 +705,18 @@ class CompanionServer(ThreadingHTTPServer):
         streaming_state = self.streaming_asr.snapshot() if self.streaming_asr is not None else None
         chat_status = getattr(self.gateway, "chat_status", None)
         chat_status = chat_status() if callable(chat_status) else "starting"
+        background_get = getattr(self.gateway, "recent_broadcasts", None)
+        background = background_get() if callable(background_get) else []
+        background_last = background[-1] if background else None
         return {
             "ok": True,
             "ts": datetime.now(timezone.utc).isoformat(),
             "agent": {"chat_status": chat_status},
+            "background": {
+                "count": len(background),
+                "last_text": str(background_last.get("text") or "")[:200] if background_last else None,
+                "last_ts": background_last.get("ts") if background_last else None,
+            },
             "attention": {
                 "dnd": bool(attention_state.get("dnd")) if attention_state else False,
                 "quiet_hours_active": bool(attention_state.get("quiet_hours_active")) if attention_state else False,

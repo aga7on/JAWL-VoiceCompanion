@@ -2420,9 +2420,17 @@
 
     let shellStatusTimer = null;
     let shellStatusStale = false;
+    let lastBackgroundTs = 0;
     function renderShellStatus(data, tick) {
       const el = document.querySelector('#shell-rail');
       if (!el || !data || data.ok !== true) return;
+      // Autonomous agent messages (heartbeat work) surface once each: the
+      // shell dedupes by the broadcast timestamp, never repeating a line.
+      const bg = data.background;
+      if (bg && bg.last_ts && Number(bg.last_ts) > lastBackgroundTs && bg.last_text) {
+        lastBackgroundTs = Number(bg.last_ts);
+        addMessage('Фон', bg.last_text);
+      }
       let agent;
       if (tick && tick.known && tick.phase === 'sleep') {
         const wake = Number(tick.wakeInSec || 0);

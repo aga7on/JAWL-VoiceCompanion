@@ -473,6 +473,11 @@ class TextGateway:
         status = getattr(self.responder, "status", None)
         return status() if callable(status) else self._brain_status
 
+    def recent_broadcasts(self) -> list[dict[str, Any]]:
+        """Bounded window of the responder's autonomous broadcast messages."""
+        get = getattr(self.responder, "recent_broadcasts", None)
+        return get() if callable(get) else []
+
     def _jawl_web_status(self) -> str:
         if self.jawl_web is None:
             return "not_configured"

@@ -318,5 +318,25 @@ class JawlTerminalGatewayBoundsTests(unittest.TestCase):
         gateway._socket = None
 
 
+class JawlBroadcastWindowTests(unittest.TestCase):
+    def test_legacy_broadcasts_captured_and_bounded(self):
+        gateway = JawlTerminalGateway(
+            Path(tempfile.gettempdir()) / "unused.port", timeout_seconds=5
+        )
+        self.addCleanup(gateway.close)
+        for index in range(25):
+            gateway._dispatch_line(json.dumps({"text": f"фон-сообщение {index}", "time": "2026-09-15"}).encode("utf-8"))
+        window = gateway.recent_broadcasts()
+        self.assertEqual(len(window), 20)
+        self.assertEqual(window[-1]["text"], "фон-сообщение 24")
+
+    def test_gateway_event_lines_do_not_pollute_broadcasts(self):
+        gateway = JawlTerminalGateway(Path(tempfile.gettempdir()) / "unused2.port", timeout_seconds=5)
+        self.addCleanup(gateway.close)
+        gateway._dispatch_line(json.dumps({"gateway_event": {"event_seq": 1, "turn_id": "t", "type": "assistant.delta", "payload": {}}}).encode("utf-8"))
+        gateway._dispatch_line(json.dumps({"other": 1}).encode("utf-8"))
+        self.assertEqual(gateway.recent_broadcasts(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
