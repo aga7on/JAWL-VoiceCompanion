@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-15 - U0 registry: machine inventory of both panels
+
+- `docs/ui-registry/registry.json`: 213 DOM data-cfg controls of the JAWL
+  console by group (system 63, host 33, web 24, telegram 17, voice 14...),
+  206 schema-mapped keys, 14 unmapped (all `system.db.sql.drives.*` — the
+  separate `/api/drives` writer), all 31 console endpoints with handlers,
+  42 API calls in the companion UI, and the coverage diff (console.js calls
+  all stay within registered routes).
+- `docs/ui-registry/UI_REGISTRY.md`: human-readable registry with owners,
+  verdicts (keep/merge/migrate), CRITICAL endpoint notes, the companion
+  native-vs-wrapper analysis (`/api/emergency-stop*`, `/api/jawl/*`), and
+  the open U0 questions (secrets readback, chat write owner, drives
+  revision, list-editor contracts).
+- Extraction scripts landed under `scripts/ui-registry/` for regeneration;
+  docs-only change, no runtime or UI code touched.
+
+## 2026-09-15 - Unified panel integration roadmap (docs only)
+
+- Added U0–U6 migration plan and grouped JAWL panel parity/ownership map.
+- Prioritized canonical config writes, effective state, native capabilities,
+  reversible section migration and full browser/accessibility regression.
+- Updated TODO/STATE; installed 19 external UX/UI skills with shared references.
+- No application, protected upstream or live configuration changes.
+
 ## 2026-09-14 - Barge-in keeps the spoken beginning; the backchannel goes quiet
 
 - The barge-in handler no longer drops the phrase start (the pre-roll and

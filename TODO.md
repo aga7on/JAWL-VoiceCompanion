@@ -1,5 +1,32 @@
 # TODO — единый агент-компаньон
 
+## Приоритет: единая панель — 2026-09-15
+
+План: [UNIFIED_UI_INTEGRATION_PLAN](docs/UNIFIED_UI_INTEGRATION_PLAN.md).
+Это очередь следующей UI-интеграции; старые отметки про console/iframe не означают
+полной parity. Незакрытые runtime gates ниже сохраняются.
+
+- [x] Установить 19 UX/UI skills и составить групповую карту переноса JAWL.
+- [ ] U0: полный field/action inventory оригинала и owned версии, baseline UI/tests.
+  - [x] Машинный реестр: `docs/ui-registry/registry.json` (213 data-cfg,
+    206 схемных ключей, 31 эндпоинт, 42 вызова UI компаньона) +
+    `docs/ui-registry/UI_REGISTRY.md` (группы, владельцы, вердикты,
+    критичные эндпоинты, дубли компаньона). Регенерация:
+    `python scripts\ui-registry\extract_ui_registry.py && python scripts\ui-registry\generate_registry_md.py`.
+  - [ ] Открытые вопросы реестра: секреты в `/api/config` readback, владелец
+    записи чата (`/api/chat` vs companion turn), ревизионный протокол drives,
+    контракт списочных редакторов (6 списков).
+  - [ ] Скриншот/interaction baseline всех экранов + конфиг-контракты и откат.
+- [ ] U1: единые config/capability contracts, writer, secrets, revision/readback.
+- [ ] U2: общие tokens и shell: Компаньон / Задачи / Память / Настройки.
+- [ ] U3: единые status, logs, catalog, диагностика и reconnect.
+- [ ] U4: все настройки/память/интеграции с проверкой round-trip и effective state.
+- [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
+- [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.
+
+Следующий срез — U0, не массовая перепись фронтенда. Детальные критерии и
+проверки каждой фазы находятся в плане. Runtime в этом docs-only срезе не менялся.
+
 ## Канонический запуск фреймворка (2026-09-13, всё выключено)
 
 1. Убить сирот при необходимости (включая `voicemem_sidecar`, `src\main.py`,
