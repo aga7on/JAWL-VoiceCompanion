@@ -478,6 +478,10 @@ class TextGateway:
         get = getattr(self.responder, "recent_broadcasts", None)
         return get() if callable(get) else []
 
+    def chat_status(self) -> str:
+        """The transport status of the active responder (terminal gateway)."""
+        return self._responder_status()
+
     def _jawl_web_status(self) -> str:
         if self.jawl_web is None:
             return "not_configured"

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-15 - U5 slice three: live reconnect drill and the rail transport fix
+
+- Live reconnect scenario verified end-to-end: agent stop → the gateway
+  reports `offline` (reconnect loop) → agent start → `connected` again in
+  ~5s, with the plan journal showing the last plan completed.
+- Found and fixed a shell bug on the way: CompanionGateway never exposed
+  `chat_status`, so the rail's transport field always fell back to
+  "starting" even while connected; the gateway now delegates to the
+  responder status. Verified live before and after the drill.
+- Terminal port file (62000) and the persistent socket survived both
+  transitions; no companion restart was needed.
+
 ## 2026-09-15 - U5 slice one: background activity surfaces in the companion
 
 - The terminal gateway now captures the agent's autonomous legacy broadcast
