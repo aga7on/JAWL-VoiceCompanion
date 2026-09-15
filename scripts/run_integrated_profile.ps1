@@ -441,11 +441,13 @@ try {
     }
     if ($env:JAWL_CONFIG_DIR) { $companionEnv.JAWL_CONFIG_DIR = $env:JAWL_CONFIG_DIR }
     if ($env:JAWL_ENV_FILE) { $companionEnv.JAWL_ENV_FILE = $env:JAWL_ENV_FILE }
+    if ($env:JAWL_LOG_DIR) { $companionEnv.JAWL_LOG_DIR = $env:JAWL_LOG_DIR }
     $companionArgs = "-u -m jawl_voicecompanion --host 127.0.0.1 --port $ControlPort --presentation-host 127.0.0.1 --presentation-port $PresentationPort --jawl-port-file `"$portFile`" --jawl-web-url $consoleUrl --jawl-chat-timeout $JawlChatTimeoutSeconds --jawl-hostos-control$audioArgs"
     # Unified config hub: the companion edits the profile config in place with
     # revision semantics; both paths are optional so tests without a profile pass.
     if ($env:JAWL_CONFIG_DIR) { $companionArgs += " --jawl-config-dir `"$env:JAWL_CONFIG_DIR`"" }
     if ($env:JAWL_ENV_FILE) { $companionArgs += " --jawl-env-file `"$env:JAWL_ENV_FILE`"" }
+    if ($env:JAWL_LOG_DIR) { $companionArgs += " --jawl-log-dir `"$env:JAWL_LOG_DIR`"" }
     if (-not $NoLive2D) {
         $companionArgs += " --live2d-assets `"$(Join-Path $repo 'runtime\live2d')`" --live2d-model `"mao_pro/mao_pro.model3.json`" --live2d-runtime `"live2d-runtime.js`""
     }

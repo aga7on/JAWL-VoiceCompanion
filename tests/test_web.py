@@ -1040,5 +1040,58 @@ class ShellStatusTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 403)
 
 
+class AgentLogTests(unittest.TestCase):
+    def _server(self, log_dir=None):
+        server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+            log_dir=log_dir,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join, 2)
+        self.base = f"http://127.0.0.1:{server.server_port}"
+        self.session_headers = {
+            "X-Companion-Session": server.session_token,
+            "X-Companion-CSRF": server.csrf_token,
+        }
+        return server
+
+    def _get(self, path):
+        request = Request(self.base + path, headers=self.session_headers)
+        with urlopen(request, timeout=3) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    def test_tail_pagination_and_redaction(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            log = log_dir / "main.log"
+            log.write_text(
+                "\n".join(f"line-{index}" for index in range(1, 21))
+                + "\nAuthorization: Bearer sk-abcdef1234567890abcdef\n",
+                encoding="utf-8",
+            )
+            self._server(log_dir=log_dir)
+            status, data = self._get("/api/logs/agent?tail=5")
+            self.assertEqual(status, 200)
+            self.assertTrue(data["ok"])
+            self.assertFalse(data["empty"])
+            self.assertEqual(len(data["lines"]), 10)  # the tail clamps at a 10-line minimum
+            self.assertEqual(data["lines"][-1], "Authorization: Bearer ***")
+            self.assertTrue(data["truncated"])
+
+    def test_empty_state_when_journal_missing(self):
+        self._server(log_dir=Path(__file__).parent)
+        status, data = self._get("/api/logs/agent")
+        self.assertEqual(status, 200)
+        self.assertTrue(data["empty"])
+        self.assertEqual(data["lines"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

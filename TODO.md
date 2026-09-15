@@ -45,8 +45,12 @@
     памяти (агент/внимание/proactive/ресурсы/сенсорика/экран/голос); статус-рейл
     в топбаре с bounded-опросом (10с, 15с на hidden, мгновенно на visible,
     stale-состояние). Тяжёлые проверки остаются в doctor по требованию.
-  - [ ] U3 остаток: logs/tick/journal surfaces с pagination и redaction,
-    состояния loading/empty/failed в UI, reconnect-проверки.
+  - [x] Срез 2 (2026-09-15): `GET /api/logs/agent?tail=N` — хвост main.log
+    с клампом 10..500 строк, redaction секретов в строках (bearer,
+    api_key/token/password/secret, sk-/rk-), карточка «Логи агента» в Системе
+    (загрузка при открытии вкладки + кнопка); лаунчер передаёт JAWL_LOG_DIR.
+  - [ ] U3 остаток: tick/journal surfaces в UI (рейл уже покрывает фазу),
+    состояния loading/empty/failed для остальных панелей, reconnect-проверки.
 - [ ] U4: все настройки/память/интеграции с проверкой round-trip и effective state.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.

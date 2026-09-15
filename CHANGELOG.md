@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U3 slice two: redacted agent log tail in the panel
+
+- `GET /api/logs/agent?tail=N` (session-gated): the tail of the agent's
+  main.log, read from the end within a 512KB window; line-count pagination
+  with a 10-line/500-line clamp; every line is secret-redacted
+  (bearer tokens, api_key/token/password/secret assignments, sk-/rk-
+  literals) and capped at 3000 chars.
+- The Система tab gains a "Логи агента" card (refresh button, loads on tab
+  open) with empty/truncated states. Launcher passes JAWL_LOG_DIR.
+- 2 new tests; 57/57 green.
+
 ## 2026-09-15 - U3 slice one: light shell telemetry and the status rail
 
 - `GET /api/shell/status` aggregates in-memory state only (agent chat

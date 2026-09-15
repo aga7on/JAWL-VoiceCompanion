@@ -316,6 +316,7 @@
 
         <section class="tab-panel" data-panel="system">
           <div class="page-heading"><div><span class="eyebrow">Diagnostics</span><h2>Система</h2><p>Диагностика провайдеров, ресурсы и аудит последних действий.</p></div></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Логи агента</h3><p>Хвост журнала main.log, секреты маскируются.</p></div><div><button id="agent-log-refresh" type="button">Обновить</button></div></div><pre id="agent-log-view" class="meta">Загрузка…</pre></article></div>
           <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Состояние контуров</h3><p>Обновляется автоматически.</p></div></div><pre id="health">Загрузка…</pre><details open><summary>Doctor</summary><pre id="doctor" class="meta">loading...</pre></details></article><article class="glass-card"><div class="card-head"><div><h3>Аудит HostOS</h3><p>Последние решения policy и результаты инструментов.</p></div></div><pre id="audit" class="meta">Загрузка…</pre></article></div>
                   <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Инициатива JAWL</h3><p>Проактивные сообщения приходят только в паузах диалога и с лимитом частоты.</p></div></div><label class="meta"><input type="checkbox" id="proactive-muted"> Режим тишины: не показывать и не озвучивать инициативу</label><br><label class="meta"><input type="checkbox" id="proactive-speak"> Озвучивать инициативу, когда диалог свободен</label><pre id="proactive" class="meta">Загрузка…</pre><div id="proactive-list" class="meta"></div></article><article class="glass-card"><div class="card-head"><div><h3>Консоль JAWL</h3><p>Полный пульт агента через единый origin компаньона.</p></div></div><p class="meta">Страница консоли отдаётся через тот же адрес, что и пульт: токен подставляется сервером, отдельный порт не нужен.</p><p><a class="button" href="/console/" target="_blank" rel="noopener">Открыть консоль JAWL</a></p></article></div>
         </section>
@@ -2115,6 +2116,23 @@
       mutedBox?.addEventListener('change', saveProactiveSettings);
       speakBox?.addEventListener('change', saveProactiveSettings);
     }
+    async function loadAgentLog(tail = 80) {
+      const view = document.querySelector('#agent-log-view');
+      if (!view) return;
+      try {
+        const response = await fetch(`/api/logs/agent?tail=${tail}`, {headers: sessionHeaders, cache: 'no-store'});
+        const data = await response.json();
+        if (!data.ok) { view.textContent = `Ошибка: ${data.error || 'unknown'}`; return; }
+        if (data.empty) { view.textContent = 'Журнал ещё не создан.'; return; }
+        view.textContent = data.lines.join('\n') + (data.truncated ? '\n… (показан хвост; полный файл — в консоли JAWL)' : '');
+        view.scrollTop = view.scrollHeight;
+      } catch (error) {
+        view.textContent = `Не удалось прочитать журнал: ${error.message}`;
+      }
+    }
+    document.querySelector('#agent-log-refresh')?.addEventListener('click', () => void loadAgentLog());
+    document.querySelector('[data-tab="system"]')?.addEventListener('click', () => void loadAgentLog());
+
     async function bootstrap() {
       const response = await fetch('/api/session', {cache: 'no-store'});
       const data = await response.json();

@@ -124,6 +124,12 @@ def main() -> None:
         help="JAWL .env path for the config hub; defaults to the config dir's sibling .env",
     )
     parser.add_argument(
+        "--jawl-log-dir",
+        type=Path,
+        default=None,
+        help="JAWL log dir; enables GET /api/logs/agent (redacted main.log tail)",
+    )
+    parser.add_argument(
         "--jawl-web-token-env",
         default="JAWL_WEB_TOKEN",
         help="environment variable containing JAWL's optional console token",

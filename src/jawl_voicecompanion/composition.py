@@ -314,6 +314,8 @@ def build_companion_runtime(
         except Exception as exc:  # noqa: BLE001 - the hub is optional at startup
             print(f"[config-hub] disabled: {type(exc).__name__}: {exc}")
 
+    log_dir = Path(args.jawl_log_dir) if args.jawl_log_dir else None
+
     server = create_server(
         args.host,
         args.port,
@@ -338,6 +340,7 @@ def build_companion_runtime(
         proactive_feed=proactive_feed,
         perception_fusion=perception_fusion,
         config_hub=config_hub,
+        log_dir=log_dir,
         activity_provider=(
             WindowsUserActivity(args.user_activity_idle_seconds).sample
             if args.user_activity else None

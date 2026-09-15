@@ -150,6 +150,14 @@ def voice_memory_block(memory_context: str, *, limit: int = 800) -> str:
     return "\n\n[ФОНОВАЯ ПАМЯТЬ ГОЛОСА (VoiceMem, фон, не цитировать дословно): " + clean + "]"
 
 
+def _redact_log_line(line: str) -> str:
+    """Mask secret-shaped substrings in a log line before display."""
+    clean = str(line or "")
+    for pattern, repl in CompanionServer._LOG_SECRET_PATTERNS:
+        clean = pattern.sub(repl, clean)
+    return clean
+
+
 def require_bind_host(host: str, *, lan_mode: bool = False) -> str:
     """Validate a bind target, requiring explicit LAN mode for non-loopback."""
     value = str(host or "").strip()
@@ -271,6 +279,7 @@ class CompanionServer(ThreadingHTTPServer):
     proactive_feed: Any | None = None,
     perception_fusion: Any | None = None,
     config_hub: Any | None = None,
+    log_dir: Path | None = None,
     legacy_presentation: bool = True,
     resource_governor: ResourceGovernor | None = None,
     presence_file: Path | None = None,
@@ -323,6 +332,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.proactive_feed = proactive_feed
         self.perception_fusion = perception_fusion
         self.config_hub = config_hub
+        self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
         self.legacy_presentation = bool(legacy_presentation)
@@ -642,6 +652,45 @@ class CompanionServer(ThreadingHTTPServer):
             "recent_events": [dict(event) for event in self._stream_chat_events],
         }
 
+    _LOG_SECRET_PATTERNS = (
+        (re.compile(r"(?i)(authorization\s*:\s*bearer\s+)\S+"), r"\1***"),
+        (re.compile(r"(?i)((?:api[_-]?key|token|password|secret)\s*[=:]\s*)\S{6,}"), r"\1***"),
+        (re.compile(r"\b(?:sk|rk)-[A-Za-z0-9]{12,}\b"), "***"),
+    )
+
+    def agent_log_tail(self, tail: int = 80) -> dict[str, Any]:
+        """Bounded, redacted tail of the agent journal for the panel.
+
+        Pagination is line-count based (the caller asks for N lines); the
+        file is read from the end, so a multi-MB journal stays cheap. Secrets
+        that happen to appear in log lines are masked before display.
+        """
+        bounded = max(10, min(int(tail), 500))
+        log_path = self.log_dir / "main.log" if self.log_dir else None
+        if log_path is None or not log_path.exists():
+            return {"ok": True, "lines": [], "truncated": False, "empty": True}
+        try:
+            with log_path.open("rb") as stream:
+                stream.seek(0, 2)
+                size = stream.tell()
+                window = min(size, 512 * 1024)
+                stream.seek(size - window)
+                blob = stream.read(window).decode("utf-8", "replace")
+        except OSError as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200], "lines": [], "truncated": False}
+        raw_lines = blob.splitlines()
+        if size > window and raw_lines:
+            raw_lines = raw_lines[1:]  # drop the possibly partial first line
+        selected = raw_lines[-bounded:]
+        redacted = [_redact_log_line(line)[:3000] for line in selected]
+        return {
+            "ok": True,
+            "lines": redacted,
+            "truncated": len(raw_lines) > bounded or size > 512 * 1024,
+            "empty": False,
+            "path": str(log_path),
+        }
+
     def shell_status(self) -> dict[str, Any]:
         """Light shell telemetry: in-memory state only, no network probes.
 
@@ -787,6 +836,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
                 return
             self._json(self.server.shell_status())
+            return
+        if path == "/api/logs/agent":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            try:
+                tail = int(urlsplit(self.path).query.split("tail=")[-1].split("&")[0]) if "tail=" in self.path else 80
+            except ValueError:
+                tail = 80
+            self._json(self.server.agent_log_tail(tail))
             return
         if path == "/api/state":
             try:
@@ -2375,6 +2436,7 @@ def create_server(
     sensory_ingestor: Any | None = None,
     perception_fusion: Any | None = None,
     config_hub: Any | None = None,
+    log_dir: Path | None = None,
     legacy_presentation: bool = True,
     presence_file: Path | None = None,
     stream_chat: StreamChatIngestor | None = None,
@@ -2477,6 +2539,7 @@ def create_server(
         proactive_feed=proactive_feed,
         perception_fusion=perception_fusion,
         config_hub=config_hub,
+        log_dir=log_dir,
         legacy_presentation=legacy_presentation,
         resource_governor=resource_governor,
         presence_file=presence_file,
