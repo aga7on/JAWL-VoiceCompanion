@@ -69,6 +69,12 @@
     const debug = document.querySelector('#debug');
     const mouth = document.querySelector('#mouth');
     const showDebug = new URLSearchParams(window.location.search).get('debug') === '1';
+    const presentationToken = new URLSearchParams(window.location.search).get('token') || '';
+    function presentationUrl(path) {
+      if (!presentationToken) return path;
+      const separator = path.includes('?') ? '&' : '?';
+      return `${path}${separator}token=${encodeURIComponent(presentationToken)}`;
+    }
     const expressionFallbacks = {
       neutral: 'neutral', attentive: 'attentive', concerned: 'concerned', confused: 'confused',
       happy: 'happy', sad: 'sad', angry: 'angry', surprised: 'surprised'
@@ -82,6 +88,59 @@
     let audioReceivedAt = 0;
     let avatarAudioChannel = null;
     if (showDebug) debug.classList.remove('hidden');
+
+    // Wheel zoom and left-button drag pan over the whole avatar surface.
+    // OBS ignores mouse input unless "interact" is enabled, so this only
+    // affects interactive viewers (the main panel embed and interact mode).
+    // With Live2D the model re-renders at the zoomed scale (no blur); the
+    // CSS fallback avatar is vector and scales cleanly. Subtitles stay fixed.
+    const surface = document.getElementById('surface');
+    const fallbackAvatar = document.getElementById('avatar');
+    let viewScale = 1, panX = 0, panY = 0;
+    function applyView() {
+      if (live2d && typeof live2d.setView === 'function') {
+        try { live2d.setView({zoom: viewScale, panX, panY}); } catch (_) { /* keep going */ }
+      } else {
+        fallbackAvatar.style.transform =
+          `translate(calc(-50% + ${panX.toFixed(1)}px), ${panY.toFixed(1)}px) scale(${viewScale.toFixed(3)})`;
+      }
+      surface.style.cursor = 'grab';
+    }
+    function resetView() {
+      viewScale = 1; panX = 0; panY = 0;
+      if (live2d && typeof live2d.setView === 'function') {
+        try { live2d.setView({zoom: 1, panX: 0, panY: 0}); } catch (_) {}
+      }
+      fallbackAvatar.style.transform = '';
+      surface.style.cursor = 'grab';
+    }
+    window.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.1;
+      viewScale = Math.min(3, Math.max(0.4, viewScale * factor));
+      applyView();
+    }, {passive: false});
+    let viewDrag = null;
+    window.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      viewDrag = {x: event.clientX, y: event.clientY};
+      surface.style.cursor = 'grabbing';
+      event.preventDefault();
+    });
+    window.addEventListener('mousemove', (event) => {
+      if (!viewDrag) return;
+      panX += event.clientX - viewDrag.x;
+      panY += event.clientY - viewDrag.y;
+      viewDrag = {x: event.clientX, y: event.clientY};
+      applyView();
+    });
+    window.addEventListener('mouseup', () => {
+      viewDrag = null;
+      surface.style.cursor = 'grab';
+    });
+    window.addEventListener('mouseleave', () => { viewDrag = null; });
+    window.addEventListener('dblclick', resetView);
+    surface.style.cursor = 'grab';
 
     function safeExpression(value) {
       const name = String(value || 'neutral').toLowerCase().replace(/[^a-z0-9_-]/g, '');
@@ -120,7 +179,7 @@
     } catch (_) { /* /api/state polling remains available */ }
     async function mountLive2D() {
       try {
-        const response = await fetch('/api/presentation/config', {cache: 'no-store'});
+        const response = await fetch(presentationUrl('/api/presentation/config'), {cache: 'no-store'});
         const config = await response.json();
         if (!config.ready) {
           if (showDebug) {
@@ -184,7 +243,7 @@
 
     async function refresh() {
       try {
-        const response = await fetch('/api/presentation/state', {cache: 'no-store'});
+        const response = await fetch(presentationUrl('/api/presentation/state'), {cache: 'no-store'});
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         render(await response.json());
       } catch (error) {

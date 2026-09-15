@@ -63,6 +63,7 @@
     .sidebar-foot { margin-top: auto; padding: 12px 9px 4px; color: var(--muted); font-size: 11px; line-height: 1.55; }
     .content { min-width: 0; }
     .tab-panel { display: none; animation: panel-in .22s ease-out; }
+    .console-frame { width: 100%; height: calc(100vh - 96px); min-height: 560px; border: 1px solid rgba(52,148,130,.18); border-radius: 14px; background: #fbfaf7; }
     .tab-panel.active { display: block; }
     @keyframes panel-in { from { opacity: .35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
     .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin: 4px 2px 15px; }
@@ -76,6 +77,7 @@
     .home-grid { display: grid; grid-template-columns: minmax(290px, .82fr) minmax(390px, 1.18fr); gap: 16px; align-items: stretch; }
     .companion-card { display: flex; flex-direction: column; }
     .stage { position: relative; min-height: 408px; overflow: hidden; border: 1px solid rgba(71,169,149,.18); border-radius: 15px; background: radial-gradient(circle at 50% 28%, #ecfff9 0 8%, transparent 40%), linear-gradient(145deg, rgba(226,252,244,.9), rgba(158,218,205,.42)); }
+    #stage-avatar { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; }
     .stage::before, .stage::after { content: ""; position: absolute; border-radius: 50%; filter: blur(2px); opacity: .7; }
     .stage::before { width: 180px; height: 180px; top: -65px; right: -44px; background: #fff9; }
     .stage::after { width: 130px; height: 130px; bottom: -52px; left: -35px; background: #71cfb577; }
@@ -102,9 +104,12 @@
     .dialog-card { display: flex; flex-direction: column; min-height: 480px; }
     #messages { flex: 1; min-height: 300px; max-height: 52vh; overflow: auto; padding: 4px 3px; }
     .message { margin: 8px 0; padding: 9px 11px; border: 1px solid rgba(52,148,130,.12); border-radius: 11px; background: rgba(255,255,255,.52); line-height: 1.45; white-space: pre-wrap; }
+    .message.draft { opacity: .55; font-style: italic; border-style: dashed; }
     .message .meta { margin-bottom: 3px; }
     .meta { color: var(--muted); font-size: 12px; }
     .composer { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(44,126,116,.14); }
+    .mic-live-transcript { margin-top: 8px; padding: 6px 10px; border: 1px dashed rgba(71,169,149,.45); border-radius: 10px; background: rgba(255,255,255,.55); color: #23695e; font-size: 13px; line-height: 1.45; min-height: 20px; max-height: 96px; overflow-y: auto; }
+    .mic-live-transcript .draft-prefix { opacity: .6; margin-right: 6px; }
     .composer textarea { min-height: 73px; }
     .composer-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
     .composer-actions button:first-child { min-width: 112px; }
@@ -194,7 +199,10 @@
       .mini-avatar .mini-badge, .stage-info { display: none; }
       .dialog-card { min-height: 0; }
       .dialog-card .card-head p { display: none; }
-      #messages { min-height: 90px; max-height: max(90px, calc(100vh - 545px)); max-height: max(90px, calc(100dvh - 545px)); }
+      /* Keep the composer inside the first mobile viewport. The transcript remains
+         scrollable, while the input/actions stay immediately usable on 320px-wide
+         tablets/phones instead of being pushed below the fold by long history. */
+      #messages { min-height: 90px; max-height: max(90px, calc(100vh - 600px)); max-height: max(90px, calc(100dvh - 600px)); }
       .composer textarea { min-height: 64px; font-size: 16px; }
       .composer { margin-top: 6px; padding-top: 8px; }
       .chat-tools { gap: 4px; }
@@ -236,6 +244,7 @@
         <div class="nav-label">Контроль</div>
         <button class="nav-item" data-tab="access" aria-selected="false"><span class="nav-icon">⌁</span><span>Доступ</span></button>
         <button class="nav-item" data-tab="system" aria-selected="false"><span class="nav-icon">⚙</span><span>Система</span></button>
+        <button class="nav-item" data-tab="jawl" aria-selected="false"><span class="nav-icon">▣</span><span>Пульт JAWL</span></button>
         <div class="sidebar-foot">2D avatar · OBS<br><span id="sidebar-port">presentation 8766</span></div>
       </aside>
       <main class="content">
@@ -245,14 +254,15 @@
             <article class="glass-card companion-card">
               <div class="card-head"><div><h3>Мой компаньон</h3><p>2D-персонаж · локальная презентация</p></div><span class="tag" id="mini-emotion">neutral</span></div>
               <div class="stage" aria-label="Предпросмотр 2D-компаньона">
+                <iframe id="stage-avatar" hidden title="Живой 2D-персонаж" allow="autoplay"></iframe>
                 <div class="mini-avatar" id="mini-avatar"><div class="mini-head"><span class="mini-eye left"></span><span class="mini-eye right"></span><span class="mini-mouth"></span></div><div class="mini-body"></div><span class="mini-badge">2D COMPANION</span></div>
                 <div class="stage-info"><span id="mini-state">idle</span><span id="mini-motion">motion · idle</span></div>
               </div>
             </article>
             <article class="glass-card dialog-card">
-              <div class="card-head"><div><h3>Чат</h3><p>Один разговор компаньона: текст, голос и вложения</p></div><div class="signal-lights"><span id="user-signal" class="signal-light">Ты</span><span id="companion-signal" class="signal-light">Компаньон</span></div></div>
+              <div class="card-head"><div><h3>Чат</h3><p>Один разговор компаньона: текст, голос и TXT/MD-вложения</p><span id="history-summary" class="meta"></span></div><div class="signal-lights"><span id="user-signal" class="signal-light">Ты</span><span id="companion-signal" class="signal-light">Компаньон</span></div></div>
               <div id="messages"><div class="empty-state">Напишите сообщение или включите микрофон — история появится здесь.</div></div>
-              <div class="composer"><div id="emoji-picker" class="emoji-picker" aria-label="Эмодзи"></div><textarea id="input" rows="3" placeholder="Напишите компаньону… Поддерживаются /команды"></textarea><div id="attachment-list" class="attachment-list"></div><div class="chat-tools"><button id="attach" type="button" title="Добавить файл">＋</button><input id="attachment-input" type="file" hidden multiple accept=".txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.wav,.mp3,.mp4,.webm"><button id="emoji" type="button" title="Эмодзи">☺</button><button id="slash" type="button" title="Команды">/</button><button id="mic" type="button" title="Микрофон">🎙</button><button id="send" class="primary send-button">Отправить</button></div><span id="mic-status" class="meta">Микрофон выключен.</span></div>
+              <div class="composer"><div id="emoji-picker" class="emoji-picker" aria-label="Эмодзи"></div><textarea id="input" rows="3" placeholder="Напишите компаньону… Поддерживаются /команды"></textarea><div id="attachment-list" class="attachment-list"></div><div class="chat-tools"><button id="attach" type="button" title="Добавить TXT или MD">＋</button><input id="attachment-input" type="file" hidden multiple accept=".txt,.md,text/plain,text/markdown"><button id="emoji" type="button" title="Эмодзи">☺</button><button id="slash" type="button" title="Команды">/</button><button id="mic" type="button" title="Микрофон">🎙</button><button id="send" class="primary send-button">Отправить</button></div><span id="mic-status" class="meta">Микрофон выключен.</span><div id="mic-live-transcript" class="mic-live-transcript" hidden></div></div>
             </article>
           </div>
           <div class="stat-grid"><div class="stat"><label>Подключение</label><strong id="home-gateway-status">Проверка…</strong></div><div class="stat"><label>Голосовой вывод</label><strong id="home-tts-status">Не настроен</strong></div><div class="stat"><label>Память</label><strong id="home-memory-status">Проверка…</strong></div><div class="stat"><label>Доступ</label><strong id="home-access-status">SANDBOX</strong></div></div>
@@ -261,7 +271,7 @@
         <section class="tab-panel" data-panel="voice">
           <div class="page-heading"><div><span class="eyebrow">Voice lab</span><h2>Голос</h2><p>Микрофонный gate, пики сигнала и настройки синтеза речи.</p></div></div>
           <div class="split-grid">
-            <article class="glass-card mic-card"><div class="card-head"><div><h3>Микрофон</h3><p>Gate фильтрует шум до передачи в ASR/VoiceMem.</p></div><span class="tag">локально</span></div><div class="mic-gate"><div class="mic-gate-row"><label for="mic-gate">Порог шумового gate</label><span id="mic-gate-value" class="meta">—</span></div><input id="mic-gate" type="range" min="0.005" max="0.15" step="0.005" value="0.035"><div class="mic-meter" role="meter" aria-label="Уровень микрофона" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="mic-level"></div><div id="mic-peak"></div></div><div class="gate-state"><span id="mic-signal" class="meta">Сигнал: —</span><span id="mic-gate-state" class="meta">Gate: closed</span></div><div class="button-row"><button id="mic-calibrate" type="button">Автокалибровка · 1,5 с</button><span id="mic-gate-status" class="meta">Тишина не отправляется в ASR.</span></div></div><div class="field"><label><input id="hands-free" type="checkbox"> Hands-free · завершать фразу после тишины</label></div></article>
+            <article class="glass-card mic-card"><div class="card-head"><div><h3>Микрофон</h3><p>Gate фильтрует шум до передачи в ASR/VoiceMem.</p></div><span class="tag">локально</span></div><div class="mic-gate"><div class="mic-gate-row"><label for="mic-gate">Порог шумового gate</label><span id="mic-gate-value" class="meta">—</span></div><input id="mic-gate" type="range" min="0.005" max="0.15" step="0.005" value="0.035"><div class="mic-meter" role="meter" aria-label="Уровень микрофона" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="mic-level"></div><div id="mic-peak"></div></div><div class="gate-state"><span id="mic-signal" class="meta">Сигнал: —</span><span id="mic-gate-state" class="meta">Gate: closed</span></div><div class="button-row"><button id="mic-calibrate" type="button">Автокалибровка · 1,5 с</button><span id="mic-gate-status" class="meta">Тишина не отправляется в ASR.</span></div></div><div class="field"><label><input id="hands-free" type="checkbox" checked> Hands-free · завершать фразу после тишины</label></div><div class="field"><label><input id="backchannel" type="checkbox" checked> Бэкченнел · короткое «угу» на длинных репликах</label></div></article>
             <article class="glass-card"><div class="card-head"><div><h3>Озвучка ответа</h3><p>TeraTTSv2 сейчас выбран для быстрого русского CPU-режима.</p></div><span class="tag" id="tts-status">TTS выключен.</span></div><div class="field"><label for="tts-voice">Голос провайдера</label><input id="tts-voice" type="text" maxlength="120" placeholder="по умолчанию"></div><div class="field"><label for="tts-speed">Скорость речи</label><input id="tts-speed" type="number" min="0.5" max="2" step="0.05" value="1"></div><div class="button-row"><button class="primary" type="button" data-tab-target="home">← Вернуться к диалогу</button><span class="meta">Qwen3-TTS · voice clone — отдельный тестовый профиль</span></div></article>
           </div>
         </section>
@@ -277,7 +287,7 @@
 
         <section class="tab-panel" data-panel="memory">
           <div class="page-heading"><div><span class="eyebrow">JAWL memory</span><h2>Память</h2><p>Каноническая память остаётся в JAWL; здесь только обзор и явные изменения.</p></div></div>
-          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Библиотека памяти</h3><p>JAWL заполняет её сам; здесь можно найти, исправить или забыть запись.</p></div></div><pre id="jawl-overview" class="meta">JAWL не подключён.</pre><div class="memory-toolbar"><input id="jawl-memory-search" type="search" placeholder="Поиск по памяти" aria-label="Поиск по памяти"><select id="jawl-memory-filter" aria-label="Слой памяти"><option value="all">Все слои</option><option value="trait">Черты</option><option value="fact">Факты</option><option value="evidence">Evidence</option><option value="episode">Эпизоды</option></select></div><div id="jawl-memory-editor" class="memory-list empty-state">Каноническая память JAWL не подключена.</div><div class="field"><label for="jawl-memory-key">Ключ записи</label><input id="jawl-memory-key" type="text" placeholder="memory_key (для новой записи можно пусто)"></div><div class="split-grid"><div class="field"><label for="jawl-memory-kind">Слой</label><select id="jawl-memory-kind"><option value="fact">Факт</option><option value="trait">Черта</option><option value="evidence">Evidence</option><option value="episode">Эпизод</option></select></div><div class="field"><label for="jawl-memory-source">Источник</label><input id="jawl-memory-source" type="text" placeholder="user, voice, ambient…"></div></div><div class="field"><label for="jawl-memory-value">Значение</label><input id="jawl-memory-value" type="text" placeholder="Факт, черта или содержательная запись"></div><div class="button-row"><button id="jawl-memory-save" class="primary" type="button">Сохранить в JAWL</button><button id="jawl-memory-cancel" type="button" hidden>Отмена редактирования</button></div><span id="jawl-memory-status" class="meta"></span></article><article class="glass-card"><div class="card-head"><div><h3>Журнал автономности</h3><p>Решения и планы, полученные из JAWL.</p></div></div><pre id="jawl-journal" class="meta">Журнал JAWL не подключён.</pre><details><summary>Как это работает</summary><p class="meta">Companion не создаёт второго мозга: чтение, коррекция и забывание проходят через native JAWL memory API.</p></details></article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Библиотека памяти</h3><p>JAWL заполняет её сам; здесь можно найти, исправить или забыть запись.</p></div></div><pre id="jawl-overview" class="meta">JAWL не подключён.</pre><div class="memory-toolbar"><input id="jawl-memory-search" type="search" placeholder="Поиск по памяти" aria-label="Поиск по памяти"><select id="jawl-memory-filter" aria-label="Слой памяти"><option value="all">Все слои</option><option value="trait">Черты</option><option value="fact">Факты</option><option value="preference">Предпочтения</option><option value="summary">Сводки</option></select></div><div id="jawl-memory-editor" class="memory-list empty-state">Каноническая память JAWL не подключена.</div><div class="field"><label for="jawl-memory-key">Ключ записи</label><input id="jawl-memory-key" type="text" placeholder="memory_key (для новой записи можно пусто)"></div><div class="split-grid"><div class="field"><label for="jawl-memory-kind">Слой</label><select id="jawl-memory-kind"><option value="fact">Факт</option><option value="trait">Черта</option><option value="preference">Предпочтение</option><option value="summary">Сводка</option></select></div><div class="field"><label for="jawl-memory-source">Источник</label><input id="jawl-memory-source" type="text" placeholder="user, voice, ambient…"></div></div><div class="field"><label for="jawl-memory-value">Значение</label><input id="jawl-memory-value" type="text" placeholder="Факт, черта, предпочтение или сводка"></div><div class="button-row"><button id="jawl-memory-save" class="primary" type="button">Сохранить в JAWL</button><button id="jawl-memory-cancel" type="button" hidden>Отмена редактирования</button></div><span id="jawl-memory-status" class="meta"></span></article><article class="glass-card"><div class="card-head"><div><h3>Журнал автономности</h3><p>Решения и планы, полученные из JAWL.</p></div></div><pre id="jawl-journal" class="meta">Журнал JAWL не подключён.</pre><details><summary>Как это работает</summary><p class="meta">Companion не создаёт второго мозга: чтение, коррекция и забывание проходят через native JAWL memory API.</p></details></article></div>
         </section>
 
         <section class="tab-panel" data-panel="access">
@@ -289,6 +299,10 @@
         <section class="tab-panel" data-panel="system">
           <div class="page-heading"><div><span class="eyebrow">Diagnostics</span><h2>Система</h2><p>Диагностика провайдеров, ресурсы и аудит последних действий.</p></div></div>
           <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Состояние контуров</h3><p>Обновляется автоматически.</p></div></div><pre id="health">Загрузка…</pre><details open><summary>Doctor</summary><pre id="doctor" class="meta">loading...</pre></details></article><article class="glass-card"><div class="card-head"><div><h3>Аудит HostOS</h3><p>Последние решения policy и результаты инструментов.</p></div></div><pre id="audit" class="meta">Загрузка…</pre></article></div>
+                  <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Инициатива JAWL</h3><p>Проактивные сообщения приходят только в паузах диалога и с лимитом частоты.</p></div></div><label class="meta"><input type="checkbox" id="proactive-muted"> Режим тишины: не показывать и не озвучивать инициативу</label><br><label class="meta"><input type="checkbox" id="proactive-speak"> Озвучивать инициативу, когда диалог свободен</label><pre id="proactive" class="meta">Загрузка…</pre><div id="proactive-list" class="meta"></div></article><article class="glass-card"><div class="card-head"><div><h3>Консоль JAWL</h3><p>Полный пульт агента через единый origin компаньона.</p></div></div><p class="meta">Страница консоли отдаётся через тот же адрес, что и пульт: токен подставляется сервером, отдельный порт не нужен.</p><p><a class="button" href="/console/" target="_blank" rel="noopener">Открыть консоль JAWL</a></p></article></div>
+        </section>
+        <section class="tab-panel" data-panel="jawl">
+          <iframe class="console-frame" src="/console/" title="JAWL console" loading="lazy"></iframe>
         </section>
       </main>
     </div>
@@ -373,7 +387,45 @@
     const pendingAttachments = [];
     let sessionHeaders = {};
     let voice = null;
+    let activeDraftTimer = null;
+    function showLiveTranscript(text) {
+      const liveEl = document.querySelector('#mic-live-transcript');
+      if (!liveEl) return;
+      const clean = String(text || '').trim();
+      if (!clean) { liveEl.hidden = true; liveEl.textContent = ''; return; }
+      liveEl.hidden = false;
+      liveEl.innerHTML = '<span class="draft-prefix">услышано:</span>' + clean.replace(/[&<>]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]));
+    }
     let voiceQueue = Promise.resolve();
+    // P2 single-connection transport (opt-in): localStorage 'jawl-ws' = '1'.
+    // Chat and voice share one WebSocket instead of POST-per-chunk; the HTTP
+    // path stays the default so the flag can be rolled back instantly.
+    let voiceSocket = null;
+    const voiceSocketPending = new Map();
+    function wsTransportEnabled() {
+      try { return localStorage.getItem('jawl-ws') === '1'; } catch (_) { return false; }
+    }
+    function ensureVoiceSocket() {
+      if (!wsTransportEnabled()) return null;
+      if (voiceSocket && (voiceSocket.readyState === WebSocket.OPEN || voiceSocket.readyState === WebSocket.CONNECTING)) return voiceSocket;
+      try {
+        voiceSocket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws`);
+      } catch (_) { voiceSocket = null; return null; }
+      voiceSocket.addEventListener('message', event => {
+        let message = null;
+        try { message = JSON.parse(event.data); } catch (_) { return; }
+        if (!message || typeof message !== 'object') return;
+        if (message.type === 'voice_final') {
+          const pending = voiceSocketPending.get('voice_end');
+          if (pending) { voiceSocketPending.delete('voice_end'); pending(message); }
+        }
+      });
+      voiceSocket.addEventListener('close', () => {
+        for (const pending of voiceSocketPending.values()) pending({ ok: false, error: 'ws closed' });
+        voiceSocketPending.clear();
+      });
+      return voiceSocket;
+    }
     const MAX_PENDING_AUDIO_CHUNKS = 8;
     let ttsConfigured = false;
     let currentAudio = null;
@@ -381,6 +433,7 @@
     let ambientPlaybackActive = false;
     let chatAbort = null;
     let streamSpeechActive = false;
+    let speechPlaybackActive = false;
     let speechSession = null;
     let bargeInTriggered = false;
     let avatarAudioContext = null;
@@ -393,14 +446,37 @@
     let micMeterFrame = 0;
     let micMeterPending = null;
     try { avatarAudioChannel = new BroadcastChannel('jawl-voicecompanion-avatar'); } catch (_) { /* backend polling remains available */ }
-    function addMessage(who, text) {
+    function addMessage(who, text, options = {}) {
+      if (who === 'Companion' || who === 'Компаньон') clearProvisional();
       messages.querySelector('.empty-state')?.remove();
       const item = document.createElement('div');
-      item.className = 'message';
+      item.className = options.draft ? 'message draft' : 'message';
       item.innerHTML = `<div class="meta">${who}</div><div></div>`;
       item.lastElementChild.textContent = text;
       messages.appendChild(item);
       messages.scrollTop = messages.scrollHeight;
+      return item;
+    }
+    // Fast situational hint while the brain is busy: a dim provisional line
+    // from the freshest perception fusion, replaced by the real answer.
+    let provisionalMessage = null;
+    let provisionalTimer = null;
+    function clearProvisional() {
+      if (provisionalTimer) { window.clearTimeout(provisionalTimer); provisionalTimer = null; }
+      if (provisionalMessage) { provisionalMessage.remove(); provisionalMessage = null; }
+    }
+    async function showPerceptionDraft() {
+      if (!Object.keys(sessionHeaders).length) return;
+      try {
+        const response = await fetch('/api/perception/now', {headers: sessionHeaders, cache: 'no-store'});
+        if (!response.ok) return;
+        const data = await response.json();
+        const text = String(data.draft || '').trim();
+        if (!text) return;
+        clearProvisional();
+        provisionalMessage = addMessage('Смотрю', text, {draft: true});
+        provisionalTimer = window.setTimeout(clearProvisional, 30000);
+      } catch (_) { /* the hint is best-effort */ }
     }
     function renderAttachments() {
       attachmentList.replaceChildren(...pendingAttachments.map((file, index) => {
@@ -413,6 +489,19 @@
       }));
     }
     function setSignal(element, active) { element?.classList.toggle('active', Boolean(active)); }
+    async function resumeAudioContextBounded(context) {
+      if (!context || context.state !== 'suspended') return;
+      // Browser autoplay policies and headless WebAudio can leave resume()
+      // pending forever.  Audio observation must never block chat/TTS UI;
+      // the context may finish resuming later, while the bounded monitor
+      // remains a valid degraded state.
+      try {
+        await Promise.race([
+          context.resume(),
+          new Promise(resolve => window.setTimeout(resolve, 500)),
+        ]);
+      } catch (_) { /* keep the monitor alive in a degraded audio state */ }
+    }
     async function composeChatText(text) {
       if (!pendingAttachments.length) return text;
       const textFiles = pendingAttachments.filter(file => /\.(txt|md)$/i.test(file.name));
@@ -420,6 +509,39 @@
       if (unsupported.length) throw new Error(`Текущий контур не анализирует этот тип вложений: ${unsupported.map(file => file.name).join(', ')}`);
       const parts = await Promise.all(textFiles.map(async file => `[Файл: ${file.name}]\n${(await file.text()).slice(0, 12000)}`));
       return `${text}\n\n${parts.join('\n\n')}`.slice(0, 30000);
+    }
+    async function dispatchLocalSlashCommand(rawText) {
+      const match = String(rawText || '').trim().match(/^\/([a-zа-яё][\wа-яё-]*)(?:\s+([\s\S]*))?$/iu);
+      if (!match) return false;
+      const command = match[1].toLocaleLowerCase('ru-RU');
+      const argument = String(match[2] || '').trim();
+      const local = (text) => { addMessage('System', text); return true; };
+      if (command === 'help' || command === 'помощь') {
+        return local('Локальные команды: /help, /status, /stop, /clear, /tab home|voice|perception|memory|access|system. Команды /goal и остальные передаются JAWL.');
+      }
+      if (command === 'stop' || command === 'стоп') {
+        if (chatAbort) chatAbort.abort();
+        await stopSpeech();
+        return local('Текущий диалоговый и голосовой turn остановлен.');
+      }
+      if (command === 'clear' || command === 'очистить') {
+        messages.replaceChildren();
+        return local('Очищен только видимый список сообщений; каноническая история JAWL не удалена.');
+      }
+      if (command === 'status' || command === 'статус') {
+        await refreshOnce();
+        return local('Состояние контуров обновлено. Подробности доступны во вкладке «Система».');
+      }
+      if (command === 'tab' || command === 'вкладка') {
+        const aliases = { обзор: 'home', home: 'home', голос: 'voice', voice: 'voice', восприятие: 'perception', perception: 'perception', память: 'memory', memory: 'memory', доступ: 'access', access: 'access', система: 'system', system: 'system' };
+        const tab = aliases[argument.toLocaleLowerCase('ru-RU')];
+        if (!tab) return local('Укажите вкладку: /tab home|voice|perception|memory|access|system.');
+        document.querySelector(`[data-tab="${tab}"]`)?.click();
+        return local(`Открыта вкладка: ${tab}.`);
+      }
+      // Goal/task commands remain in the JAWL conversation so its native
+      // GoalSkills, memory and policy stay the sole authority.
+      return false;
     }
     function clamp(value, low, high) { return Math.max(low, Math.min(high, value)); }
     async function refreshMicDevices() {
@@ -435,7 +557,19 @@
         document.querySelector('#mic-device-status').textContent = `Список микрофонов недоступен: ${error.message}`;
       }
     }
-    micDevice?.addEventListener('change', () => { try { localStorage.setItem('jawl-mic-device', micDevice.value); } catch (_) {} });
+    micDevice?.addEventListener('change', async () => {
+      try { localStorage.setItem('jawl-mic-device', micDevice.value); } catch (_) {}
+      // Applying a device change to a live stream requires a restart; do it
+      // automatically so the voice-tab selection always matches the capture.
+      if (voice) {
+        try {
+          await stopMicrophone();
+          await startMicrophone();
+        } catch (error) {
+          document.querySelector('#mic-status').textContent = `Микрофон недоступен: ${error.message}`;
+        }
+      }
+    });
     refreshMicDevices();
     navigator.mediaDevices?.addEventListener?.('devicechange', refreshMicDevices);
     function amplitudeDb(value) {
@@ -520,10 +654,11 @@
       return item.lastElementChild;
     }
     async function streamChat(text, speech, controller) {
+      const correlationId = `turn-chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', ...sessionHeaders},
-        body: JSON.stringify({text}),
+        body: JSON.stringify({text, correlation_id: correlationId}),
         signal: controller.signal
       });
       if (!response.ok || !response.body) return null;
@@ -537,11 +672,21 @@
         const event = JSON.parse(line);
         if (event.type === 'delta') {
           output.textContent += event.text || '';
-          pushSpeechDelta(speech, event.text || '');
+          // Deltas are NOT pushed into streaming speech here: an error turn is
+          // only known at the final envelope, and error text must never be
+          // voiced. Speech is committed after the final verdict below.
           messages.scrollTop = messages.scrollHeight;
         } else if (event.type === 'final') {
           finalResponse = event.response || null;
         } else if (event.type === 'error') {
+          // Provisional native deltas are display-only until the authoritative
+          // envelope arrives. If JAWL/provider fails, discard them instead of
+          // leaving a truncated sentence in the conversation history.
+          if (event.discard_deltas) {
+            const message = output.closest('.message');
+            if (message) message.remove();
+          }
+          if (speech) void stopSpeech();
           throw new Error(event.error || 'Chat stream failed');
         }
       };
@@ -557,33 +702,39 @@
       if (!finalResponse) throw new Error('Chat stream ended without a response envelope');
       return finalResponse;
     }
-    async function refresh() {
-      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, jawlHostos, jawlJournal, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse] = await Promise.all([
-        fetch('/api/state', {headers: sessionHeaders}),
-        fetch('/api/health'),
-        fetch('/api/hostos/approvals', {headers: sessionHeaders}),
-        fetch('/api/vision/status'),
-        fetch('/api/tts/status'),
-        fetch('/api/jawl/overview', {headers: sessionHeaders}),
-        fetch('/api/jawl/hostos', {headers: sessionHeaders}),
-        fetch('/api/jawl/journal?limit=10', {headers: sessionHeaders}),
-        fetch('/api/audit', {headers: sessionHeaders}),
-        fetch('/api/doctor'),
-        fetch('/api/ambient-memory', {headers: sessionHeaders}),
-        fetch('/api/ambient-audio', {headers: sessionHeaders})
+    async function refreshOnce() {
+      const get = (url, options) => fetch(url, options).catch(() => new Response('{}', {status: 503, headers: {'Content-Type': 'application/json'}}));
+      const [state, status, approvalResponse, visionStatus, ttsStatus, jawlOverview, jawlMemory, jawlHostos, jawlJournal, auditResponse, doctorResponse, ambientMemoryResponse, ambientAudioResponse, proactiveResponse] = await Promise.all([
+        get('/api/state', {headers: sessionHeaders}),
+        get('/api/health'),
+        get('/api/hostos/approvals', {headers: sessionHeaders}),
+        get('/api/vision/status'),
+        get('/api/tts/status'),
+        get('/api/jawl/overview', {headers: sessionHeaders}),
+        get('/api/jawl/memory', {headers: sessionHeaders}),
+        get('/api/jawl/hostos', {headers: sessionHeaders}),
+        get('/api/jawl/journal?limit=10', {headers: sessionHeaders}),
+        get('/api/audit', {headers: sessionHeaders}),
+        get('/api/doctor'),
+        get('/api/ambient-memory', {headers: sessionHeaders}),
+        get('/api/ambient-audio', {headers: sessionHeaders}),
+        get('/api/proactive', {headers: sessionHeaders})
       ]);
       const stateData = await state.json();
       const statusData = await status.json();
+      observeRuntimeInstance(statusData);
       const approvalData = approvalResponse.ok ? await approvalResponse.json() : {approvals: []};
       const visionStatusData = visionStatus.ok ? await visionStatus.json() : {configured: false};
       const ttsStatusData = ttsStatus.ok ? await ttsStatus.json() : {configured: false};
       const jawlData = jawlOverview.ok ? await jawlOverview.json() : {configured: false, status: 'unavailable'};
+      const jawlMemoryData = jawlMemory.ok ? await jawlMemory.json() : {configured: false, status: 'unavailable'};
       const jawlHostosData = jawlHostos.ok ? await jawlHostos.json() : {configured: false, status: 'unavailable'};
       const jawlJournalData = jawlJournal.ok ? await jawlJournal.json() : {configured: false, status: 'unavailable'};
       const auditData = auditResponse.ok ? await auditResponse.json() : {events: []};
       const doctorData = doctorResponse.ok ? await doctorResponse.json() : {status: 'unavailable'};
       const ambientMemoryData = ambientMemoryResponse.ok ? await ambientMemoryResponse.json() : {state: {enabled: false}};
       const ambientAudioData = ambientAudioResponse.ok ? await ambientAudioResponse.json() : {configured: false, status: 'unavailable'};
+      const proactiveData = proactiveResponse.ok ? await proactiveResponse.json() : {configured: false};
       window.renderMiniAvatar?.(stateData);
       const gatewayState = String(statusData.status || 'unknown');
       document.querySelector('#top-connection').textContent = `Локальный контур · ${gatewayState}`;
@@ -607,6 +758,45 @@
       document.querySelector('#deny-risks').value = (stateData.policy.deny_risks || []).join(', ');
       health.textContent = JSON.stringify(statusData, null, 2);
       document.querySelector('#doctor').textContent = JSON.stringify(doctorData, null, 2);
+      {
+        const mutedBox = document.querySelector('#proactive-muted');
+        const speakBox = document.querySelector('#proactive-speak');
+        if (proactiveData && proactiveData.configured && mutedBox && speakBox) {
+          if (document.activeElement !== mutedBox) mutedBox.checked = Boolean(proactiveData.muted);
+          if (document.activeElement !== speakBox) speakBox.checked = Boolean(proactiveData.speak);
+          const delivered = Array.isArray(proactiveData.delivered) ? proactiveData.delivered : [];
+          const queued = Array.isArray(proactiveData.queued) ? proactiveData.queued : [];
+          document.querySelector('#proactive').textContent = `доставлено за час: ${proactiveData.delivered_last_hour || 0}; в очереди: ${queued.length}` + (proactiveData.last_error ? `; ошибка: ${proactiveData.last_error}` : '');
+          const list = document.querySelector('#proactive-list');
+          list.textContent = '';
+          for (const item of delivered.slice(-3)) {
+            const row = document.createElement('div');
+            row.textContent = `· [${item.time || ''}] ${item.text || ''}`;
+            if (item.feedback) {
+              row.textContent += ` (оценено: ${item.feedback})`;
+            } else if (item.id) {
+              for (const [verdict, label] of [['useful', 'полезно'], ['noise', 'шум']]) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'meta';
+                button.textContent = label;
+                button.addEventListener('click', async () => {
+                  try { await apiPost('/api/proactive/feedback', {item_id: item.id, verdict}); } catch (_) { /* best effort */ }
+                  refresh();
+                });
+                row.appendChild(document.createTextNode(' '));
+                row.appendChild(button);
+              }
+            }
+            list.appendChild(row);
+          }
+          for (const item of queued.slice(-3)) {
+            const row = document.createElement('div');
+            row.textContent = `(ждёт) [${item.time || ''}] ${item.text || ''}`;
+            list.appendChild(row);
+          }
+        }
+      }
       document.querySelector('#jawl-overview').textContent = JSON.stringify({...jawlData, hostos: jawlHostosData}, null, 2);
       const journalPlans = Array.isArray(jawlJournalData.plans)
         ? jawlJournalData.plans.map(plan => ({
@@ -625,13 +815,13 @@
         : 'Канонический журнал JAWL не подключён.';
       const memoryEditor = document.querySelector('#jawl-memory-editor');
       memoryEditor.replaceChildren();
-      const memoryRecords = jawlData.sources?.memory?.structured?.memories || [];
+      const memoryRecords = jawlMemoryData.structured?.memories || [];
       const memoryQuery = String(document.querySelector('#jawl-memory-search')?.value || '').trim().toLowerCase();
       const memoryFilter = document.querySelector('#jawl-memory-filter')?.value || 'all';
-      document.querySelector('#home-memory-status').textContent = jawlData.configured
+      document.querySelector('#home-memory-status').textContent = jawlMemoryData.configured
         ? `${Array.isArray(memoryRecords) ? memoryRecords.length : 0} записей` : 'не подключена';
-      if (!jawlData.configured || !Array.isArray(memoryRecords) || !memoryRecords.length) {
-        memoryEditor.textContent = jawlData.configured ? 'Активных структурированных записей нет.' : 'Каноническая память JAWL не подключена.';
+      if (!jawlMemoryData.configured || !Array.isArray(memoryRecords) || !memoryRecords.length) {
+        memoryEditor.textContent = jawlMemoryData.configured ? 'Активных структурированных записей нет.' : 'Каноническая память JAWL не подключена.';
       } else {
         const visibleRecords = memoryRecords.filter(record => {
           const haystack = [record.memory_key, record.kind, record.subject, record.predicate, record.value, record.source].join(' ').toLowerCase();
@@ -754,6 +944,52 @@
         }
       }
     }
+    let runtimeInstanceId = null;
+    let runtimeProbeInFlight = false;
+    async function probeRuntimeInstance() {
+      if (runtimeProbeInFlight) return;
+      runtimeProbeInFlight = true;
+      try {
+        const response = await fetch('/api/health', {cache: 'no-store'});
+        if (!response.ok) return;
+        observeRuntimeInstance(await response.json());
+      } catch (_) {
+        // A brief restart window is expected; the next probe will reconcile it.
+      } finally {
+        runtimeProbeInFlight = false;
+      }
+    }
+    function observeRuntimeInstance(statusData) {
+      const next = String(statusData?.runtime_instance_id || '');
+      if (!next) return;
+      if (runtimeInstanceId && runtimeInstanceId !== next) {
+        // Stop local WebAudio immediately. The old backend may already be gone,
+        // so this must not depend on /api/tts/cancel succeeding.
+        void stopSpeech();
+        bargeInTriggered = false;
+        document.querySelector('#mic-status').textContent = 'Контур перезапущен; старое аудио остановлено.';
+      }
+      runtimeInstanceId = next;
+    }
+    // Keep dashboard refreshes single-flight. Search/filter/actions can fire
+    // while a native JAWL restart is settling; overlapping full refreshes
+    // otherwise amplify slow endpoint failures and hide the memory panel.
+    let refreshInFlight = null;
+    let refreshQueued = false;
+    function refresh() {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return refreshInFlight;
+      }
+      refreshInFlight = refreshOnce().finally(() => {
+        refreshInFlight = null;
+        if (refreshQueued) {
+          refreshQueued = false;
+          refresh();
+        }
+      });
+      return refreshInFlight;
+    }
     async function apiPost(path, body) {
       return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
     }
@@ -792,6 +1028,7 @@
     function stopAvatarAudioMonitor() {
       const monitor = avatarAudioMonitor;
       avatarAudioMonitor = null;
+      speechPlaybackActive = false;
       if (monitor) {
         cancelAnimationFrame(monitor.frame);
         if (monitor.sources) {
@@ -802,6 +1039,7 @@
           monitor.sources.clear();
         }
         try { monitor.source?.disconnect(); } catch (_) {}
+        try { monitor.gain?.disconnect(); } catch (_) {}
         try { monitor.analyser.disconnect(); } catch (_) {}
       }
       publishAvatarAudio(0, false);
@@ -815,7 +1053,7 @@
       }
       try {
         avatarAudioContext ||= new AudioContextClass();
-        if (avatarAudioContext.state === 'suspended') await avatarAudioContext.resume();
+        await resumeAudioContextBounded(avatarAudioContext);
         if (currentAudio !== audio) return;
         const source = avatarAudioContext.createMediaElementSource(audio);
         const analyser = avatarAudioContext.createAnalyser();
@@ -856,11 +1094,13 @@
       if (!AudioContextClass) return null;
       try {
         avatarAudioContext ||= new AudioContextClass();
-        if (avatarAudioContext.state === 'suspended') await avatarAudioContext.resume();
+        await resumeAudioContextBounded(avatarAudioContext);
         const analyser = avatarAudioContext.createAnalyser();
         analyser.fftSize = 512;
+        const gain = avatarAudioContext.createGain();
+        gain.connect(analyser);
         analyser.connect(avatarAudioContext.destination);
-        const monitor = {kind: 'stream', sources: new Set(), analyser, frame: 0, streamDone: false};
+        const monitor = {kind: 'stream', sources: new Set(), analyser, gain, frame: 0, streamDone: false};
         avatarAudioMonitor = monitor;
         const values = new Uint8Array(analyser.fftSize);
         const sample = () => {
@@ -897,13 +1137,28 @@
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return bytes.buffer;
     }
-    function scheduleSpeechAudio(session, audioBuffer) {
+    async function waitForSpeechBuffer(session) {
+      const maxLead = 0.85;
+      while (!session.stopped && !session.controller.signal.aborted) {
+        const lead = session.nextStart - avatarAudioContext.currentTime;
+        if (lead <= maxLead) return;
+        await new Promise(resolve => window.setTimeout(resolve, Math.min(120, Math.max(20, (lead - 0.65) * 1000))));
+      }
+      throw new DOMException('Speech cancelled', 'AbortError');
+    }
+    async function scheduleSpeechAudio(session, audioBuffer) {
       if (speechSession !== session || avatarAudioMonitor !== session.monitor || session.controller.signal.aborted) {
+        throw new DOMException('Speech cancelled', 'AbortError');
+      }
+      // Keep a small bounded jitter-buffer: enough to mask TTS timing jitter,
+      // but short enough that barge-in can discard the unsaid tail.
+      await waitForSpeechBuffer(session);
+      if (speechSession !== session || session.stopped || session.controller.signal.aborted) {
         throw new DOMException('Speech cancelled', 'AbortError');
       }
       const source = avatarAudioContext.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(session.monitor.analyser);
+      source.connect(session.monitor.gain || session.monitor.analyser);
       session.monitor.sources.add(source);
       source.onended = () => {
         session.monitor.sources.delete(source);
@@ -911,6 +1166,10 @@
       };
       const startAt = Math.max(session.nextStart, avatarAudioContext.currentTime + 0.01);
       source.start(startAt);
+      // A pending TTS request is not yet audible. Arm barge-in only after a
+      // real WebAudio source has been scheduled, otherwise microphone noise or
+      // a short AEC leak can cancel speech before its first audio buffer.
+      speechPlaybackActive = true;
       session.nextStart = startAt + audioBuffer.duration;
     }
     async function consumeTtsStream(response, session) {
@@ -924,7 +1183,7 @@
         if (event.type === 'cancelled') throw new DOMException('Speech cancelled', 'AbortError');
         if (event.type !== 'audio') return;
         const audioBuffer = await avatarAudioContext.decodeAudioData(decodeBase64Audio(event.data_base64));
-        scheduleSpeechAudio(session, audioBuffer);
+        await scheduleSpeechAudio(session, audioBuffer);
       };
       while (true) {
         const result = await reader.read();
@@ -940,7 +1199,7 @@
       const monitor = await startAvatarStreamMonitor();
       if (!monitor) return null;
       const session = {
-        monitor, controller, nextStart: avatarAudioContext.currentTime + 0.03,
+        monitor, controller, nextStart: avatarAudioContext.currentTime + 0.25,
         queue: Promise.resolve(), buffer: '', seenText: '', stopped: false, emotion
       };
       speechSession = session;
@@ -997,6 +1256,36 @@
       await session.queue;
       session.monitor.streamDone = true;
     }
+    function splitSimulatedSpeech(text) {
+      const value = String(text || '').trim();
+      if (!value) return [];
+      const sentences = value.split(/(?<=[.!?…])\s+/u).filter(Boolean);
+      const segments = [];
+      for (const sentence of sentences) {
+        let rest = sentence.trim();
+        while (rest) {
+          const words = rest.split(/\s+/u);
+          if (words.length <= 12) { segments.push(rest); break; }
+          const cut = words.slice(0, 12).join(' ').length;
+          const boundary = rest.lastIndexOf(' ', cut);
+          const end = boundary > 0 ? boundary : cut;
+          segments.push(rest.slice(0, end).trim());
+          rest = rest.slice(end).trimStart();
+        }
+      }
+      return segments;
+    }
+    async function speakSimulatedStream(text, controller, emotion = null) {
+      const session = await createSpeechSession(controller, emotion);
+      if (!session) return false;
+      for (const segment of splitSimulatedSpeech(text)) {
+        if (session.stopped || controller.signal.aborted) throw new DOMException('Speech cancelled', 'AbortError');
+        queueSpeechSegment(session, segment);
+      }
+      await session.queue;
+      session.monitor.streamDone = true;
+      return true;
+    }
     async function speakStream(text, controller, emotion = null) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass || !window.ReadableStream) return false;
@@ -1039,6 +1328,52 @@
         ttl_seconds: 30
       }).catch(() => { /* ambient echo protection is best-effort in text-only mode */ });
     }
+    function backchannelEnabled() {
+      return document.querySelector('#backchannel') || {checked: false};
+    }
+    const backchannelCache = {blob: null, busy: false};
+    async function playBackchannel() {
+      // A quiet acknowledgement inside the user's turn; never owns the turn
+      // and never touches the TTS speech session state.
+      if (backchannelCache.busy || !ttsConfigured) return;
+      backchannelCache.busy = true;
+      try {
+        if (!backchannelCache.blob) {
+          const response = await fetch('/api/tts/synthesize', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', ...sessionHeaders},
+            body: JSON.stringify({text: 'Угу.', voice: ttsVoice.value.trim() || null, speed: 1.0})
+          });
+          if (!response.ok) return;
+          backchannelCache.blob = await response.blob();
+        }
+        const url = URL.createObjectURL(backchannelCache.blob);
+        const audio = new Audio(url);
+        audio.volume = 0.55;
+        audio.onended = () => URL.revokeObjectURL(url);
+        await audio.play();
+      } catch (_) {
+        /* fail-soft: a missed acknowledgement never breaks capture */
+      } finally {
+        backchannelCache.busy = false;
+      }
+    }
+    function duckPlayback(seconds = 0.12) {
+      // DUCK before STOP: fast fade so the interruption does not click.
+      const session = speechSession;
+      const context = avatarAudioContext;
+      if (!session || !context || !session.monitor?.gain) return false;
+      try {
+        const param = session.monitor.gain.gain;
+        const now = context.currentTime;
+        param.cancelScheduledValues(now);
+        param.setValueAtTime(Math.max(0.0001, param.value), now);
+        param.linearRampToValueAtTime(0.0001, now + seconds);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
     async function stopSpeech() {
       setAmbientPlayback(false);
       if (speechSession) speechSession.stopped = true;
@@ -1071,7 +1406,9 @@
       ttsAbort = controller;
       setAmbientPlayback(true);
       try {
-        const streamed = await speakStream(text, controller, emotion);
+        // JAWL's response is one JSON envelope. Simulate incremental speech
+        // after receipt by sending bounded phrases to the streaming TTS queue.
+        const streamed = await speakSimulatedStream(text, controller, emotion);
         if (streamed) return;
         const response = await fetch('/api/tts/synthesize', {
           method: 'POST',
@@ -1135,14 +1472,25 @@
       if (active) active.pendingUploads += 1;
       const payload = {
         session_id: sessionId, sample_rate: 16000, channels: 1,
+        correlation_id: active?.correlationId || null,
         pcm16_base64: pcm16Base64(downsample(samples, sampleRate, 16000))
       };
+      const socket = (typeof ensureVoiceSocket === 'function') ? ensureVoiceSocket() : null;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify({action: 'voice_chunk', ...payload}));
+          if (active) active.pendingUploads = Math.max(0, active.pendingUploads - 1);
+          return true;
+        } catch (_) { /* fall through to the HTTP transport */ }
+      }
       voiceQueue = voiceQueue.then(async () => {
         const response = await apiPost('/api/voice/audio', payload);
         const data = await response.json();
         for (const answer of data.responses || []) {
           addMessage('Компаньон', answer.text || answer.error);
-          speak(answer.text, answer.emotion);
+          // Voice audio chunks must not own playback. Final voice/end selects
+          // one speech response; speaking here would cancel it on the next
+          // chunk and produce an abrupt cut.
         }
         if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem недоступен');
       }).catch(error => {
@@ -1173,31 +1521,75 @@
       return active.flushPromise;
     }
     function handleVoiceResponses(data) {
-      for (const answer of data.responses || []) {
-        addMessage('Companion', answer.text || answer.error);
-        speak(answer.text, answer.emotion);
+      const answers = (data.responses || []).filter(answer => answer && typeof answer === 'object');
+      const transcript = String(data.transcript || '').trim();
+      if (transcript) addMessage('Вы', transcript);
+      showLiveTranscript(transcript);
+      if (data.filtered === 'asr_noise_hallucination') {
+        const statusEl = document.querySelector('#mic-status');
+        if (statusEl) statusEl.textContent = 'Обнаружен шум без речи — этот отрывок помечен техническим и не отправлен в диалог.';
+        showLiveTranscript('');
       }
+      for (const answer of answers) {
+        addMessage('Companion', answer.text || answer.error);
+      }
+      // Render every protocol response, but allow only one speech owner.
+      // Calling speak() for each item would cancel the previous TTS stream.
+      // Error/technical responses are never voiced.
+      const answer = answers[answers.length - 1];
+      if (answer?.text && shouldVoice(answer)) void speak(answer.text, answer.emotion);
+    }
+    function shouldVoice(envelope) {
+      if (!envelope) return false;
+      if (envelope.speak === false) return false;
+      if (envelope.avatar && envelope.avatar.state === 'error') return false;
+      if (envelope.emotion && envelope.emotion.id === 'error') return false;
+      return true;
     }
     async function finishVoiceUtterance(active) {
       if (!active) return;
       if (active.finishPromise) return active.finishPromise;
       active.finalizing = true;
       flushMicSamples(active);
+      void showPerceptionDraft();
       active.finishPromise = (async () => {
         await voiceQueue;
         try {
-          const response = await apiPost('/api/voice/end', {session_id: active.sessionId});
-          const data = await response.json();
+          let data;
+          const socket = (typeof ensureVoiceSocket === 'function') ? ensureVoiceSocket() : null;
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            data = await new Promise(resolve => {
+              voiceSocketPending.set('voice_end', resolve);
+              socket.send(JSON.stringify({
+                action: 'voice_end', session_id: active.sessionId, correlation_id: active.correlationId,
+              }));
+              window.setTimeout(() => {
+                if (voiceSocketPending.get('voice_end')) {
+                  voiceSocketPending.delete('voice_end');
+                  resolve({ok: false, error: 'ws voice_end timeout'});
+                }
+              }, 15000);
+            });
+            if (!data.ok && data.error) throw new Error(data.error);
+          } else {
+            const response = await apiPost('/api/voice/end', {
+              session_id: active.sessionId, correlation_id: active.correlationId,
+            });
+            data = await response.json();
+            if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem unavailable');
+          }
           handleVoiceResponses(data);
-          if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem unavailable');
         } catch (error) {
           document.querySelector('#mic-status').textContent = `Hands-free finish error: ${error.message}`;
         } finally {
           if (voice === active) {
             active.sessionId = `browser-mic-${Date.now()}-${++voiceSequence}`;
+            active.correlationId = `turn-voice-${Date.now()}-${voiceSequence}`;
             active.finalizing = false;
             active.finishPromise = null;
-            active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0};
+            active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false};
+            active.lastDraftHold = false;
+            active.backchannelSent = false;
             active.gate.open = false;
             active.gate.silentBlocks = 0;
             active.gate.preRoll.length = 0;
@@ -1212,8 +1604,11 @@
     async function stopMicrophone() {
       if (!voice) return;
       const active = voice;
+      if (activeDraftTimer) { window.clearInterval(activeDraftTimer); activeDraftTimer = null; }
       await requestMicWorkletFlush(active);
       voice = null;
+      try { voiceSocket?.close(); } catch (_) { /* the socket is optional */ }
+      voiceSocket = null;
       if (active.gate.calibrationTimer) window.clearTimeout(active.gate.calibrationTimer);
       active.gate.calibration = null;
       try { active.processor.port.close(); } catch (_) {}
@@ -1230,12 +1625,11 @@
       }
       await voiceQueue;
       try {
-        const response = await apiPost('/api/voice/end', {session_id: active.sessionId});
+        const response = await apiPost('/api/voice/end', {
+          session_id: active.sessionId, correlation_id: active.correlationId,
+        });
         const data = await response.json();
-        for (const answer of data.responses || []) {
-          addMessage('Компаньон', answer.text || answer.error);
-          speak(answer.text, answer.emotion);
-        }
+        handleVoiceResponses(data);
       } catch (error) {
         document.querySelector('#mic-status').textContent = `Остановка микрофона: ${error.message}`;
       }
@@ -1243,9 +1637,13 @@
       finishMicMeter();
       document.querySelector('#mic').textContent = '🎙️ Включить микрофон';
       document.querySelector('#mic-status').textContent = 'Микрофон выключен.';
+      showLiveTranscript('');
     }
     function updateVoiceVad(active, rms) {
       if (!handsFree.checked || active.finalizing) return;
+      // Never end a turn while our own speech is still playing: the window
+      // around a barge-in fade is full of echo and would finalize a fragment.
+      if (currentAudio || speechPlaybackActive) return;
       const now = performance.now();
       if (rms >= gateThreshold()) {
         if (!active.vad.speaking) {
@@ -1253,9 +1651,23 @@
           active.vad.startedAt = now;
         }
         active.vad.lastSpeechAt = now;
+        // Adaptive backchannel: one quiet acknowledgement for a long turn.
+        if (backchannelEnabled().checked && !active.backchannelSent && now - active.vad.startedAt >= 7000) {
+          active.backchannelSent = true;
+          void playBackchannel();
+        }
         return;
       }
-      if (active.vad.speaking && now - active.vad.lastSpeechAt >= 800 && now - active.vad.startedAt >= 300) {
+      if (!active.vad.speaking) return;
+      const silence = now - active.vad.lastSpeechAt;
+      // Semantic end-of-turn: silence is not an end while the live draft
+      // reads unfinished (trailing "и/но/что…"). One bounded extension per
+      // utterance keeps a monologue from holding the turn forever.
+      if (!active.vad.holdUsed && active.lastDraftHold && silence >= 800) {
+        active.vad.holdUsed = true;
+      }
+      const required = active.vad.holdUsed ? 2000 : (active.vad.afterBargeIn ? 1500 : 800);
+      if (silence >= required && now - active.vad.startedAt >= 300) {
         finishVoiceUtterance(active);
       }
     }
@@ -1265,7 +1677,15 @@
       const audio = {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false};
       if (micDevice?.value) audio.deviceId = {exact: micDevice.value};
       const stream = await navigator.mediaDevices.getUserMedia({audio});
+      // Chromium hides real device labels until the site has microphone
+      // permission; refresh the selector now that the grant is recorded.
+      refreshMicDevices();
       const context = new AudioContext();
+      // Chromium may create a suspended context even after the microphone
+      // permission gesture. Resume it explicitly so the AudioWorklet starts
+      // consuming real capture frames in headless and tablet browsers alike.
+      await context.resume();
+      ensureVoiceSocket();
       try {
         await context.audioWorklet.addModule('/mic-processor.js');
       } catch (error) {
@@ -1293,6 +1713,7 @@
         const inputSamples = event.data instanceof ArrayBuffer
           ? new Float32Array(event.data) : null;
         if (!inputSamples?.length) return;
+        if (active.receivedChunks !== undefined) active.receivedChunks += 1;
         let energy = 0;
         let peak = 0;
         for (const sample of inputSamples) {
@@ -1300,16 +1721,57 @@
           peak = Math.max(peak, Math.abs(sample));
         }
         const rms = Math.sqrt(energy / Math.max(1, inputSamples.length));
+        if (rms > 0.001) active.sawSignal = true;
+        if (active.lastRms === undefined || rms > active.lastRms) active.lastRms = rms;
         const gated = passThroughMicGate(active, inputSamples, rms);
+        // Real-time capture feedback in the chat status line: seconds of
+        // active speech and a live listening marker, throttled to 1 Hz.
+        const nowMs = performance.now();
+        if (nowMs - (active.lastStatusAt || 0) > 900) {
+          active.lastStatusAt = nowMs;
+          const statusEl = document.querySelector('#mic-status');
+          if (statusEl) {
+            statusEl.textContent = gated.open
+              ? `🎤 Запись · ${Math.max(0, Math.round((nowMs - (active.vad.startedAt || nowMs)) / 1000))} с`
+              : 'Слушаю… (порог закрыт)';
+          }
+        }
+        if (window.__voiceE2E) {
+          window.__voiceE2E.worklet_chunks = (window.__voiceE2E.worklet_chunks || 0) + 1;
+          window.__voiceE2E.last_rms = rms;
+          window.__voiceE2E.last_gate_open = gated.open;
+        }
         updateMicMeter(rms, peak, gated.open);
-        if (!bargeInTriggered && (currentAudio || ttsAbort || streamSpeechActive)) {
-          if (rms >= 0.08) {
-            bargeInTriggered = true;
-            stopSpeech();
+        const playbackActive = Boolean(currentAudio || speechPlaybackActive);
+        if (!bargeInTriggered && gated.open && playbackActive) {
+          // Use the calibrated input gate as the barge-in threshold too. A
+          // fixed RMS value made real microphones and synthetic fixtures
+          // disagree: VAD saw speech while playback was left running.
+          bargeInTriggered = true;
+          // The overlapping beginning passed through the browser echo
+          // canceller while our own voice was playing, so it transcribes
+          // badly. Drop it and start a clean utterance once the duck stops
+          // playback; the user repeats at most one syllable.
+          samples.length = 0;
+          active.gate.preRoll.length = 0;
+          active.gate.silentBlocks = 0;
+          active.gate.open = false;
+          active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false, afterBargeIn: true};
+          active.lastDraftHold = false;
+          // New ASR session: the server-side buffer for the old session still
+          // holds echo-contaminated audio, so the final transcript for the
+          // barge-in utterance must be built from fresh frames only.
+          active.sessionId = `browser-mic-${Date.now()}-${++voiceSequence}`;
+          active.correlationId = `turn-voice-${Date.now()}-${voiceSequence}`;
+          if (window.__voiceE2E) window.__voiceE2E.barge_in_ms = performance.now();
+          if (duckPlayback()) {
+            window.setTimeout(() => { void stopSpeech(); }, 130);
+          } else {
+            void stopSpeech();
           }
         }
         updateVoiceVad(active, gated.open ? rms : 0);
-        if (!active.finalizing && gated.open) {
+        if (!active.finalizing && gated.open && !playbackActive) {
           if (gated.samples.length) samples.push(...gated.samples);
           samples.push(...inputSamples);
           while (samples.length >= chunkSize) {
@@ -1321,10 +1783,15 @@
       processor.connect(mute);
       mute.connect(context.destination);
       voice = {
-        stream, context, source, processor, samples, sessionId: `browser-mic-${Date.now()}-${++voiceSequence}`,
+        stream, context, source, processor, samples,
+        sessionId: `browser-mic-${Date.now()}-${++voiceSequence}`,
+        correlationId: `turn-voice-${Date.now()}-${voiceSequence}`,
         finalizing: false, finishPromise: null, pendingUploads: 0, droppedChunks: 0,
+        receivedChunks: 0,
         flushPromise: null, flushResolve: null,
-        vad: {speaking: false, lastSpeechAt: 0, startedAt: 0},
+        vad: {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false},
+        lastDraftHold: false,
+        backchannelSent: false,
         gate: {
           threshold: gateThreshold(), open: false, silentBlocks: 0, releaseBlocks: 3,
           preRoll: [], preRollLimit: Math.floor(context.sampleRate * 0.12),
@@ -1336,6 +1803,73 @@
       micGateStatus.textContent = 'Gate активен до сети/ASR; калибровка предполагает тишину.';
       document.querySelector('#mic').textContent = '⏹ Выключить микрофон';
       document.querySelector('#mic-status').textContent = 'Микрофон слушает; VoiceMem сам определяет конец фразы.';
+      // Live draft transcript: streaming ASR answers in ~0.8 s, the
+      // re-transcription fallback needs far longer, so the cadence adapts to
+      // whichever mode answered.
+      showLiveTranscript('');
+      let draftDelay = 2500;
+      const scheduleDraft = () => {
+        activeDraftTimer = window.setTimeout(async () => {
+          const current = voice;
+          if (!current || current.finalizing) { activeDraftTimer = null; return; }
+          if (current.receivedChunks) {
+            try {
+              const response = await apiPost('/api/voice/draft', {session_id: current.sessionId});
+              if (voice === current) {
+                const data = await response.json();
+                showLiveTranscript(data.draft);
+                current.lastDraftHold = Boolean(data.hold);
+                draftDelay = data.mode === 'streaming' ? 800 : 2500;
+              }
+            } catch (_) { /* fail-soft: drafts never break capture */ }
+          }
+          scheduleDraft();
+        }, draftDelay);
+      };
+      scheduleDraft();
+      // No-audio watchdog: a stream can open successfully yet deliver no
+      // frames (device held exclusively by another app, disabled in Windows,
+      // or hardware-muted). Surface that instead of a silent meter.
+      const watchTrack = stream.getAudioTracks()[0];
+      const describeTrack = () => {
+        if (!watchTrack) return '';
+        const settings = watchTrack.getSettings ? watchTrack.getSettings() : {};
+        return ` (устройство: ${watchTrack.label || 'по умолчанию'}, состояние: ${watchTrack.readyState}${watchTrack.muted ? ', ВЫКЛЮЧЕНО СИСТЕМОЙ' : ''}${settings.sampleRate ? `, ${Math.round(settings.sampleRate)} Hz` : ''})`;
+      };
+      const startedVoice = voice;
+      if (startedVoice && startedVoice.context === context) {
+        const gateCardStatus = document.querySelector('#mic-gate-status');
+        const activeDeviceLabel = (watchTrack && watchTrack.label) || 'системный';
+        micGateStatus.textContent = `Активен вход: ${activeDeviceLabel}. Говорите — сигнал появится в полосе выше.`;
+        if (gateCardStatus) gateCardStatus.textContent = `Gate активен; вход: ${activeDeviceLabel}.`;
+        window.setTimeout(() => {
+          if (voice !== startedVoice) return;
+          const flowed = startedVoice.receivedChunks > 0
+            || startedVoice.samples.length > 0
+            || (startedVoice.gate.preRoll && startedVoice.gate.preRoll.length > 0);
+          let diagnosis = '';
+          if (!flowed) {
+            diagnosis =
+              'Микрофон включён, но кадры не приходят (RMS −∞).' +
+              ' Другая программа монопольно заняла микрофон, отключено в Windows' +
+              ' (Параметры → Конфиденциальность → Микрофон) либо это не тот вход.' +
+              describeTrack();
+          } else if (!startedVoice.sawSignal) {
+            diagnosis =
+              'Кадры идут, но устройство отдаёт тишину (максимальный RMS 0).' +
+              ' Проверьте мьют на самом устройстве (кнопка на гарнитуре),' +
+              ' уровень ввода в Windows или выберите другой вход — сейчас: ' +
+              activeDeviceLabel + describeTrack();
+          } else if (watchTrack && watchTrack.muted) {
+            diagnosis =
+              'Сигнал поступает, но трек помечен ВЫКЛЮЧЕННЫМ системой' + describeTrack();
+          }
+          if (diagnosis) {
+            document.querySelector('#mic-status').textContent = diagnosis;
+            if (gateCardStatus) gateCardStatus.textContent = diagnosis;
+          }
+        }, 3500);
+      }
       document.querySelector('#mic-status').textContent = handsFree.checked
         ? 'Hands-free listening; silence finishes each utterance.'
         : 'Microphone listening; use the button to finish the utterance.';
@@ -1377,20 +1911,57 @@
     updateMicGateLabel();
     micGate.addEventListener('input', updateMicGateLabel);
     micCalibrate.addEventListener('click', calibrateMicrophoneGate);
+    {
+      const mutedBox = document.querySelector('#proactive-muted');
+      const speakBox = document.querySelector('#proactive-speak');
+      const saveProactiveSettings = async () => {
+        try {
+          await apiPost('/api/proactive/settings', {muted: mutedBox.checked, speak: speakBox.checked});
+          refresh();
+        } catch (_) { /* settings stay as chosen locally */ }
+      };
+      mutedBox?.addEventListener('change', saveProactiveSettings);
+      speakBox?.addEventListener('change', saveProactiveSettings);
+    }
     async function bootstrap() {
       const response = await fetch('/api/session', {cache: 'no-store'});
       const data = await response.json();
       sessionHeaders = {'X-Companion-CSRF': data.csrf_token};
+      await loadHistory();
       refresh();
+    }
+    async function loadHistory() {
+      if (!Object.keys(sessionHeaders).length) return;
+      try {
+        const response = await fetch('/api/history', {headers: sessionHeaders, cache: 'no-store'});
+        if (!response.ok) return;
+        const data = await response.json();
+        const turns = data.turns || [];
+        if (!turns.length) return;
+        for (const turn of turns) {
+          const userText = String(turn.user || '').trim();
+          const reply = turn.response && typeof turn.response === 'object' ? turn.response : null;
+          const replyText = String(reply ? (reply.text || '') : '').trim();
+          if (userText) addMessage('Вы', userText);
+          if (replyText) addMessage('Компаньон', replyText);
+        }
+        const historySummary = document.querySelector('#history-summary');
+        if (historySummary) historySummary.textContent = `История сессии: ${turns.length} реплик.`;
+      } catch (_) { /* history is best-effort on load */ }
     }
     document.querySelector('#send').addEventListener('click', async () => {
       const text = input.value.trim();
       if (!text && !pendingAttachments.length) return;
+      if (text && !pendingAttachments.length && await dispatchLocalSlashCommand(text)) {
+        input.value = '';
+        return;
+      }
       let requestText;
       try { requestText = await composeChatText(text || 'Проанализируй приложенные файлы.'); }
       catch (error) { addMessage('System', error.message); return; }
       await stopSpeech();
       addMessage('Ты', text || 'Проанализируй приложенные файлы.');
+      void showPerceptionDraft();
       pendingAttachments.length = 0;
       renderAttachments();
       input.value = '';
@@ -1400,17 +1971,22 @@
       try {
         const streamed = await streamChat(requestText, speech, chatController);
         if (streamed) {
-          if (speech && streamed.speak) {
+          if (speech && shouldVoice(streamed)) {
             await finishSpeechSession(speech, streamed.text, streamed.emotion);
-          } else if (streamed.speak) {
+          } else if (shouldVoice(streamed)) {
             speak(streamed.text, streamed.emotion);
+          } else if (speech) {
+            await stopSpeech();
           }
         } else {
           if (speech) await stopSpeech();
-          const response = await apiPost('/api/chat', {text: requestText});
+          const response = await apiPost('/api/chat', {
+            text: requestText,
+            correlation_id: `turn-chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          });
           const data = await response.json();
           addMessage('Компаньон', data.text || data.error);
-          if (response.ok) speak(data.text, data.emotion);
+          if (response.ok && shouldVoice(data)) speak(data.text, data.emotion);
         }
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -1471,6 +2047,18 @@
     obsUrl.value = `${window.location.origin}/avatar`;
     fetch('/api/avatar/config', {cache: 'no-store'}).then(response => response.json()).then(config => {
       if (config.presentation_url) obsUrl.value = config.presentation_url;
+      // The real Live2D character lives on the presentation server (the OBS
+      // source). Embed it on the main stage; the embedded page keeps its own
+      // fallback, and the CSS mini-avatar covers profiles without a
+      // presentation server.
+      if (!config.presentation_url) return;
+      const frame = document.querySelector('#stage-avatar');
+      const fallback = document.querySelector('#mini-avatar');
+      frame.src = config.presentation_url;
+      frame.addEventListener('load', () => {
+        frame.hidden = false;
+        fallback.style.display = 'none';
+      });
     }).catch(() => { /* same-origin fallback remains visible */ });
     document.querySelector('#copy-obs-url').addEventListener('click', async () => {
       try {
@@ -1599,6 +2187,7 @@
       }
     });
     bootstrap();
+    window.setInterval(probeRuntimeInstance, 2000);
   </script>
 </body>
 </html>
