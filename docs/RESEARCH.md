@@ -187,6 +187,50 @@ location is supplied.
 
 ## Combined findings
 
+## RAM-first multimodal proposal review — 2026-09-06
+
+The pasted proposal is useful as a model-placement study, but it must not
+change ownership boundaries. MiniCPM-o 4.5 is a credible future sensory/live
+candidate: its official GGUF repository labels it any-to-any/full-duplex and
+lists a Q4_K_M file of about 5.03 GB under Apache-2.0. The official project
+also documents a llama.cpp-omni/WebRTC path. This is evidence to benchmark,
+not evidence that our RTX 5080 build, Russian quality, interruption behavior,
+or JAWL tool calling is already production-ready.
+
+Keep the following decisions:
+
+- JAWL remains the only personality, memory, task, heartbeat, and native-tool
+  owner. MiniCPM-o, if adopted, is a sensory/interaction worker and cannot
+  become a second agent or write canonical memory directly.
+- Qwen3-ASR-0.6B remains the current selected ASR baseline. It already passed
+  the real three-turn browser capture path on this machine. Whisper Turbo is a
+  later A/B candidate, not an automatic replacement.
+- Silero VAD is a good small CPU gate and streaming boundary. It complements
+  the user's hardware/noise gate; it does not replace level calibration,
+  echo cancellation, or barge-in tests.
+- YAMNet is optional P2 audio-event classification. It is not required for
+  speech conversation and should only run on a decimated audio branch when an
+  event is salient. A 30-second bounded metadata clip and dedup/cooldown are
+  preferable to continuous LLM calls.
+- Whisper timestamps, ForcedAligner, diarization, and PySceneDetect are
+  archive/enrichment tools. None belongs in the critical voice response path.
+- Gemma E2B/E4B or another small summarizer may consolidate a bounded sensory
+  ring buffer later, but consolidation must emit a typed observation to JAWL;
+  it must not decide what becomes a fact or trait.
+
+RAM-first placement is therefore: CPU RAM for VAD, ASR, ring buffers, queues,
+and delayed enrichment; GPU1 only for an explicitly benchmarked optional
+  vision/omni worker; GPU0 and the main LLM remain reserved by the host setup.
+  Models can be memory-mapped or cold-loaded, but the acceptance budget must
+  include page faults, warm-up, and VRAM/RAM pressure rather than counting file
+  size as inference memory. Vision remains deferred as requested.
+
+The proposal's "MiniCPM-o instead of Gemma" conclusion is not accepted as a
+replacement for the current text brain. The useful next experiment is a
+separate opt-in MiniCPM-o sensory benchmark against the existing typed
+VoiceMem/audio boundaries, with no changes to the canonical JAWL profile until
+latency, Russian audio, full-duplex interruption, and resource isolation pass.
+
 The most important additions to the original plan are:
 
 1. Attention must be a lightweight timing layer separate from deep JAWL
@@ -199,6 +243,41 @@ The most important additions to the original plan are:
 7. The first avatar should remain 2D Live2D.
 
 ## License and asset notes
+
+### MiniCPM-o 4.5 benchmark decision — 2026-09-06
+
+The attached proposal is correct that the official repository does not publish
+IQ1/IQ2 MiniCPM-o 4.5 files. The official GGUF set currently starts at Q4_0
+and includes Q4_K_S, Q4_K_M, Q5_K_M, Q6_K and Q8_0. A locally produced IQ1/IQ2
+file is an experiment, not a supported release artifact; it cannot replace the
+runtime until it passes multimodal quality and startup tests.
+
+The first controlled download is the official Q4_K_M language GGUF plus the
+official vision, audio, TTS and token2wav sidecars. Q4_0 and Q5_K_M are the
+comparison points; F16 is a conversion/calibration source only if disk and
+RAM headroom remain sufficient. We do not download every quantization.
+
+The intended memory topology is hybrid, not arbitrary per-layer paging:
+
+- GPU1 is the isolated optional MiniCPM worker; GPU0 and the JAWL text path
+  remain reserved. Device assignment is accepted only when `nvidia-smi`
+  confirms it.
+- Vision/projector and KV cache are candidates for GPU1. Audio, TTS and
+  token2wav are candidates for CPU RAM unless measurements prove otherwise.
+  GGUF weights may be memory-mapped; file size is not resident VRAM/RAM.
+- `--gpu-layers`, split/offload settings and context size are benchmark
+  parameters. Arbitrary dynamic layer swapping is excluded from real time:
+  page faults can create stalls and destroy latency.
+- The bundled llama.cpp executable is CPU-only. It can validate loading and
+  vision behavior, but a CUDA-enabled llama.cpp-omni or supported PyTorch
+  runtime is required for a 5080 VRAM result.
+
+Acceptance compares identical prompts/assets across Q4_0, Q4_K_M and Q5_K_M:
+load success, resident RAM, peak VRAM, image TTFT, generation rate, Russian
+UI-grounding/OCR, audio/video startup, interruption behavior and repeatability.
+MiniCPM remains an opt-in sensory worker; JAWL still owns persona, memory,
+policy, tools and final action decisions. A benchmark result never changes the
+production profile automatically.
 
 JAWL and Open-LLM-VTuber use permissive code licenses in their repositories;
 VoiceMem is Apache-2.0. Miru and Mana use Apache-2.0 code, with Mana's

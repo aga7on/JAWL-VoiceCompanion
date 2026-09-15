@@ -64,9 +64,48 @@ Companion не должен переходить на локальный исп�
 но не обходят права Windows и явные исключения. См.
 [границу HostOS](docs/contracts/jawl-hostos.md).
 
+Для connected runtime используется `scripts/run_integrated_profile.ps1`. Его
+безопасный default — native access level `0` и отключённый Debug Broker. Явный
+disposable-профиль полного доступа запускается так:
+
+```powershell
+$env:LLM_API_URL = 'http://127.0.0.1:11434/v1'
+$env:LLM_API_KEY_1 = 'local-loopback'
+.\scripts\run_integrated_profile.ps1 -NativeAccessLevel 3 -EnableDebugBroker
+```
+
+Для opt-in unattended lifecycle с нативным JAWL supervisor добавьте
+`-EnableSupervisor`. Supervisor использует тот же profile registry и sandbox,
+а JAWL остаётся владельцем start/stop, lease, policy и recovery:
+
+```powershell
+.\scripts\run_integrated_profile.ps1 `
+  -ProfileName supervised-dev `
+  -NativeAccessLevel 3 `
+  -EnableSupervisor
+```
+
+Воспроизводимый disposable acceptance этого контура:
+
+```powershell
+python scripts/run_supervised_profile_acceptance.py --live
+```
+
+Это проверяет startup и intentional stop. Crash recovery с активным ROOT lease
+и long-run soak всё ещё должны пройти отдельный live gate.
+
+Оба флага меняют только конфигурацию выбранного профиля в
+`runtime/instances/<name>`. Исполнение, policy, registry, audit, emergency
+stop и ROOT lease остаются внутри JAWL; Companion не добавляет второго
+исполнителя. Live evidence: `runtime/native-catalog-full-access-launcher-
+20260909-r2.json` и `runtime/native-namespace-full-access-launcher-
+20260909-r2.json`.
+
 ## Голос, модели и представление
 
-Qwen3-ASR-0.6B — текущий русский final-utterance профиль. Qwen3-TTS 0.6B —
+Qwen3-ASR-0.6B — текущий русский final-utterance профиль; integrated launcher
+выбирает его по умолчанию (`-AsrBackend whisper` оставляет явный fallback).
+Qwen3-TTS 0.6B —
 желаемый основной голосовой движок с клоном; TeraTTSv2 остаётся рядом как
 быстрый CPU fallback. Нынешний CLI default — Tera, Qwen выбирается явно.
 Это расхождение не скрыто; автоматический выбор ещё предстоит довести.

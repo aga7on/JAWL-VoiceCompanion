@@ -1,5 +1,32 @@
 # Аудит продукта, архитектуры и доказательств
 
+## Текущий аудит — 2026-09-06
+
+Актуальные findings и порядок исправлений: [RECOVERY_PLAN](RECOVERY_PLAN.md).
+Срез: HEAD `1bb3117` плюс три dirty config/prompt/patch файла.
+Проверены текущий код, Git diff и сохранённые JSON/логи; live запуска не было.
+
+- P0: hardcoded `set_execution_blocklist(["HostOS"])` в owned snapshot,
+  ограниченный native catalog и запрещённый discovery расходятся с Full Access
+  и обязательными поручениями. Исправлять через native policy и bounded lookup.
+- P0: записанный context patch не разбирается Git (`corrupt patch ...:76`).
+  `copy_missing` не доставляет обновления в существующий профиль.
+- P0: пять свежих recall reports failed. Один gateway pass (~48 с)
+  не закрывает совместимость модели, память и connected daily scenario.
+- P0: browser voice harness обходит capture/gate и штатный playback/avatar;
+  нет достаточной проверки смысла ответа и terminal error.
+- Исходный 503 при установке уровня 3 остаётся unexplained. Утверждение,
+  что это deliberate emergency-stop fixture, не соответствует traceback
+  `runtime/full-gate-20260905T101053Z.log:670`.
+
+Следующий путь: R1 воспроизводимость/tools → R2 turn/memory → R3 browser voice
+→ R4 native task/recovery/full gate. Код этих исправлений пока не реализован.
+
+## Исторический аудит 2026-09-05
+
+Ниже сохранены первоначальные findings и общая матрица. Датированные статусы
+и указания «следующий шаг» читать с учётом текущего аудита выше и RECOVERY_PLAN.
+
 2026-09-05. Документальный аудит: требования владельца → документация →
 выборочная проверка исходников и существующих отчётов. Это не полный code/
 security audit и не новая live-приёмка. Исходный аудит был docs-only;
@@ -223,3 +250,10 @@ Vision по выбору → полная приёмка. Независимый
 заменены владельцем. Этот аудит не проводил полный secret scan и не утверждает
 отсутствие ключей в history/logs. Никаких самовольных revocation, UAC/EULA или
 изменений в protected repositories.
+# 2026-09-07 read-only upstream status note
+
+На текущем read-only осмотре `G:\AI\JAWL-Coding` уже обнаружен dirty
+worktree (изменённые tracked-файлы), а `G:\AI\VoiceMem` также содержит
+локальные изменения/артефакты. Авторство этих изменений этим аудитом не
+устанавливается. Companion их не откатывает и не переписывает; для live
+запуска используется отдельный pinned snapshot с независимым SHA-256.

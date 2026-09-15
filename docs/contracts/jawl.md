@@ -47,8 +47,17 @@ on its terminal transport; the web stream returns cursor metadata and sets
 unreadable journal state also fails closed as a gap. A native Gateway client
 is not an operator CLI session and does not emit terminal-open/close presence
 events. This supports replay and duplicate suppression, not exactly-once
-native side effects. Mutations need authority-owned idempotency and recovery
-reconciliation; a crash after dispatch can leave an uncertain outcome.
+native side effects. Before dispatch, the native Goal Ledger records the bounded
+action identity as `in_flight`; after a restart it becomes
+`needs_reconciliation`, and the next cycle must verify the postcondition before
+replay. The verified outcome is then recorded in bounded
+`ledger.reconcile_actions` as `confirmed` or `not_applied`; `unknown` keeps the
+goal active and completion is rejected. This is a recovery guard, not an
+exactly-once syscall claim: mutations still need authority-owned idempotency,
+and a crash after dispatch can leave an uncertain outcome.
+When provider plans reuse a local id such as `action_1`, reconciliation must
+also include the matching `tool`; the ledger preserves unresolved prior intents
+instead of allowing a later read or completion plan to overwrite them.
 
 Provider selection stays inside JAWL. QWB-JAWL, GPT Luna, TokenRouter or a
 local model must satisfy JAWL's own provider/tool contract; Companion receives
@@ -147,9 +156,40 @@ hidden reasoning never cross the public bridge.
 For action-bearing ReAct ticks, native JAWL emits ordered safe lifecycle
 summaries (`tool.requested`, `tool.started`, `tool.completed`) containing only
 bounded action identity and result summary; arguments remain inside JAWL. These summaries may arrive after dispatch or even after the final answer;
-their order does not prove pre-dispatch timing. The current loop does not
-fabricate `assistant.delta` events: that type is reserved
-for a provider-backed streaming implementation.
+their order does not prove pre-dispatch timing. The current loop does not fabricate
+`assistant.delta` events: that type is reserved for a provider-backed streaming
+implementation.
+
+The Companion consumes correlated `assistant.delta` events when a compatible
+JAWL build emits them. Each fragment is bounded and checked for internal
+control markup, and the joined fragments must match the authoritative
+`assistant.final` text before completion. On mismatch or provider failure,
+provisional browser text is discarded and never sent to TTS. The pinned
+`jawl-20260906-daily-v2` snapshot currently emits only `assistant.final`, so
+its live path remains final-response transport followed by bounded
+sentence/TTS streaming; this is not token-level realtime evidence.
+
+For a provider that returns a legacy empty action envelope after native work,
+the pinned compatibility path may finish a Goal only from durable evidence:
+terminal ledger phase, no pending steps/next action/blocker, and `success` for
+every outcome in the last action batch. A successful tool result by itself is
+not a completion signal; otherwise the Goal remains subject to the normal
+bounded repair/block policy.
+
+The same rule applies when a provider explicitly emits Goal Protocol v2
+`state=done`: that field is an assertion, not proof. While a Goal is active,
+JAWL accepts completion only after a durable terminal ledger patch and a
+successful recorded action batch are present. If either is missing, JAWL
+rejects the assertion and transitions the Goal to `blocked`; it must never
+create a false `complete` state from stale provider context.
+Communication-only outcomes such as `HostTerminalMessages.send_message_to_terminal`
+or terminal-history reads do not count as that action evidence; at least one
+successful non-communication native action must be present.
+
+An active Goal that returns no actions and no explicit `state=wait` is also not
+allowed to sleep indefinitely. JAWL requests a bounded provider repair; after
+the repair budget it records `blocked`. An explicit Goal Protocol v2
+`state=wait` remains the supported way to wait for an external/user event.
 
 ## Vision execution boundary
 

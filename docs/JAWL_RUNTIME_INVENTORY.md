@@ -5,7 +5,9 @@
 
 ## Сохранённый source snapshot
 
-`runtime/jawl-sources/jawl-20260905-daily-v1` содержит 348 отобранных файлов.
+`runtime/jawl-sources/jawl-20260906-daily-v2` содержит 348 отобранных файлов.
+Его digest следует проверять скриптом `scripts/verify_jawl_snapshot.py`; snapshot
+разрешён в Git как единственный immutable runtime source, state остаётся ignored.
 `SOURCE_MANIFEST.json` перечисляет их SHA256; все 348 повторно сверены после
 записи. Общий digest: `91250ab5fa232c44c3aa22ebaf440d5fe65f6ec935e845a27aa09770bdc6ad0d`.
 Сборщик — `scripts/stage_jawl_source.py`, default dry-run, запись по `--write`,

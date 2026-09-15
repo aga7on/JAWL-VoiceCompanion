@@ -10,6 +10,10 @@ JAWL: личность, Heartbeat/ReAct, долговременная памят
 Перед существенной работой полностью прочитать:
 `docs/PRODUCT.md` → `docs/STATE.md` → `TODO.md` →
 `docs/TECHNICAL_AUDIT.md`; для изменяемой границы — архитектуру/контракт.
+После аудита 2026-09-06 также прочитать `docs/RECOVERY_PLAN.md`:
+текущий порядок исправлений R1–R4, evidence и запрет подмены полноценного
+агента ограниченным диалоговым профилем. Уменьшение prompt-каталога не должно
+отключать discovery или подменять native policy глобальным HostOS blocklist.
 Проверить `git status --short --branch`, выбрать один проверяемый срез.
 История и CHANGELOG не переопределяют текущую очередь/замысел.
 Последнее явное поручение пользователя задаёт scope: просьба править только
@@ -27,12 +31,15 @@ JAWL: личность, Heartbeat/ReAct, долговременная памят
 - 2D-only; адаптивный веб-интерфейс для телефона/планшета и LAN-доступ явно
   запрошены владельцем. Отдельный mobile app не нужен. Тяжёлый UI framework, 3D, cloud-hosting не добавлять без
   отдельного обоснования/решения.
-- Qwen3-TTS 0.6B — желаемый основной, TeraTTSv2 — быстрый CPU fallback.
-  Пока CLI default Tera: не выдавать желаемый выбор за уже изменённый код.
-- Qwen3-ASR — final-utterance профиль. ASR не описывает музыку/тембр/настроение
-  без отдельно проверенной capability.
-- Постоянная Vision модель отложена владельцем. Не выбирать/скачивать её
-  самовольно; делать независимые задачи на CLI/UIA/fallback.
+- TeraTTSv2 (ru_f1, 9889) — текущий основной синтез; prosody planner (gemma-3-1b,
+  8987) опционален и может быть отключён ради меньшей задержки голоса.
+  Qwen3-TTS остаётся желаемым исследовательским направлением, но не активным кодом.
+- GigaAM v3 (crispasr, batch final + streaming partials) — канонический ASR;
+  Qwen3-ASR — необязательный фолбэк (не стартует по умолчанию). ASR не описывает
+  музыку/тембр/настроение без отдельно проверенной capability.
+- Постоянное зрение работает: Bonsai (8986) + screen-watch + PerceptionFusion.
+  Bonsai поднимать до профиля (`scripts\run_coding_server.ps1`); тяжёлые
+  vision-модели в остальном не менять без решения владельца.
 - Big Pickle/OpenCode — временный тестовый provider. Будущий QWB/local —
   за JAWL provider contract, не direct Companion LLM как второй агент.
 - Ambient system audio/screen — отдельная низкоприоритетная память.
@@ -81,6 +88,17 @@ data/log/cache/env. Вывод нового fork/dependency за существ�
 
 Dirty changes принадлежат пользователю/предыдущим итерациям. Не делать reset/
 checkout/delete, массовый commit и не приписывать авторство по timestamps.
+
+### Правило совместимости: не перезаписывать лучшее
+
+Перед переносом любого поведения из JAWL/VoiceMem сравнивать контракт, ошибки,
+границы безопасности, latency и regression evidence. Если реализация Companion
+уже полнее или лучше подходит сценарию компаньона, сохранять её и добавлять
+только адаптер совместимости; если upstream покрывает capability лучше —
+подключать upstream как owner. Нельзя заменять рабочий код только ради
+одинакового внешнего вида или механического совпадения с JAWL. Решение и
+причина фиксируются в `docs/JAWL_CANONICAL_CAPABILITIES.md` или техническом
+аудите, а поведение подтверждается тестом.
 
 ## Дисциплина контекста и квоты
 
@@ -157,3 +175,72 @@ browser interactions/скриншоты, реальную модель, устр
 
 Не объявлять RC до целого daily scenario, production-ready до полной
 применимой матрицы и пользовательской приёмки. Называть реальные пробелы.
+
+<!-- BEGIN: CodeSee integration -->
+## CodeSee 功能图
+
+本项目用 CodeSee 把功能逻辑以语义流程图呈现。
+数据在 `.codesee/features.json`，由你（AI）维护。
+
+### 触发规则
+
+**触发 1：首次扫描**
+若 `.codesee/features.json` 不存在或缺少 `version` 字段：
+→ 执行 `.codesee/prompts/scan.md`（会自动判断走 light / heavy / planning 哪一档）
+
+**触发 2：每轮代码改动后**
+完成改动后，在回复用户前主动：
+→ 执行 `.codesee/prompts/sync.md`
+
+跳过条件：纯样式/重构/重命名，或用户明确要求跳过。
+
+**触发 3：用户显式要求**
+"刷新功能图""更新 codesee""扫一下" → 按上述策略执行。
+
+**触发 4：生成导览（仅显式要求，不自动跑）**
+用户说"生成导览""加个 tour""给新人做个引导" → 执行 `.codesee/prompts/scan-tour.md`，
+为 `features.json` 写一条引导式导览（tours 字段）。**绝不在 scan/sync 流程里自动触发。**
+
+### 项目阶段
+
+CodeSee 同时支持四种阶段：
+
+- **SDD 项目**（有 `.specify/` / `.trellis/` / `.bmad-core/` / `.agents/skills/` 等）→ scan.md 路由到 `scan-sdd.md`，**直接消费 spec/PRD 文档**，不读源码（最准确、最省 token）
+- **规划阶段**（只有文档，没代码）→ scan.md 会路由到 `scan-planning.md`，产出"规划版" features.json，所有 feature 标 `tags: ['planned']`
+- **实现阶段**（有代码）→ scan.md 路由到 light/heavy，产出正式 features.json
+- **混合阶段**（部分实现）→ sync.md 自动把 `planned` 的 feature 升级为 `implemented`
+
+### Checkpoint 协议（重要）
+
+大任务（涉及 5+ 文件）必须拆成 checkpoint，**每完成一个逻辑闭环立即 sync**，不要等全部写完才一次性更新。
+
+- 逻辑闭环 = 用户能感知的、可独立验证的小功能（如"添加购物车 API + 表 + 按钮"）
+- 流程：实现闭环 1 → sync → 实现闭环 2 → sync → ... → 最终整体核查
+- 全部完成后必须做最终核查（覆盖度 / 关系 / epic_flow / refs 准确性 / 跑校验器）
+
+详见 `.codesee/prompts/sync.md` 的 "Checkpoint 协议" 章节。
+
+### 核心约束
+
+- ❌ 不修改 `.codesee/prompts/` 与 `.codesee/scripts/` 下的文件
+- ❌ 不修改 `locked: true` 的 feature
+- ❌ 不重命名既有 id（废弃用 tags: ['deprecated']）
+- ❌ 不跳过校验
+- ✓ step.name 必须用 manifest.lang 指定的语言写动词短语
+- ✓ flow.kind 必填
+- ✓ 写入后跑 `node .codesee/scripts/validate-features.mjs`，退出码 1 必须修
+
+### 参考文件
+
+- Schema + 示例：`.codesee/prompts/_schema.md`
+- 规则详情：`.codesee/prompts/_rules.md`
+- 扫描：`.codesee/prompts/scan.md`
+- 同步：`.codesee/prompts/sync.md`
+- 导览生成（实验性，仅显式调用）：`.codesee/prompts/scan-tour.md`
+- 校验：`.codesee/scripts/validate-features.mjs`
+- 增量补丁：`.codesee/scripts/apply-patch.mjs`（sync 优先模式）
+- 数据：`.codesee/features.json`
+- Hooks（可选自动提醒）：`.codesee/hooks/README.md`
+
+> 执行 scan/sync 前先告诉用户你要做什么。
+<!-- END: CodeSee integration -->

@@ -230,6 +230,13 @@ not promote that signal to `BARGE_IN` or `USER_FINAL`. In external-ASR mode,
 final normalized ASR text is authoritative; in bundled mode VoiceMem finalizes.
 Neither amplitude nor ambient audio is proof of an operator instruction.
 
+The browser arms that cancellation trigger only after a real audio element or
+WebAudio buffer source has started playback. A pending TTS request or an
+in-flight model generation alone must not cancel speech; this prevents an AEC
+leak/noise spike from truncating the first syllable. The playback queue remains
+bounded to a small jitter window so an armed interruption can discard the
+unsaid tail promptly.
+
 Production barge-in also classifies backchannel, correction, amendment and new
 turn before replacing conversational state. Amplitude alone may stop playback
 quickly, but it is not sufficient evidence that media/nearby speech is the

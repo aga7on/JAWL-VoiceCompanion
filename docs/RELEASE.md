@@ -54,6 +54,33 @@ cd G:\AI\JAWL-VoiceCompanion
 уровня/stop/start меняет подключённый runtime. `--hostos-live` не заменяет
 native JAWL и не является готовым Full Access профилем общей системы.
 
+### Integrated JAWL profile и Full Access
+
+Для connected runtime используйте `scripts/run_integrated_profile.ps1`. Его
+безопасный default — native access level `0` и отключённый Debug Broker. Для
+явного disposable Full Access/RE-профиля:
+
+```powershell
+$env:LLM_API_URL = 'http://127.0.0.1:11434/v1'
+$env:LLM_API_KEY_1 = 'local-loopback'
+.\scripts\run_integrated_profile.ps1 `
+  -ProfileName native-integrated `
+  -NativeAccessLevel 3 `
+  -EnableDebugBroker
+```
+
+Launcher вызывает `prepare_daily_profile.py`, затем применяет только два
+разрешённых profile override через `configure_profile_native.py`. Весь
+каталог HostOS/HostTerminal/Debug Broker и side effects остаются native JAWL;
+Companion не является fallback executor. `-NativeAccessLevel 3` означает
+права текущего Windows-пользователя и не обходит UAC, ACL, EULA или TTD.
+`G:\RE` используется как настроенный внешний tool root; upstream
+`G:\AI\JAWL-Coding` не изменяется.
+
+Принятый launcher live-срез:
+`runtime/native-catalog-full-access-launcher-20260909-r2.json` и
+`runtime/native-namespace-full-access-launcher-20260909-r2.json`.
+
 ## Существующие голосовые workers
 
 Запускать каждый выбранный worker в отдельной сессии: launcher остаётся
@@ -121,6 +148,22 @@ Vision не запускать/фиксировать до решения вла
 | run_voicemem_profile.ps1 | Process/VAD/fixture; bundled fixture не русский microphone test |
 | run_audio_pipeline_profile.py | Audio routes/enqueue/TTS bytes; не native LLM identity/physical playback |
 
+For the unattended production-duration check, use the isolated orchestrator:
+
+```powershell
+.\scripts\run_long_unattended_acceptance.ps1 `
+  -ProfileName qwen-ollama-unattended-8h `
+  -DurationSeconds 28800
+```
+
+It uses only the persistent local Ollama OpenAI-compatible endpoint, starts a
+disposable level-3 profile on the requested Companion ports, writes separate
+profile/soak logs, and verifies that all three owned ports close in `finally`.
+It never uses FoxMCP `8765` or Ollama `11434` as disposable ports and does not
+claim success until both the soak report and cleanup check pass. A short smoke
+must be run before an eight-hour acceptance; this does not replace physical
+microphone, OBS or provider-variance acceptance.
+
 Наличие `--live` не делает окружение изолированным. До любого mutating
 профиля проверить targets, cleanup, настройки и authority. Старые dated JSON
 могут перезаписываться — использовать unique run IDs. Положительный target
@@ -140,6 +183,12 @@ Gateway 100-turn Big Pickle отчёт остаётся evidence своего di
 Build создаёт `dist\wheel\*.whl` и `dist\SHA256SUMS.txt`.
 Хеш — integrity record, не подпись и не проверка функционирования приложения.
 Повторять сборку при изменении packaged inputs, не ради накопления pass-строк.
+
+Перед release-приёмкой полный gate запускает
+`scripts/release_secret_scan.py`. Он проверяет текстовые source/config/docs
+inputs, исключает только сгенерированные `runtime`/`dist` деревья и в отчёте
+сохраняет лишь путь, строку и категорию — значение совпадения никогда не
+выводится. Отчёт последнего запуска: `runtime/release-secret-scan.json`.
 
 Для изолированной установки использовать **новое** venv и ровно выбранный
 wheel из манифеста; не force-reinstall рабочий профиль по glob. Проверить
