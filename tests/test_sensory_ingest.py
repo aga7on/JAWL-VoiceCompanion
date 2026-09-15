@@ -85,5 +85,42 @@ class SensoryIngestorTests(unittest.TestCase):
         self.assertEqual(self.ingestor.state()["counters"]["speech"], 2)
 
 
+class SensoryOffsetPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "sensory.ndjson"
+        self.memory = AmbientMemoryBuffer(enabled=True)
+
+    def test_offset_survives_restart(self):
+        first = SensoryIngestor(self.memory, self.path, music_dedupe_s=300.0)
+        _write(self.path, {"type": "screen_frame", "ts": "t", "window": "Code", "changed": True})
+        first.poll_once(now=1000.0)
+        offset = first.state()["offset"]
+        self.assertGreater(offset, 0)
+        restarted = SensoryIngestor(self.memory, self.path, music_dedupe_s=300.0)
+        self.assertEqual(restarted.state()["offset"], offset)
+        _write(self.path, {"type": "speech", "ts": "t2", "text": "новая реплика", "speech_seconds": 1.0})
+        result = restarted.poll_once(now=1001.0)
+        self.assertEqual(result["processed"], 1)
+
+    def test_shrunk_journal_restarts_from_zero(self):
+        first = SensoryIngestor(self.memory, self.path, music_dedupe_s=300.0)
+        _write(self.path, {"type": "screen_frame", "ts": "t", "window": "Code", "changed": True})
+        first.poll_once(now=1000.0)
+        self.path.write_text("", encoding="utf-8")
+        restarted = SensoryIngestor(self.memory, self.path, music_dedupe_s=300.0)
+        self.assertEqual(restarted.state()["offset"], 0)
+
+    def test_persisted_offset_never_exceeds_the_journal(self):
+        first = SensoryIngestor(self.memory, self.path, music_dedupe_s=300.0)
+        _write(self.path, {"type": "speech", "ts": "t", "text": "привет", "speech_seconds": 1.0})
+        first.poll_once(now=1000.0)
+        self.path.write_text("", encoding="utf-8")
+        _write(self.path, {"type": "speech", "ts": "t2", "text": "снова", "speech_seconds": 1.0})
+        restarted = SensoryIngestor(self.memory, self.path, music_dedupe_s=300.0)
+        self.assertEqual(restarted.state()["offset"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

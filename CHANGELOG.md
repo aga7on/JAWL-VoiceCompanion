@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-14 - Sensory journal: persistent read offset
+
+- The sensory NDJSON ingestor now persists its byte offset next to the
+  journal and resumes from it after a companion restart instead of
+  re-reading the whole file (36 MB after three days of events). A shrunk or
+  rotated journal safely restarts from zero. Applies from the next
+  companion start.
+
 ## 2026-09-14 - Turn-taking: breath-proof endpointing and live interjections
 
 - Hands-free endpointing no longer ends a turn on the first breath: the base

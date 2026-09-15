@@ -45,7 +45,8 @@ class SensoryIngestor:
         self.max_events_per_poll = max(1, min(int(max_events_per_poll), 500))
         self.music_dedupe_s = max(0.0, float(music_dedupe_s))
         self.governor = governor
-        self._offset = 0
+        self._offset_path = self.path.with_name(self.path.name + ".offset")
+        self._offset = self._load_offset()
         self._counters: dict[str, int] = {
             "lines": 0, "visual": 0, "music": 0, "speech": 0,
             "ignored": 0, "errors": 0,
@@ -89,6 +90,32 @@ class SensoryIngestor:
                 "last_error": self._last_error[:240],
             }
 
+    def _load_offset(self) -> int:
+        """Resume from the persisted byte offset.
+
+        Without this, every companion restart re-reads the whole sensory
+        journal (tens of MB after a few days). A shrunk or missing journal
+        starts from zero.
+        """
+        try:
+            offset = int(self._offset_path.read_text(encoding="ascii").strip())
+        except (OSError, ValueError):
+            return 0
+        if offset < 0:
+            return 0
+        try:
+            if self.path.stat().st_size < offset:
+                return 0
+        except OSError:
+            return 0
+        return offset
+
+    def _save_offset(self) -> None:
+        try:
+            self._offset_path.write_text(str(self._offset), encoding="ascii")
+        except OSError:
+            pass
+
     def poll_once(self, now: float | None = None) -> dict[str, Any]:
         """Read new complete lines once; safe to call from tests."""
         now = time.time() if now is None else float(now)
@@ -98,6 +125,7 @@ class SensoryIngestor:
             return {"status": "missing", "processed": 0}
         if size < self._offset:
             self._offset = 0
+            self._save_offset()
         if size == self._offset:
             return {"status": "idle", "processed": 0}
         with self.path.open("rb") as stream:
@@ -111,6 +139,7 @@ class SensoryIngestor:
             partial = lines.pop() if lines else b""
             consumed = len(chunk) - len(partial)
         self._offset += consumed
+        self._save_offset()
         processed = 0
         results: dict[str, int] = {}
         for raw in lines[: self.max_events_per_poll]:

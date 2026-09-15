@@ -1320,6 +1320,8 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
 - [ ] Turn-taking retest: breath hold (1.4s base / 2.6s semantic) and live
   interjection while the answer is being prepared; confirm a resumed phrase
   stays one turn and nothing is dropped.
+- [ ] Sensory journal growth (~12 MB/day, no rotation): offset persistence
+  landed 2026-09-14; consider journal rotation/compaction after a live day.
 - [ ] Nightly unattended soak (step 5 of the review), prepared 2026-09-14:
   `powershell -File scripts\run_long_unattended_acceptance.ps1 -DurationSeconds 28800 -JawlConsolePort 8772 -ControlPort 2368 -PresentationPort 8767`
   (ports moved off the daily stack; model default `qwen3.8-27b-abliterated:latest`
