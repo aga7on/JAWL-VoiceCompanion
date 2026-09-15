@@ -2446,6 +2446,7 @@
       el.textContent = `агент: ${agent} · голос: ${tts} · сенсорика: ${sensory}`;
       el.title = `экран: ${data.screen?.running ? 'смотрит' : 'пауза'} · внимание: ${data.attention?.dnd ? 'DND' : 'активно'}`
         + (tick?.reason ? ` · такт: ${tick.reason}` : '')
+        + (data.plans && data.plans.in_progress ? ` · задач в работе: ${data.plans.in_progress}` : '')
         + ` · обновлено ${new Date().toLocaleTimeString()}`;
       el.classList.remove('stale');
     }

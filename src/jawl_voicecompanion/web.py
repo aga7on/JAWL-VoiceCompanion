@@ -708,6 +708,18 @@ class CompanionServer(ThreadingHTTPServer):
         background_get = getattr(self.gateway, "recent_broadcasts", None)
         background = background_get() if callable(background_get) else []
         background_last = background[-1] if background else None
+        plans_summary = {"in_progress": 0, "failed_last": None, "last_state": None}
+        journal_adapter = getattr(self.gateway, "jawl_web", None)
+        if journal_adapter is not None:
+            try:
+                journal = journal_adapter.autonomy_journal(limit=10)
+                rows = journal.get("plans") or []
+                plans_summary["in_progress"] = sum(1 for p in rows if str(p.get("state") or "") == "in_progress")
+                if rows:
+                    plans_summary["last_state"] = str(rows[0].get("state") or "unknown")[:40]
+                    plans_summary["last_id"] = str(rows[0].get("plan_id") or "")[:40]
+            except Exception:  # noqa: BLE001 - the journal is optional for the rail
+                pass
         return {
             "ok": True,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -717,6 +729,7 @@ class CompanionServer(ThreadingHTTPServer):
                 "last_text": str(background_last.get("text") or "")[:200] if background_last else None,
                 "last_ts": background_last.get("ts") if background_last else None,
             },
+            "plans": plans_summary,
             "attention": {
                 "dnd": bool(attention_state.get("dnd")) if attention_state else False,
                 "quiet_hours_active": bool(attention_state.get("quiet_hours_active")) if attention_state else False,
