@@ -21,7 +21,7 @@ from .vision import (
 from .presence import ScreenDeltaWatcher
 from .attention import AttentionPresence
 from .jawl_events import JawlEventFileSink
-from .tts import CozyVoiceHttpClient, Qwen3TTSHttpClient, TeraTTSHttpClient, TTSService, TTSUnavailable, TTSCancelled
+from .tts import CozyVoiceHttpClient, Qwen3TTSHttpClient, TeraTTSHttpClient, TTSService, TTSUnavailable, TTSCancelled, VoxCPMHttpClient
 from .voicemem_client import VoiceMemAsyncIngest, VoiceMemProcessClient, VoiceMemUnavailable
 from .jawl_web import JawlWebAdapter, JawlWebChatAdapter, JawlWebUnavailable
 from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
@@ -49,6 +49,7 @@ from .system_audio import SystemAudioLoopback, SystemAudioUnavailable
 from .audit import AuditLog
 from .stream_chat import StreamChatIngestor, StreamChatLimits
 from .runtime_profile import RuntimeProfile
+from .companion_runtime import CompanionRuntime
 
 __all__ = [
     "AccessLevel",
@@ -78,6 +79,7 @@ __all__ = [
     "CozyVoiceHttpClient",
     "TeraTTSHttpClient",
     "Qwen3TTSHttpClient",
+    "VoxCPMHttpClient",
     "TTSService",
     "TTSUnavailable",
     "TTSCancelled",
@@ -118,4 +120,5 @@ __all__ = [
     "StreamChatIngestor",
     "StreamChatLimits",
     "RuntimeProfile",
+    "CompanionRuntime",
 ]

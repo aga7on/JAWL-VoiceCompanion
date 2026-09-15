@@ -161,6 +161,8 @@ class _AudioSession:
     channels: int
     data: bytearray
     touched_at: float
+    last_draft_at: float = 0.0
+    last_draft_text: str = ""
 
 
 class ExternalASRService:
@@ -209,6 +211,42 @@ class ExternalASRService:
                 "raw_audio_persisted": False,
             }
 
+    def draft(self, session_id: str) -> dict[str, Any]:
+        """Transcribe the buffered utterance without clearing it.
+
+        Gives the panel a near-real-time transcript while the user is still
+        speaking. The session buffer is NOT cleared: only finish() ends an
+        utterance. Drafts are throttled per session and never raise: any
+        provider failure yields an empty draft, keeping capture unaffected.
+        """
+        session = str(session_id or "local")[:200]
+        with self._lock:
+            current = self._sessions.get(session)
+            if current is None or not current.data:
+                return {"status": "empty", "text": "", "bytes": 0, "raw_audio_persisted": False}
+            now = self._clock()
+            last_at = getattr(current, "last_draft_at", 0.0)
+            if last_at and now - last_at < 2.0:
+                cached = getattr(current, "last_draft_text", "")
+                return {"status": "throttled", "text": cached, "bytes": len(current.data), "raw_audio_persisted": False}
+            current.last_draft_at = now
+        wav_bytes = self._wav(current)
+        try:
+            text = self.provider.transcribe(wav_bytes)
+        except ASRNoSpeech:
+            text = ""
+        except Exception:  # noqa: BLE001 - drafts must never break capture
+            return {"status": "draft_failed", "text": "", "bytes": len(current.data), "raw_audio_persisted": False}
+        text = str(text or "").strip()
+        with self._lock:
+            current.last_draft_text = text[:MAX_ASR_TEXT_CHARS]
+        return {
+            "status": "drafted",
+            "text": text[:MAX_ASR_TEXT_CHARS],
+            "bytes": len(current.data),
+            "raw_audio_persisted": False,
+        }
+
     def finish(self, session_id: str) -> dict[str, Any]:
         session = str(session_id or "local")[:200]
         with self._lock:
@@ -224,6 +262,30 @@ class ExternalASRService:
             "status": "transcribed",
             "text": text[:MAX_ASR_TEXT_CHARS],
             "bytes": len(current.data),
+            "raw_audio_persisted": False,
+        }
+
+    def to_wav(self, session_id: str) -> bytes | None:
+        """Peek the buffered utterance as WAV bytes without clearing it."""
+        session = str(session_id or "local")[:200]
+        with self._lock:
+            current = self._sessions.get(session)
+            if current is None or not current.data:
+                return None
+            return self._wav(current)
+
+    def discard(self, session_id: str) -> dict[str, Any]:
+        """Drop a buffered utterance without calling the provider.
+
+        Used when another lane (the batch GigaAM transcriber) already produced
+        the canonical final transcript for this utterance.
+        """
+        session = str(session_id or "local")[:200]
+        with self._lock:
+            current = self._sessions.pop(session, None)
+        return {
+            "status": "discarded" if current is not None else "empty",
+            "bytes": len(current.data) if current is not None else 0,
             "raw_audio_persisted": False,
         }
 

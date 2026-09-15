@@ -124,6 +124,7 @@ def run(args: argparse.Namespace) -> int:
                 "duration_seconds": round(duration, 3),
                 "elapsed_seconds": round(elapsed, 3),
                 "rtf": round(elapsed / duration, 3) if duration else None,
+                "transcript": transcript,
                 "transcript_chars": len(transcript),
                 "non_empty": bool(transcript.strip()),
                 "must_transcribe": bool(expectation["must_transcribe"]),

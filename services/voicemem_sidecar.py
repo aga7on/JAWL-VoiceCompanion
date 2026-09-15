@@ -11,6 +11,7 @@ import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Callable
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 
@@ -281,16 +282,37 @@ def _voice_mem_factory(args: argparse.Namespace) -> Callable[[str], Any]:
         # and embedder are injected locally. A non-secret sentinel
         # keeps that construction valid; local-memory mode never
         # sends it to a provider.
+        base_url = (
+            args.base_url
+            or os.environ.get("VOICEMEM_BASE_URL", "").strip()
+            or (os.environ.get("LLM_API_URL", "").strip() if args.local_memory else "")
+            or os.environ.get("OPENAI_BASE_URL", "").strip()
+            or None
+        )
+        api_key = (
+            os.environ.get(args.api_key_env, "").strip()
+            or os.environ.get("LLM_API_KEY_1", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
+            or ("local_dummy_key" if args.local_memory else "")
+            or None
+        )
+        # A local JAWL/VoiceMem co-processor must not inherit a machine-wide
+        # SOCKS proxy. Keep external-provider proxy settings untouched.
+        if base_url and urlsplit(base_url).hostname in {"127.0.0.1", "localhost", "::1"}:
+            no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+            hosts = {item.strip() for item in no_proxy.split(",") if item.strip()}
+            hosts.update({"127.0.0.1", "localhost", "::1"})
+            value = ",".join(sorted(hosts))
+            os.environ["NO_PROXY"] = value
+            os.environ["no_proxy"] = value
+            for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+                os.environ.pop(name, None)
         vm = VoiceMem(
             mode=args.mode,
             memory_root=args.memory_root,
             user_id=args.user_id,
-            base_url=args.base_url,
-            api_key=(
-                os.environ.get(args.api_key_env, "")
-                or ("local_dummy_key" if args.local_memory else "")
-                or None
-            ),
+            base_url=base_url,
+            api_key=api_key,
             **overrides,
         )
         return vm
