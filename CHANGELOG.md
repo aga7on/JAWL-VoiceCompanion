@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-14 - Voice preface: first audible reaction before the model answers
+
+- `/api/voice/preface` returns a short speakable provisional line built
+  without an LLM from the live ASR partial and the freshest PerceptionFusion
+  observation; only screen-shaped questions qualify and the line is capped
+  ("Смотрю: ..."). Verified constraint: the pinned JAWL snapshot emits one
+  `assistant.final` per turn and has no delta emitters, so phrase-ready
+  streaming cannot come from JAWL itself.
+- The browser voice lane speaks the preface immediately after finalizing
+  the utterance, in parallel with the JAWL turn; the authoritative answer
+  waits (bounded at 6s) only when the preface is actually audible, then
+  takes over. Barge-in cancels the preface like any speech.
+- Tests: `/api/voice/preface` covers the screen-question template, the
+  non-screen no-op, soft fusion failures and the browser-session gate.
+
 ## 2026-09-14 - Unified shell (JAWL tab) + faster voice lane + cold-start fixes
 
 - Companion UI now embeds the JAWL console as a first-class "Пульт JAWL"

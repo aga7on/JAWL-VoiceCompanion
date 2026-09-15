@@ -196,6 +196,9 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"bargeInTriggered", frontend)
             self.assertIn(b"speechPlaybackActive", frontend)
             self.assertIn(b"(currentAudio || speechPlaybackActive)", frontend)
+            self.assertIn(b"prefaceVoiceTurn", frontend)
+            self.assertIn(b"speakProvisional", frontend)
+            self.assertIn(b"/api/voice/preface", frontend)
             self.assertIn(b"runtime_instance_id", frontend)
             self.assertIn("Контур перезапущен; старое аудио остановлено.".encode("utf-8"), frontend)
             self.assertIn(b"hands-free", frontend)
@@ -840,6 +843,90 @@ class PresentationWebTests(unittest.TestCase):
             create_server(host="0.0.0.0", port=0, gateway=TextGateway())
         with self.assertRaises(ValueError):
             create_presentation_server(self.control, host="0.0.0.0", port=0)
+
+class _FakeStreamingAsr:
+    def __init__(self, text="", active=True):
+        self.text = text
+        self.active = active
+
+    def snapshot(self):
+        return {"active": self.active, "text": self.text, "silence_ms": 800}
+
+
+class _FakeFusion:
+    def __init__(self, line="", *, error=False):
+        self.line = line
+        self.error = error
+
+    def compose(self):
+        if self.error:
+            raise RuntimeError("fusion offline")
+        return self.line
+
+
+class VoicePrefaceTests(unittest.TestCase):
+    def _start_server(self, *, partial, fusion):
+        server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+            streaming_asr=_FakeStreamingAsr(partial),
+            perception_fusion=fusion,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join, 2)
+        self.base = f"http://127.0.0.1:{server.server_port}"
+        self.session_headers = {
+            "X-Companion-Session": server.session_token,
+            "X-Companion-CSRF": server.csrf_token,
+        }
+        return server
+
+    def _post(self, path, payload, headers=None):
+        request = Request(
+            self.base + path,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                **(self.session_headers if headers is None else headers),
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    def test_screen_question_returns_bounded_preface(self):
+        self._start_server(
+            partial="Компаньон, что сейчас происходит на экране?",
+            fusion=_FakeFusion("Экран: окно OpenCode с таблицей логов. Звук: тишина"),
+        )
+        status, data = self._post("/api/voice/preface", {"session_id": "s1"})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["text"], "Смотрю: окно OpenCode с таблицей логов.")
+
+    def test_non_screen_question_has_no_preface(self):
+        self._start_server(
+            partial="Напиши короткое письмо коллеге",
+            fusion=_FakeFusion("Экран: окно OpenCode"),
+        )
+        _, data = self._post("/api/voice/preface", {"session_id": "s1"})
+        self.assertEqual(data["text"], "")
+
+    def test_missing_or_broken_perception_is_soft(self):
+        self._start_server(partial="что на экране", fusion=_FakeFusion(error=True))
+        _, data = self._post("/api/voice/preface", {"session_id": "s1"})
+        self.assertEqual(data["text"], "")
+
+    def test_preface_requires_browser_session(self):
+        self._start_server(partial="что на экране", fusion=_FakeFusion("Экран: окно"))
+        with self.assertRaises(HTTPError) as context:
+            self._post("/api/voice/preface", {"session_id": "s1"}, headers={})
+        self.assertEqual(context.exception.code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

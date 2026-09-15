@@ -1297,3 +1297,9 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
   dump, and `%TEMP%\companion-boot.log` boot markers.
 - [ ] Speed lane next: re-measure live voice turns after the context trim
   (baseline best 5.17s; first post-trim text turn 9.06s incl. cold state).
+- [ ] Voice preface (2026-09-14): verify live — ASR final → immediate
+  "Смотрю: ..." speech, then the full answer; check self-hearing under
+  hands-free and confirm barge-in drops the preface. Live check needs the
+  full profile running (Bonsai first).
+- [ ] WS protocol tests (frame types: ping/pong/close/fragmentation/masking/
+  oversized) before moving the WS lane back to default-on.

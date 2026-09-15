@@ -503,6 +503,32 @@ class CompanionServer(ThreadingHTTPServer):
             return prefix + clean + "\n\n[Свежих наблюдений восприятия нет: экран не наблюдался в последние минуты.]"
         return prefix + clean + "\n\n[ВНУТРЕННИЕ НАБЛЮДЕНИЯ ВОСПРИЯТИЯ (фон, не цитировать дословно): " + observation[:900] + "]"
 
+    def voice_preface(self, partial: str) -> str:
+        """Build a short speakable provisional line from fresh perception.
+
+        The voice lane can say this while the JAWL turn is still running, so
+        the first audible reaction no longer waits for the full model answer.
+        Only screen-shaped questions qualify and the line stays bounded.
+        """
+        clean = str(partial or "").strip()
+        fusion = self.perception_fusion
+        if not clean or fusion is None or not self._SCREEN_QUERY.search(clean):
+            return ""
+        try:
+            observation = str(fusion.compose() or "").strip()
+        except Exception:  # noqa: BLE001 - a missing hint never blocks the turn
+            return ""
+        if not observation:
+            return ""
+        clause = observation.split(". ", 1)[0].strip()
+        clause = re.sub(r"^(?:Экран|Окно|Звук|Музыка|Слышно)\s*:\s*", "", clause, flags=re.IGNORECASE).strip()
+        clause = clause.strip("«»\"' .;:,-")
+        if not clause:
+            return ""
+        if len(clause) > 140:
+            clause = clause[:140].rsplit(" ", 1)[0].rstrip(" ,;:-")
+        return f"Смотрю: {clause}."
+
     def server_close(self) -> None:
         errors: list[str] = []
 
@@ -1002,6 +1028,20 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 decision = turn_policy.decide(text, 0.0)
                 self._json({"ok": True, "draft": text, "mode": "external_final_utterance",
                             "hold": bool(decision["hold"]), "required_ms": decision["required_ms"]})
+                return
+            if self.path == "/api/voice/preface":
+                # A short provisional phrase (no LLM) that can be spoken while
+                # the JAWL turn is still thinking; the authoritative answer
+                # follows it. Screen-shaped questions only, best-effort.
+                partial = ""
+                if self.server.streaming_asr is not None:
+                    try:
+                        snapshot = self.server.streaming_asr.snapshot()
+                    except Exception:  # noqa: BLE001 - the preface is optional
+                        snapshot = {}
+                    if isinstance(snapshot, dict) and snapshot.get("active"):
+                        partial = str(snapshot.get("text") or "").strip()
+                self._json({"ok": True, "text": self.server.voice_preface(partial)})
                 return
             if self.path == "/api/reflection/note":
                 # Reflection write path: consolidation summaries enter VoiceMem

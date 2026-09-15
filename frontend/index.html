@@ -435,6 +435,7 @@
     let streamSpeechActive = false;
     let speechPlaybackActive = false;
     let speechSession = null;
+    let provisionalSpeech = null;
     let bargeInTriggered = false;
     let avatarAudioContext = null;
     let avatarAudioMonitor = null;
@@ -1378,6 +1379,7 @@
       setAmbientPlayback(false);
       if (speechSession) speechSession.stopped = true;
       speechSession = null;
+      provisionalSpeech = null;
       stopAvatarAudioMonitor();
       streamSpeechActive = false;
       if (currentAudio) {
@@ -1398,6 +1400,21 @@
     }
     async function speak(text, emotion = null) {
       if (!ttsConfigured || !text) return;
+      // A provisional phrase may already be speaking while the model was
+      // still working. Let it finish when it is actually audible; otherwise
+      // drop it so the authoritative answer is not delayed.
+      if (provisionalSpeech) {
+        const pending = provisionalSpeech;
+        const audible = Boolean(
+          pending.session && pending.session.monitor && pending.session.monitor.sources.size > 0
+        );
+        if (audible) {
+          await Promise.race([
+            pending.done,
+            new Promise(resolve => window.setTimeout(resolve, 6000)),
+          ]);
+        }
+      }
       await stopSpeech();
       bargeInTriggered = false;
       const speed = Math.max(0.5, Math.min(2, Number(ttsSpeed.value) || 1));
@@ -1434,6 +1451,49 @@
         document.querySelector('#tts-status').textContent = `TTS не воспроизведён: ${error.message}`;
       } finally {
         if (ttsAbort === controller) ttsAbort = null;
+      }
+    }
+    async function speakProvisional(text) {
+      // A short provisional phrase spoken while the JAWL turn is still
+      // running. It never owns the turn: the authoritative answer waits for
+      // it briefly (see speak) and barge-in cancels it like any speech.
+      const clean = String(text || '').trim();
+      if (!ttsConfigured || !clean || provisionalSpeech || speechSession) return false;
+      const controller = new AbortController();
+      const entry = {controller, session: null, done: null};
+      const done = (async () => {
+        try {
+          const session = await createSpeechSession(controller, null);
+          if (!session) return;
+          entry.session = session;
+          for (const segment of splitSimulatedSpeech(clean)) {
+            if (session.stopped || controller.signal.aborted) throw new DOMException('Speech cancelled', 'AbortError');
+            queueSpeechSegment(session, segment);
+          }
+          await session.queue;
+          session.monitor.streamDone = true;
+        } catch (_) {
+          /* provisional speech is best-effort */
+        } finally {
+          if (ttsAbort === controller) ttsAbort = null;
+          if (provisionalSpeech === entry) provisionalSpeech = null;
+        }
+      })();
+      entry.done = done;
+      provisionalSpeech = entry;
+      return true;
+    }
+    async function prefaceVoiceTurn(active) {
+      if (!ttsConfigured) return;
+      try {
+        const response = await apiPost('/api/voice/preface', {session_id: active.sessionId});
+        if (!response.ok) return;
+        const data = await response.json();
+        const text = String(data.text || '').trim();
+        if (!text || voice !== active) return;
+        await speakProvisional(text);
+      } catch (_) {
+        /* the preface is optional: failures never touch the turn */
       }
     }
     function downsample(samples, fromRate, toRate) {
@@ -1551,6 +1611,9 @@
       if (active.finishPromise) return active.finishPromise;
       active.finalizing = true;
       flushMicSamples(active);
+      // Speak a short perception-based preface while JAWL is still working;
+      // the authoritative answer follows when the turn settles.
+      void prefaceVoiceTurn(active);
       void showPerceptionDraft();
       active.finishPromise = (async () => {
         await voiceQueue;
