@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-14 - Voice HUD: live transcript, send countdown and safe interjections
+
+- The mic panel now shows the live transcript while the user speaks (draft
+  poll at 300ms during speech) and an endpoint countdown ("Отправка через
+  1.2 с") in the silence window, so the send timing is visible; the status
+  line narrates the states (Распознаю…, Думаю…, Слушаю…).
+- Interjection is now guarded: only a fresh, meaningful draft phrase may
+  redirect a pending turn; noise-level re-triggers just disarm the VAD. A
+  superseded request is no longer aborted — its answer still lands in the
+  chat (displayed silently). Live incident fixed: a noise trigger dropped a
+  prepared answer that later appeared only in the console window.
+
 ## 2026-09-14 - Sensory journal: persistent read offset
 
 - The sensory NDJSON ingestor now persists its byte offset next to the

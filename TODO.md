@@ -1319,7 +1319,9 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
   JAWL memory survives restarts.
 - [ ] Turn-taking retest: breath hold (1.4s base / 2.6s semantic) and live
   interjection while the answer is being prepared; confirm a resumed phrase
-  stays one turn and nothing is dropped.
+  stays one turn and nothing is dropped. Voice HUD (live transcript + send
+  countdown) landed 2026-09-14; interjections now require a fresh meaningful
+  draft and a superseded answer still appears in the chat silently.
 - [ ] Sensory journal growth (~12 MB/day, no rotation): offset persistence
   landed 2026-09-14; consider journal rotation/compaction after a live day.
 - [ ] Nightly unattended soak (step 5 of the review), prepared 2026-09-14:
