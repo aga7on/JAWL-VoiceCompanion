@@ -1309,10 +1309,17 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
   prefetch (expect the batch final in ~1s after speech ends), then decide
   whether the canonical lane should query VoiceMem context synchronously
   (sync feed_partial) or the sidecar stays a write-only enrichment sink.
-- [ ] Voice preface retest (2026-09-14 evening): explicit screen questions
+- [x] Voice preface retest (2026-09-14 evening): explicit screen questions
   only, half-volume background playback, `voice_preface` entries in
-  voice-events.ndjson for every spoken preface. Confirm no spurious
-  prefaces on ordinary turns and still no self-hearing under hands-free.
+  voice-events.ndjson for every spoken preface. Confirmed: one preface per
+  screen question, silence on ordinary turns, no self-hearing.
+- [x] End-to-end acceptance (2026-09-14): conversation and barge-in verified
+  live; memory write fixed via ZZ_MEMORY_WRITES (guard no longer tripped);
+  recall before restart 4.9s, after a full stack restart 8.3s — canonical
+  JAWL memory survives restarts.
+- [ ] Turn-taking retest: breath hold (1.4s base / 2.6s semantic) and live
+  interjection while the answer is being prepared; confirm a resumed phrase
+  stays one turn and nothing is dropped.
 - [ ] VoiceMem weight: with context passthrough only on its own lane, review
   after the live run whether the sidecar's embedding/graph machinery earns
   its RAM next to JAWL memory (keep JAWL canonical either way).

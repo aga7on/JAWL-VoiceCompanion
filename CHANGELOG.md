@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-14 - Turn-taking: breath-proof endpointing and live interjections
+
+- Hands-free endpointing no longer ends a turn on the first breath: the base
+  silence threshold rises to 1.4s (1.8s after a barge-in) and the semantic
+  hold extends to 2.6s, engaging earlier (0.6s) so an unfinished draft keeps
+  the turn open. The live draft poll runs at 600ms while streaming.
+- The user can now speak while the previous answer is still being prepared:
+  the pending /api/voice/end request is aborted and marked stale, and the
+  resumed speech becomes the live turn (the shared ASR buffer keeps the whole
+  sentence). Superseded answers settle silently.
+- The server frees the utterance buffer right after capturing the WAV, before
+  the (possibly slow) batch transcription, so an interjection can never lose
+  its opening words to a late discard.
+- Prompt rule ZZ_MEMORY_WRITES: memory facts must call
+  SQLStructuredMemory.remember with its real fields (kind/subject/predicate/
+  value), the skill catalog is searched at most once per cycle, and a
+  "запомни" request finishes in 2-3 actions. Live acceptance had the model
+  inventing `memory_key`, tripping the type guard and burning all 15 steps
+  without an answer.
+
 ## 2026-09-14 - WS protocol hardening with frame-level tests
 
 - read_frame now rejects reserved bits and validates control frames (FIN
