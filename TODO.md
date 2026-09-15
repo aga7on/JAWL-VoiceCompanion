@@ -62,9 +62,11 @@
   - [x] Срез 3 (2026-09-15): карточка «Память и подсознание» — similarity
     threshold, граф-потолок, задачи/заметки максимум, гипотезы, ToT
     (вкл/ветви/симуляции), подсознание. Итого 23 скаляра в «Настройках».
-  - [ ] U4 остаток: drives-редактор (SQLite /api/drives), memory-редактор с
-    evidence/provenance, интеграции с credentials, lifecycle/HostOS/DB-wipe
-    отдельными блоками.
+  - [x] Срез 4 (2026-09-15): карточка «Мотивация» — 14 ключей drives через
+    hub (DRIVES_FIELDS; значения в settings.yaml, состояния драйвов остаются
+    в SQLite /api/drives). Итого 37 скаляра.
+  - [ ] U4 остаток: memory-редактор с evidence/provenance, интеграции с
+    credentials, lifecycle/HostOS/DB-wipe отдельными блоками.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.
 

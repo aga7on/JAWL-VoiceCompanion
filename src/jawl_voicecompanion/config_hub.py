@@ -50,6 +50,28 @@ def _load_snapshot_modules(env_file: Path | None = None):
 
 SECRET_MARKERS = ("KEY", "TOKEN", "PASSWORD", "SECRET", "HASH")
 
+# The drives settings are managed by the console's /api/drives form (they are
+# outside the snapshot's schema.py mapping), but the values themselves live in
+# settings.yaml under system.db.sql.drives.* — the hub writes them with the
+# same in-place semantics, so the unified settings can edit them too. The
+# SQLite side (drive states/satisfaction) stays with /api/drives.
+DRIVES_FIELDS: Dict[str, str] = {
+    "settings:system.db.sql.drives.enabled": "system.db.sql.drives.enabled",
+    "settings:system.db.sql.drives.dynamic_reduction": "system.db.sql.drives.dynamic_reduction",
+    "settings:system.db.sql.drives.pause_on_offline": "system.db.sql.drives.pause_on_offline",
+    "settings:system.db.sql.drives.max_custom_drives": "system.db.sql.drives.max_custom_drives",
+    "settings:system.db.sql.drives.max_reflections_history": "system.db.sql.drives.max_reflections_history",
+    "settings:system.db.sql.drives.fundamental.curiosity.enabled": "system.db.sql.drives.fundamental.curiosity.enabled",
+    "settings:system.db.sql.drives.fundamental.curiosity.decay.rate": "system.db.sql.drives.fundamental.curiosity.decay.rate",
+    "settings:system.db.sql.drives.fundamental.curiosity.decay.interval_sec": "system.db.sql.drives.fundamental.curiosity.decay.interval_sec",
+    "settings:system.db.sql.drives.fundamental.mastery.enabled": "system.db.sql.drives.fundamental.mastery.enabled",
+    "settings:system.db.sql.drives.fundamental.mastery.decay.rate": "system.db.sql.drives.fundamental.mastery.decay.rate",
+    "settings:system.db.sql.drives.fundamental.mastery.decay.interval_sec": "system.db.sql.drives.fundamental.mastery.decay.interval_sec",
+    "settings:system.db.sql.drives.fundamental.social.enabled": "system.db.sql.drives.fundamental.social.enabled",
+    "settings:system.db.sql.drives.fundamental.social.decay.rate": "system.db.sql.drives.fundamental.social.decay.rate",
+    "settings:system.db.sql.drives.fundamental.social.decay.interval_sec": "system.db.sql.drives.fundamental.social.decay.interval_sec",
+}
+
 
 class ConfigHub:
     """Revision-aware facade over the pinned snapshot's config writer."""
@@ -96,6 +118,7 @@ class ConfigHub:
 
         values: Dict[str, Any] = {}
         values.update(_collect(self.schema.SETTINGS_FIELDS, settings))
+        values.update(_collect(DRIVES_FIELDS, settings))
         values.update(_collect(self.schema.INTERFACES_FIELDS, interfaces))
         for cfg_key, env_key in self.schema.ENV_FIELDS.items():
             raw = env.get(env_key, "")
@@ -181,8 +204,9 @@ class ConfigHub:
         ifc_scalars: Dict[str, Any] = {}
         unknown: List[str] = []
         for cfg_key, value in values.items():
-            if cfg_key in self.schema.SETTINGS_FIELDS:
-                scalars[self.schema.SETTINGS_FIELDS[cfg_key]] = value
+            if cfg_key in self.schema.SETTINGS_FIELDS or cfg_key in DRIVES_FIELDS:
+                path = self.schema.SETTINGS_FIELDS.get(cfg_key) or DRIVES_FIELDS[cfg_key]
+                scalars[path] = value
             elif cfg_key in self.schema.INTERFACES_FIELDS:
                 ifc_scalars[self.schema.INTERFACES_FIELDS[cfg_key]] = value
             elif cfg_key not in self.schema.ENV_FIELDS:

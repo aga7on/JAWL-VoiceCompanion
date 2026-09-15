@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-15 - U4 slice four: motivation (drives) card
+
+- The config hub now also maps the 14 drive settings keys
+  (`system.db.sql.drives.*` — outside the snapshot schema, normally managed
+  by the console's /api/drives form); the values live in settings.yaml, so
+  the unified settings edit them with the same in-place semantics.
+- The settings tab gains a «Мотивация» card: drives toggle, dynamic
+  reduction, offline pause, custom-drives/reflections maxima and the
+  curiosity/mastery/social triple (enabled + decay rate + interval each).
+- Drive STATES (satisfaction) stay with /api/drives (SQLite). 37 settings
+  scalars migrated so far. 67 tests green (hub + web).
+
 ## 2026-09-15 - U4 slice three: memory and subconscious card
 
 - The settings tab gains a «Память и подсознание» card: vector similarity
