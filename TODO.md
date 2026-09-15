@@ -1301,8 +1301,9 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
   "Смотрю: ..." speech, then the full answer; check self-hearing under
   hands-free and confirm barge-in drops the preface. Live check needs the
   full profile running (Bonsai first).
-- [ ] WS protocol tests (frame types: ping/pong/close/fragmentation/masking/
-  oversized) before moving the WS lane back to default-on.
+- [x] WS protocol tests (frame types: ping/pong/close/fragmentation/masking/
+  oversized): covered 2026-09-14 (13 tests); the lane stays opt-in until a
+  live session runs over WS end to end.
 - [ ] Sensory/memory (2026-09-14): vision back-off, VoiceMem memory_context
   passthrough and ASR model prefetch are in. Live-verify: voice turn with
   prefetch (expect the batch final in ~1s after speech ends), then decide

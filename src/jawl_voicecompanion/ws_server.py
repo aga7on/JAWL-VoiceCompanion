@@ -76,6 +76,8 @@ def read_frame(stream: Any) -> tuple[int, bool, bytes]:
     first, second = header[0], header[1]
     fin = bool(first & 0x80)
     opcode = first & 0x0F
+    if first & 0x70:
+        raise WebSocketError("websocket reserved bits must be zero")
     masked = bool(second & 0x80)
     length = second & 0x7F
     if length == 126:
@@ -84,6 +86,11 @@ def read_frame(stream: Any) -> tuple[int, bool, bytes]:
         length = struct.unpack("!Q", _read_exact(stream, 8))[0]
     if length > _MAX_FRAME_BYTES:
         raise WebSocketError("websocket frame exceeds the bounded limit")
+    if opcode & 0x08:
+        if not fin:
+            raise WebSocketError("websocket control frames must not be fragmented")
+        if length > 125:
+            raise WebSocketError("websocket control frame exceeds 125 bytes")
     if not masked:
         raise WebSocketError("client frames must be masked")
     mask = _read_exact(stream, 4)
@@ -118,58 +125,68 @@ class WebSocketConnection:
         self._fragment_opcode: int | None = None
 
     def read_message(self) -> str | None:
-        """Return the next complete text message, or None after close."""
-        while not self.closed:
-            try:
+        """Return the next complete text message, or None after close.
+
+        Any protocol violation closes the connection cleanly instead of
+        escaping the handler thread.
+        """
+        try:
+            while not self.closed:
                 opcode, fin, payload = read_frame(self._reader)
-            except WebSocketError:
-                self.closed = True
-                return None
-            if opcode == OPCODE_CLOSE:
-                try:
-                    self.send_close()
-                except OSError:
-                    pass
-                self.closed = True
-                return None
-            if opcode == OPCODE_PING:
-                try:
-                    self.send_pong(payload)
-                except OSError:
+                if opcode == OPCODE_CLOSE:
+                    try:
+                        self.send_close()
+                    except OSError:
+                        pass
                     self.closed = True
                     return None
-                continue
-            if opcode == OPCODE_PONG:
-                continue
-            if opcode in (OPCODE_TEXT, OPCODE_BINARY):
-                if fin:
-                    data = payload
+                if opcode == OPCODE_PING:
+                    try:
+                        self.send_pong(payload)
+                    except OSError:
+                        self.closed = True
+                        return None
+                    continue
+                if opcode == OPCODE_PONG:
+                    continue
+                if opcode in (OPCODE_TEXT, OPCODE_BINARY):
+                    if self._fragment_opcode is not None:
+                        raise WebSocketError(
+                            "websocket data frame inside a fragmented message"
+                        )
+                    if fin:
+                        data = payload
+                    else:
+                        self._fragments = [payload]
+                        self._fragment_opcode = opcode
+                        continue
+                elif opcode == OPCODE_CONTINUATION:
+                    if self._fragment_opcode is None:
+                        raise WebSocketError("continuation frame without a start")
+                    self._fragments.append(payload)
+                    if not fin:
+                        if sum(len(item) for item in self._fragments) > _MAX_MESSAGE_BYTES:
+                            raise WebSocketError("websocket message exceeds the bounded limit")
+                        continue
+                    data = b"".join(self._fragments)
+                    opcode = self._fragment_opcode
+                    self._fragments = []
+                    self._fragment_opcode = None
                 else:
-                    self._fragments = [payload]
-                    self._fragment_opcode = opcode
-                    continue
-            elif opcode == OPCODE_CONTINUATION:
-                if self._fragment_opcode is None:
-                    raise WebSocketError("continuation frame without a start")
-                self._fragments.append(payload)
-                if not fin:
-                    if sum(len(item) for item in self._fragments) > _MAX_MESSAGE_BYTES:
-                        raise WebSocketError("websocket message exceeds the bounded limit")
-                    continue
-                data = b"".join(self._fragments)
-                opcode = self._fragment_opcode
-                self._fragments = []
-                self._fragment_opcode = None
-            else:
-                raise WebSocketError("unsupported websocket opcode")
-            if sum(len(item) for item in self._fragments) + len(data) > _MAX_MESSAGE_BYTES:
-                raise WebSocketError("websocket message exceeds the bounded limit")
-            if opcode == OPCODE_BINARY:
-                return data.decode("latin-1")
-            try:
-                return data.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise WebSocketError("websocket text frame is not utf-8") from exc
+                    raise WebSocketError("unsupported websocket opcode")
+                if sum(len(item) for item in self._fragments) + len(data) > _MAX_MESSAGE_BYTES:
+                    raise WebSocketError("websocket message exceeds the bounded limit")
+                if opcode == OPCODE_BINARY:
+                    return data.decode("latin-1")
+                try:
+                    return data.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise WebSocketError("websocket text frame is not utf-8") from exc
+        except WebSocketError:
+            self.closed = True
+            self._fragments = []
+            self._fragment_opcode = None
+            return None
         return None
 
     def send_text(self, text: str) -> None:

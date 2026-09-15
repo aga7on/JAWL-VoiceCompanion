@@ -45,6 +45,25 @@ def _read_server_frame(sock: socket.socket) -> tuple[int, bytes]:
     return opcode, bytes(payload)
 
 
+def _client_frame(opcode: int, payload: bytes = b"", *, fin: bool = True, mask: bool = True, rsv: int = 0) -> bytes:
+    header = bytearray([(0x80 if fin else 0x00) | ((rsv & 0x07) << 4) | (opcode & 0x0F)])
+    length = len(payload)
+    flags = 0x80 if mask else 0x00
+    if length < 126:
+        header.append(flags | length)
+    elif length < 65536:
+        header.append(flags | 126)
+        header.extend(struct.pack("!H", length))
+    else:
+        header.append(flags | 127)
+        header.extend(struct.pack("!Q", length))
+    if mask:
+        mask_key = os.urandom(4)
+        header.extend(mask_key)
+        payload = bytes(byte ^ mask_key[index % 4] for index, byte in enumerate(payload))
+    return bytes(header) + payload
+
+
 class WebSocketTransportTests(unittest.TestCase):
     def setUp(self):
         self.server = create_server(
@@ -140,6 +159,127 @@ class WebSocketTransportTests(unittest.TestCase):
             self.assertEqual(message["type"], "voice_ack")
             self.assertFalse(message["ok"])
             self.assertIn("VoiceMem", message["error"])
+        finally:
+            sock.close()
+
+
+    def _handshake(self, sock: socket.socket) -> None:
+        response = b""
+        while b"\r\n\r\n" not in response:
+            response += sock.recv(4096)
+        self.assertIn("101", response.decode("latin-1").split("\r\n", 1)[0])
+
+    def _expect_closed(self, sock: socket.socket) -> None:
+        sock.settimeout(3)
+        try:
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return
+        except socket.timeout:
+            raise AssertionError("server did not close the connection")
+
+    def test_fragmented_message_is_assembled(self):
+        sock = self._connect()
+        sock.settimeout(5)
+        try:
+            self._handshake(sock)
+            body = json.dumps({"action": "ping"}).encode("utf-8")
+            sock.sendall(_client_frame(0x1, body[:8], fin=False))
+            sock.sendall(_client_frame(0x0, body[8:], fin=True))
+            opcode, payload = _read_server_frame(sock)
+            self.assertEqual(opcode, 0x1)
+            self.assertEqual(json.loads(payload.decode("utf-8")), {"type": "pong"})
+        finally:
+            sock.close()
+
+    def test_ping_with_payload_is_echoed_in_pong(self):
+        sock = self._connect()
+        sock.settimeout(5)
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x9, b"hi"))
+            opcode, payload = _read_server_frame(sock)
+            self.assertEqual(opcode, 0xA)
+            self.assertEqual(payload, b"hi")
+        finally:
+            sock.close()
+
+    def test_close_frame_is_acknowledged_and_closed(self):
+        sock = self._connect()
+        sock.settimeout(5)
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x8, struct.pack("!H", 1000)))
+            opcode, _ = _read_server_frame(sock)
+            self.assertEqual(opcode, 0x8)
+            self._expect_closed(sock)
+        finally:
+            sock.close()
+
+    def test_unmasked_frame_closes_the_connection(self):
+        sock = self._connect()
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x1, b'{"action":"ping"}', mask=False))
+            self._expect_closed(sock)
+        finally:
+            sock.close()
+
+    def test_reserved_bits_close_the_connection(self):
+        sock = self._connect()
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x1, b'{"action":"ping"}', rsv=1))
+            self._expect_closed(sock)
+        finally:
+            sock.close()
+
+    def test_fragmented_control_frame_closes_the_connection(self):
+        sock = self._connect()
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x9, b"x", fin=False))
+            self._expect_closed(sock)
+        finally:
+            sock.close()
+
+    def test_oversized_control_frame_closes_the_connection(self):
+        sock = self._connect()
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x9, b"x" * 126))
+            self._expect_closed(sock)
+        finally:
+            sock.close()
+
+    def test_data_frame_inside_fragmented_message_closes_the_connection(self):
+        sock = self._connect()
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x1, b'{"action":', fin=False))
+            sock.sendall(_client_frame(0x1, b'"ping"}'))
+            self._expect_closed(sock)
+        finally:
+            sock.close()
+
+    def test_oversized_frame_claim_closes_the_connection(self):
+        sock = self._connect()
+        try:
+            self._handshake(sock)
+            header = bytearray([0x81, 0x80 | 127])
+            header.extend(struct.pack("!Q", 300 * 1024))
+            sock.sendall(bytes(header))
+            self._expect_closed(sock)
+        finally:
+            sock.close()
+
+    def test_invalid_utf8_text_closes_the_connection(self):
+        sock = self._connect()
+        try:
+            self._handshake(sock)
+            sock.sendall(_client_frame(0x1, b"\xff\xfe\xfd"))
+            self._expect_closed(sock)
         finally:
             sock.close()
 

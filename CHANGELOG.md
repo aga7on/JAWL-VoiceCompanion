@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-14 - WS protocol hardening with frame-level tests
+
+- read_frame now rejects reserved bits and validates control frames (FIN
+  required, payload <= 125 bytes); a data frame while a fragmented message
+  is in progress is rejected; any protocol violation closes the connection
+  cleanly instead of escaping the handler thread.
+- New protocol tests: fragmentation assembly, ping payload echo, close
+  handshake, unmasked frames, reserved bits, fragmented and oversized
+  control frames, interleaved data frames, oversized frame claims and
+  invalid UTF-8 (13 WS tests total). The WS lane stays opt-in until a live
+  session runs over it.
+
 ## 2026-09-14 - Voice preface follow-up: stricter gate and background level
 
 - First voiced live test: barge-in and answer latency work, no
