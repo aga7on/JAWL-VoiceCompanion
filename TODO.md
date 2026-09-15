@@ -59,9 +59,12 @@
   - [x] Срез 2 (2026-09-15): карточка «Такт и контекст» — continuous_cycle,
     heartbeat_interval, timezone, critical_multiplier, RAG depth/vector
     лимиты, swarm-воркеры (тот же ревизионный write + readback).
-  - [ ] U4 остаток: перенос остальных секций (memory caps, ToT, subconscious,
-    drives), memory-редактор с evidence/provenance, интеграции с credentials,
-    lifecycle/HostOS/DB-wipe отдельными блоками.
+  - [x] Срез 3 (2026-09-15): карточка «Память и подсознание» — similarity
+    threshold, граф-потолок, задачи/заметки максимум, гипотезы, ToT
+    (вкл/ветви/симуляции), подсознание. Итого 23 скаляра в «Настройках».
+  - [ ] U4 остаток: drives-редактор (SQLite /api/drives), memory-редактор с
+    evidence/provenance, интеграции с credentials, lifecycle/HostOS/DB-wipe
+    отдельными блоками.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.
 

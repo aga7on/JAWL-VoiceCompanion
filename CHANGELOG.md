@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-09-15 - U4 slice three: memory and subconscious card
+
+- The settings tab gains a «Память и подсознание» card: vector similarity
+  threshold, graph node cap, tasks/notes maxima, the hypotheses toggle,
+  Tree of Thoughts (enabled/branches/simulations) and the subconscious
+  switch — the same revision-guarded hub write with readback and the
+  restart hint. 23 scalars migrated so far.
+
 ## 2026-09-15 - U4 slice two: tact and context card in settings
 
 - The «Настройки» tab gains a second card («Такт и контекст»): continuous

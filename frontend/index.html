@@ -340,6 +340,16 @@
             <div class="field"><label>RAG: глубина<input type="number" id="cfg-rag-depth" min="0"></label></div>
             <div class="field"><label>RAG: векторных блоков<input type="number" id="cfg-rag-vector" min="0"></label></div>
             <div class="field"><label>Swarm: одновременных воркеров<input type="number" id="cfg-swarm-workers" min="1" max="10"></label></div>
+          </article><article class="glass-card"><div class="card-head"><div><h3>Память и подсознание</h3><p>Векторный/графовый потолок, гипотезы, ToT и фоновые процессы.</p></div></div>
+            <div class="field"><label>Порог схожести векторов<input type="number" id="cfg-vector-sim" min="0" max="1" step="0.01"></label></div>
+            <div class="field"><label>Граф: макс. узлов<input type="number" id="cfg-graph-nodes" min="10"></label></div>
+            <div class="field"><label>Задач максимум<input type="number" id="cfg-max-tasks" min="1"></label></div>
+            <div class="field"><label>Заметок максимум<input type="number" id="cfg-max-notes" min="1"></label></div>
+            <div class="field"><label><input type="checkbox" id="cfg-hypotheses"> Гипотезы включены</label></div>
+            <div class="field"><label><input type="checkbox" id="cfg-tot"> Tree of Thoughts включён</label></div>
+            <div class="field"><label>ToT: ветвей<input type="number" id="cfg-tot-branches" min="1"></label></div>
+            <div class="field"><label>ToT: симуляций на ветвь<input type="number" id="cfg-tot-sims" min="1"></label></div>
+            <div class="field"><label><input type="checkbox" id="cfg-subconscious"> Подсознание включено</label></div>
           </article></div>
         </section>
         <section class="tab-panel" data-panel="jawl">
@@ -2196,6 +2206,16 @@
         set('#cfg-rag-depth', data.values['settings:system.context_depth.rag.depth_limit']);
         set('#cfg-rag-vector', data.values['settings:system.context_depth.rag.max_vector_blocks']);
         set('#cfg-swarm-workers', data.values['settings:system.swarm.max_concurrent_workers']);
+        set('#cfg-vector-sim', data.values['settings:system.db.vector.similarity_threshold']);
+        set('#cfg-graph-nodes', data.values['settings:system.db.graph.max_nodes']);
+        set('#cfg-max-tasks', data.values['settings:system.db.sql.tasks.max_tasks']);
+        set('#cfg-max-notes', data.values['settings:system.db.sql.notes.max_notes']);
+        const boolSet = (id, key) => { const el = document.querySelector(id); if (el) el.checked = data.values[key] === true; };
+        boolSet('#cfg-hypotheses', 'settings:system.db.sql.hypotheses.enabled');
+        boolSet('#cfg-tot', 'settings:system.tree_of_thoughts.enabled');
+        set('#cfg-tot-branches', data.values['settings:system.tree_of_thoughts.branches']);
+        set('#cfg-tot-sims', data.values['settings:system.tree_of_thoughts.simulations_per_branch']);
+        boolSet('#cfg-subconscious', 'settings:system.subconscious.enabled');
         statusEl.textContent = `Загружено · ревизия ${String(data.revision).slice(0, 12)}…`;
       } catch (error) {
         statusEl.textContent = `Config hub недоступен: ${error.message}`;
@@ -2224,6 +2244,15 @@
           'settings:system.context_depth.rag.depth_limit': num(document.querySelector('#cfg-rag-depth')?.value || 0),
           'settings:system.context_depth.rag.max_vector_blocks': num(document.querySelector('#cfg-rag-vector')?.value || 0),
           'settings:system.swarm.max_concurrent_workers': num(document.querySelector('#cfg-swarm-workers')?.value || 3),
+          'settings:system.db.vector.similarity_threshold': num(document.querySelector('#cfg-vector-sim')?.value || 0.35),
+          'settings:system.db.graph.max_nodes': num(document.querySelector('#cfg-graph-nodes')?.value || 5000),
+          'settings:system.db.sql.tasks.max_tasks': num(document.querySelector('#cfg-max-tasks')?.value || 200),
+          'settings:system.db.sql.notes.max_notes': num(document.querySelector('#cfg-max-notes')?.value || 500),
+          'settings:system.db.sql.hypotheses.enabled': !!document.querySelector('#cfg-hypotheses')?.checked,
+          'settings:system.tree_of_thoughts.enabled': !!document.querySelector('#cfg-tot')?.checked,
+          'settings:system.tree_of_thoughts.branches': num(document.querySelector('#cfg-tot-branches')?.value || 3),
+          'settings:system.tree_of_thoughts.simulations_per_branch': num(document.querySelector('#cfg-tot-sims')?.value || 2),
+          'settings:system.subconscious.enabled': !!document.querySelector('#cfg-subconscious')?.checked,
         },
         expected_revision: configRevision,
       };
