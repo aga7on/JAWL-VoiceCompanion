@@ -13,10 +13,14 @@
     `docs/ui-registry/UI_REGISTRY.md` (группы, владельцы, вердикты,
     критичные эндпоинты, дубли компаньона). Регенерация:
     `python scripts\ui-registry\extract_ui_registry.py && python scripts\ui-registry\generate_registry_md.py`.
-  - [ ] Открытые вопросы реестра: секреты в `/api/config` readback, владелец
-    записи чата (`/api/chat` vs companion turn), ревизионный протокол drives,
-    контракт списочных редакторов (6 списков).
-  - [ ] Скриншот/interaction baseline всех экранов + конфиг-контракты и откат.
+  - [x] Открытые вопросы реестра задокументированы в
+    `docs/ui-registry/CONFIG_CONTRACTS.md`: секреты отдаются в открытом виде
+    (GET), ревизий/конфликтов нет (last-write-wins), restartRequired всегда
+    пуст, drives живут в SQLite через `/api/drives`, бэкапов writer не делает
+    (только артефакты снапшотера) — контракты для U1 сформулированы.
+  - [x] Живой baseline: `docs/ui-registry/baseline/` — 11 скринов (7 вкладок
+    компаньона + 5 экранов консоли через iframe) + `manifest.json`; стек
+    перезапущен, агент восстановлен после утреннего agent.stop.
 - [ ] U1: единые config/capability contracts, writer, secrets, revision/readback.
 - [ ] U2: общие tokens и shell: Компаньон / Задачи / Память / Настройки.
 - [ ] U3: единые status, logs, catalog, диагностика и reconnect.

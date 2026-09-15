@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-15 - U0 closed: live baseline and config contracts
+
+- Live baseline captured: `docs/ui-registry/baseline/` — 11 screenshots
+  (7 companion tabs + 5 console screens through the embedded iframe) with a
+  manifest; the stack was restarted (the agent recovered from the morning
+  `agent.stop` and is cycling again).
+- `docs/ui-registry/CONFIG_CONTRACTS.md` documents the actual config
+  semantics: three owners (settings.yaml / interfaces.yaml / .env), in-place
+  YAML editing with exact CRLF/LF preservation, env prefix renumbering,
+  drives living in SQLite via `/api/drives`, and the U1 gaps — no revision
+  (last-write-wins), secrets served in plaintext, `restartRequired` always
+  empty, no writer-side backups (rollback today = git + manual .bak).
+
 ## 2026-09-15 - U0 registry: machine inventory of both panels
 
 - `docs/ui-registry/registry.json`: 213 DOM data-cfg controls of the JAWL
