@@ -167,6 +167,11 @@ class ConfigHub:
             "unknown": sorted(set(unknown)),
             "missing": missing,
             "readback": self.read(mask_secrets=True),
+            # The agent calls load_config() once at startup (src/main.py), so
+            # every config key is conservative: an agent restart applies it.
+            # No config key is currently proven live-cycle-reloaded.
+            "restart_required": bool(written),
+            "restart_policy": "agent_restart",
         }
 
     # ------------------------------------------------------------ internals

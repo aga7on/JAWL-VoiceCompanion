@@ -113,5 +113,29 @@ class ConfigHubTests(unittest.TestCase):
         self.assertIn("0.6", (self.config / "settings.yaml").read_text(encoding="utf-8"))
 
 
+    def test_two_client_conflict(self):
+        # Client A reads, client B writes, client A's stale write is rejected.
+        client_a = self.hub.read()
+        other = ConfigHub(self.config, env_file=Path(self.tmp.name) / ".env")
+        self.assertTrue(other.write({"values": {"settings:llm.temperature": 0.9}})["ok"])
+        result = self.hub.write(
+            {"values": {"settings:llm.temperature": 0.2}},
+            expected_revision=client_a["revision"],
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "conflict")
+        self.assertEqual(self.hub.read()["values"]["settings:llm.temperature"], 0.9)
+
+    def test_write_reports_restart_required(self):
+        result = self.hub.write(
+            {"values": {"settings:llm.temperature": 0.6}},
+            expected_revision=self.hub.revision(),
+        )
+        self.assertTrue(result["restart_required"])
+        self.assertEqual(result["restart_policy"], "agent_restart")
+        empty = self.hub.write({"values": {}}, expected_revision=self.hub.revision())
+        self.assertFalse(empty["restart_required"])
+
+
 if __name__ == "__main__":
     unittest.main()
