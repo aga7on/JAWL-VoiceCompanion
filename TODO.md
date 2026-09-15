@@ -35,6 +35,11 @@
   - [ ] U1 остаток: effective-состояние после записи (нужен агент-side
     аудит по-ключ), UI-слою настроек подключить hub (draft/save/conflict UX).
 - [ ] U2: общие tokens и shell: Компаньон / Задачи / Память / Настройки.
+  - [x] Срез 1 (2026-09-15): полный токен-слой в :root (статусы, spacing,
+    radius, motion, control-height, focus-ring) с привязкой горячих правил;
+    hashchange → табы (back/forward), Alt+1..7 — клавиатурная навигация.
+  - [ ] U2 остаток: regroup навигации в 4 раздела (после U4-контента),
+    settings search, сохранение draft/focus, адаптивность по реальным данным.
 - [ ] U3: единые status, logs, catalog, диагностика и reconnect.
 - [ ] U4: все настройки/память/интеграции с проверкой round-trip и effective state.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.

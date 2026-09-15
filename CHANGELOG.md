@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U2 slice one: design token layer, keyboard tabs, back/forward
+
+- The token layer lands in the companion UI: status colors (success/warning/
+  focus-ring), spacing scale, radius scale, motion durations and control
+  height, with the hot rules (buttons, inputs, tab panels, focus rings)
+  mapped to the variables. The mint Aero palette itself is frozen.
+- Navigation core: browser back/forward now switches tabs (hashchange),
+  and Alt+1..7 jumps between tabs in sidebar order.
+- Docs-only per-panel changes were kept minimal; existing styles render
+  unchanged (tokens mirror the current literals).
+
 ## 2026-09-15 - U1 slice one: unified config hub with revisions and secret masking
 
 - `config_hub.py` wraps the pinned snapshot's `config_io` (the same in-place

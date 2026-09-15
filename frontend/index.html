@@ -18,6 +18,23 @@
       --line: rgba(44, 126, 116, .18);
       --shadow: 0 18px 46px rgba(41, 111, 100, .16), 0 2px 8px rgba(22, 72, 67, .08);
       --danger: #a64658;
+      /* U2 token layer: status, spacing, radius, motion, control sizes. */
+      --success: #2f8f6d;
+      --warning: #b07a2e;
+      --focus-ring: rgba(54, 173, 151, .32);
+      --focus-ring-width: 3px;
+      --radius-sm: 8px;
+      --radius-md: 11px;
+      --radius-lg: 13px;
+      --radius-xl: 16px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 18px;
+      --motion-fast: 140ms ease-out;
+      --motion-base: 220ms ease-out;
+      --control-height: 38px;
     }
     * { box-sizing: border-box; }
     html { min-width: 320px; background: #c8eee1; }
@@ -30,9 +47,9 @@
     }
     body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .22; background-image: linear-gradient(115deg, transparent 0 48%, rgba(255,255,255,.55) 49% 50%, transparent 51%); background-size: 18px 18px; }
     button, input, select, textarea { font: inherit; }
-    button, select { border: 1px solid rgba(40, 121, 112, .28); border-radius: 11px; min-height: 38px; padding: 8px 13px; color: var(--ink); background: rgba(255,255,255,.72); box-shadow: 0 2px 7px rgba(33, 105, 94, .08); cursor: pointer; transition: .18s ease; }
+    button, select { border: 1px solid rgba(40, 121, 112, .28); border-radius: var(--radius-md); min-height: var(--control-height); padding: var(--space-2) 13px; color: var(--ink); background: rgba(255,255,255,.72); box-shadow: 0 2px 7px rgba(33, 105, 94, .08); cursor: pointer; transition: var(--motion-fast); }
     button:hover, select:hover { background: #fff; border-color: var(--mint-strong); transform: translateY(-1px); }
-    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(54, 173, 151, .32); outline-offset: 2px; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring); outline-offset: 2px; }
     button.primary { color: #fff; border-color: var(--mint-deep); background: linear-gradient(135deg, #48b79f, #238c80); }
     button.primary:hover { background: linear-gradient(135deg, #39a88f, #19786d); }
     button.danger { color: #fff; border-color: #963b4d; background: linear-gradient(135deg, #bd6271, var(--danger)); }
@@ -62,7 +79,7 @@
     .nav-icon { width: 20px; text-align: center; font-size: 16px; }
     .sidebar-foot { margin-top: auto; padding: 12px 9px 4px; color: var(--muted); font-size: 11px; line-height: 1.55; }
     .content { min-width: 0; }
-    .tab-panel { display: none; animation: panel-in .22s ease-out; }
+    .tab-panel { display: none; animation: panel-in var(--motion-base); }
     .console-frame { width: 100%; height: calc(100vh - 96px); min-height: 560px; border: 1px solid rgba(52,148,130,.18); border-radius: 14px; background: #fbfaf7; }
     .tab-panel.active { display: block; }
     @keyframes panel-in { from { opacity: .35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -320,6 +337,17 @@
       tabs.forEach(tab => tab.addEventListener('click', () => selectTab(tab.dataset.tab)));
       document.querySelectorAll('[data-tab-target]').forEach(button => button.addEventListener('click', () => selectTab(button.dataset.tabTarget)));
       selectTab(window.location.hash.slice(1) || 'home');
+      // U2 navigation core: browser back/forward and Alt+1..7 switch tabs.
+      window.addEventListener('hashchange', () => selectTab(window.location.hash.slice(1) || 'home'));
+      window.addEventListener('keydown', event => {
+        if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        const index = Number(event.key);
+        if (!Number.isInteger(index) || index < 1 || index > tabs.length) return;
+        const tab = tabs[index - 1];
+        if (!tab) return;
+        event.preventDefault();
+        selectTab(tab.dataset.tab);
+      });
       window.renderMiniAvatar = state => {
         const turn = state?.last_turn || {};
         const response = turn.response || {};
