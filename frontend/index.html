@@ -991,8 +991,8 @@
       });
       return refreshInFlight;
     }
-    async function apiPost(path, body) {
-      return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body) });
+    async function apiPost(path, body, options = {}) {
+      return fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json', ...sessionHeaders}, body: JSON.stringify(body), signal: options.signal });
     }
     function publishAvatarAudio(amplitude, speaking) {
       setSignal(companionSignal, speaking && Number(amplitude) > 0.01);
@@ -1615,12 +1615,14 @@
       if (!active) return;
       if (active.finishPromise) return active.finishPromise;
       active.finalizing = true;
+      const entry = {controller: new AbortController(), superseded: false, promise: null};
+      active.pendingEnd = entry;
       flushMicSamples(active);
       // Speak a short perception-based preface while JAWL is still working;
       // the authoritative answer follows when the turn settles.
       void prefaceVoiceTurn(active);
       void showPerceptionDraft();
-      active.finishPromise = (async () => {
+      entry.promise = (async () => {
         await voiceQueue;
         try {
           let data;
@@ -1642,19 +1644,23 @@
           } else {
             const response = await apiPost('/api/voice/end', {
               session_id: active.sessionId, correlation_id: active.correlationId,
-            });
+            }, {signal: entry.controller.signal});
             data = await response.json();
             if (!response.ok || data.error) throw new Error(data.error || 'VoiceMem unavailable');
           }
+          if (entry.superseded) return;
           handleVoiceResponses(data);
         } catch (error) {
-          document.querySelector('#mic-status').textContent = `Hands-free finish error: ${error.message}`;
+          if (error.name !== 'AbortError' && !entry.superseded) {
+            document.querySelector('#mic-status').textContent = `Hands-free finish error: ${error.message}`;
+          }
         } finally {
-          if (voice === active) {
+          if (active.pendingEnd === entry) active.pendingEnd = null;
+          if (active.finishPromise === entry.promise) active.finishPromise = null;
+          if (voice === active && !entry.superseded) {
             active.sessionId = `browser-mic-${Date.now()}-${++voiceSequence}`;
             active.correlationId = `turn-voice-${Date.now()}-${voiceSequence}`;
             active.finalizing = false;
-            active.finishPromise = null;
             active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false};
             active.lastDraftHold = false;
             active.backchannelSent = false;
@@ -1668,6 +1674,24 @@
         }
       })();
       return active.finishPromise;
+    }
+    function interjectVoiceUtterance(active) {
+      // The user resumed while the previous answer was still being prepared:
+      // the resumed speech already lives in the same ASR buffer, so the stale
+      // request is cancelled and the live utterance becomes the turn. The
+      // superseded response is dropped silently when it settles.
+      const pending = active.pendingEnd;
+      if (pending) {
+        pending.superseded = true;
+        try { pending.controller.abort(); } catch (_) { /* already settled */ }
+        active.pendingEnd = null;
+      }
+      active.finishPromise = null;
+      active.finalizing = false;
+      active.correlationId = `turn-voice-${Date.now()}-${++voiceSequence}`;
+      active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false, afterBargeIn: false};
+      active.lastDraftHold = false;
+      return finishVoiceUtterance(active);
     }
     async function stopMicrophone() {
       if (!voice) return;
@@ -1708,7 +1732,7 @@
       showLiveTranscript('');
     }
     function updateVoiceVad(active, rms) {
-      if (!handsFree.checked || active.finalizing) return;
+      if (!handsFree.checked) return;
       // Never end a turn while our own speech is still playing: the window
       // around a barge-in fade is full of echo and would finalize a fragment.
       if (currentAudio || speechPlaybackActive) return;
@@ -1731,12 +1755,20 @@
       // Semantic end-of-turn: silence is not an end while the live draft
       // reads unfinished (trailing "и/но/что…"). One bounded extension per
       // utterance keeps a monologue from holding the turn forever.
-      if (!active.vad.holdUsed && active.lastDraftHold && silence >= 800) {
+      if (!active.vad.holdUsed && active.lastDraftHold && silence >= 600) {
         active.vad.holdUsed = true;
       }
-      const required = active.vad.holdUsed ? 2000 : (active.vad.afterBargeIn ? 1500 : 800);
+      // A breath between clauses is not an end of the turn: the base hold is
+      // deliberately longer than an inhalation.
+      const required = active.vad.holdUsed ? 2600 : (active.vad.afterBargeIn ? 1800 : 1400);
       if (silence >= required && now - active.vad.startedAt >= 300) {
-        finishVoiceUtterance(active);
+        if (active.finalizing) {
+          // The answer to the previous utterance is still being prepared and
+          // the user kept talking: cancel it and treat this as the live turn.
+          interjectVoiceUtterance(active);
+        } else {
+          finishVoiceUtterance(active);
+        }
       }
     }
     async function startMicrophone() {
@@ -1879,7 +1911,7 @@
       const scheduleDraft = () => {
         activeDraftTimer = window.setTimeout(async () => {
           const current = voice;
-          if (!current || current.finalizing) { activeDraftTimer = null; return; }
+          if (!current || (current.finalizing && !current.vad.speaking)) { activeDraftTimer = null; return; }
           if (current.receivedChunks) {
             try {
               const response = await apiPost('/api/voice/draft', {session_id: current.sessionId});
@@ -1887,7 +1919,7 @@
                 const data = await response.json();
                 showLiveTranscript(data.draft);
                 current.lastDraftHold = Boolean(data.hold);
-                draftDelay = data.mode === 'streaming' ? 800 : 2500;
+                draftDelay = data.mode === 'streaming' ? 600 : 2500;
               }
             } catch (_) { /* fail-soft: drafts never break capture */ }
           }

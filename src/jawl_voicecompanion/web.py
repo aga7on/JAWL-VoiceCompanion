@@ -1793,20 +1793,28 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             batch_text = ""
             transcriber = getattr(self.server, "gigaam_transcriber", None)
             if transcriber is not None:
+                wav_bytes = b""
                 try:
                     wav_bytes = self.server.asr.to_wav(session_id)
-                    if wav_bytes:
-                        batch_text = str(transcriber.transcribe(wav_bytes) or "").strip()[:12_000]
                 except Exception:  # noqa: BLE001 - batch lane is an accelerator
-                    batch_text = ""
+                    wav_bytes = b""
+                if wav_bytes:
+                    # Free the live buffer before the (possibly slow) batch
+                    # transcription: a resumed (interjecting) utterance keeps
+                    # buffering in the same session and must never be dropped
+                    # by a late discard from this request.
+                    try:
+                        self.server.asr.discard(session_id)
+                    except Exception:
+                        pass
+                    try:
+                        batch_text = str(transcriber.transcribe(wav_bytes) or "").strip()[:12_000]
+                    except Exception:  # noqa: BLE001
+                        batch_text = ""
             if batch_text and is_meaningful_transcript(batch_text):
                 # GigaAM (Sber) file-mode transcription of the complete
                 # buffered utterance: measured faster and more accurate than
-                # the Qwen fallback; drop the buffer without a second call.
-                try:
-                    self.server.asr.discard(session_id)
-                except Exception:
-                    pass
+                # the Qwen fallback; the buffer was already dropped above.
                 transcription = {"status": "transcribed", "text": batch_text}
                 asr_source = "gigaam"
             else:
