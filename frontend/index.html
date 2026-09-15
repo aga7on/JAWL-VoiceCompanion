@@ -2126,16 +2126,25 @@
     }
     let shellStatusTimer = null;
     let shellStatusStale = false;
-    function renderShellStatus(data) {
+    function renderShellStatus(data, tick) {
       const el = document.querySelector('#shell-rail');
       if (!el || !data || data.ok !== true) return;
-      const agent = data.agent?.chat_status === 'connected' ? 'связь'
-        : (data.agent?.chat_status === 'starting' ? 'подключение' : 'нет связи');
+      let agent;
+      if (tick && tick.known && tick.phase === 'sleep') {
+        const wake = Number(tick.wakeInSec || 0);
+        agent = wake > 0 ? `сон ${Math.floor(wake / 60)}:${String(Math.floor(wake % 60)).padStart(2, '0')}` : 'пробуждается';
+      } else if (tick && tick.phase === 'wake' && tick.step > 0) {
+        agent = `шаг ${tick.step}/${tick.maxSteps || '—'}`;
+      } else {
+        agent = data.agent?.chat_status === 'connected' ? 'связь'
+          : (data.agent?.chat_status === 'starting' ? 'подключение' : 'нет связи');
+      }
       const tts = data.voice?.tts ? 'готов' : 'выкл';
       const sensory = data.sensory?.running ? `события: ${data.sensory.lines}` : 'тихо';
       el.textContent = `агент: ${agent} · голос: ${tts} · сенсорика: ${sensory}`;
       el.title = `экран: ${data.screen?.running ? 'смотрит' : 'пауза'} · внимание: ${data.attention?.dnd ? 'DND' : 'активно'}`
-        + ` · профиль: ${data.resources?.profile || '—'} · обновлено ${new Date().toLocaleTimeString()}`;
+        + (tick?.reason ? ` · такт: ${tick.reason}` : '')
+        + ` · обновлено ${new Date().toLocaleTimeString()}`;
       el.classList.remove('stale');
     }
     async function pollShellStatus() {
@@ -2144,7 +2153,12 @@
         const response = await fetch('/api/shell/status', {headers: sessionHeaders, cache: 'no-store'});
         const data = await response.json();
         shellStatusStale = false;
-        renderShellStatus(data);
+        let tick = null;
+        try {
+          const tickResponse = await fetch('/console-api/tick', {cache: 'no-store'});
+          tick = await tickResponse.json();
+        } catch (_) { /* the tick lane is optional for the rail */ }
+        renderShellStatus(data, tick);
       } catch (_) {
         const el = document.querySelector('#shell-rail');
         if (el && !shellStatusStale) {
