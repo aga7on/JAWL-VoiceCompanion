@@ -52,6 +52,13 @@
   - [ ] U3 остаток: tick/journal surfaces в UI (рейл уже покрывает фазу),
     состояния loading/empty/failed для остальных панелей, reconnect-проверки.
 - [ ] U4: все настройки/память/интеграции с проверкой round-trip и effective state.
+  - [x] Срез 1 (2026-09-15): вкладка «Настройки» — редактор ядра (имя, модель,
+    температура, мин-интервал, max шагов, язык) через config hub: ревизия,
+    conflict-UX с авто-перечиткой, unknown-ключи, readback, подсказка рестарта.
+    HTTP round-trip тесты (запись → readback → смена ревизии → конфликт).
+  - [ ] U4 остаток: перенос остальных секций настроек (такт/RAG/память/swarm),
+    memory-редактор с evidence/provenance, интеграции с credentials,
+    lifecycle/HostOS/DB-wipe отдельными блоками.
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.
 

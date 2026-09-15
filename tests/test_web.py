@@ -1093,5 +1093,84 @@ class AgentLogTests(unittest.TestCase):
         self.assertEqual(data["lines"], [])
 
 
+class SettingsHubUITests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        config = self.tmp.name + "/config"
+        Path(config).mkdir()
+        (Path(config) / "settings.yaml").write_text(
+            "identity:\n  agent_name: Компаньон\nllm:\n  main_model: deepseek-v4-flash\n  temperature: 0.4\n  language: ru\n",
+            encoding="utf-8",
+        )
+        (Path(config) / "interfaces.yaml").write_text("web:\n  enabled: true\n", encoding="utf-8")
+        (Path(self.tmp.name) / ".env").write_text("LLM_API_URL=http://127.0.0.1:8891/v1\n", encoding="utf-8")
+        from jawl_voicecompanion.config_hub import ConfigHub
+
+        self.server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+            config_hub=ConfigHub(Path(config), env_file=Path(self.tmp.name) / ".env"),
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        self.session_headers = {
+            "X-Companion-Session": self.server.session_token,
+            "X-Companion-CSRF": self.server.csrf_token,
+        }
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def _post(self, payload):
+        request = Request(
+            self.base + "/api/config-hub/save",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", **self.session_headers},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _get(self):
+        request = Request(self.base + "/api/config-hub", headers=self.session_headers)
+        with urlopen(request, timeout=3) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def test_roundtrip_through_http(self):
+        state = self._get()
+        self.assertEqual(state["values"]["settings:llm.temperature"], 0.4)
+        result = self._post({
+            "values": {"settings:llm.temperature": 0.55, "settings:llm.main_model": "glm-5.3-flash"},
+            "expected_revision": state["revision"],
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["readback"]["values"]["settings:llm.temperature"], 0.55)
+        self.assertEqual(result["readback"]["values"]["settings:llm.main_model"], "glm-5.3-flash")
+        self.assertTrue(result["restart_required"])
+        again = self._get()
+        self.assertEqual(again["values"]["settings:llm.temperature"], 0.55)
+        self.assertNotEqual(again["revision"], state["revision"])
+        # masked secret still masked after the write
+        self.assertEqual(again["values"]["env:LLM_API_URL"], "http://127.0.0.1:8891/v1")
+
+    def test_conflict_returns_conflict_status(self):
+        state = self._get()
+        result = self._post({
+            "values": {"settings:llm.temperature": 2.0},
+            "expected_revision": "deadbeef" + "0" * 24,
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "conflict")
+        self.assertEqual(self._get()["values"]["settings:llm.temperature"], 0.4)
+        del state
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -260,6 +260,7 @@
         <button class="nav-item" data-tab="perception" aria-selected="false"><span class="nav-icon">◌</span><span>Восприятие</span></button>
         <button class="nav-item" data-tab="memory" aria-selected="false"><span class="nav-icon">▤</span><span>Память</span></button>
         <div class="nav-label">Контроль</div>
+        <button class="nav-item" data-tab="settings" aria-selected="false"><span class="nav-icon">⚙</span><span>Настройки</span></button>
         <button class="nav-item" data-tab="access" aria-selected="false"><span class="nav-icon">⌁</span><span>Доступ</span></button>
         <button class="nav-item" data-tab="system" aria-selected="false"><span class="nav-icon">⚙</span><span>Система</span></button>
         <button class="nav-item" data-tab="jawl" aria-selected="false"><span class="nav-icon">▣</span><span>Пульт JAWL</span></button>
@@ -319,6 +320,19 @@
           <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Логи агента</h3><p>Хвост журнала main.log, секреты маскируются.</p></div><div><button id="agent-log-refresh" type="button">Обновить</button></div></div><pre id="agent-log-view" class="meta">Загрузка…</pre></article></div>
           <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Состояние контуров</h3><p>Обновляется автоматически.</p></div></div><pre id="health">Загрузка…</pre><details open><summary>Doctor</summary><pre id="doctor" class="meta">loading...</pre></details></article><article class="glass-card"><div class="card-head"><div><h3>Аудит HostOS</h3><p>Последние решения policy и результаты инструментов.</p></div></div><pre id="audit" class="meta">Загрузка…</pre></article></div>
                   <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Инициатива JAWL</h3><p>Проактивные сообщения приходят только в паузах диалога и с лимитом частоты.</p></div></div><label class="meta"><input type="checkbox" id="proactive-muted"> Режим тишины: не показывать и не озвучивать инициативу</label><br><label class="meta"><input type="checkbox" id="proactive-speak"> Озвучивать инициативу, когда диалог свободен</label><pre id="proactive" class="meta">Загрузка…</pre><div id="proactive-list" class="meta"></div></article><article class="glass-card"><div class="card-head"><div><h3>Консоль JAWL</h3><p>Полный пульт агента через единый origin компаньона.</p></div></div><p class="meta">Страница консоли отдаётся через тот же адрес, что и пульт: токен подставляется сервером, отдельный порт не нужен.</p><p><a class="button" href="/console/" target="_blank" rel="noopener">Открыть консоль JAWL</a></p></article></div>
+        </section>
+        <section class="tab-panel" data-panel="settings">
+          <div class="page-heading"><div><span class="eyebrow">Configuration</span><h2>Настройки</h2><p>Ключевые параметры агента через единый writer; значения применяются после рестарта агента.</p></div></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Ядро агента</h3><p>config hub: ревизии, маскирование секретов, pre-save бэкапы.</p></div></div>
+            <div class="field"><label>Имя агента<input type="text" id="cfg-agent-name"></label></div>
+            <div class="field"><label>Основная модель<input type="text" id="cfg-main-model"></label></div>
+            <div class="field"><label>Температура<input type="number" id="cfg-temperature" min="0" max="2" step="0.05"></label></div>
+            <div class="field"><label>Мин. интервал вызовов, сек<input type="number" id="cfg-min-interval" min="0"></label></div>
+            <div class="field"><label>Максимум шагов ReAct<input type="number" id="cfg-max-steps" min="1" max="30"></label></div>
+            <div class="field"><label>Язык<input type="text" id="cfg-language"></label></div>
+            <div class="button-row"><button id="settings-reload" type="button">Перечитать</button><button id="settings-save" class="primary" type="button">Сохранить</button></div>
+            <p id="settings-status" class="meta"></p>
+          </article></div>
         </section>
         <section class="tab-panel" data-panel="jawl">
           <iframe class="console-frame" src="/console/" title="JAWL console" loading="lazy"></iframe>
@@ -2142,6 +2156,83 @@
       void pollShellStatus();
       scheduleShellStatus();
     }
+    let configRevision = null;
+    async function loadSettingsHub() {
+      const statusEl = document.querySelector('#settings-status');
+      if (!statusEl) return;
+      try {
+        const response = await fetch('/api/config-hub', {headers: sessionHeaders, cache: 'no-store'});
+        const data = await response.json();
+        if (!data.ok) {
+          configRevision = null;
+          statusEl.textContent = data.error || 'Config hub недоступен.';
+          return;
+        }
+        configRevision = data.revision;
+        const set = (id, value) => {
+          const el = document.querySelector(id);
+          if (el && value !== null && value !== undefined) el.value = value;
+        };
+        set('#cfg-agent-name', data.values['settings:identity.agent_name']);
+        set('#cfg-main-model', data.values['settings:llm.main_model']);
+        set('#cfg-temperature', data.values['settings:llm.temperature']);
+        set('#cfg-min-interval', data.values['settings:llm.min_call_interval_sec']);
+        set('#cfg-max-steps', data.values['settings:llm.max_react_steps']);
+        set('#cfg-language', data.values['settings:llm.language']);
+        statusEl.textContent = `Загружено · ревизия ${String(data.revision).slice(0, 12)}…`;
+      } catch (error) {
+        statusEl.textContent = `Config hub недоступен: ${error.message}`;
+      }
+    }
+    async function saveSettingsHub() {
+      const statusEl = document.querySelector('#settings-status');
+      if (!statusEl) return;
+      if (!configRevision) { statusEl.textContent = 'Сначала перечитайте конфигурацию.'; return; }
+      const num = value => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : value;
+      };
+      const payload = {
+        values: {
+          'settings:identity.agent_name': String(document.querySelector('#cfg-agent-name')?.value || '').trim(),
+          'settings:llm.main_model': String(document.querySelector('#cfg-main-model')?.value || '').trim(),
+          'settings:llm.temperature': num(document.querySelector('#cfg-temperature')?.value),
+          'settings:llm.min_call_interval_sec': num(document.querySelector('#cfg-min-interval')?.value || 0),
+          'settings:llm.max_react_steps': num(document.querySelector('#cfg-max-steps')?.value || 15),
+          'settings:llm.language': String(document.querySelector('#cfg-language')?.value || '').trim(),
+        },
+        expected_revision: configRevision,
+      };
+      const button = document.querySelector('#settings-save');
+      if (button) button.disabled = true;
+      try {
+        const response = await apiPost('/api/config-hub/save', payload);
+        const data = await response.json();
+        if (data.ok) {
+          configRevision = data.revision;
+          const written = (data.written || []).join(', ') || 'ничего';
+          statusEl.textContent = `Сохранено (${written}). Рестарт агента применит значения.`
+            + (data.unknown?.length ? ` Неизвестные ключи: ${data.unknown.join(', ')}.` : '');
+          const changed = Object.entries(payload.values)
+            .filter(([key, value]) => data.readback?.values?.[key] !== undefined && data.readback.values[key] !== value)
+            .map(([key]) => key);
+          if (changed.length) statusEl.textContent += ` Readback: ${changed.join(', ')}.`;
+        } else if (data.status === 'conflict') {
+          statusEl.textContent = 'Конфликт: конфиг изменился с момента чтения — перечитываю…';
+          await loadSettingsHub();
+        } else {
+          statusEl.textContent = `Ошибка: ${data.error || 'unknown'}`;
+        }
+      } catch (error) {
+        statusEl.textContent = `Не удалось сохранить: ${error.message}`;
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+    document.querySelector('#settings-reload')?.addEventListener('click', () => void loadSettingsHub());
+    document.querySelector('#settings-save')?.addEventListener('click', () => void saveSettingsHub());
+    document.querySelector('[data-tab="settings"]')?.addEventListener('click', () => void loadSettingsHub());
+
     let shellStatusTimer = null;
     let shellStatusStale = false;
     function renderShellStatus(data, tick) {

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U4 slice one: native settings tab over the config hub
+
+- New «Настройки» tab (first unified-navigation section): edits the core
+  agent scalars (agent name, main model, temperature, min call interval,
+  max ReAct steps, language) through the config hub with the full U1
+  semantics — revision guard, conflict UX (auto-reload on conflict),
+  unknown-key notes, post-write readback and the restart-required hint.
+- Settings load on tab open; reload button re-reads the revision.
+- HTTP round-trip tests through a real hub (write → readback → revision
+  change → conflict path). 59/59 web tests.
+
 ## 2026-09-15 - U3 slice two: redacted agent log tail in the panel
 
 - `GET /api/logs/agent?tail=N` (session-gated): the tail of the agent's
