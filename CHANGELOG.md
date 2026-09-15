@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-15 - U6 portions 3-4: all remaining interface groups migrated
+
+- Portion 3 = MCP 6, Debug Broker 9, Multimodality 7, Cloud voice 14
+  (Whisper STT, ElevenLabs/Edge TTS); Portion 4 = Web tools 24 (HTTP,
+  search + deep research, browser, hooks, RSS) and HostOS details 33
+  (desktop, coding approvals, containers, files, terminal) — including a
+  new 'float' input type for the fractional scalars.
+- All large groups round-trip tested through the hub (8-field spot check).
+- Parity: telegram 17 + block-A 17 + block-B 36 + web 24 + host 33 = **147
+  interface controls migrated; 187/213 controls total (88%)**. Remaining:
+  custom-drives CRUD, DB-wipe decision, and the console-only list editors
+  (enabled_providers/feeds/servers are console-transitional).
+
 ## 2026-09-15 - U6 portion 2: block-A integrations (github/email/calendar/code_graph/meta)
 
 - Portion 2 = 17 more interface fields through the typed-card framework:

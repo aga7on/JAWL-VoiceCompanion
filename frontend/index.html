@@ -377,6 +377,18 @@
             <div id="ifc-code_graph"></div>
             <div id="ifc-meta"></div>
           </article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Интеграции · блок B</h3><p>MCP, Debug Broker, Мультимодальность, Облачный голос.</p></div></div>
+            <div id="ifc-mcp"></div>
+            <div id="ifc-debug_broker"></div>
+            <div id="ifc-multimodality"></div>
+            <div id="ifc-voice"></div>
+          </article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Web-инструменты</h3><p>HTTP, поиск, deep research, браузер, hooks, RSS.</p></div></div>
+            <div id="ifc-web"></div>
+          </article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>HostOS · детали</h3><p>Desktop, coding, контейнеры, файлы, терминал.</p></div></div>
+            <div id="ifc-host"></div>
+          </article></div>
           <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Telegram</h3><p>Telethon (чтение) и Aiogram (отправка) — по отдельности.</p></div></div>
             <div id="ifc-telegram"></div>
           </article></div>
@@ -2288,6 +2300,129 @@
       return out;
     }
     const IFACE_SECTIONS = {
+      mcp: {
+        title: 'MCP-серверы',
+        fields: [
+          {key: 'interfaces:mcp.enabled', label: 'MCP: включён', type: 'bool'},
+          {key: 'interfaces:mcp.startup_timeout_sec', label: 'MCP: таймаут старта, сек', type: 'int'},
+          {key: 'interfaces:mcp.request_timeout_sec', label: 'MCP: таймаут запроса, сек', type: 'int'},
+          {key: 'interfaces:mcp.max_catalog_items', label: 'MCP: макс. элементов каталога', type: 'int'},
+          {key: 'interfaces:mcp.max_result_chars', label: 'MCP: макс. символов результата', type: 'int'},
+          {key: 'interfaces:mcp.max_binary_bytes', label: 'MCP: макс. байт бинарных данных', type: 'int'},
+        ],
+      },
+      debug_broker: {
+        title: 'Debug Broker (RE)',
+        fields: [
+          {key: 'interfaces:debug_broker.enabled', label: 'Debug Broker: включён', type: 'bool'},
+          {key: 'interfaces:debug_broker.re_root', label: 'Debug Broker: корень RE', type: 'text'},
+          {key: 'interfaces:debug_broker.auto_start', label: 'Debug Broker: автозапуск', type: 'bool'},
+          {key: 'interfaces:debug_broker.startup_timeout_sec', label: 'Debug Broker: таймаут старта', type: 'int'},
+          {key: 'interfaces:debug_broker.request_timeout_sec', label: 'Debug Broker: таймаут запроса', type: 'int'},
+          {key: 'interfaces:debug_broker.max_result_chars', label: 'Debug Broker: макс. символов', type: 'int'},
+          {key: 'interfaces:debug_broker.max_sessions', label: 'Debug Broker: сессий максимум', type: 'int'},
+          {key: 'interfaces:debug_broker.x64dbg_port_start', label: 'x64dbg: начало портов', type: 'int'},
+          {key: 'interfaces:debug_broker.x64dbg_port_end', label: 'x64dbg: конец портов', type: 'int'},
+        ],
+      },
+      multimodality: {
+        title: 'Мультимодальность',
+        fields: [
+          {key: 'interfaces:multimodality.enabled', label: 'Мультимодальность: включена', type: 'bool'},
+          {key: 'interfaces:multimodality.video_understanding_enabled', label: 'Понимание видео', type: 'bool'},
+          {key: 'interfaces:multimodality.media_generation_enabled', label: 'Генерация медиа', type: 'bool'},
+          {key: 'interfaces:multimodality.media_request_timeout_sec', label: 'Таймаут медиа-запроса, сек', type: 'int'},
+          {key: 'interfaces:multimodality.media_poll_interval_sec', label: 'Опрос медиа, сек', type: 'float'},
+          {key: 'interfaces:multimodality.media_max_upload_mb', label: 'Загрузка максимум МБ', type: 'int'},
+          {key: 'interfaces:multimodality.media_max_download_mb', label: 'Скачивание максимум МБ', type: 'int'},
+        ],
+      },
+      voice: {
+        title: 'Облачный голос (дополнительно)',
+        fields: [
+          {key: 'interfaces:voice.stt.cloud.whisper.enabled', label: 'Whisper: включён', type: 'bool'},
+          {key: 'interfaces:voice.stt.cloud.whisper.model', label: 'Whisper: модель', type: 'text'},
+          {key: 'interfaces:voice.stt.cloud.whisper.temperature', label: 'Whisper: температура', type: 'float'},
+          {key: 'interfaces:voice.stt.cloud.whisper.timeout_sec', label: 'Whisper: таймаут, сек', type: 'int'},
+          {key: 'interfaces:voice.tts.cloud.elevenlabs.enabled', label: 'ElevenLabs: включён', type: 'bool'},
+          {key: 'interfaces:voice.tts.cloud.elevenlabs.tts_model', label: 'ElevenLabs: модель', type: 'text'},
+          {key: 'interfaces:voice.tts.cloud.elevenlabs.main_voice', label: 'ElevenLabs: голос', type: 'text'},
+          {key: 'interfaces:voice.tts.cloud.elevenlabs.stability', label: 'ElevenLabs: стабильность', type: 'float'},
+          {key: 'interfaces:voice.tts.cloud.elevenlabs.similarity_boost', label: 'ElevenLabs: похожесть', type: 'float'},
+          {key: 'interfaces:voice.tts.cloud.edge.enabled', label: 'Edge TTS: включён', type: 'bool'},
+          {key: 'interfaces:voice.tts.cloud.edge.main_voice', label: 'Edge: голос', type: 'text'},
+          {key: 'interfaces:voice.tts.cloud.edge.rate', label: 'Edge: темп', type: 'text'},
+          {key: 'interfaces:voice.tts.cloud.edge.volume', label: 'Edge: громкость', type: 'text'},
+          {key: 'interfaces:voice.tts.cloud.edge.pitch', label: 'Edge: высота', type: 'text'},
+        ],
+      },
+      web: {
+        title: 'Web-инструменты',
+        fields: [
+          {key: 'interfaces:web.http.enabled', label: 'HTTP: включён', type: 'bool'},
+          {key: 'interfaces:web.http.request_timeout_sec', label: 'HTTP: таймаут, сек', type: 'int'},
+          {key: 'interfaces:web.http.max_response_chars', label: 'HTTP: макс. символов ответа', type: 'int'},
+          {key: 'interfaces:web.search.enabled', label: 'Поиск: включён', type: 'bool'},
+          {key: 'interfaces:web.search.search_engine', label: 'Поиск: движок', type: 'text'},
+          {key: 'interfaces:web.search.reader_engine', label: 'Поиск: ридер', type: 'text'},
+          {key: 'interfaces:web.search.request_timeout_sec', label: 'Поиск: таймаут, сек', type: 'int'},
+          {key: 'interfaces:web.search.max_page_chars', label: 'Поиск: макс. символов страницы', type: 'int'},
+          {key: 'interfaces:web.search.deep_research.max_queries', label: 'Deep research: запросов', type: 'int'},
+          {key: 'interfaces:web.search.deep_research.max_results_per_query', label: 'Deep research: результатов/запрос', type: 'int'},
+          {key: 'interfaces:web.search.deep_research.max_pages_to_read', label: 'Deep research: страниц читать', type: 'int'},
+          {key: 'interfaces:web.search.deep_research.total_max_chars', label: 'Deep research: всего символов', type: 'int'},
+          {key: 'interfaces:web.browser.enabled', label: 'Браузер: включён', type: 'bool'},
+          {key: 'interfaces:web.browser.headless', label: 'Браузер: headless', type: 'bool'},
+          {key: 'interfaces:web.browser.timeout_sec', label: 'Браузер: таймаут, сек', type: 'int'},
+          {key: 'interfaces:web.browser.idle_timeout_sec', label: 'Браузер: idle-таймаут, сек', type: 'int'},
+          {key: 'interfaces:web.hooks.enabled', label: 'Hooks: включены', type: 'bool'},
+          {key: 'interfaces:web.hooks.host', label: 'Hooks: хост', type: 'text'},
+          {key: 'interfaces:web.hooks.port', label: 'Hooks: порт', type: 'int'},
+          {key: 'interfaces:web.hooks.history_limit', label: 'Hooks: лимит истории', type: 'int'},
+          {key: 'interfaces:web.hooks.preview_max_chars', label: 'Hooks: макс. превью', type: 'int'},
+          {key: 'interfaces:web.rss.enabled', label: 'RSS: включён', type: 'bool'},
+          {key: 'interfaces:web.rss.polling_interval_sec', label: 'RSS: интервал опроса, сек', type: 'int'},
+          {key: 'interfaces:web.rss.recent_limit', label: 'RSS: лимит недавних', type: 'int'},
+        ],
+      },
+      host: {
+        title: 'HostOS (детали)',
+        fields: [
+          {key: 'interfaces:host.os.enabled', label: 'HostOS: включён', type: 'bool'},
+          {key: 'interfaces:host.os.access_level', label: 'HostOS: уровень доступа', type: 'int'},
+          {key: 'interfaces:host.os.env_access', label: 'HostOS: доступ к env', type: 'bool'},
+          {key: 'interfaces:host.os.desktop_interactions', label: 'Desktop: взаимодействия', type: 'bool'},
+          {key: 'interfaces:host.os.desktop_max_windows', label: 'Desktop: макс. окон', type: 'int'},
+          {key: 'interfaces:host.os.desktop_max_elements', label: 'Desktop: макс. элементов', type: 'int'},
+          {key: 'interfaces:host.os.desktop_max_text_chars', label: 'Desktop: макс. текст', type: 'int'},
+          {key: 'interfaces:host.os.desktop_max_result_chars', label: 'Desktop: макс. результат', type: 'int'},
+          {key: 'interfaces:host.os.desktop_operation_timeout_sec', label: 'Desktop: таймаут операции', type: 'int'},
+          {key: 'interfaces:host.os.require_deploy_sessions', label: 'Deploy: требовать сессии', type: 'bool'},
+          {key: 'interfaces:host.os.deploy_max_retries', label: 'Deploy: макс. ретраев', type: 'int'},
+          {key: 'interfaces:host.os.framework_tree_depth', label: 'Framework: глубина дерева', type: 'int'},
+          {key: 'interfaces:host.os.monitoring_interval_sec', label: 'Мониторинг: интервал, сек', type: 'int'},
+          {key: 'interfaces:host.os.execution_timeout_sec', label: 'Выполнение: таймаут, сек', type: 'int'},
+          {key: 'interfaces:host.os.coding_execution_backend', label: 'Coding: backend', type: 'text'},
+          {key: 'interfaces:host.os.coding_approval_mode', label: 'Coding: режим одобрений', type: 'text'},
+          {key: 'interfaces:host.os.coding_approval_ttl_sec', label: 'Coding: TTL одобрений, сек', type: 'int'},
+          {key: 'interfaces:host.os.coding_container_runtime', label: 'Контейнер: runtime', type: 'text'},
+          {key: 'interfaces:host.os.coding_container_image', label: 'Контейнер: образ', type: 'text'},
+          {key: 'interfaces:host.os.coding_container_network', label: 'Контейнер: сеть', type: 'text'},
+          {key: 'interfaces:host.os.coding_container_memory_mb', label: 'Контейнер: память МБ', type: 'int'},
+          {key: 'interfaces:host.os.coding_container_cpus', label: 'Контейнер: CPU', type: 'float'},
+          {key: 'interfaces:host.os.coding_container_pids', label: 'Контейнер: PIDs', type: 'int'},
+          {key: 'interfaces:host.os.file_read_max_chars', label: 'Файлы: макс. чтение', type: 'int'},
+          {key: 'interfaces:host.os.file_list_limit', label: 'Файлы: лимит списка', type: 'int'},
+          {key: 'interfaces:host.os.top_processes_limit', label: 'Процессы: лимит', type: 'int'},
+          {key: 'interfaces:host.os.file_diff_max_chars', label: 'Diff: макс. символов', type: 'int'},
+          {key: 'interfaces:host.os.workspace_max_opened_files', label: 'Workspace: открытых файлов', type: 'int'},
+          {key: 'interfaces:host.os.recent_file_changes_limit', label: 'Workspace: недавние изменения', type: 'int'},
+          {key: 'interfaces:host.os.workspace_max_file_chars', label: 'Workspace: макс. символов файла', type: 'int'},
+          {key: 'interfaces:host.terminal.enabled', label: 'Терминал: включён', type: 'bool'},
+          {key: 'interfaces:host.terminal.history_limit', label: 'Терминал: лимит истории', type: 'int'},
+          {key: 'interfaces:host.terminal.context_limit', label: 'Терминал: лимит контекста', type: 'int'},
+        ],
+      },
       github: {
         title: 'GitHub',
         fields: [
@@ -2373,7 +2508,7 @@
             label.append(box);
           } else {
             const input = document.createElement('input');
-            input.type = field.type === 'int' ? 'number' : 'text';
+            input.type = field.type === 'int' || field.type === 'float' ? 'number' : 'text';
             input.id = ifcInputId(field.key);
             if (field.type === 'nullable') input.placeholder = 'пусто = не менять';
             label.append(input);
@@ -2392,6 +2527,7 @@
           if (field.type === 'bool') el.checked = value === true;
           else if (field.type === 'nullable') el.value = value === null || value === undefined ? '' : String(value);
           else el.value = value === null || value === undefined ? '' : String(value);
+          // float/number/text handled by the generic branch above
         }
       }
     }
@@ -2403,6 +2539,7 @@
           if (!el) continue;
           if (field.type === 'bool') out[field.key] = el.checked;
           else if (field.type === 'int') out[field.key] = Number.isFinite(Number(el.value)) ? Number(el.value) : el.value;
+          else if (field.type === 'float') out[field.key] = el.value === '' ? '' : (Number.isFinite(Number(el.value)) ? Number(el.value) : el.value);
           else if (field.type === 'nullable') {
             // A nullable field is written ONLY when filled: an empty input
             // must never turn a stored null into '' (the agent's strict

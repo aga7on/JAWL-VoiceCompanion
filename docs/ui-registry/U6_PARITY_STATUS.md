@@ -28,8 +28,12 @@
   Framework: типизированные карточки по спецификации (`IFACE_SECTIONS`),
   nullable-поля пишутся только при заполнении (защита StrictInt|None).
 - Порция 2: **GitHub/Email/Календарь/Граф кода/Meta — 17 полей** — ГОТОВО.
-  Итого перенесено: **73 контрола** (34%). Остались: mcp 6, debug_broker 9,
-  multimodality 7, voice 14, web 24, host 33, + env 16 уже были в срезе 6.
+- Порция 3: **MCP 6 + Debug Broker 9 + Мультимодальность 7 + Облачный голос 14** — ГОТОВО.
+- Порция 4: **Web-инструменты 24 + HostOS детали 33** — ГОТОВО (включая
+  float-тип для дробных скаляров).
+- Итого перенесено: **187/213 контролов (88%)**. Остались: custom-drives
+  CRUD (SQLite /api/drives), DB-wipe решение владельца, и списочные
+  редакторы консоли (feeds/servers/enabled_providers — console-transitional).
 
 ## Оставшиеся до 100% parity
 

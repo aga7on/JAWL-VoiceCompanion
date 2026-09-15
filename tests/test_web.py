@@ -1106,14 +1106,50 @@ class SettingsHubUITests(unittest.TestCase):
             encoding="utf-8",
         )
         (Path(config) / "interfaces.yaml").write_text(
-            "web:\n  enabled: true\n"
             "telegram:\n  telethon:\n    enabled: false\n    recent_chats_limit: 20\n"
             "    private_chat_history_limit: 3\n    incoming_history_limit: 8\n"
             "github:\n  enabled: false\n  request_timeout_sec: 15\n  polling_interval_sec: 30\n"
             "email:\n  enabled: false\n  recent_limit: 10\n  polling_interval_sec: 60\n"
             "calendar:\n  enabled: false\n  upcoming_events_limit: 5\n  polling_interval_sec: 60\n"
             "code_graph:\n  enabled: false\n  max_search_results: 10\n  max_structure_items: 20\n"
-            "meta:\n  enabled: false\n  access_level: 0\n  custom_skills_enabled: false\n",
+            "meta:\n  enabled: false\n  access_level: 0\n  custom_skills_enabled: false\n"
+            "mcp:\n  enabled: false\n  startup_timeout_sec: 30\n  request_timeout_sec: 60\n"
+            "  max_catalog_items: 500\n  max_result_chars: 20000\n  max_binary_bytes: 10485760\n"
+            "debug_broker:\n  enabled: false\n  re_root: 'G:/RE'\n  auto_start: true\n"
+            "  startup_timeout_sec: 30\n  request_timeout_sec: 180\n  max_result_chars: 30000\n"
+            "  max_sessions: 20\n  x64dbg_port_start: 8888\n  x64dbg_port_end: 8899\n"
+            "multimodality:\n  enabled: false\n  video_understanding_enabled: false\n"
+            "  media_generation_enabled: false\n  media_request_timeout_sec: 30\n"
+            "  media_poll_interval_sec: 5.0\n  media_max_upload_mb: 50\n  media_max_download_mb: 500\n"
+            "voice:\n  stt:\n    cloud:\n      whisper:\n        enabled: false\n        model: whisper-1\n"
+            "        temperature: 0.0\n        timeout_sec: 120\n"
+            "  tts:\n    cloud:\n      elevenlabs:\n        enabled: false\n        tts_model: eleven_multilingual_v2\n"
+            "        main_voice: voice1\n        stability: 0.5\n        similarity_boost: 0.75\n"
+            "      edge:\n        enabled: false\n        main_voice: ru-RU-SvetlanaNeural\n"
+            "        rate: '+0%'\n        volume: '+0%'\n        pitch: '+0Hz'\n"
+            "web:\n  http:\n    enabled: false\n    request_timeout_sec: 15\n    max_response_chars: 10000\n"
+            "  search:\n    enabled: false\n    search_engine: duckduckgo\n    reader_engine: trafilatura\n"
+            "    request_timeout_sec: 15\n    max_page_chars: 10000\n"
+            "    deep_research:\n      max_queries: 10\n      max_results_per_query: 5\n"
+            "      max_pages_to_read: 15\n      total_max_chars: 30000\n"
+            "  browser:\n    enabled: false\n    headless: true\n    timeout_sec: 30\n    idle_timeout_sec: 900\n"
+            "  hooks:\n    enabled: false\n    host: 127.0.0.1\n    port: 8080\n    history_limit: 10\n"
+            "    preview_max_chars: 200\n"
+            "  rss:\n    enabled: false\n    polling_interval_sec: 3600\n    recent_limit: 3\n"
+            "host:\n  os:\n    enabled: true\n    access_level: 0\n    env_access: false\n"
+            "    desktop_interactions: false\n    desktop_max_windows: 20\n    desktop_max_elements: 250\n"
+            "    desktop_max_text_chars: 500\n    desktop_max_result_chars: 60000\n"
+            "    desktop_operation_timeout_sec: 30\n    require_deploy_sessions: true\n"
+            "    deploy_max_retries: 5\n    framework_tree_depth: 1\n    monitoring_interval_sec: 30\n"
+            "    execution_timeout_sec: 60\n    coding_execution_backend: disabled\n"
+            "    coding_approval_mode: disabled\n    coding_approval_ttl_sec: 900\n"
+            "    coding_container_runtime: docker\n    coding_container_image: python:3.11-slim\n"
+            "    coding_container_network: none\n    coding_container_memory_mb: 2048\n"
+            "    coding_container_cpus: 2.0\n    coding_container_pids: 256\n"
+            "    file_read_max_chars: 10000\n    file_list_limit: 100\n    top_processes_limit: 10\n"
+            "    file_diff_max_chars: 200\n    workspace_max_opened_files: 15\n"
+            "    recent_file_changes_limit: 3\n    workspace_max_file_chars: 20000\n"
+            "  terminal:\n    enabled: true\n    history_limit: 50\n    context_limit: 10\n",
             encoding="utf-8",
         )
         (Path(self.tmp.name) / ".env").write_text(
@@ -1222,6 +1258,32 @@ class SettingsHubUITests(unittest.TestCase):
         self.assertEqual(rb["interfaces:calendar.enabled"], True)
         self.assertEqual(rb["interfaces:code_graph.max_search_results"], 15)
         self.assertEqual(rb["interfaces:meta.access_level"], 1)
+
+    def test_portion3_roundtrip_large_groups(self):
+        state = self._get()
+        result = self._post({
+            "values": {
+                "interfaces:mcp.max_result_chars": 25000,
+                "interfaces:debug_broker.max_sessions": 25,
+                "interfaces:multimodality.media_poll_interval_sec": 4.5,
+                "interfaces:voice.stt.cloud.whisper.timeout_sec": 150,
+                "interfaces:web.search.deep_research.max_queries": 12,
+                "interfaces:web.hooks.port": 8081,
+                "interfaces:host.os.coding_container_memory_mb": 4096,
+                "interfaces:host.terminal.history_limit": 60,
+            },
+            "expected_revision": state["revision"],
+        })
+        self.assertTrue(result["ok"])
+        rb = result["readback"]["values"]
+        self.assertEqual(rb["interfaces:mcp.max_result_chars"], 25000)
+        self.assertEqual(rb["interfaces:debug_broker.max_sessions"], 25)
+        self.assertEqual(rb["interfaces:multimodality.media_poll_interval_sec"], 4.5)
+        self.assertEqual(rb["interfaces:voice.stt.cloud.whisper.timeout_sec"], 150)
+        self.assertEqual(rb["interfaces:web.search.deep_research.max_queries"], 12)
+        self.assertEqual(rb["interfaces:web.hooks.port"], 8081)
+        self.assertEqual(rb["interfaces:host.os.coding_container_memory_mb"], 4096)
+        self.assertEqual(rb["interfaces:host.terminal.history_limit"], 60)
 
     def test_conflict_returns_conflict_status(self):
         state = self._get()
