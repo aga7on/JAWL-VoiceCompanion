@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-09-14 - Barge-in keeps the spoken beginning; the backchannel goes quiet
+
+- The barge-in handler no longer drops the phrase start (the pre-roll and
+  the pending buffer are kept) and uploads resume immediately after the
+  duck fade, so a short interruption is not erased down to two words.
+- The microphone gate now holds speech through clause-level dips: the
+  release window grows from ~8ms to ~350ms, so quiet word tails survive.
+- The backchannel («угу» after 7s of speech) is off by default and never
+  fires while the answer is playing or being prepared. Live incident: the
+  synthesized «угу» leaked into the open microphone and became the whole
+  transcript («То есть у тебя зрение на два экрана» arrived as «Угу»).
+
 ## 2026-09-14 - Voice capture: continuous audio and session rotation at finalize
 
 - Root cause of "said a lot, sent two words": the audio pipeline dropped

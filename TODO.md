@@ -1317,11 +1317,11 @@ memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
   live; memory write fixed via ZZ_MEMORY_WRITES (guard no longer tripped);
   recall before restart 4.9s, after a full stack restart 8.3s — canonical
   JAWL memory survives restarts.
-- [ ] Turn-taking retest: breath hold (1.4s base / 2.6s semantic) and live
-  interjection while the answer is being prepared; confirm a resumed phrase
-  stays one turn and nothing is dropped. Voice HUD (live transcript + send
-  countdown) landed 2026-09-14; interjections now require a fresh meaningful
-  draft and a superseded answer still appears in the chat silently.
+- [x] Turn-taking retest (2026-09-14, user-confirmed): with the backchannel
+  off the voice flow is clean. Companion-side hardening that landed with
+  this round (barge-in keeps the phrase start, uploads resume right after
+  the duck, gate holds ~350ms dips, backchannel off by default and muted
+  during playback/preparation) applies from the next page reload.
 - [ ] Long-monologue retest (2026-09-14): speak continuously for ~30s with
   breaths; the sent transcript must cover the whole utterance (session
   rotation at finalize + continuous upload). The HUD partial may still show

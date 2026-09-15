@@ -271,7 +271,7 @@
         <section class="tab-panel" data-panel="voice">
           <div class="page-heading"><div><span class="eyebrow">Voice lab</span><h2>Голос</h2><p>Микрофонный gate, пики сигнала и настройки синтеза речи.</p></div></div>
           <div class="split-grid">
-            <article class="glass-card mic-card"><div class="card-head"><div><h3>Микрофон</h3><p>Gate фильтрует шум до передачи в ASR/VoiceMem.</p></div><span class="tag">локально</span></div><div class="mic-gate"><div class="mic-gate-row"><label for="mic-gate">Порог шумового gate</label><span id="mic-gate-value" class="meta">—</span></div><input id="mic-gate" type="range" min="0.005" max="0.15" step="0.005" value="0.035"><div class="mic-meter" role="meter" aria-label="Уровень микрофона" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="mic-level"></div><div id="mic-peak"></div></div><div class="gate-state"><span id="mic-signal" class="meta">Сигнал: —</span><span id="mic-gate-state" class="meta">Gate: closed</span></div><div class="button-row"><button id="mic-calibrate" type="button">Автокалибровка · 1,5 с</button><span id="mic-gate-status" class="meta">Тишина не отправляется в ASR.</span></div></div><div class="field"><label><input id="hands-free" type="checkbox" checked> Hands-free · завершать фразу после тишины</label></div><div class="field"><label><input id="backchannel" type="checkbox" checked> Бэкченнел · короткое «угу» на длинных репликах</label></div></article>
+            <article class="glass-card mic-card"><div class="card-head"><div><h3>Микрофон</h3><p>Gate фильтрует шум до передачи в ASR/VoiceMem.</p></div><span class="tag">локально</span></div><div class="mic-gate"><div class="mic-gate-row"><label for="mic-gate">Порог шумового gate</label><span id="mic-gate-value" class="meta">—</span></div><input id="mic-gate" type="range" min="0.005" max="0.15" step="0.005" value="0.035"><div class="mic-meter" role="meter" aria-label="Уровень микрофона" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"><div id="mic-level"></div><div id="mic-peak"></div></div><div class="gate-state"><span id="mic-signal" class="meta">Сигнал: —</span><span id="mic-gate-state" class="meta">Gate: closed</span></div><div class="button-row"><button id="mic-calibrate" type="button">Автокалибровка · 1,5 с</button><span id="mic-gate-status" class="meta">Тишина не отправляется в ASR.</span></div></div><div class="field"><label><input id="hands-free" type="checkbox" checked> Hands-free · завершать фразу после тишины</label></div><div class="field"><label><input id="backchannel" type="checkbox"> Бэкченнел · короткое «угу» на длинных репликах</label></div></article>
             <article class="glass-card"><div class="card-head"><div><h3>Озвучка ответа</h3><p>TeraTTSv2 сейчас выбран для быстрого русского CPU-режима.</p></div><span class="tag" id="tts-status">TTS выключен.</span></div><div class="field"><label for="tts-voice">Голос провайдера</label><input id="tts-voice" type="text" maxlength="120" placeholder="по умолчанию"></div><div class="field"><label for="tts-speed">Скорость речи</label><input id="tts-speed" type="number" min="0.5" max="2" step="0.05" value="1"></div><div class="button-row"><button class="primary" type="button" data-tab-target="home">← Вернуться к диалогу</button><span class="meta">Qwen3-TTS · voice clone — отдельный тестовый профиль</span></div></article>
           </div>
         </section>
@@ -1787,7 +1787,10 @@
         active.vad.lastSpeechAt = now;
         if (active.lastCountdown) { active.lastCountdown = null; showSendCountdown(null); }
         // Adaptive backchannel: one quiet acknowledgement for a long turn.
-        if (backchannelEnabled().checked && !active.backchannelSent && now - active.vad.startedAt >= 7000) {
+        // Never while the answer is playing or being prepared: the played
+        // «угу» leaks into the open microphone and lands in the transcript.
+        if (backchannelEnabled().checked && !active.backchannelSent && !active.finalizing
+            && !currentAudio && !speechPlaybackActive && now - active.vad.startedAt >= 7000) {
           active.backchannelSent = true;
           void playBackchannel();
         }
@@ -1899,19 +1902,20 @@
           // fixed RMS value made real microphones and synthetic fixtures
           // disagree: VAD saw speech while playback was left running.
           bargeInTriggered = true;
-          // The overlapping beginning passed through the browser echo
-          // canceller while our own voice was playing, so it transcribes
-          // badly. Drop it and start a clean utterance once the duck stops
-          // playback; the user repeats at most one syllable.
+          // Keep the beginning the user already spoke: clearing ~0.3s of a
+          // short phrase erased half of it. The echo-cancelled overlap
+          // transcribes imperfectly, but losing words is worse.
+          const keptStart = [...active.gate.preRoll, ...samples];
           samples.length = 0;
+          if (keptStart.length) samples.push(...keptStart);
           active.gate.preRoll.length = 0;
           active.gate.silentBlocks = 0;
           active.gate.open = false;
           active.vad = {speaking: false, lastSpeechAt: 0, startedAt: 0, holdUsed: false, afterBargeIn: true};
           active.lastDraftHold = false;
-          // New ASR session: the server-side buffer for the old session still
-          // holds echo-contaminated audio, so the final transcript for the
-          // barge-in utterance must be built from fresh frames only.
+          // New ASR session: the server-side buffer for the old session holds
+          // the previous answer's context, so the barge-in utterance gets a
+          // fresh buffer; the kept start rides along in the local samples.
           active.sessionId = `browser-mic-${Date.now()}-${++voiceSequence}`;
           active.correlationId = `turn-voice-${Date.now()}-${voiceSequence}`;
           if (window.__voiceE2E) window.__voiceE2E.barge_in_ms = performance.now();
@@ -1924,8 +1928,10 @@
         updateVoiceVad(active, gated.open ? rms : 0);
         // Audio keeps flowing while a previous answer is prepared: the
         // session was rotated at finalize, so the continuation lands in a
-        // fresh buffer instead of being dropped on the floor.
-        if (gated.open && !playbackActive) {
+        // fresh buffer instead of being dropped on the floor. After a
+        // barge-in the upload resumes immediately even while the duck fade
+        // is still finishing, so the first words are never lost.
+        if (gated.open && (!playbackActive || bargeInTriggered)) {
           if (gated.samples.length) samples.push(...gated.samples);
           samples.push(...inputSamples);
           while (samples.length >= chunkSize) {
@@ -1947,7 +1953,8 @@
         lastDraftHold: false,
         backchannelSent: false,
         gate: {
-          threshold: gateThreshold(), open: false, silentBlocks: 0, releaseBlocks: 3,
+          threshold: gateThreshold(), open: false, silentBlocks: 0,
+          releaseBlocks: Math.max(3, Math.floor(context.sampleRate * 0.35 / 128)),
           preRoll: [], preRollLimit: Math.floor(context.sampleRate * 0.12),
           calibration: null, calibrationTimer: null
         }
