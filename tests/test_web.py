@@ -1106,7 +1106,10 @@ class SettingsHubUITests(unittest.TestCase):
             encoding="utf-8",
         )
         (Path(config) / "interfaces.yaml").write_text("web:\n  enabled: true\n", encoding="utf-8")
-        (Path(self.tmp.name) / ".env").write_text("LLM_API_URL=http://127.0.0.1:8891/v1\n", encoding="utf-8")
+        (Path(self.tmp.name) / ".env").write_text(
+            "LLM_API_URL=http://127.0.0.1:8891/v1\nWEBHOOK_SECRET=whsec-123\n",
+            encoding="utf-8",
+        )
         from jawl_voicecompanion.config_hub import ConfigHub
 
         self.server = create_server(
@@ -1159,6 +1162,20 @@ class SettingsHubUITests(unittest.TestCase):
         self.assertNotEqual(again["revision"], state["revision"])
         # masked secret still masked after the write
         self.assertEqual(again["values"]["env:LLM_API_URL"], "http://127.0.0.1:8891/v1")
+
+    def test_masked_secret_keep_and_replace(self):
+        state = self._get()
+        self.assertEqual(state["values"]["env:WEBHOOK_SECRET"], "__SET__")
+        # empty input for a masked secret keeps the stored value
+        keep = self._post({"values": {"env:WEBHOOK_SECRET": ""}})
+        self.assertTrue(keep["ok"])
+        env_text = (Path(self.tmp.name) / ".env").read_text(encoding="utf-8")
+        self.assertIn("whsec-123", env_text)
+        # a typed value replaces it
+        replace = self._post({"values": {"env:WEBHOOK_SECRET": "whsec-999"}})
+        self.assertTrue(replace["ok"])
+        self.assertEqual(replace["readback"]["values"]["env:WEBHOOK_SECRET"], "__SET__")
+        self.assertIn("whsec-999", (Path(self.tmp.name) / ".env").read_text(encoding="utf-8"))
 
     def test_conflict_returns_conflict_status(self):
         state = self._get()

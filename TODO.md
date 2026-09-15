@@ -70,8 +70,12 @@
     (native archive); редактор уже был (list/filter/search/revise/forget
     через native API), закрыт пробел evidence-отображения. Live-проверено
     (50 записей, emerald с confidence/revision).
-  - [ ] U4 остаток: интеграции с credentials (env-редактор с __SET__),
-    lifecycle/HostOS/DB-wipe отдельными блоками.
+  - [x] Срез 6 (2026-09-15): карточка «Интеграции и секреты» — все 16 env-
+    полей динамически (секреты как password с placeholder «сохранено» и
+    бейджем «установлен»), keep-семантика хаба проверена HTTP-тестом
+    (пустое поле не стирает секрет, замена работает).
+  - [ ] U4 остаток: lifecycle/HostOS/DB-wipe отдельными блоками (уровни и
+    emergency уже есть во вкладке Доступ; wipe требует отдельного решения).
 - [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
 - [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.
 

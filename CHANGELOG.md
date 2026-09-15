@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U4 slice six: integrations and secrets card
+
+- The «Настройки» tab gains an «Интеграции и секреты» card rendering all 16
+  env fields dynamically: secrets as password inputs with a "сохранено —
+  введите новое" placeholder and an «установлен» badge, URL/ID fields as
+  text. The hub's keep-semantics hold: an empty input for a masked secret
+  never clears a stored credential (HTTP-tested: keep → replace).
+- Saves merge into the same revision-guarded write; values apply after the
+  agent restart, and a note documents that the launcher env may override
+  them for the current launch.
+
 ## 2026-09-15 - U4 slice five: evidence lines and archive in the memory editor
 
 - The Память tab's memory rows now show the canonical contract's provenance

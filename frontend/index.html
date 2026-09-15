@@ -366,6 +366,9 @@
             <div class="field"><label>Социализация вкл<input type="checkbox" id="cfg-soc-enabled"></label></div>
             <div class="field"><label>Социализация: rate<input type="number" id="cfg-soc-rate" min="0" step="0.5"></label></div>
             <div class="field"><label>Социализация: интервал, сек<input type="number" id="cfg-soc-interval" min="0"></label></div>
+          </article><article class="glass-card"><div class="card-head"><div><h3>Интеграции и секреты</h3><p>Секреты маскируются: пустое поле оставляет сохранённое значение.</p></div></div>
+            <div id="env-fields" class="meta">Загрузка…</div>
+            <p class="meta">Launcher может перекрывать эти значения в текущем запуске; применяются после рестарта агента.</p>
           </article></div>
         </section>
         <section class="tab-panel" data-panel="jawl">
@@ -2216,6 +2219,64 @@
       scheduleShellStatus();
     }
     let configRevision = null;
+    const ENV_FIELD_LABELS = {
+      'env:LLM_API_URL': 'LLM API URL',
+      'env:PROXY_URL': 'Proxy URL',
+      'env:SUB_LLM_API_URL': 'Sub-LLM URL',
+      'env:SUB_LLM_API_KEY_1': 'Sub-LLM ключ',
+      'env:AIOGRAM_BOT_TOKEN': 'Aiogram токен',
+      'env:TELETHON_API_ID': 'Telethon API ID',
+      'env:TELETHON_API_HASH': 'Telethon hash',
+      'env:GITHUB_TOKEN': 'GitHub токен',
+      'env:EMAIL_ACCOUNT': 'Email аккаунт',
+      'env:EMAIL_PASSWORD': 'Email пароль',
+      'env:TAVILY_API_KEY': 'Tavily ключ',
+      'env:WEBHOOK_SECRET': 'Webhook secret',
+      'env:ELEVENLABS_API_KEY': 'ElevenLabs ключ',
+      'env:CLOUD_WHISPER_API_KEY': 'Cloud Whisper ключ',
+      'env:ELEVENLABS_API_URL': 'ElevenLabs URL',
+      'env:CLOUD_WHISPER_API_URL': 'Cloud Whisper URL',
+    };
+    function renderEnvFields(values) {
+      const wrap = document.querySelector('#env-fields');
+      if (!wrap) return;
+      wrap.replaceChildren();
+      for (const key of Object.keys(ENV_FIELD_LABELS)) {
+        const masked = values[key] === '__SET__';
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = /URL$/.test(key) || key === 'env:TELETHON_API_ID' || key === 'env:EMAIL_ACCOUNT' ? 'text' : 'password';
+        input.id = `env-input-${key.slice(4).toLowerCase().replace(/_/g, '-')}`;
+        input.autocomplete = 'off';
+        if (masked) {
+          input.placeholder = '●●● сохранено — введите новое для замены';
+          input.dataset.masked = '1';
+          input.value = '';
+        } else {
+          input.value = String(values[key] || '');
+        }
+        const badge = masked ? ' · установлен' : '';
+        label.textContent = `${ENV_FIELD_LABELS[key]}${badge}`;
+        label.append(input);
+        field.append(label);
+        wrap.append(field);
+      }
+    }
+    function collectEnvValues() {
+      const out = {};
+      for (const key of Object.keys(ENV_FIELD_LABELS)) {
+        const input = document.querySelector(`#env-input-${key.slice(5).toLowerCase().replace(/_/g, '-')}`);
+        if (!input) continue;
+        const masked = input.dataset.masked === '1';
+        const raw = String(input.value || '');
+        // For secrets an empty input means "keep": the hub treats empty as
+        // unchanged, so a stored credential can never be cleared by accident.
+        out[key] = masked && !raw ? '' : raw;
+      }
+      return out;
+    }
     async function loadSettingsHub() {
       const statusEl = document.querySelector('#settings-status');
       if (!statusEl) return;
@@ -2271,6 +2332,7 @@
         boolSet('#cfg-soc-enabled', 'settings:system.db.sql.drives.fundamental.social.enabled');
         set('#cfg-soc-rate', data.values['settings:system.db.sql.drives.fundamental.social.decay.rate']);
         set('#cfg-soc-interval', data.values['settings:system.db.sql.drives.fundamental.social.decay.interval_sec']);
+        renderEnvFields(data.values || {});
         statusEl.textContent = `Загружено · ревизия ${String(data.revision).slice(0, 12)}…`;
       } catch (error) {
         statusEl.textContent = `Config hub недоступен: ${error.message}`;
@@ -2286,6 +2348,7 @@
       };
       const payload = {
         values: {
+          ...collectEnvValues(),
           'settings:identity.agent_name': String(document.querySelector('#cfg-agent-name')?.value || '').trim(),
           'settings:llm.main_model': String(document.querySelector('#cfg-main-model')?.value || '').trim(),
           'settings:llm.temperature': num(document.querySelector('#cfg-temperature')?.value),
