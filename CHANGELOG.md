@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-15 - U6 close: full test battery, deploy and stability watch
+
+- Full test battery after all migration portions: **512/512 tests OK** (156s
+  run) including the live TeraTTS profile probe against the running stack.
+- The profile was relaunched and observed stable for 7.5 minutes straight
+  (2367/8770/8891/9889 up the whole time); the earlier "die after READY"
+  incidents traced back to false-kill wrapper aborts during the launch
+  command, not to a runtime fault.
+- U6 remaining owner decisions: DB-wipe surface and the nightly soak start
+  (command ready in TODO).
+
 ## 2026-09-15 - U6 portions 3-4: all remaining interface groups migrated
 
 - Portion 3 = MCP 6, Debug Broker 9, Multimodality 7, Cloud voice 14
