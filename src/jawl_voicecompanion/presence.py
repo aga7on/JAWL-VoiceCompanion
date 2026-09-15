@@ -81,16 +81,18 @@ class ScreenDeltaWatcher:
                     self._last_error = str(result.get("reason") or result.get("status") or "vision_unavailable")[:200]
                 return result
             event = self._make_event(result)
-            with self._lock:
-                self._events.append(event)
-                self._last_error = None
+            sink_failed = False
+            # Publish before exposing the event through events().  Consumers use
+            # that deque as the readiness signal; recording first made them race
+            # the synchronous file sink and observe a missing IPC artifact.
             if self.event_sink is not None:
                 try:
                     self.event_sink(event)
                 except Exception:
-                    # A consumer must not terminate the sensor thread.
-                    with self._lock:
-                        self._last_error = "screen_event_sink_failed"
+                    sink_failed = True
+            with self._lock:
+                self._events.append(event)
+                self._last_error = "screen_event_sink_failed" if sink_failed else None
             return {**result, "event": event}
         except Exception:
             with self._lock:
@@ -131,7 +133,10 @@ class ScreenDeltaWatcher:
             "priority": int(TurnPriority.SCREEN_DELTA),
             "payload": {
                 "summary": description,
-                "significance": 1,
+                # A changed focused window is the event itself: baseline 2 so
+                # it clears the attention threshold; salient wording (errors,
+                # dialogs, "важно") is bumped to 3 by the attention scorer.
+                "significance": 2,
                 "captured_at": str(result.get("captured_at") or _now()),
                 "changed": True,
                 "raw_frame_persisted": False,

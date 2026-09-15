@@ -28,6 +28,11 @@ class JawlEventFileSink:
         summary = str(payload.get("summary") or "").replace("\x00", "").strip()[:600]
         if not summary:
             raise ValueError("SPEAK_INTENT summary is required")
+        try:
+            from .event_log import log_event
+            log_event("screen_delta", message=summary, significance=payload.get("significance"))
+        except Exception:  # noqa: BLE001 - logging must never break the sink
+            pass
         event = {
             "message": "A bounded screen observation requires attention.",
             "payload": {

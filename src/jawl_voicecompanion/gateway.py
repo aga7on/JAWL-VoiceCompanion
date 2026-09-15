@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from math import isfinite
 from typing import Any, Callable, Iterator, Mapping
 import re
+import inspect
 from uuid import uuid4
 
 from .hostos_policy import HostOSPolicy
 from .arbiter import TurnArbiter, TurnPriority
+from .history import ConversationHistory
 from .jawl_adapter import JawlTurnCancelled
 from .jawl_web import JawlWebAdapter
 
@@ -137,10 +139,26 @@ class TextGateway:
     arbiter: TurnArbiter = field(default_factory=TurnArbiter)
     _brain_status: str = field(default="mock", init=False, repr=False)
     _turns: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    history_store: ConversationHistory | None = field(default=None, repr=False)
 
-    def handle_text(self, text: str, session_id: str = "local") -> dict[str, Any]:
+    @staticmethod
+    def _invoke_responder(method: Callable[..., Any], text: str, *, cancel_event: Any, correlation_id: str) -> Any:
+        """Pass tracing to new responders while keeping legacy adapters usable."""
+        kwargs: dict[str, Any] = {"cancel_event": cancel_event}
+        try:
+            parameters = inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        if "correlation_id" in parameters:
+            kwargs["correlation_id"] = correlation_id
+        return method(text, **kwargs)
+
+    def handle_text(
+        self, text: str, session_id: str = "local", correlation_id: str | None = None,
+    ) -> dict[str, Any]:
         clean = str(text or "").strip()
         response_id = str(uuid4())
+        correlation = str(correlation_id or f"turn-{uuid4().hex}")[:128]
         token = self.arbiter.begin(TurnPriority.USER_FINAL)
         turn_id = token.turn_id
         native_envelope: dict[str, Any] | None = None
@@ -154,7 +172,7 @@ class TextGateway:
                 if self.responder:
                     envelope_method = getattr(self.responder, "respond_envelope", None)
                     if getattr(self.responder, "supports_native_envelope", False) and callable(envelope_method):
-                        candidate = envelope_method(clean, cancel_event=token.cancel_event)
+                        candidate = self._invoke_responder(envelope_method, clean, cancel_event=token.cancel_event, correlation_id=correlation)
                         if not isinstance(candidate, dict):
                             raise ValueError("native responder returned a non-object envelope")
                         native_envelope = dict(candidate)
@@ -163,7 +181,7 @@ class TextGateway:
                     else:
                         responder_method = getattr(self.responder, "respond", None)
                         if callable(responder_method):
-                            answer = responder_method(clean, cancel_event=token.cancel_event)
+                            answer = self._invoke_responder(responder_method, clean, cancel_event=token.cancel_event, correlation_id=correlation)
                         else:
                             answer = self.responder(clean)
                 else:
@@ -200,15 +218,16 @@ class TextGateway:
                 if native_envelope is not None
                 else self._build_envelope(clean, answer, response_id, turn_id, speak=speak, emotion=emotion)
             )
-            self._record_turn(session_id, clean, envelope)
+            self._record_turn(session_id, correlation, clean, envelope)
             return envelope
         finally:
             self.arbiter.complete(token)
 
-    def stream_text(self, text: str, session_id: str = "local") -> Iterator[dict[str, Any]]:
+    def stream_text(self, text: str, session_id: str = "local", correlation_id: str | None = None) -> Iterator[dict[str, Any]]:
         """Stream safe responder deltas and finish with one canonical envelope."""
         clean = str(text or "").strip()
         response_id = str(uuid4())
+        correlation = str(correlation_id or f"turn-{uuid4().hex}")[:128]
         token = self.arbiter.begin(TurnPriority.USER_FINAL)
         native_envelope: dict[str, Any] | None = None
         terminal_error = False
@@ -221,8 +240,62 @@ class TextGateway:
                 chunks: list[str] = []
                 try:
                     envelope_method = getattr(self.responder, "respond_envelope", None) if self.responder else None
-                    if self.responder and getattr(self.responder, "supports_native_envelope", False) and callable(envelope_method):
-                        candidate = envelope_method(clean, cancel_event=token.cancel_event)
+                    native_stream_method = getattr(self.responder, "stream_envelope", None) if self.responder else None
+                    if (
+                        self.responder
+                        and getattr(self.responder, "supports_native_envelope", False)
+                        and callable(native_stream_method)
+                    ):
+                        source = self._invoke_responder(
+                            native_stream_method,
+                            clean,
+                            cancel_event=token.cancel_event,
+                            correlation_id=correlation,
+                        )
+                        for event in source:
+                            if not isinstance(event, dict):
+                                raise ValueError("native stream yielded a non-object event")
+                            event_type = event.get("type")
+                            if event_type == "delta":
+                                fragment = event.get("text")
+                                if not isinstance(fragment, str):
+                                    raise ValueError("native delta text must be a string")
+                                if fragment:
+                                    chunks.append(fragment)
+                                    yield {
+                                        "type": "delta",
+                                        "text": fragment,
+                                        "turn_id": token.turn_id,
+                                        "correlation_id": correlation,
+                                    }
+                            elif event_type == "final":
+                                candidate = event.get("response")
+                                if not isinstance(candidate, dict):
+                                    raise ValueError("native stream final must contain an envelope")
+                                native_envelope = dict(candidate)
+                                validate_response_envelope(native_envelope)
+                                answer = native_envelope.get("text")
+                                if not isinstance(answer, str) or not answer.strip():
+                                    raise ValueError("native stream returned empty text")
+                                if chunks:
+                                    if "".join(chunks).strip() != answer.strip():
+                                        raise ValueError(
+                                            "native stream deltas do not match the authoritative final text"
+                                        )
+                                else:
+                                    # Compatibility with the current pinned JAWL,
+                                    # which emits assistant.final without deltas.
+                                    yield {
+                                        "type": "delta",
+                                        "text": answer,
+                                        "turn_id": token.turn_id,
+                                        "correlation_id": correlation,
+                                    }
+                                break
+                        if native_envelope is None:
+                            raise ConnectionError("native stream ended without a final envelope")
+                    elif self.responder and getattr(self.responder, "supports_native_envelope", False) and callable(envelope_method):
+                        candidate = self._invoke_responder(envelope_method, clean, cancel_event=token.cancel_event, correlation_id=correlation)
                         if not isinstance(candidate, dict):
                             raise ValueError("native responder returned a non-object envelope")
                         native_envelope = dict(candidate)
@@ -230,11 +303,11 @@ class TextGateway:
                         answer = native_envelope.get("text")
                         if not isinstance(answer, str) or not answer.strip():
                             raise ValueError("native responder returned empty text")
-                        yield {"type": "delta", "text": answer, "turn_id": token.turn_id}
+                        yield {"type": "delta", "text": answer, "turn_id": token.turn_id, "correlation_id": correlation}
                     else:
                         stream_method = getattr(self.responder, "stream", None) if self.responder else None
                         if callable(stream_method):
-                            source = stream_method(clean, cancel_event=token.cancel_event)
+                            source = self._invoke_responder(stream_method, clean, cancel_event=token.cancel_event, correlation_id=correlation)
                             for chunk in source:
                                 if token.cancel_event.is_set():
                                     raise JawlTurnCancelled()
@@ -242,19 +315,19 @@ class TextGateway:
                                     raise ValueError("stream responder must yield strings")
                                 if chunk:
                                     chunks.append(chunk)
-                                    yield {"type": "delta", "text": chunk, "turn_id": token.turn_id}
+                                    yield {"type": "delta", "text": chunk, "turn_id": token.turn_id, "correlation_id": correlation}
                             answer = "".join(chunks).strip()
                             if not answer:
                                 raise ConnectionError("stream responder returned empty text")
                         elif self.responder:
                             responder_method = getattr(self.responder, "respond", None)
-                            answer = responder_method(clean, cancel_event=token.cancel_event) if callable(responder_method) else self.responder(clean)
+                            answer = self._invoke_responder(responder_method, clean, cancel_event=token.cancel_event, correlation_id=correlation) if callable(responder_method) else self.responder(clean)
                             if not isinstance(answer, str) or not answer.strip():
                                 raise ConnectionError("responder returned empty text")
-                            yield {"type": "delta", "text": answer, "turn_id": token.turn_id}
+                            yield {"type": "delta", "text": answer, "turn_id": token.turn_id, "correlation_id": correlation}
                         else:
                             answer = self._mock_response(clean)
-                            yield {"type": "delta", "text": answer, "turn_id": token.turn_id}
+                            yield {"type": "delta", "text": answer, "turn_id": token.turn_id, "correlation_id": correlation}
                     self._brain_status = "connected" if self.responder else "mock"
                     speak = True
                     emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
@@ -265,31 +338,42 @@ class TextGateway:
                     speak = False
                     emotion = {"id": "neutral", "intensity": 0.0, "confidence": 1.0}
                 except (ConnectionError, OSError, TimeoutError, ValueError):
-                    if chunks:
-                        raise
+                    # A provider may fail after yielding one or more deltas.
+                    # Never let that escape as a truncated SSE stream: the UI
+                    # needs one bounded terminal error so it can discard any
+                    # provisional text and the next user turn can proceed.
                     self._brain_status = "offline_fallback"
                     native_envelope = None
-                    terminal_error = bool(
-                        self.responder and getattr(self.responder, "supports_native_envelope", False)
-                    )
-                    answer = "JAWL сейчас недоступен. Я сохранила текстовый fallback и готова продолжить после восстановления связи."
-                    speak = True
-                    emotion = {"id": "concerned", "intensity": 0.35, "confidence": 1.0}
-                    if terminal_error:
-                        answer = "JAWL недоступен: текущий turn завершён с ошибкой."
-                        speak = False
-                        emotion = {"id": "error", "intensity": 0.35, "confidence": 1.0}
-                        yield {"type": "error", "error": "native_turn_failed", "turn_id": token.turn_id}
-                    else:
-                        yield {"type": "delta", "text": answer, "turn_id": token.turn_id}
+                    terminal_error = True
+                    answer = "JAWL недоступен: текущий turn завершён с ошибкой."
+                    speak = False
+                    emotion = {"id": "error", "intensity": 0.35, "confidence": 1.0}
+                    if not chunks:
+                        # Preserve the bounded diagnostic text delta for a
+                        # failure before any provider output. It is never
+                        # speakable; the error event/final envelope remain the
+                        # authoritative terminal result.
+                        yield {
+                            "type": "delta",
+                            "text": "JAWL сейчас недоступен. Я готова продолжить после восстановления связи.",
+                            "turn_id": token.turn_id,
+                            "correlation_id": correlation,
+                        }
+                    yield {
+                        "type": "error",
+                        "error": "provider_turn_failed",
+                        "turn_id": token.turn_id,
+                        "correlation_id": correlation,
+                        "discard_deltas": bool(chunks),
+                    }
 
             envelope = (
                 self._preserve_native_envelope(native_envelope)
                 if native_envelope is not None
                 else self._build_envelope(clean, answer, response_id, token.turn_id, speak=speak, emotion=emotion)
             )
-            self._record_turn(session_id, clean, envelope)
-            yield {"type": "final", "response": envelope}
+            self._record_turn(session_id, correlation, clean, envelope)
+            yield {"type": "final", "response": envelope, "correlation_id": correlation}
         finally:
             self.arbiter.complete(token)
 
@@ -325,14 +409,47 @@ class TextGateway:
 
     @staticmethod
     def _preserve_native_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
-        """Validate and pass through JAWL's canonical envelope unchanged."""
+        """Validate and pass through JAWL's canonical envelope unchanged.
+
+        Error-state conventions are normalized: a turn whose avatar state or
+        emotion signals an error is never voiced, regardless of what the
+        provider declared. Technical error text stays in the transcript only;
+        the panel must not synthesize it.
+        """
         result = dict(envelope)
         validate_response_envelope(result)
+        avatar = result.get("avatar") or {}
+        emotion = result.get("emotion") or {}
+        if avatar.get("state") == "error" or emotion.get("id") == "error":
+            result["speak"] = False
         return result
 
-    def _record_turn(self, session_id: str, clean: str, envelope: dict[str, Any]) -> None:
-        self._turns.append({"created_at": _now(), "session_id": session_id, "user": clean, "response": envelope})
-        del self._turns[:-50]
+    def _record_turn(self, session_id: str, correlation_id: str, clean: str, envelope: dict[str, Any]) -> None:
+        record = {
+            "created_at": _now(), "session_id": session_id, "correlation_id": correlation_id,
+            "user": clean, "response": envelope,
+        }
+        self._turns.append(record)
+        if self.history_store is not None:
+            try:
+                self.history_store.append(record)
+            except OSError:  # noqa: BLE001 - history is best-effort; never break a turn
+                pass
+        del self._turns[:-400]
+
+    def turn_history(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Return the conversation log for the panel (reload-safe history).
+
+        Prefers the persisted store when configured; falls back to the bounded
+        in-memory ring otherwise.
+        """
+        bounded = max(1, min(int(limit), 400))
+        if self.history_store is not None:
+            try:
+                return self.history_store.turns(bounded)
+            except OSError:
+                return list(self._turns)[-bounded:]
+        return list(self._turns)[-bounded:]
 
     def health(self) -> dict[str, Any]:
         return {

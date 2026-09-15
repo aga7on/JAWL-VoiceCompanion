@@ -86,6 +86,45 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(response["avatar"]["state"], "error")
         self.assertEqual(response["emotion"]["id"], "error")
 
+    def test_native_stream_uses_deltas_but_final_envelope_is_authoritative(self):
+        native = TextGateway().handle_text("seed")
+        native.update({
+            "response_id": "jawl-response-stream-1",
+            "turn_id": "jawl-turn-stream-1",
+            "text": "Первая часть. Вторая часть.",
+        })
+
+        class NativeStreamingResponder:
+            supports_native_envelope = True
+
+            def stream_envelope(self, _text, cancel_event=None, correlation_id=None):
+                del cancel_event, correlation_id
+                yield {"type": "delta", "text": "Первая часть. "}
+                yield {"type": "delta", "text": "Вторая часть."}
+                yield {"type": "final", "response": native}
+
+        events = list(TextGateway(responder=NativeStreamingResponder()).stream_text("stream"))
+        self.assertEqual([event["type"] for event in events], ["delta", "delta", "final"])
+        self.assertEqual("".join(event["text"] for event in events[:-1]), native["text"])
+        self.assertEqual(events[-1]["response"], native)
+
+    def test_native_stream_mismatch_is_discarded_as_terminal_error(self):
+        native = TextGateway().handle_text("seed")
+        native["text"] = "authoritative final"
+
+        class MismatchedResponder:
+            supports_native_envelope = True
+
+            def stream_envelope(self, _text, cancel_event=None, correlation_id=None):
+                del cancel_event, correlation_id
+                yield {"type": "delta", "text": "provisional wrong"}
+                yield {"type": "final", "response": native}
+
+        events = list(TextGateway(responder=MismatchedResponder()).stream_text("stream"))
+        self.assertEqual([event["type"] for event in events], ["delta", "error", "final"])
+        self.assertTrue(events[1]["discard_deltas"])
+        self.assertFalse(events[-1]["response"]["speak"])
+
     def test_new_user_turn_cancels_pending_responder(self):
         started = threading.Event()
 
@@ -121,6 +160,31 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual("".join(event["text"] for event in events[:-1]), "first second")
         self.assertEqual(events[-1]["response"]["text"], "first second")
         self.assertEqual(gateway.state()["last_turn"]["response"]["text"], "first second")
+
+    def test_partial_provider_failure_is_terminal_and_next_turn_recovers(self):
+        class FlakyResponder:
+            def __init__(self):
+                self.calls = 0
+
+            def stream(self, _text, cancel_event=None):
+                del cancel_event
+                self.calls += 1
+                if self.calls == 1:
+                    yield "provisional output"
+                    raise ConnectionError("provider dropped after delta")
+                yield "recovered output"
+
+        gateway = TextGateway(responder=FlakyResponder(), brain_name="provider")
+        failed = list(gateway.stream_text("first"))
+        self.assertEqual([event["type"] for event in failed], ["delta", "error", "final"])
+        self.assertTrue(failed[1]["discard_deltas"])
+        self.assertFalse(failed[-1]["response"]["speak"])
+        self.assertEqual(failed[-1]["response"]["avatar"]["state"], "error")
+
+        recovered = list(gateway.stream_text("second"))
+        self.assertEqual([event["type"] for event in recovered], ["delta", "final"])
+        self.assertEqual(recovered[-1]["response"]["text"], "recovered output")
+        self.assertNotEqual(failed[-1]["response"]["turn_id"], recovered[-1]["response"]["turn_id"])
 
     def test_stream_fallback_messages_preserve_russian_utf8(self):
         empty_events = list(TextGateway().stream_text("   "))
@@ -191,6 +255,19 @@ class GatewayTests(unittest.TestCase):
                 "payload": {"response": mismatched},
             })
 
+    def test_transport_correlation_is_preserved_across_stream_and_state(self):
+        correlation = "turn-browser-voice-42"
+        events = list(TextGateway().stream_text(
+            "проверка", session_id="browser-mic-42", correlation_id=correlation,
+        ))
+        self.assertTrue(events)
+        self.assertTrue(all(event["correlation_id"] == correlation for event in events))
+        final = events[-1]
+        self.assertEqual(final["type"], "final")
+        state = TextGateway()
+        list(state.stream_text("проверка", session_id="browser-mic-42", correlation_id=correlation))
+        self.assertEqual(state.state()["last_turn"]["correlation_id"], correlation)
+
     def test_native_jawl_event_contract_rejects_tool_details_and_unknown_fields(self):
         base = {
             "schema_version": 1,
@@ -209,6 +286,36 @@ class GatewayTests(unittest.TestCase):
                 **base,
                 "payload": {"action_id": "action-1", "arguments": {"cmd": "whoami"}},
             })
+
+
+class ConversationHistoryTests(unittest.TestCase):
+    def test_turn_is_persisted_and_reread_from_disk(self):
+        import tempfile
+        from jawl_voicecompanion.history import ConversationHistory  # noqa: E402
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ConversationHistory(Path(tmp) / "conversation.ndjson")
+            gateway = TextGateway(history_store=store)
+            response = gateway.handle_text("Привет, запомни меня", session_id="seed-1")
+            self.assertTrue(store.path.exists())
+            turns = store.turns()
+            self.assertEqual(len(turns), 1)
+            self.assertEqual(turns[0]["user"], "Привет, запомни меня")
+            self.assertEqual(turns[0]["response"]["text"], response["text"])
+            reloaded = ConversationHistory(store.path).turns()
+            self.assertEqual(reloaded[0]["user"], "Привет, запомни меня")
+
+    def test_turn_history_prefers_persisted_store(self):
+        import tempfile
+        from jawl_voicecompanion.history import ConversationHistory  # noqa: E402
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ConversationHistory(Path(tmp) / "conversation.ndjson")
+            gateway = TextGateway(history_store=store)
+            list(gateway.stream_text("голосовая реплика", session_id="voice-1"))
+            history = gateway.turn_history(limit=50)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["user"], "голосовая реплика")
 
 
 if __name__ == "__main__":

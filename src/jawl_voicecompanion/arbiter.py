@@ -70,6 +70,11 @@ class TurnArbiter:
             else:
                 self._queued.append(token)
                 self._queued.sort(key=lambda item: (item.priority, item.generation))
+                # Bound the queue: a stuck producer must not grow memory
+                # without bound; the least important waiter is dropped first.
+                if len(self._queued) > 8:
+                    dropped = self._queued.pop()
+                    dropped.cancel("queue_overflow")
             return token
 
     def complete(self, token: TurnToken) -> TurnToken | None:

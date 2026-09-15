@@ -79,6 +79,8 @@ class _RelayHandler(BaseHTTPRequestHandler):
                 "Accept-Encoding": "identity",
             }
         )
+        if config.get("session_id"):
+            headers["x-opencode-session"] = config["session_id"]
         connection_type, host, port, prefix = config["upstream"]
         connection_class = HTTPSConnection if connection_type == "https" else HTTPConnection
         connection = connection_class(
@@ -90,16 +92,38 @@ class _RelayHandler(BaseHTTPRequestHandler):
         try:
             connection.request(self.command, prefix + self.path, body=body, headers=headers)
             response = connection.getresponse()
+            upstream_transfer_encoding = (response.getheader("Transfer-Encoding") or "").casefold()
+            upstream_is_chunked = "chunked" in upstream_transfer_encoding
             self.send_response(response.status, response.reason)
             for key, value in response.getheaders():
                 if key.casefold() not in _HOP_BY_HOP:
                     self.send_header(key, value)
+            # HTTPResponse decodes an upstream chunked body for us.  The
+            # relay must frame it again for the downstream HTTP/1.1 client;
+            # merely dropping Transfer-Encoding leaves the client waiting for
+            # EOF on a keep-alive connection and truncates streaming turns.
+            if upstream_is_chunked:
+                self.send_header("Transfer-Encoding", "chunked")
+            elif not response.getheader("Content-Length"):
+                # An unusual close-delimited response has no safe length to
+                # advertise.  Make the framing explicit rather than allowing
+                # a persistent downstream connection to hang.
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
             while True:
                 chunk = response.read(64 * 1024)
                 if not chunk:
                     break
-                self.wfile.write(chunk)
+                if upstream_is_chunked:
+                    self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
+                    self.wfile.write(chunk)
+                    self.wfile.write(b"\r\n")
+                else:
+                    self.wfile.write(chunk)
+                self.wfile.flush()
+            if upstream_is_chunked:
+                self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
         except (ConnectionError, OSError, TimeoutError) as exc:
             if not self.wfile.closed:
@@ -124,6 +148,10 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8891)
     parser.add_argument("--upstream", default="https://opencode.ai/zen")
     parser.add_argument("--key-env", default="OPENCODE_RELAY_KEY")
+    parser.add_argument("--session-env", default="OPENCODE_RELAY_SESSION",
+                        help="stable UUID for the x-opencode-session header; "
+                        "required for the free tier, which is restricted "
+                        "to OpenCode clients (MissingSessionID otherwise)")
     parser.add_argument("--user-agent", default="OpenCode/1.18.11")
     parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
@@ -134,6 +162,9 @@ def main() -> int:
     key = os.environ.get(args.key_env, "").strip()
     if not key:
         parser.error(f"missing credential in ${args.key_env}")
+    session_id = os.environ.get(args.session_env, "").strip()
+    if session_id and (len(session_id) > 128 or any(c in session_id for c in "\r\n")):
+        parser.error("session id must be a bounded single line")
     upstream = _parse_upstream(args.upstream)
     server = _RelayServer(("127.0.0.1", args.port), _RelayHandler)
     server.relay_config = {
@@ -141,6 +172,7 @@ def main() -> int:
         "host": upstream[1],
         "key": key,
         "user_agent": args.user_agent,
+        "session_id": session_id,
         "timeout": max(1.0, min(args.timeout, 600.0)),
     }
     print(f"OpenCode relay listening on http://127.0.0.1:{args.port}/", flush=True)

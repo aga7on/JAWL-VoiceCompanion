@@ -59,6 +59,22 @@ class _BrokenOnCloseSseResponse(_SseResponse):
         return super().readline()
 
 
+class _EofSseResponse(_SseResponse):
+    """Serve pre-queued SSE lines and then report EOF immediately."""
+
+    def __init__(self, lines):
+        self.lines = Queue()
+        self.closed = threading.Event()
+        for line in lines:
+            self.lines.put(line)
+
+    def readline(self):
+        try:
+            return self.lines.get_nowait()
+        except Empty:
+            return b""
+
+
 class JawlWebTests(unittest.TestCase):
     def test_persona_filters_config_secrets(self):
         responses = {
@@ -303,6 +319,30 @@ class JawlWebTests(unittest.TestCase):
             "http://127.0.0.1:8770/api/agent/status",
         ])
 
+    def test_restart_agent_can_wait_for_structured_memory(self):
+        calls = []
+
+        def opener(request, timeout):
+            del timeout
+            calls.append(request.full_url)
+            if request.full_url.endswith("/api/agent/status"):
+                return _Response({"ok": True, "running": True, "starting": False})
+            if request.full_url.endswith("/api/agent/stop"):
+                return _Response({"ok": True, "forced": False})
+            if request.full_url.endswith("/api/agent/start"):
+                return _Response({"ok": True, "pid": 42})
+            if request.full_url.endswith("/api/db/stats"):
+                return _Response({"ok": True})
+            if request.full_url.endswith("/api/drives"):
+                return _Response({"ok": True, "drives": []})
+            self.assertTrue(request.full_url.endswith("/api/memory?limit=50"))
+            return _Response({"ok": True, "native": True, "memory": {"memories": []}})
+
+        adapter = JawlWebAdapter("http://127.0.0.1:8770", token="secret", opener=opener)
+        result = adapter.restart_agent(wait_for_memory=True)
+        self.assertTrue(result["agent_ready"])
+        self.assertEqual(calls[-1], "http://127.0.0.1:8770/api/memory?limit=50")
+
     def test_chat_post_and_sse_are_correlated_by_sequence(self):
         stream = _SseResponse()
         posted = threading.Event()
@@ -448,6 +488,178 @@ class JawlWebTests(unittest.TestCase):
         )
         self.assertEqual(adapter.respond("Привет"), "Ответ из JAWL")
         self.assertEqual(calls[:2], ["/api/companion/stream", "/api/companion/turn"])
+
+    def test_native_gateway_gap_cursor_advances_to_latest(self):
+        gap_line = (
+            "data: "
+            + json.dumps({
+                "events": [],
+                "cursor": {
+                    "schema_version": 1,
+                    "after": 0,
+                    "oldest_event_seq": 100,
+                    "latest_event_seq": 105,
+                    "gap": True,
+                },
+            })
+            + "\n"
+        ).encode("utf-8")
+        first = _EofSseResponse([gap_line, b"\n"])
+        second = _SseResponse()
+        calls = []
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            calls.append(path)
+            if path.startswith("/api/companion/stream"):
+                return first if len(calls) == 1 else second
+            self.assertEqual(path, "/api/companion/turn")
+            turn_id = json.loads(request.data.decode("utf-8"))["turn_id"]
+            response = {
+                "schema_version": 1,
+                "response_id": "resp-native-gap",
+                "turn_id": turn_id,
+                "text": "Ответ после gap",
+                "speak": True,
+                "emotion": {"id": "attentive", "intensity": 0.45, "confidence": 0.8},
+                "avatar": {"expression": "attentive", "motion": "soft_nod", "state": "speaking"},
+                "voice": {"provider": "jawl", "voice_id": "main_ru", "rate": 1.0},
+                "actions": [],
+                "interruptible": True,
+                "proactive": False,
+            }
+            second.lines.put(
+                (
+                    "data: "
+                    + json.dumps({
+                        "events": [{
+                            "schema_version": 1,
+                            "event_seq": 106,
+                            "turn_id": turn_id,
+                            "type": "assistant.final",
+                            "payload": {"response": response},
+                        }],
+                        "cursor": {"schema_version": 1, "after": 106, "gap": False},
+                    })
+                    + "\n"
+                ).encode("utf-8")
+            )
+            second.lines.put(b"\n")
+            return _Response({"ok": True, "turn_id": turn_id})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770",
+            native_gateway=True,
+            chat_timeout_seconds=3,
+            opener=opener,
+        )
+        self.assertEqual(adapter.respond("Привет"), "Ответ после gap")
+        self.assertEqual(calls[0], "/api/companion/stream")
+        self.assertEqual(calls[1], "/api/companion/turn")
+        self.assertIn("after=105", calls[2])
+
+    def test_native_gateway_forwards_safe_assistant_deltas(self):
+        stream = _SseResponse()
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            if path == "/api/companion/stream":
+                return stream
+            payload = json.loads(request.data.decode("utf-8"))
+            turn_id = payload["turn_id"]
+            response = {
+                "schema_version": 1,
+                "response_id": "resp-native-stream-1",
+                "turn_id": turn_id,
+                "text": "Первая часть. Вторая часть.",
+                "speak": True,
+                "emotion": {"id": "attentive", "intensity": 0.45, "confidence": 0.8},
+                "avatar": {"expression": "attentive", "motion": "soft_nod", "state": "speaking"},
+                "voice": {"provider": "jawl", "voice_id": "main_ru", "rate": 1.0},
+                "actions": [],
+                "interruptible": True,
+                "proactive": False,
+            }
+            stream.lines.put(("data: " + json.dumps({"events": [
+                {"schema_version": 1, "event_seq": 2, "turn_id": turn_id,
+                 "type": "assistant.delta", "payload": {"text": "Первая часть. "}},
+                {"schema_version": 1, "event_seq": 3, "turn_id": turn_id,
+                 "type": "assistant.delta", "payload": {"text": "Вторая часть."}},
+                {"schema_version": 1, "event_seq": 4, "turn_id": turn_id,
+                 "type": "assistant.final", "payload": {"response": response}},
+            ]}) + "\n").encode("utf-8"))
+            stream.lines.put(b"\n")
+            return _Response({"ok": True, "turn_id": turn_id})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770", native_gateway=True,
+            chat_timeout_seconds=2, opener=opener,
+        )
+        events = list(adapter.stream_envelope("Привет"))
+        self.assertEqual([event["type"] for event in events], ["delta", "delta", "final"])
+        self.assertEqual("".join(event["text"] for event in events[:-1]), "Первая часть. Вторая часть.")
+        self.assertEqual(events[-1]["response"]["text"], "Первая часть. Вторая часть.")
+
+    def test_native_gateway_accepts_initial_evicted_history_gap(self):
+        stream = _SseResponse()
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            if path == "/api/companion/stream":
+                return stream
+            payload = json.loads(request.data.decode("utf-8"))
+            response = {
+                "schema_version": 1, "response_id": "resp-gap",
+                "turn_id": payload["turn_id"], "text": "Ответ после gap",
+                "speak": True,
+                "emotion": {"id": "attentive", "intensity": 0.4, "confidence": 0.9},
+                "avatar": {"expression": "attentive", "motion": "soft_nod", "state": "speaking"},
+                "voice": {"provider": "jawl", "voice_id": "main_ru", "rate": 1.0},
+                "actions": [], "interruptible": True, "proactive": False,
+            }
+            stream.lines.put(("data: " + json.dumps({
+                "events": [], "cursor": {"after": 20, "latest": 20, "gap": True},
+            }) + "\n").encode("utf-8"))
+            stream.lines.put(b"\n")
+            stream.lines.put(("data: " + json.dumps({
+                "events": [{"schema_version": 1, "event_seq": 21,
+                            "turn_id": payload["turn_id"], "type": "assistant.final",
+                            "payload": {"response": response}}],
+                "cursor": {"after": 21, "gap": False},
+            }) + "\n").encode("utf-8"))
+            stream.lines.put(b"\n")
+            return _Response({"ok": True, "turn_id": payload["turn_id"]})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770", native_gateway=True,
+            chat_timeout_seconds=2, opener=opener,
+        )
+        self.assertEqual(adapter.respond("gap-safe"), "Ответ после gap")
+
+    def test_native_gateway_cancels_turn_after_terminal_timeout(self):
+        stream = _SseResponse()
+        calls = []
+
+        def opener(request, timeout):
+            del timeout
+            path = request.full_url.removeprefix("http://127.0.0.1:8770")
+            calls.append(path)
+            if path == "/api/companion/stream":
+                return stream
+            payload = json.loads(request.data.decode("utf-8"))
+            return _Response({"ok": True, "turn_id": payload["turn_id"]})
+
+        adapter = JawlWebChatAdapter(
+            "http://127.0.0.1:8770", native_gateway=True,
+            chat_timeout_seconds=0.2, opener=opener,
+        )
+        with self.assertRaises(JawlWebUnavailable):
+            adapter.respond("timeout-safe")
+        self.assertEqual(calls.count("/api/companion/turn"), 1)
+        self.assertEqual(calls.count("/api/companion/cancel"), 1)
 
     def test_native_gateway_reconnects_from_last_cursor_without_resubmitting_turn(self):
         first = _SseResponse()

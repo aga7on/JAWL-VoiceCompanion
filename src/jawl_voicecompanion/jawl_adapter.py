@@ -57,6 +57,24 @@ def filter_user_response(text: str) -> str:
     return clean
 
 
+def filter_user_delta(text: str) -> str:
+    """Validate one provisional native-gateway text fragment.
+
+    A delta is not independently complete text, so ``filter_user_response``
+    cannot be used here (it correctly rejects whitespace-only fragments).
+    Deltas are still untrusted: internal control markers or NULs must never
+    reach the browser. The terminal ``assistant.final`` remains authoritative
+    and is validated with the stricter full-response filter.
+    """
+
+    clean = str(text or "").replace("\x00", "")
+    if len(clean) > 16_000:
+        raise JawlUnsafeResponse("JAWL delta exceeds the bounded text limit")
+    if "<!--" in clean or _INTERNAL_TAG.search(clean) or _INTERNAL_LINE.search(clean):
+        raise JawlUnsafeResponse("JAWL delta contains internal control markup")
+    return clean
+
+
 class JawlTerminalAdapter:
     """Send one text turn through JAWL's loopback terminal channel.
 
