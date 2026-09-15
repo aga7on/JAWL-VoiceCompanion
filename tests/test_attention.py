@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.attention import AttentionPresence  # noqa: E402
+from jawl_voicecompanion.arbiter import TurnArbiter, TurnPriority  # noqa: E402
 
 
 def _event(summary="editor changed", significance=1, event_id="screen-1"):
@@ -71,6 +72,17 @@ class AttentionTests(unittest.TestCase):
         self.assertEqual(result["status"], "suppressed")
         self.assertEqual(result["reason"], "user_active")
         self.assertEqual(attention.state()["activity"]["foreground_class"], "Editor")
+
+    def test_active_conversation_suppresses_proactive_screen_speech(self):
+        arbiter = TurnArbiter()
+        token = arbiter.begin(TurnPriority.USER_FINAL)
+        attention = AttentionPresence(cooldown_seconds=0, turn_arbiter=arbiter)
+
+        result = attention.consume(_event("Ошибка в активном диалоге"))
+
+        self.assertEqual(result["status"], "suppressed")
+        self.assertEqual(result["reason"], "conversation_active")
+        arbiter.complete(token)
 
     def test_activity_provider_failure_is_degraded_but_does_not_break_gate(self):
         attention = AttentionPresence(

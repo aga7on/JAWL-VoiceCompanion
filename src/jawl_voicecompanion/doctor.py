@@ -54,6 +54,10 @@ def build_doctor_report(
     ambient_memory: Any | None = None,
     ambient_audio: Any | None = None,
     resource_governor: Any | None = None,
+    streaming_asr: Any | None = None,
+    helper_urls: dict[str, str] | None = None,
+    sensory_ingestor: Any | None = None,
+    gigaam_transcriber: Any | None = None,
 ) -> dict[str, Any]:
     """Return bounded component readiness without exposing paths or secrets."""
     health = gateway.health()
@@ -79,13 +83,20 @@ def build_doctor_report(
         action="Configure --voicemem-python for voice input" if voice_status == "not_configured" else None,
     ))
 
-    asr_health = _health(asr)
-    asr_status = str(asr_health.get("status", "degraded"))
-    checks.append(_check(
-        "asr", asr_status, "External final-utterance ASR" if asr is not None else "External ASR is disabled",
-        ready=asr is not None and asr_status in {"connected", "online", "ready", "ok"},
-        action="Configure --asr-url and --asr-model for Qwen3-ASR" if asr is None else None,
-    ))
+    if gigaam_transcriber is not None:
+        checks.append(_check(
+            "asr", "gigaam",
+            "Sber GigaAM batch final (crispasr); Qwen3-ASR is an optional fallback",
+            ready=True,
+        ))
+    else:
+        asr_health = _health(asr)
+        asr_status = str(asr_health.get("status", "degraded"))
+        checks.append(_check(
+            "asr", asr_status, "External final-utterance ASR" if asr is not None else "External ASR is disabled",
+            ready=asr is not None and asr_status in {"connected", "online", "ready", "ok"},
+            action="Configure --asr-url and --asr-model for Qwen3-ASR" if asr is None else None,
+        ))
 
     speech = _health(tts)
     tts_status = str(speech.get("status", "degraded"))
@@ -148,6 +159,43 @@ def build_doctor_report(
             "resources", "ready", "Bounded speech/vision/ambient resource governor",
             ready=True,
             action="Review the active resource profile" if resource_state.get("gaming_mode") else None,
+        ))
+
+    if streaming_asr is not None:
+        snapshot = {}
+        try:
+            snapshot = streaming_asr.snapshot()
+        except Exception:  # noqa: BLE001 - doctor must never break the control plane
+            snapshot = {}
+        active = bool(snapshot.get("active"))
+        checks.append(_check(
+            "streaming_asr", "online" if active else "idle",
+            "Streaming ASR lane (partial drafts + adaptive endpoint)" if active else "Streaming ASR idle until capture",
+            ready=True,
+        ))
+    if sensory_ingestor is not None:
+        sensory_state = sensory_ingestor.state()
+        running = bool(sensory_state.get("running"))
+        counters = sensory_state.get("counters", {})
+        checks.append(_check(
+            "sensory_ingest", "online" if running else "stopped",
+            "Sensory NDJSON -> ambient memory"
+            f" (visual={counters.get('visual', 0)} music={counters.get('music', 0)} speech={counters.get('speech', 0)})",
+            ready=running,
+        ))
+    for name, url in sorted((helper_urls or {}).items()):
+        status = "offline"
+        try:
+            import urllib.request
+            request = urllib.request.Request(str(url), headers={"Accept": "application/json"})
+            with urllib.request.urlopen(request, timeout=1.5) as response:
+                status = "online" if int(response.status) < 500 else "degraded"
+        except Exception:  # noqa: BLE001 - helpers are optional
+            status = "offline"
+        checks.append(_check(
+            f"helper_{name}", status,
+            f"Local helper: {name}",
+            ready=status == "online",
         ))
 
     required_failures = [item for item in checks if item["required"] and not item["ready"]]

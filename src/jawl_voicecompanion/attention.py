@@ -12,7 +12,7 @@ from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
 
-from .arbiter import TurnPriority
+from .arbiter import TurnArbiter, TurnPriority
 
 
 _SALIENT = re.compile(
@@ -43,6 +43,8 @@ class AttentionPresence:
     clock: Callable[[], datetime] | None = None
     intent_sink: Callable[[dict[str, Any]], Any] | None = None
     activity_provider: Callable[[], dict[str, Any]] | None = None
+    turn_arbiter: TurnArbiter | None = None
+    summary_composer: Callable[[str], str] | None = None
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _seen: deque[str] = field(default_factory=lambda: deque(maxlen=200), init=False, repr=False)
     _intents: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=50), init=False, repr=False)
@@ -145,6 +147,8 @@ class AttentionPresence:
             self._last_activity = activity
             if activity.get("status") == "verified" and activity.get("user_active"):
                 return {"status": "suppressed", "reason": "user_active", "significance": score}
+            if self._user_turn_active():
+                return {"status": "suppressed", "reason": "conversation_active", "significance": score}
             if self.dnd:
                 return {"status": "suppressed", "reason": "dnd_active", "significance": score}
             if self._is_quiet(self._local_now()):
@@ -169,6 +173,20 @@ class AttentionPresence:
                     self._last_error = "attention_sink_failed"
                 return {"status": "proposed", "intent": intent, "delivered": False}
         return {"status": "proposed", "intent": intent, "delivered": True}
+
+    def _user_turn_active(self) -> bool:
+        """Never enqueue proactive speech while a user turn owns the arbiter."""
+        if self.turn_arbiter is None:
+            return False
+        active = self.turn_arbiter.state().get("active")
+        if not isinstance(active, dict):
+            return False
+        if active.get("priority") == TurnPriority.USER_FINAL.name:
+            return True
+        try:
+            return int(active.get("priority", int(TurnPriority.BACKGROUND))) == int(TurnPriority.USER_FINAL)
+        except (TypeError, ValueError):
+            return False
 
     def _sample_activity(self) -> dict[str, Any]:
         if self.activity_provider is None:
@@ -201,8 +219,15 @@ class AttentionPresence:
         base = max(0, min(3, base))
         return max(base, 3 if _SALIENT.search(summary) else 0)
 
-    @staticmethod
-    def _make_intent(event: dict[str, Any], summary: str, score: int) -> dict[str, Any]:
+    def _make_intent(self, event: dict[str, Any], summary: str, score: int) -> dict[str, Any]:
+        composed = summary
+        if self.summary_composer is not None:
+            try:
+                candidate = self.summary_composer(summary)
+            except Exception:  # noqa: BLE001 - optional fusion must not break attention
+                candidate = None
+            if isinstance(candidate, str) and candidate.strip():
+                composed = candidate.strip()[:1200]
         expires = datetime.now(timezone.utc) + timedelta(minutes=5)
         return {
             "schema_version": 1,
@@ -215,7 +240,7 @@ class AttentionPresence:
             "payload": {
                 "topic": "screen_change",
                 "reason": "salient_screen_change",
-                "summary": summary,
+                "summary": composed,
                 "significance": score,
                 "observed_event_id": str(event.get("event_id") or "")[:200],
                 "expires_at": expires.isoformat(),
