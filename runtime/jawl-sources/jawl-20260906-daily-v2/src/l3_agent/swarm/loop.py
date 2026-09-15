@@ -1,0 +1,272 @@
+"""
+Stateless ReAct loop for background subagents.
+
+Unlike the main ReactLoop, subagent loops are lightweight, do not commit
+events to SQLite ticks history, and run within volatile local arrays.
+Enforces reporting constraints (Anti-Laziness Guard) on execution completion.
+"""
+
+import json
+from typing import Callable, Dict, List, Tuple, Optional
+
+from src.utils.logger import swarm_logger
+
+from src.utils._tools import dump_prompt_to_file
+
+from src.l3_agent.llm.executor import LLMExecutor
+from src.l3_agent.skills.schema import AgentResponse, ActionCall, ACTION_SCHEMA, parse_llm_json
+from src.l3_agent.skills.registry import SkillResult, call_skill, execute_action_plan
+from src.l3_agent.swarm.prompt.builder import SwarmPromptBuilder
+from src.l3_agent.swarm.context.builder import SwarmContextBuilder
+from src.l3_agent.swarm.roles import SubagentRole
+
+
+class SubagentLoop:
+    """Lightweight stateless reasoning loop."""
+
+    def __init__(
+        self,
+        subagent_id: str,
+        role: SubagentRole,
+        task_description: str,
+        executor: LLMExecutor,
+        model_name: str,
+        prompt_builder: SwarmPromptBuilder,
+        context_builder: SwarmContextBuilder,
+        allowed_skills: List[str],
+        max_steps: int = 15,
+        control_message_provider: Optional[Callable[[], List[str]]] = None,
+    ) -> None:
+        """
+        Initializes the subagent loop.
+
+        Args:
+            subagent_id: Process UUID identifier.
+            role: Dedicated worker role.
+            task_description: Primary task instructions.
+            executor: LLM executor instance.
+            model_name: Target model name.
+            prompt_builder: Swarm prompt builder.
+            context_builder: Swarm context builder.
+            allowed_skills: Filtered skills pool.
+            max_steps: Maximum step iterations limit before force termination.
+        """
+
+        self.subagent_id = subagent_id
+        self.role = role
+        self.task_description = task_description
+
+        self.executor = executor
+        self.model_name = model_name
+        self.prompt_builder = prompt_builder
+        self.context_builder = context_builder
+        self.allowed_skills = allowed_skills + ["SubagentReport.submit_final_report"]
+
+        self.max_steps = max_steps
+        self.control_message_provider = control_message_provider
+
+        self.history: List[Dict[str, str]] = []
+        self.is_done = False
+
+        self.report_submitted = False
+
+    async def run(self) -> str:
+        """
+        Core subagent ReAct execution cycle.
+        """
+
+        log = f"[Swarm] Launching subagent {self.role.id}_{self.subagent_id}."
+        swarm_logger.info(log)
+
+        prompt = self.prompt_builder.build(self.role)
+
+        step = 1
+        provider_failed = False
+        while step <= self.max_steps and not self.is_done:
+            log = f"[Subagent ReAct] Step {step}/{self.max_steps}."
+            swarm_logger.info(log)
+
+            # -----------------------------------------------------------------
+            # Prompt & Context compilation
+            # -----------------------------------------------------------------
+
+            messages = self._prepare_messages(prompt)
+            self._dump_context_to_file(messages, step)
+
+            # --------------------------------------------------------------
+            # LLM execution
+            # --------------------------------------------------------------
+
+            raw_answer = await self.executor.execute(
+                model_name=self.model_name,
+                messages=messages,
+                temperature=0.7,
+                logger=swarm_logger,
+                log_prefix=f"[Swarm {self.subagent_id}]",
+                tools=ACTION_SCHEMA,
+            )
+            if raw_answer is None:
+                log = f"[Swarm] Critical LLM connection error on subagent {self.subagent_id}. Forcing crash report."
+                swarm_logger.error(log)
+                provider_failed = True
+                break
+
+            # --------------------------------------------------------------
+            # Response parsing
+            # --------------------------------------------------------------
+
+            parsed_response, error_msg = self._parse_response(raw_answer)
+
+            if error_msg:
+                log_err = (
+                    f"[Swarm {self.subagent_id}] JSON parse error on step {step}: {error_msg}"
+                )
+                swarm_logger.warning(log_err)
+                swarm_logger.debug(f"[Swarm {self.subagent_id}] Raw answer: {raw_answer}")
+
+                fallback_thoughts = (
+                    parsed_response if isinstance(parsed_response, str) else "[JSON Error]"
+                )
+                self.history.append(
+                    {
+                        "thoughts": fallback_thoughts,
+                        "actions": "None",
+                        "results": f"[System Error]: Failed to parse JSON response. Details: {error_msg}",
+                    }
+                )
+                step += 1
+                continue
+
+            thoughts = parsed_response.thoughts
+            actions = parsed_response.actions
+
+            # --------------------------------------------------------------
+            # Handle empty actions
+            # --------------------------------------------------------------
+
+            if not actions:
+                if not self.report_submitted:
+                    log = f"[Swarm] Subagent {self.subagent_id} attempted to exit without submitting a final report. Forcing action."
+                    swarm_logger.warning(log)
+
+                    self.history.append(
+                        {
+                            "thoughts": thoughts,
+                            "actions": "[]",
+                            "results": "[System Error]: You attempted to exit (returned an empty actions list) without submitting a final report. This is forbidden. Use the report skill to submit results.",
+                        }
+                    )
+                    step += 1
+                    continue
+                else:
+                    log = f"[Swarm] Subagent {self.role.id}_{self.subagent_id} returned an empty actions list. Concluding loop."
+                    swarm_logger.info(log)
+
+                    self.is_done = True
+                    break
+
+            # --------------------------------------------------------------
+            # Actions execution
+            # --------------------------------------------------------------
+
+            await self._execute_and_log_actions(thoughts, actions)
+            step += 1
+
+        if not self.is_done:
+            log = f"[Swarm] Subagent {self.subagent_id} reached max steps limit ({self.max_steps}) and was terminated."
+            swarm_logger.warning(log)
+
+            report_result = await call_skill(
+                "SubagentReport.submit_final_report",
+                {
+                    "subagent_id": self.subagent_id,
+                    "role": self.role.id,
+                    "report": "## Timeout Error\nSubagent reached the maximum step limit and was terminated. Task incomplete.",
+                },
+            )
+            self.report_submitted = report_result.is_success
+
+        if provider_failed or not self.is_done:
+            return "failed"
+        return "completed"
+
+    # -------------------------------------------------------------------------
+    # Private Helpers
+    # -------------------------------------------------------------------------
+
+    def _prepare_messages(self, prompt: str) -> List[Dict[str, str]]:
+        context = self.context_builder.build(
+            self.subagent_id, self.task_description, self.history
+        )
+        if self.control_message_provider is not None:
+            control_messages = self.control_message_provider()
+            if control_messages:
+                rendered = "\n\n".join(
+                    f"[{index}] {message}"
+                    for index, message in enumerate(control_messages, start=1)
+                )
+                context += (
+                    "\n\n## ORCHESTRATOR CONTROL MESSAGES\n"
+                    "These messages are new steering from the parent agent. "
+                    "Acknowledge them through your next concrete actions or final report.\n"
+                    + rendered
+                )
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": context},
+        ]
+        return messages
+
+    def _dump_context_to_file(self, messages: List[Dict[str, str]], current_step: int) -> None:
+        meta = f"# SUBAGENT DUMP\n* **Role**: {self.role.name.upper()}\n* **Subagent ID**: {self.subagent_id}\n* **Step**: {current_step} / {self.max_steps}"
+        dump_prompt_to_file("logs/prompts/sub_prompt.md", messages, meta_header=meta)
+
+    def _parse_response(
+        self, raw_answer: str
+    ) -> Tuple[Optional[AgentResponse], Optional[str]]:
+        return parse_llm_json(raw_answer)
+
+    async def _execute_and_log_actions(self, thoughts: str, actions: List[ActionCall]) -> None:
+        results = []
+        actions_log = []
+
+        for act in actions:
+            actions_log.append(
+                f"* {act.tool_name}({json.dumps(act.parameters, ensure_ascii=False)})"
+            )
+
+        async def _runner(act: ActionCall) -> SkillResult:
+            if act.tool_name not in self.allowed_skills:
+                return SkillResult.fail(
+                    "Access denied. This tool is not authorized for your role."
+                )
+
+            if act.tool_name == "SubagentReport.submit_final_report" and (
+                act.parameters.get("subagent_id") != self.subagent_id
+                or act.parameters.get("role") != self.role.id
+            ):
+                return SkillResult.fail(
+                    "Report identity mismatch. Use the exact assigned subagent ID and role."
+                )
+
+            try:
+                return await call_skill(act.tool_name, act.parameters, logger=swarm_logger)
+            except Exception as e:
+                return SkillResult.fail(f"Internal error - {e}")
+
+        outcomes = await execute_action_plan(actions, _runner)
+        for outcome in outcomes:
+            results.append(f"* {outcome.tool_name}: {outcome.message}")
+            if (
+                outcome.tool_name == "SubagentReport.submit_final_report"
+                and outcome.is_success
+            ):
+                self.report_submitted = True
+
+        self.history.append(
+            {
+                "thoughts": thoughts,
+                "actions": "\n".join(actions_log),
+                "results": "\n".join(results),
+            }
+        )

@@ -41,6 +41,16 @@ screenshots/
 # Runtime state
 data/
 runtime/
+!runtime/
+runtime/*
+!runtime/jawl-sources/
+runtime/jawl-sources/*
+!runtime/jawl-sources/jawl-20260906-daily-v2/
+!runtime/jawl-sources/jawl-20260906-daily-v2/**
+runtime/jawl-sources/jawl-20260906-daily-v2/**/__pycache__/
+runtime/jawl-sources/jawl-20260906-daily-v2/**/*.py[cod]
+runtime/jawl-sources/jawl-20260906-daily-v2/logs/
+runtime/jawl-sources/jawl-20260906-daily-v2/sandbox/
 logs/
 *.log
 *.sqlite

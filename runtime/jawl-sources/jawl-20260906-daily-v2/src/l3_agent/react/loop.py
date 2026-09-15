@@ -1,0 +1,1440 @@
+"""
+Agent Reasoning and Acting (ReAct) Core.
+
+Implements the Stateless loop: gathers context, sends prompt to LLM,
+parses JSON outputs (Chain-of-Thought + Tool Calls), executes skills, and
+commits results (Ticks) to the database.
+"""
+
+import asyncio
+from typing import Callable, Dict, Any, List, Literal, Optional, Tuple, Union, TYPE_CHECKING
+
+import base64
+import hashlib
+import mimetypes
+import os
+import re
+import copy
+from pathlib import Path
+
+from src.utils.logger import main_logger, agent_logger
+from src.utils.settings import TreeOfThoughtsConfig
+from src.utils._tools import dump_prompt_to_file, redact_sensitive_text, truncate_text
+
+from src.utils.event.bus import EventBus
+from src.utils.event.registry import Events
+from src.utils.tracing import begin_trace, current_trace, reset_trace
+
+from src.l0_state.agent.state import AgentState, AgentStatus
+
+from src.l1_databases.sql.management.ticks import SQLTicks
+from src.l1_databases.vector.manager import VectorManager
+
+from src.l3_agent.llm.executor import LLMExecutor
+from src.l3_agent.llm.providers.contracts import normalize_tool_transport
+from src.l3_agent.prompt.builder import PromptBuilder
+from src.l3_agent.context.builder import ContextBuilder
+
+from src.l3_agent.tot.generator import ToTGenerator
+
+from src.l3_agent.skills.registry import (
+    ExecutionResult,
+    execute_skill,
+    resolve_native_tool_name,
+)
+from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
+from src.l3_agent.event_buffer import BoundedEventBuffer
+from src.l3_agent.companion_gateway import (
+    current_companion_turn_id,
+    reset_companion_turn_id,
+    set_companion_turn_id,
+)
+
+if TYPE_CHECKING:
+    from src.l3_agent.goals.manager import GoalManager
+
+
+def _empty_goal_action_policy(goal: Any) -> Literal["waiting", "continue", "blocked"]:
+    """Classify an empty provider response while an active Goal has work.
+
+    A provider may return useful reasoning but omit both Goal state and native
+    actions.  Treating that as ordinary waiting can strand a Goal forever even
+    though its durable Task Ledger names an exact next action.  Give the model
+    a small repair budget; after that, expose a deterministic blocker instead
+    of silently claiming autonomous progress.
+    """
+
+    if goal is None or getattr(goal, "status", "") != "active":
+        return "waiting"
+    ledger = getattr(goal, "task_ledger", None)
+    next_action = getattr(ledger, "next_action", "") if ledger is not None else ""
+    continuations = int(getattr(goal, "continuation_count", 0) or 0)
+    if not str(next_action or "").strip():
+        # An active Goal with no explicit wait state still requires a bounded
+        # provider repair. Otherwise a malformed/empty response can strand an
+        # unattended Goal in ``waiting`` forever before it ever records its
+        # first durable next action. Explicit Goal Protocol v2 ``state=wait``
+        # is handled by the caller and remains a legitimate indefinite wait.
+        return "continue" if continuations < 3 else "blocked"
+    return "continue" if continuations < 3 else "blocked"
+
+
+def _ledger_completion_eligible(goal: Any) -> bool:
+    """Allow a narrow terminal fallback for legacy empty Goal responses.
+
+    Some local OpenAI-compatible providers return the legacy empty action
+    envelope after the last verified native action instead of emitting the
+    compact Goal Protocol v2 ``state=done`` envelope.  Never infer completion
+    from an action finishing alone: require the durable ledger to be terminal,
+    empty of pending work/blockers, and backed by an entirely successful last
+    action batch.  This keeps the Goal gate fail-closed for ordinary empty
+    responses while allowing a provider transport quirk to finish a goal whose
+    evidence is already durable.
+    """
+
+    if goal is None or getattr(goal, "status", "") != "active":
+        return False
+    ledger = getattr(goal, "task_ledger", None)
+    if ledger is None:
+        return False
+    phase = str(getattr(ledger, "current_phase", "") or "").strip().casefold()
+    if phase not in {"done", "complete", "completed"}:
+        return False
+    if getattr(ledger, "pending_steps", None):
+        return False
+    next_action = str(getattr(ledger, "next_action", "") or "").strip().casefold()
+    if next_action and next_action not in {"none", "n/a", "null"}:
+        return False
+    if getattr(ledger, "blockers", None):
+        return False
+    outcomes = getattr(ledger, "last_action_batch", None) or []
+    if not outcomes:
+        return False
+    # Terminal-message compatibility wrappers are transport, not evidence of
+    # the Goal's physical work. A provider can otherwise wrap state=done in
+    # HostTerminalMessages.send_message_to_terminal and manufacture a
+    # successful action batch without ever executing a native action.
+    evidence_tools = {
+        str(getattr(outcome, "tool", "") or "").strip()
+        for outcome in outcomes
+        if str(getattr(outcome, "tool", "") or "").strip()
+        not in {
+            "HostTerminalMessages.send_message_to_terminal",
+            "HostTerminalMessages.read_terminal_history",
+        }
+    }
+    if not evidence_tools:
+        return False
+    return all(
+        str(getattr(outcome, "status", "") or "").strip().casefold()
+        == "success"
+        for outcome in outcomes
+    )
+
+
+def _normalize_tool_output(text: str) -> str:
+    """Make tool output safe for JSON/UTF-8 without destroying valid Unicode."""
+    if not text:
+        return text
+    # Replace only invalid, unpaired UTF-16 surrogates. Emoji, CJK, Arabic,
+    # mathematical symbols and other valid scripts must remain intact.
+    normalized = text.encode("utf-8", errors="replace").decode("utf-8")
+    # Tool output is textual. Drop C0 controls that commonly break upstream
+    # JSON/web transports while retaining normal whitespace.
+    return "".join(
+        ch for ch in normalized if ord(ch) >= 0x20 or ch in "\t\n\r"
+    )
+
+class ReactLoop:
+    """
+    Autonomous agent core.
+    Implements the ReAct (Reasoning and Acting) loop in Stateless mode.
+    """
+
+    def __init__(
+        self,
+        executor: LLMExecutor,
+        prompt_builder: PromptBuilder,
+        context_builder: ContextBuilder,
+        agent_state: AgentState,
+        sql_ticks: SQLTicks,
+        vector_manager: VectorManager,
+        tools: Union[list, Callable[[], list]],
+        event_bus: EventBus,
+        tool_transport: str = "json_envelope",
+        thinking_policy: Literal[
+            "provider_default", "always", "never", "first_step"
+        ] = "provider_default",
+        cooldown_sec: int = 30,
+        llm_max_retries: int = 3,
+        llm_max_timeout_retries: int = 2,
+        llm_invalid_request_retries: int = 1,
+        event_queue_max: int = 100,
+        event_coalesce_window_sec: float = 2.0,
+        event_coalesce_names: Optional[List[str]] = None,
+        event_payload_sample_limit: int = 3,
+        tot_config: Optional[TreeOfThoughtsConfig] = None,
+        tot_generator: Optional[ToTGenerator] = None,
+        goal_manager: Optional["GoalManager"] = None,
+    ) -> None:
+        """
+        Initializes the ReAct loop.
+
+        Args:
+            executor: LLM executor instance.
+            prompt_builder: Static system prompt compiler.
+            context_builder: Context builder (manages L0 States and episodic memory).
+            agent_state: Agent State L0 instance.
+            sql_ticks: SQLite ticks controller.
+            vector_manager: Vector DB manager.
+            tools: List of available JSON schema tools.
+            event_bus: Global event bus.
+            cooldown_sec: Interval in seconds to wait when hitting Rate Limits (429).
+            tot_config: Optional Tree of Thoughts configuration.
+            tot_generator: Optional Tree of Thoughts generator.
+        """
+
+        self.executor = executor
+
+        self.prompt_builder = prompt_builder
+        self.context_builder = context_builder
+
+        self.agent_state = agent_state
+
+        self.sql_ticks = sql_ticks
+        self.vector_manager = vector_manager
+
+        self.tools = tools
+        self.tool_transport = normalize_tool_transport(tool_transport)
+        self.thinking_policy = thinking_policy
+        self.cooldown_sec = cooldown_sec
+        self.llm_max_retries = max(1, llm_max_retries)
+        self.llm_max_timeout_retries = max(1, llm_max_timeout_retries)
+        self.llm_invalid_request_retries = max(
+            0, min(int(llm_invalid_request_retries), 3)
+        )
+
+        self.event_bus = event_bus
+
+        self.tot_config = tot_config
+        self.tot_generator = tot_generator
+        self.goal_manager = goal_manager
+        # Duplicate-success guard state: the last executed action batch and
+        # whether every outcome succeeded. A provider that re-sends the same
+        # successful batch (observed terminal-delivery loops) must not
+        # exhaust the ReAct budget by repeating delivered work.
+        self._last_action_batch: Optional[List[Dict[str, Any]]] = None
+        self._last_action_batch_success: bool = False
+
+
+        self._realtime_events = BoundedEventBuffer(
+            capacity=event_queue_max,
+            coalesce_window_sec=event_coalesce_window_sec,
+            coalesce_names=event_coalesce_names,
+            payload_sample_limit=event_payload_sample_limit,
+        )
+        self._steer_event_buffer = BoundedEventBuffer(
+            capacity=event_queue_max,
+            coalesce_window_sec=event_coalesce_window_sec,
+            coalesce_names=event_coalesce_names,
+            payload_sample_limit=event_payload_sample_limit,
+        )
+        self.current_events: List[Dict[str, Any]] = self._realtime_events.items
+        self._steer_requested: bool = False
+        self.active_companion_turn_id: str = ""
+        self.last_cycle_outcome: Dict[str, Any] = {
+            "status": "never_run",
+            "event_name": "",
+            "had_actions": False,
+        }
+
+    def _thinking_enabled_for_step(self) -> Optional[bool]:
+        """Resolve the optional provider thinking flag for this ReAct step."""
+        if self.thinking_policy == "provider_default":
+            return None
+        if self.thinking_policy == "always":
+            return True
+        if self.thinking_policy == "never":
+            return False
+        return self.agent_state.current_step == 1
+
+    @staticmethod
+    def _prepare_request_profile(
+        event_name: str, payload: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], bool]:
+        """Recognize an explicit compact live-command request.
+
+        `/quick` and `/fast` are opt-in because silently dropping memory from a
+        normal user request would be unsafe. SOUL/system rules remain in the
+        static prompt; only volatile dynamic providers are compacted.
+        """
+
+        prepared = dict(payload)
+        message = prepared.get("message")
+        if not isinstance(message, str):
+            return prepared, False
+        match = re.match(r"^\s*/(?:quick|fast)(?:\s+|$)", message, re.IGNORECASE)
+        if match is None:
+            return prepared, False
+        command = message[match.end() :].strip()
+        prepared["message"] = command or "Report the current live runtime status."
+        prepared["_jawl_context_profile"] = "fast"
+        return prepared, True
+
+    def _session_id_for_request(
+        self,
+        event_name: str,
+        payload: Dict[str, Any],
+        *,
+        fast_profile: bool,
+    ) -> str:
+        """Return an optional provider-session lane used only as a cache."""
+
+        provider = getattr(self.executor, "provider", None)
+        capabilities = getattr(provider, "capabilities", None)
+        server_side = getattr(
+            capabilities, "server_side_conversation", True
+        )
+        if server_side is False:
+            return ""
+
+        goal_lane = self.goal_manager.lane_id if self.goal_manager is not None else ""
+        if not fast_profile:
+            return goal_lane
+        identity = str(
+            payload.get("chat_id")
+            or payload.get("sender_id")
+            or payload.get("user_id")
+            or "local"
+        )
+        digest = hashlib.sha256(
+            f"{event_name}\0{identity}".encode("utf-8")
+        ).hexdigest()[:12]
+        return f"{goal_lane or 'quick'}-fast-{digest}"
+
+    async def run(
+        self, event_name: str, payload: Dict[str, Any], missed_events: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Launches the ReAct loop call to the LLM (Orchestrator).
+
+        Args:
+            event_name: Primary trigger event name.
+            payload: Primary trigger event payload parameters dict.
+            missed_events: List of missed background events.
+        """
+
+        payload, fast_profile = self._prepare_request_profile(event_name, payload)
+        provider_session_id = self._session_id_for_request(
+            event_name,
+            payload,
+            fast_profile=fast_profile,
+        )
+        if fast_profile:
+            agent_logger.info(
+                "[Context] Explicit fast command profile enabled; "
+                + (
+                    "using an isolated warm provider lane."
+                    if provider_session_id
+                    else "provider has no server-side conversation state."
+                )
+            )
+
+        self._realtime_events.clear()
+        self._realtime_events.extend(missed_events)
+        self.current_events = self._realtime_events.items
+        self.last_cycle_outcome = {
+            "status": "running",
+            "event_name": event_name,
+            "had_actions": False,
+        }
+        trace_token, trace = begin_trace(
+            "react_cycle", event_name=event_name, model=self.agent_state.llm_model
+        )
+        self.agent_state.current_trace_id = trace["trace_id"]
+        cycle_goal_id = ""
+        self.active_companion_turn_id = str(
+            payload.get("_companion_turn_id", "") or ""
+        ).strip()[:128]
+        companion_turn_token = set_companion_turn_id(
+            payload.get("_companion_turn_id", "")
+        )
+
+        try:
+            self.agent_state.reset_step()
+            if self.goal_manager is not None:
+                goal = await self.goal_manager.begin_cycle(event_name)
+                if goal is not None:
+                    cycle_goal_id = goal.goal_id
+
+            log = f"[ReAct] Reasoning cycle initialized. Reason: {event_name} (LLM Model: {self.agent_state.llm_model})."
+            agent_logger.info(log)
+
+            prompt = self.prompt_builder.build()
+            cycle_concluded = False
+            self._last_action_batch = None
+            tool_protocol_repairs = 0
+            retry_policy = getattr(self.executor, "retry_policy", None)
+            configured_repair_limit = getattr(
+                retry_policy, "tool_protocol_retries", 1
+            )
+            tool_protocol_repair_limit = (
+                configured_repair_limit
+                if isinstance(configured_repair_limit, int)
+                else 1
+            )
+
+            # ==================================================================
+            # MAIN LOOP
+            # ==================================================================
+
+            while self.agent_state.current_step <= self.agent_state.max_react_steps:
+                if self._steer_requested:
+                    await self._handle_cycle_steered()
+                    cycle_concluded = True
+                    break
+                self.agent_state.update_state(AgentStatus.THINKING)
+
+                # --------------------------------------------------------------
+                # Tree of Thoughts generation
+                # --------------------------------------------------------------
+
+                if (
+                    self.tot_config
+                    and self.tot_config.enabled
+                    and self.tot_config.mode in ("auto", "hybrid")
+                ):
+                    if (self.agent_state.current_step == 1) or (
+                        (self.agent_state.current_step - 1)
+                        % self.tot_config.auto_interval_steps
+                        == 0
+                    ):
+
+                        tree_md = await self.tot_generator.generate(
+                            event_name,
+                            payload,
+                            missed_events,
+                            task_description="Automated thoughts tree generation to evaluate current vector.",
+                        )
+                        if tree_md:
+                            self.agent_state.current_thoughts_tree = tree_md
+
+                if self._steer_requested:
+                    await self._handle_cycle_steered()
+                    cycle_concluded = True
+                    break
+
+                # --------------------------------------------------------------
+                # Context and Prompt compilation
+                # --------------------------------------------------------------
+
+                messages = await self._prepare_messages(prompt, event_name, payload)
+
+                if self._steer_requested:
+                    await self._handle_cycle_steered()
+                    cycle_concluded = True
+                    break
+
+                # --------------------------------------------------------------
+                # LLM execution call
+                # --------------------------------------------------------------
+
+                raw_answer = await self.executor.execute(
+                    model_name=self.agent_state.llm_model,
+                    messages=messages,
+                    temperature=self.agent_state.temperature,
+                    logger=agent_logger,
+                    log_prefix="[LLM]",
+                    tools=self.tools() if callable(self.tools) else self.tools,
+                    tool_transport=self.tool_transport,
+                    enable_thinking=self._thinking_enabled_for_step(),
+                    max_retries=self.llm_max_retries,
+                    max_timeout_retries=self.llm_max_timeout_retries,
+                    max_invalid_request_retries=(
+                        self.llm_invalid_request_retries
+                    ),
+                    session_id=(
+                        provider_session_id
+                    ),
+                )
+                budget_blocked = False
+                if self.goal_manager is not None:
+                    usage_goal = await self.goal_manager.record_usage(
+                        self._llm_metrics_snapshot()
+                    )
+                    budget_blocked = bool(
+                        usage_goal is not None and usage_goal.status == "blocked"
+                    )
+                if self._steer_requested:
+                    await self._handle_cycle_steered()
+                    cycle_concluded = True
+                    break
+                if raw_answer is None:
+                    self.agent_state.update_state(AgentStatus.ERROR)
+                    failure_metrics = self._llm_metrics_snapshot()
+                    failure_status = str(
+                        failure_metrics.get("status") or "failed"
+                    )
+                    self.last_cycle_outcome["status"] = failure_status
+                    companion_turn_id = current_companion_turn_id()
+                    if companion_turn_id:
+                        # A provider outage can happen after native actions
+                        # have already committed.  The correlated Companion
+                        # stream must still receive one terminal error, or the
+                        # browser waits until its outer timeout and the task
+                        # cannot be reconciled by the operator.
+                        await self.event_bus.publish(
+                            Events.REACT_TICK_SAVED,
+                            companion_turn_id=companion_turn_id,
+                            companion_gateway_type="turn.error",
+                            companion_gateway_reason=(
+                                "JAWL provider request failed after bounded retries; "
+                                "no terminal answer was produced."
+                            ),
+                        )
+                        # EventBus normally schedules handlers in the
+                        # background. This branch is terminal: release the
+                        # correlation context only after the Companion error
+                        # has reached its gateway writer.
+                        await self.event_bus.flush(timeout=3.0)
+                    if self.goal_manager is not None:
+                        if failure_status == "invalid_request":
+                            error_kind = str(
+                                failure_metrics.get("error_kind") or "unknown"
+                            )
+                            if bool(failure_metrics.get("retryable")):
+                                await self.goal_manager.finish_cycle(
+                                    state="failed",
+                                    summary=(
+                                        "Provider rejected the request after "
+                                        "bounded retries "
+                                        f"({error_kind}); Goal remains active "
+                                        "for a fresh continuation."
+                                    ),
+                                    wake_after_seconds=60,
+                                )
+                            else:
+                                await self.goal_manager.finish_cycle(
+                                    state="blocked",
+                                    summary=(
+                                        "Provider rejected a deterministic "
+                                        "request configuration "
+                                        f"({error_kind}); operator correction "
+                                        "is required."
+                                    ),
+                                )
+                        else:
+                            await self.goal_manager.finish_cycle(
+                                state="failed",
+                                summary="LLM request failed before a valid response.",
+                                wake_after_seconds=30,
+                            )
+                    break
+
+                # --------------------------------------------------------------
+                # Response parsing
+                # --------------------------------------------------------------
+
+                parsed_response, error_msg = self._parse_response(raw_answer)
+                if error_msg:
+                    await self._handle_protocol_error(raw_answer, error_msg)
+                    tool_protocol_repairs += 1
+                    repair_metrics = getattr(
+                        self.executor, "last_call_metrics", None
+                    )
+                    if isinstance(repair_metrics, dict):
+                        repair_metrics["tool_protocol_repairs"] = (
+                            tool_protocol_repairs
+                        )
+                        repair_metrics["tool_protocol_repair_limit"] = (
+                            tool_protocol_repair_limit
+                        )
+                    if budget_blocked:
+                        cycle_concluded = True
+                        break
+                    if tool_protocol_repairs > tool_protocol_repair_limit:
+                        self.last_cycle_outcome["status"] = "tool_protocol_error"
+                        if self.goal_manager is not None:
+                            await self.goal_manager.finish_cycle(
+                                state="failed",
+                                summary=(
+                                    "Provider output exceeded the bounded tool "
+                                    "protocol repair budget; Goal remains active "
+                                    "for a fresh continuation."
+                                ),
+                                wake_after_seconds=30,
+                            )
+                        cycle_concluded = True
+                        break
+                    self.agent_state.next_step()
+                    continue
+
+                thoughts = parsed_response.thoughts.strip()
+                actions = parsed_response.actions
+
+                if (
+                    self.goal_manager is not None
+                    and parsed_response.ledger is not None
+                ):
+                    # Persist the operational checkpoint before dispatch. If
+                    # execution or the provider chat disappears afterwards,
+                    # the next ReAct cycle can reconcile this declared next
+                    # action with the durable action journal/tool evidence.
+                    await self.goal_manager.record_ledger_patch(
+                        parsed_response.ledger
+                    )
+
+                if thoughts:
+                    log = f"[Thoughts]:\n{thoughts}\n"
+                    agent_logger.info(log)
+
+                # --------------------------------------------------------------
+                # Completion checks
+                # --------------------------------------------------------------
+
+                if not actions:
+                    completion_text = thoughts or parsed_response.goal_summary
+                    completion_status = "completed"
+                    if self.goal_manager is not None:
+                        goal_state = parsed_response.goal_state
+                        if goal_state == "done":
+                            active_goal = self.goal_manager.active_goal
+                            # Goal Protocol v2's state=done is an assertion,
+                            # not evidence. Require durable ledger proof so
+                            # stale provider context cannot complete a newly
+                            # created Goal using the previous Goal's summary.
+                            if active_goal is not None and not _ledger_completion_eligible(active_goal):
+                                await self.goal_manager.finish_cycle(
+                                    state="blocked",
+                                    summary=(
+                                        "Provider emitted Goal Protocol v2 state=done "
+                                        "without a terminal durable ledger: pending work, "
+                                        "blockers, or successful native-action evidence "
+                                        "is missing. Refusing false completion."
+                                    ),
+                                )
+                                completion_status = "goal_blocked"
+                                completion_text = (
+                                    "Goal blocked: terminal ledger evidence is missing; "
+                                    "the provider's done assertion was rejected."
+                                )
+                            else:
+                                transitioned_goal = await self.goal_manager.finish_cycle(
+                                    state="completed",
+                                    summary=parsed_response.goal_summary,
+                                )
+                                if (
+                                    transitioned_goal is not None
+                                    and transitioned_goal.status == "active"
+                                ):
+                                    completion_status = "goal_continues"
+                                    completion_text = transitioned_goal.last_summary
+                        elif goal_state == "blocked":
+                            await self.goal_manager.finish_cycle(
+                                state="blocked",
+                                summary=parsed_response.goal_summary,
+                            )
+                        elif goal_state == "continue":
+                            await self.goal_manager.finish_cycle(
+                                state="continue",
+                                summary=parsed_response.goal_summary
+                                or "Goal requested another bounded continuation.",
+                                wake_after_seconds=(
+                                    parsed_response.wake_after_seconds or 1
+                                ),
+                            )
+                        elif goal_state == "wait":
+                            await self.goal_manager.finish_cycle(
+                                state="waiting",
+                                summary=parsed_response.goal_summary,
+                                wake_after_seconds=parsed_response.wake_after_seconds,
+                            )
+                        elif self.goal_manager.active_goal is not None:
+                            active_goal = self.goal_manager.active_goal
+                            ledger_completion = _ledger_completion_eligible(active_goal)
+                            if ledger_completion:
+                                ledger_summary = (
+                                    "Goal completed from the durable ledger: terminal "
+                                    "phase, no pending action or blocker, and every "
+                                    "recorded action outcome is success."
+                                )
+                                transitioned_goal = (
+                                    await self.goal_manager.finish_cycle(
+                                        state="completed",
+                                        summary=ledger_summary,
+                                    )
+                                )
+                                if (
+                                    transitioned_goal is not None
+                                    and transitioned_goal.status == "active"
+                                ):
+                                    completion_status = "goal_continues"
+                                    completion_text = transitioned_goal.last_summary
+                                else:
+                                    completion_text = ledger_summary
+                            else:
+                                empty_goal_policy = _empty_goal_action_policy(
+                                    active_goal
+                                )
+                            if not ledger_completion and empty_goal_policy == "continue":
+                                await self.goal_manager.finish_cycle(
+                                    state="continue",
+                                    summary=(
+                                        "Active Goal has a durable next_action but the "
+                                        "provider emitted no native action. Retry the "
+                                        "next_action now; emit exactly one allowed "
+                                        "native action or explicit Goal Protocol v2 "
+                                        "state=blocked with a concrete reason."
+                                    ),
+                                    wake_after_seconds=1,
+                                )
+                                completion_status = "goal_continues"
+                                completion_text = (
+                                    "Goal action was not emitted; requesting a bounded "
+                                    "provider repair."
+                                )
+                            elif not ledger_completion and empty_goal_policy == "blocked":
+                                await self.goal_manager.finish_cycle(
+                                    state="blocked",
+                                    summary=(
+                                        "Provider emitted no native action for the "
+                                        "durable Goal next_action after the bounded "
+                                        "repair budget. Provider compatibility or "
+                                        "prompt/tool transport must be fixed."
+                                    ),
+                                )
+                                completion_status = "goal_blocked"
+                                completion_text = (
+                                    "Goal blocked: provider did not emit the required "
+                                    "native action."
+                                )
+                            elif not ledger_completion:
+                                await self.goal_manager.finish_cycle(
+                                    state="waiting",
+                                    summary=(
+                                        completion_text
+                                        or "Legacy empty-actions response; waiting for "
+                                        "new evidence or an explicit wakeup."
+                                    ),
+                                )
+                    await self._handle_completion(
+                        completion_text, status=completion_status
+                    )
+                    cycle_concluded = True
+                    break
+
+                # --------------------------------------------------------------
+                # Duplicate-success guard: an identical action batch that
+                # already executed with full success adds nothing on repeat.
+                # The previous execution already delivered its effect, so
+                # conclude without re-execution; the Goal receives a bounded
+                # continuation below rather than a synthetic completion.
+                # --------------------------------------------------------------
+
+                if (
+                    self._last_action_batch is not None
+                    and [action.model_dump() for action in actions]
+                    == self._last_action_batch
+                    and self._last_action_batch_success
+                ):
+                    agent_logger.info(
+                        "[ReAct] Duplicate successful action batch. "
+                        "Concluding cycle without re-execution."
+                    )
+                    # A duplicate batch is a provider-side planning error, not
+                    # a completed Goal.  Leaving the durable Goal untouched
+                    # here makes the heartbeat sleep until the next long tick
+                    # and can strand a valid native result indefinitely.  Keep
+                    # the Goal active, persist the bounded reason, and request
+                    # one immediate continuation so the model can declare
+                    # done or choose a genuinely new evidence-backed action.
+                    if self.goal_manager is not None:
+                        await self.goal_manager.finish_cycle(
+                            state="continue",
+                            summary=(
+                                "A previously successful native action batch was "
+                                "proposed again; it was not re-executed. Review "
+                                "the recorded result and emit Goal Protocol v2 "
+                                "state=done or a new evidence-backed action."
+                            ),
+                            wake_after_seconds=1,
+                        )
+                    self.last_cycle_outcome["status"] = "duplicate_success_concluded"
+                    cycle_concluded = True
+                    break
+
+                # --------------------------------------------------------------
+                # Actions execution
+                # --------------------------------------------------------------
+
+                if self.goal_manager is not None:
+                    repetition_warning = self.goal_manager.repeated_action_warning(
+                        [action.model_dump() for action in actions]
+                    )
+                    if repetition_warning:
+                        await self._handle_repetition_guard(
+                            thoughts,
+                            actions,
+                            repetition_warning,
+                        )
+                        self.agent_state.next_step()
+                        continue
+                    # Persist action identity before any native adapter can
+                    # mutate the machine. If the process dies after dispatch,
+                    # GoalManager will require postcondition reconciliation on
+                    # restart instead of treating the action as absent.
+                    await self.goal_manager.record_action_intent(
+                        [action.model_dump() for action in actions]
+                    )
+                await self._execute_actions(thoughts, actions)
+
+                if getattr(
+                    self.agent_state.last_actions_result, "terminate_loop", False
+                ):
+                    self.last_cycle_outcome["status"] = "yielded"
+                    self.last_cycle_outcome["had_actions"] = True
+                    agent_logger.info(
+                        "[ReAct] Skill requested early cycle termination."
+                    )
+                    cycle_concluded = True
+                    break
+
+                if cycle_goal_id and self.goal_manager is not None:
+                    cycle_goal = self.goal_manager.get(cycle_goal_id)
+                    if cycle_goal is not None and cycle_goal.status != "active":
+                        await self._handle_completion(
+                            cycle_goal.completion_summary
+                            or cycle_goal.blocked_reason
+                            or cycle_goal.last_summary
+                        )
+                        cycle_concluded = True
+                        break
+                if budget_blocked:
+                    await self._handle_completion(
+                        "Goal token budget reached after the last valid action batch."
+                    )
+                    cycle_concluded = True
+                    break
+
+                if self._steer_requested:
+                    await self._handle_cycle_steered()
+                    cycle_concluded = True
+                    break
+
+                self.agent_state.next_step()
+
+            if (
+                not cycle_concluded
+                and self.agent_state.current_step > self.agent_state.max_react_steps
+            ):
+                await self._handle_step_limit()
+
+        except asyncio.CancelledError:
+            self.last_cycle_outcome["status"] = "cancelled"
+            await asyncio.shield(self._handle_cycle_cancelled())
+            raise
+        finally:
+            reset_companion_turn_id(companion_turn_token)
+            self.active_companion_turn_id = ""
+            self.agent_state.update_state(AgentStatus.IDLE)
+            self.agent_state.current_trace_id = ""
+            self._steer_requested = False
+            self._steer_event_buffer.clear()
+            reset_trace(trace_token)
+
+    # -------------------------------------------------------------------------
+    # Private Helpers
+    # -------------------------------------------------------------------------
+
+    async def _prepare_messages(
+        self, prompt: str, event_name: str, payload: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Assembles context, formats messages for the LLM, and injects multimodality.
+
+        Args:
+            prompt: Static system prompt.
+            event_name: Primary wakeup event.
+            payload: Primary wakeup payload.
+
+        Returns:
+            List[Dict[str, Any]]: Messages list in OpenAI format.
+        """
+
+        context = await self.context_builder.build(
+            event_name, payload, self._realtime_events.view()
+        )
+
+        if self.agent_state.current_step >= 5:
+            self._realtime_events.clear()
+
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": context},
+        ]
+
+        messages = copy.deepcopy(messages)
+
+        pending_media = self._collect_pending_media(
+            payload, self._realtime_events.view()
+        )
+        messages = await self._inject_images_to_payload(
+            messages, pending_media=pending_media
+        )
+
+        self.agent_state.last_input_tokens = self.executor.tracker.count_messages_tokens(
+            messages
+        )
+
+        await asyncio.to_thread(self._dump_context_to_file, messages)
+
+        log = (
+            f"[ReAct] Step {self.agent_state.current_step}/{self.agent_state.max_react_steps}."
+        )
+        main_logger.info(log)
+        agent_logger.info(log)
+
+        return messages
+
+    async def _execute_actions(self, thoughts: str, actions: List[ActionCall]) -> None:
+        """
+        Executes requested tools, updates state, and commits results to the DB.
+
+        Args:
+            thoughts: Internal monologue (CoT).
+            actions: List of actions to execute.
+        """
+
+        self.agent_state.update_state(AgentStatus.ACTING)
+        self.last_cycle_outcome["had_actions"] = True
+        self.last_cycle_outcome["status"] = "acted"
+        execution_result = await execute_skill(actions=actions)
+        # ``ExecutionResult`` is a str subclass carrying the cycle-control
+        # signal.  Keep that metadata while sanitizing the textual report;
+        # converting it through a plain ``str`` silently loses terminate_loop.
+        normalized_report = _normalize_tool_output(str(execution_result))
+        results_str = ExecutionResult(
+            normalized_report,
+            terminate_loop=bool(getattr(execution_result, "terminate_loop", False)),
+            outcomes=list(getattr(execution_result, "outcomes", [])),
+        )
+        outcomes = getattr(execution_result, "outcomes", [])
+        self._last_action_batch = [action.model_dump() for action in actions]
+        self._last_action_batch_success = bool(outcomes) and all(
+            getattr(outcome, "is_success", False) for outcome in outcomes
+        )
+        outcome_by_id = {
+            str(getattr(outcome, "action_id", "")): outcome
+            for outcome in outcomes
+            if getattr(outcome, "action_id", None)
+        }
+
+        self.agent_state.last_thoughts = thoughts
+        self.agent_state.last_actions_result = results_str
+        self.agent_state.last_action_tools = [action.tool_name for action in actions]
+        if self.goal_manager is not None:
+            await self.goal_manager.record_action_result(
+                results_str,
+                actions=[action.model_dump() for action in actions],
+            )
+
+        args_to_rag = []
+        for act in actions:
+            for val in act.parameters.values():
+                if isinstance(val, str) and len(val) > 3:
+                    args_to_rag.append(val)
+        self.agent_state.last_action_args = args_to_rag
+
+        await self.sql_ticks.save_tick(
+            thoughts=thoughts,
+            actions=[a.model_dump() for a in actions],
+            results={
+                "execution_report": results_str,
+                "step": self.agent_state.current_step,
+                "max_steps": self.agent_state.max_react_steps,
+                "llm_metrics": self._llm_metrics_snapshot(),
+                "trace": current_trace(),
+            },
+        )
+        await self.event_bus.publish(
+            Events.REACT_TICK_SAVED,
+            companion_turn_id=current_companion_turn_id(),
+            companion_actions=[
+                {
+                    "action_id": action.action_id or f"action-{index + 1}",
+                    "tool": action.tool_name,
+                    "status": (
+                        "completed"
+                        if getattr(
+                            outcome_by_id.get(action.action_id or f"action_{index + 1}"),
+                            "is_success",
+                            False,
+                        )
+                        else "failed"
+                    ),
+                }
+                for index, action in enumerate(actions)
+            ],
+            companion_action_status=(
+                "completed"
+                if outcomes and all(getattr(outcome, "is_success", False) for outcome in outcomes)
+                else "failed"
+            ),
+            companion_action_summary=(
+                "JAWL action batch completed."
+                if outcomes and all(getattr(outcome, "is_success", False) for outcome in outcomes)
+                else "JAWL action batch contained failed actions."
+            ),
+        )
+
+    async def _handle_repetition_guard(
+        self,
+        thoughts: str,
+        actions: List[ActionCall],
+        warning: str,
+    ) -> None:
+        """Persist a rejected repeated discovery batch and force replanning."""
+
+        self.agent_state.update_state(AgentStatus.ACTING)
+        self.last_cycle_outcome["status"] = "repetition_guard"
+        reports = []
+        for index, action in enumerate(actions):
+            action_id = action.action_id or f"action_{index + 1}"
+            reports.append(
+                f"* GoalRepetitionGuard: {warning}\n"
+                f"  [action_id={action_id}; status=failed; duration_ms=0]"
+            )
+        results_str = "\n".join(reports)
+        self.agent_state.last_thoughts = thoughts
+        self.agent_state.last_action_error = warning
+        self.agent_state.last_actions_result = results_str
+        self.agent_state.last_action_tools = [action.tool_name for action in actions]
+        if self.goal_manager is not None:
+            await self.goal_manager.record_action_result(
+                results_str,
+                actions=[action.model_dump() for action in actions],
+            )
+        agent_logger.warning(f"[Goal] {warning}")
+        await self.sql_ticks.save_tick(
+            thoughts=thoughts,
+            actions=[action.model_dump() for action in actions],
+            results={
+                "status": "repetition_guard",
+                "execution_report": results_str,
+                "step": self.agent_state.current_step,
+                "max_steps": self.agent_state.max_react_steps,
+                "llm_metrics": self._llm_metrics_snapshot(),
+                "trace": current_trace(),
+            },
+        )
+        await self.event_bus.publish(
+            Events.REACT_TICK_SAVED,
+            companion_turn_id=current_companion_turn_id(),
+            companion_actions=[
+                {
+                    "action_id": action.action_id or f"action-{index + 1}",
+                    "tool": action.tool_name,
+                }
+                for index, action in enumerate(actions)
+            ],
+            companion_action_status="failed",
+            companion_action_summary=warning,
+        )
+
+    async def _handle_completion(
+        self, thoughts: str, status: str = "completed"
+    ) -> None:
+        """
+        Logic for graceful completion (absence of actions).
+
+        Args:
+            thoughts: Final thoughts of the agent prior to sleep.
+        """
+
+        self.last_cycle_outcome["status"] = status
+        log = (
+            "[ReAct] Empty actions list received. Concluding cycle."
+            if status == "completed"
+            else "[ReAct] Terminal response rejected by Goal gate; scheduling continuation."
+        )
+        agent_logger.info(log)
+
+        await self.sql_ticks.save_tick(
+            thoughts=thoughts,
+            actions=[],
+            results={
+                "status": status,
+                "step": self.agent_state.current_step,
+                "max_steps": self.agent_state.max_react_steps,
+                "llm_metrics": self._llm_metrics_snapshot(),
+                "trace": current_trace(),
+            },
+        )
+        companion_turn_id = current_companion_turn_id()
+        if companion_turn_id and status == "completed":
+            # A direct textual completion is the canonical no-tool path for
+            # lightweight/local providers. Route it through the same JAWL
+            # terminal publisher as send_message_to_terminal. An empty
+            # completion is still published as a correlated terminal error;
+            # clients must never wait until timeout for an impossible final.
+            await self.event_bus.publish(
+                Events.REACT_TICK_SAVED,
+                companion_turn_id=companion_turn_id,
+                companion_gateway_type="assistant.final",
+                companion_text=thoughts.strip()[:16000],
+            )
+            await self.event_bus.flush(timeout=3.0)
+        else:
+            await self.event_bus.publish(Events.REACT_TICK_SAVED)
+
+    async def _handle_protocol_error(self, raw_answer: str, error_msg: str) -> None:
+        """Persist invalid provider output so the next step can self-correct."""
+
+        safe_error = truncate_text(
+            redact_sensitive_text(error_msg), max_chars=2000
+        )
+        safe_excerpt = truncate_text(
+            redact_sensitive_text(raw_answer), max_chars=4000
+        )
+        safe_tail = redact_sensitive_text(raw_answer[-2000:])
+        self.agent_state.last_thoughts = ""
+        self.agent_state.last_action_error = safe_error
+        self.agent_state.last_actions_result = (
+            "LLM tool protocol error. Correct the response format on the next step: "
+            + safe_error
+        )
+        agent_logger.warning(f"[ReAct] Tool protocol error: {safe_error}")
+        await self.sql_ticks.save_tick(
+            thoughts="[Protocol error: provider response rejected]",
+            actions=[],
+            results={
+                "status": "protocol_error",
+                "error": safe_error,
+                "response_excerpt": safe_excerpt,
+                "response_tail": safe_tail,
+                "step": self.agent_state.current_step,
+                "max_steps": self.agent_state.max_react_steps,
+                "llm_metrics": self._llm_metrics_snapshot(),
+                "trace": current_trace(),
+            },
+        )
+        await self.event_bus.publish(Events.REACT_TICK_SAVED)
+
+    async def _handle_step_limit(self) -> None:
+        """Write a terminal record when a cycle exhausts its reasoning budget."""
+
+        message = (
+            f"ReAct cycle exhausted its {self.agent_state.max_react_steps}-step "
+            "budget before producing a terminal response. Resume from durable "
+            "ticks and the action journal on the next wakeup."
+        )
+        self.agent_state.last_action_error = message
+        self.agent_state.last_actions_result = message
+        if self.goal_manager is not None:
+            await self.goal_manager.finish_cycle(
+                state="exhausted",
+                summary=message,
+                wake_after_seconds=5,
+            )
+        agent_logger.warning(f"[ReAct] {message}")
+        await self.sql_ticks.save_tick(
+            thoughts="[Cycle stopped: step budget exhausted]",
+            actions=[],
+            results={
+                "status": "max_steps_exhausted",
+                "error": message,
+                "step": self.agent_state.max_react_steps,
+                "max_steps": self.agent_state.max_react_steps,
+                "llm_metrics": self._llm_metrics_snapshot(),
+                "trace": current_trace(),
+            },
+        )
+        await self.event_bus.publish(Events.REACT_TICK_SAVED)
+
+    async def _handle_cycle_cancelled(self) -> None:
+        """Persist a terminal record before Heartbeat replaces this cycle."""
+
+        message = "ReAct cycle cancelled by a higher-priority event."
+        self.agent_state.last_action_error = message
+        self.agent_state.last_actions_result = message
+        if self.goal_manager is not None:
+            await self.goal_manager.finish_cycle(
+                state="continue",
+                summary=message,
+                wake_after_seconds=1,
+            )
+        await self.sql_ticks.save_tick(
+            thoughts="[Cycle interrupted by higher-priority event]",
+            actions=[],
+            results={
+                "status": "cycle_cancelled",
+                "error": message,
+                "step": self.agent_state.current_step,
+                "max_steps": self.agent_state.max_react_steps,
+                "llm_metrics": self._llm_metrics_snapshot(),
+                "trace": current_trace(),
+            },
+        )
+        await self.event_bus.publish(
+            Events.REACT_TICK_SAVED,
+            companion_turn_id=current_companion_turn_id(),
+            companion_gateway_type="turn.cancelled",
+            companion_gateway_reason=message,
+        )
+
+    async def _handle_cycle_steered(self) -> None:
+        """Persist a safe-boundary yield before Heartbeat starts queued work."""
+
+        event_summaries = [
+            {
+                "name": event.get("name", "UNKNOWN"),
+                "level": event.get("level", "UNKNOWN"),
+                "time": event.get("time"),
+                "count": event.get(
+                    "coalesced_count",
+                    event.get("payload", {}).get("dropped_total", 1),
+                ),
+            }
+            for event in self._steer_event_buffer.view()[-20:]
+        ]
+        message = (
+            "ReAct cycle yielded at a safe boundary for queued higher-priority "
+            "event(s). The in-flight LLM request was not cancelled."
+        )
+        self.agent_state.last_action_error = ""
+        self.agent_state.last_actions_result = message
+        if self.goal_manager is not None:
+            await self.goal_manager.finish_cycle(
+                state="continue",
+                summary=message,
+                wake_after_seconds=1,
+            )
+        await self.sql_ticks.save_tick(
+            thoughts="[Cycle steered to queued higher-priority event]",
+            actions=[],
+            results={
+                "status": "cycle_steered",
+                "message": message,
+                "queued_events": event_summaries,
+                "step": self.agent_state.current_step,
+                "max_steps": self.agent_state.max_react_steps,
+                "llm_metrics": self._llm_metrics_snapshot(),
+                "trace": current_trace(),
+            },
+        )
+        await self.event_bus.publish(Events.REACT_TICK_SAVED)
+
+    def _llm_metrics_snapshot(self) -> Dict[str, Any]:
+        metrics = getattr(self.executor, "last_call_metrics", {})
+        return copy.deepcopy(metrics) if isinstance(metrics, dict) else {}
+
+    def _parse_response(
+        self, raw_answer: str
+    ) -> Tuple[Optional[AgentResponse], Optional[str]]:
+        """
+        Parses the agent's JSON response.
+        """
+        parsed, error = parse_llm_json(raw_answer)
+        if parsed is None or error:
+            return parsed, error
+        for action in parsed.actions:
+            resolved = resolve_native_tool_name(action.tool_name)
+            if action.tool_name.startswith("jawl_") and resolved == action.tool_name:
+                return None, f"System Error: Unknown native tool '{action.tool_name}'."
+            action.tool_name = resolved
+        return parsed, None
+
+    def add_realtime_event(self, event_data: Dict[str, Any]) -> None:
+        """
+        Adds an incoming event to the agent's context (called externally when the agent is awake).
+
+        Args:
+            event_data: Event payload dict.
+        """
+
+        self._realtime_events.append(event_data)
+
+    def request_steer(self, event_data: Dict[str, Any]) -> None:
+        """Request a non-cancelling yield at the next safe ReAct boundary."""
+
+        self._steer_event_buffer.append(event_data)
+        self._steer_requested = True
+
+    def get_event_buffer_snapshot(self) -> Dict[str, Any]:
+        """Return payload-free active-cycle event buffer counters."""
+
+        return {
+            "realtime": self._realtime_events.snapshot(),
+            "steer": self._steer_event_buffer.snapshot(),
+        }
+
+    def _dump_context_to_file(self, messages: List[Dict[str, Any]]) -> None:
+        """
+        Creates a context dump (system prompt) to a Markdown file for debugging.
+
+        Args:
+            messages: Messages array.
+        """
+
+        dump_prompt_to_file(
+            "logs/prompts/main_prompt.md", messages, meta_header="# MAIN AGENT DUMP"
+        )
+
+    def _encode_image(self, image_path: str) -> str:
+        """Encodes an image from disk to Base64."""
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode("utf-8")
+
+    @staticmethod
+    def _collect_pending_media(
+        primary_payload: Optional[Dict[str, Any]],
+        realtime_events: List[Dict[str, Any]],
+    ) -> List[str]:
+        """Collect image paths from the wake event and buffered events in order."""
+
+        ordered: List[str] = []
+        seen = set()
+
+        def add_payload(candidate: Any) -> None:
+            if not isinstance(candidate, dict):
+                return
+            paths = candidate.get("media_paths", [])
+            if not isinstance(paths, list):
+                return
+            for image_path in paths:
+                if not isinstance(image_path, str) or not image_path or image_path in seen:
+                    continue
+                seen.add(image_path)
+                ordered.append(image_path)
+
+        add_payload(primary_payload)
+        for event in realtime_events:
+            if not isinstance(event, dict):
+                continue
+            add_payload(event.get("payload"))
+            for sample in event.get("payload_samples", []):
+                add_payload(sample)
+        return ordered
+
+    async def _inject_images_to_payload(
+        self, messages: List[Dict[str, Any]], pending_media: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Injects Base64 images/videos into the user prompt when markers or
+        Telegram media are present. The historical method name is preserved
+        for compatibility with callers and tests.
+
+        Args:
+            messages: Messages list.
+
+        Returns:
+            List[Dict[str, Any]]: Messages list with Base64 payloads injected.
+        """
+
+        last_result = self.agent_state.last_actions_result or ""
+        image_paths = re.findall(
+            r"\[SYSTEM_MARKER_IMAGE_ATTACHED:\s*(.+?)\]", last_result
+        )
+        video_paths = re.findall(
+            r"\[SYSTEM_MARKER_VIDEO_ATTACHED:\s*(.+?)\]", last_result
+        )
+
+        # Also include pending Telegram media
+        if pending_media:
+            for media_path in pending_media:
+                suffix = Path(media_path).suffix.lower()
+                if suffix in {
+                    ".mp4",
+                    ".webm",
+                    ".mov",
+                    ".mkv",
+                    ".avi",
+                    ".mpeg",
+                    ".mpg",
+                }:
+                    video_paths.append(media_path)
+                else:
+                    image_paths.append(media_path)
+
+        if not image_paths and not video_paths:
+            return messages
+
+        user_msg = messages[1]
+
+        if isinstance(user_msg, dict) and user_msg.get("role") == "user":
+            original_text = user_msg["content"]
+            if isinstance(original_text, list):
+                new_content = copy.deepcopy(original_text)
+            else:
+                new_content = [{"type": "text", "text": str(original_text)}]
+
+            seen_paths = set()
+            inline_limit = max(
+                1,
+                int(
+                    os.getenv(
+                        "JAWL_MEDIA_INLINE_MAX_BYTES",
+                        str(50 * 1024 * 1024),
+                    )
+                ),
+            )
+            media_items = [
+                ("image", media_path) for media_path in image_paths
+            ] + [("video", media_path) for media_path in video_paths]
+            for media_type, media_path in media_items:
+                if media_path in seen_paths:
+                    continue
+                seen_paths.add(media_path)
+                try:
+                    path_obj = Path(media_path)
+                    if path_obj.exists():
+                        if path_obj.stat().st_size > inline_limit:
+                            main_logger.warning(
+                                f"[ReAct] Skipped oversized {media_type} "
+                                f"{path_obj.name} ({path_obj.stat().st_size} bytes; "
+                                f"limit={inline_limit})."
+                            )
+                            continue
+                        base64_data = await asyncio.to_thread(
+                            self._encode_image, str(path_obj)
+                        )
+                        mime = mimetypes.guess_type(path_obj.name)[0]
+                        if not mime or not mime.startswith(f"{media_type}/"):
+                            mime = (
+                                "video/mp4"
+                                if media_type == "video"
+                                else "image/png"
+                            )
+                        if media_type == "video":
+                            new_content.append(
+                                {
+                                    "type": "video_url",
+                                    "video_url": {
+                                        "url": f"data:{mime};base64,{base64_data}"
+                                    },
+                                }
+                            )
+                        else:
+                            new_content.append(
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{mime};base64,{base64_data}"
+                                    },
+                                }
+                            )
+
+                        log = (
+                            f"[ReAct] {media_type.title()} {path_obj.name} "
+                            "successfully injected."
+                        )
+                        agent_logger.info(log)
+
+                except Exception as e:
+                    log = f"[ReAct] Base64 injection error: {e}"
+                    main_logger.error(f"[ReAct] Base64 injection error: {e}")
+                    agent_logger.error(log)
+
+            user_msg["content"] = new_content
+
+        return messages

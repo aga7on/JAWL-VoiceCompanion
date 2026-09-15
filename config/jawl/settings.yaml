@@ -1,15 +1,19 @@
-# Owned baseline for the connected daily scenario. Provider credentials are external.
+﻿# Owned baseline for the connected daily scenario. Provider credentials are external.
 identity:
   agent_name: Компаньон
 llm:
-  main_model: jawl-gemma4-it
-  available_models: [jawl-gemma4-it]
+  main_model: deepseek-v4-flash
+  available_models: [deepseek-v4-flash, jawl-gemma4-it:latest]
   language: ru
   is_multimodal: false
   # Keep the canonical JAWL JSON action envelope for local providers whose
   # OpenAI native tool-call implementation is incomplete.
   tool_transport: json_envelope
   max_react_steps: 15
+  # Canonical JAWL policy: provider thinking is used on the first ReAct step
+  # only; the managed launcher may still disable provider-side thinking for
+  # a local model that cannot return content within its output budget.
+  thinking_policy: first_step
   # Prompt selection may be narrowed per request, while native policy remains
   # the sole authority for all registered tools and HostOS levels 0..3.
   native_tool_prefixes:
@@ -20,7 +24,7 @@ llm:
   native_tool_limit: 64
   provider:
     kind: openai_compatible
-    display_name: Ollama local Gemma 4 IT (temporary connected baseline)
+    display_name: Local OpenAI-compatible model (profile-selected)
     request_timeout_seconds: 120
   temperature: 1.0
 system:
@@ -32,21 +36,39 @@ system:
     budget:
       enabled: true
       skill_policy: adaptive
-      skills_max_chars: 16000
-      max_dynamic_chars: 60000
-      recent_ticks_max_chars: 24000
-      hypotheses_max_chars: 5000
-      provider_max_chars: 10000
+      # The pinned system prompt is already about 6k tokens. Keep dynamic
+      # state bounded for the smallest supported local 16k context, leaving
+      # room for a JSON/tool response instead of relying on provider retries.
+      skills_max_chars: 8000
+      max_dynamic_chars: 12000
+      recent_ticks_max_chars: 8000
+      hypotheses_max_chars: 2500
+      provider_max_chars: 5000
     high_ticks: 4
     medium_ticks: 7
     low_ticks: 10
   goal_mode:
     enabled: true
+    compact_context: true
+    compact_max_chars: 18000
     task_ledger_enabled: true
+    task_ledger_max_chars: 6000
   lifecycle_hooks:
     enabled: false
   swarm:
     enabled: true
+    # Temporary connected baseline; replace through profile configuration
+    # when a dedicated local/remote subagent model is selected.
+    subagent_model: jawl-gemma4-it:latest
+    max_concurrent_workers: 3
+    context_depth:
+      max_steps: 20
+      detailed_steps: 3
+      action_max_chars: 10000
+      result_max_chars: 20000
+      thoughts_short_max_chars: 2000
+      action_short_max_chars: 500
+      result_short_max_chars: 1000
   tree_of_thoughts:
     enabled: false
   subconscious:
@@ -68,7 +90,7 @@ system:
     # A user voice/chat turn must preempt an autonomous heartbeat. Deferring
     # here lets a slow provider monopolize the single JAWL ReAct lane and makes
     # live voice appear hung; the native arbiter preserves cancellation state.
-    active_cycle_policy: interrupt
+    active_cycle_policy: defer
     queue_max_events: 100
     coalesce_window_sec: 2.0
     coalesce_payload_samples: 3

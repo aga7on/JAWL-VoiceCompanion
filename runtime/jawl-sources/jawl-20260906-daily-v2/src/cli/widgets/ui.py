@@ -1,0 +1,212 @@
+"""
+Unified CLI UI Widgets and Utilities.
+
+Manages terminal screen clears, console formatting styles, OS terminal window title updates,
+and spawns isolated log and terminal windows across various OS platforms (Windows/macOS/Linux).
+"""
+
+import os
+import yaml
+import sys
+import platform
+import subprocess
+import io
+import shutil
+from pathlib import Path
+
+from src.utils._tools import is_agent_running
+
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.text import Text
+from rich.align import Align
+import questionary
+
+from src.__init__ import __version__
+from src.instances.paths import get_instance_paths
+
+console = Console()
+
+LOGO = "\n".join(
+    [
+        "     ██╗  █████╗  ██╗    ██╗ ██╗",
+        "     ██║ ██╔══██╗ ██║    ██║ ██║",
+        "     ██║ ███████║ ██║ █╗ ██║ ██║",
+        "██   ██║ ██╔══██║ ██║███╗██║ ██║",
+        "╚█████╔╝ ██║  ██║ ╚███╔███╔╝ ███████╗",
+        " ╚════╝  ╚═╝  ╚═╝  ╚══╝╚══╝  ╚══════╝",
+    ]
+)
+
+INSTANCE_PATHS = get_instance_paths()
+ROOT_DIR = INSTANCE_PATHS.project_root
+PID_FILE = INSTANCE_PATHS.pid_file
+SETTINGS_FILE = INSTANCE_PATHS.config_dir / "settings.yaml"
+
+
+def set_window_title(title: str) -> None:
+    """Updates console terminal window title (cross-platform)."""
+    if os.name == "nt":
+        import ctypes
+
+        ctypes.windll.kernel32.SetConsoleTitleW(title)
+
+    else:
+        sys.stdout.write(f"\033]0;{title}\007")
+        sys.stdout.flush()
+
+
+def _get_agent_status() -> dict:
+    status = {"is_running": is_agent_running(), "model": "unknown", "interval": 0}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+                status["model"] = config.get("llm", {}).get("main_model", "unknown")
+                status["interval"] = config.get("system", {}).get("heartbeat_interval", 0)
+        except Exception:
+            pass
+    return status
+
+
+def _build_header_panel(version: str) -> Panel:
+    status = _get_agent_status()
+    logo_text = Text(LOGO, style="bold cyan")
+    subtitle_text = Text("Just A While Loop", style="bold cyan")
+    version_text = Text(f"v{version}\n", style="dim cyan")
+
+    status_text = Text()
+    if status["is_running"]:
+        status_text.append("● ONLINE", style="bold green")
+        status_text.append(
+            f"  |  Model: {status['model']}  |  Heartbeat: {status['interval']}s",
+            style="bold white",
+        )
+    else:
+        status_text.append("○ OFFLINE", style="bold red")
+        status_text.append(
+            f"  |  Model: {status['model']}  |  Heartbeat: {status['interval']}s",
+            style="dim white",
+        )
+
+    content = Group(
+        Align.center(logo_text),
+        Align.center(subtitle_text),
+        Align.center(version_text),
+        Align.center(status_text),
+    )
+    return Panel(content, border_style="cyan", expand=False)
+
+
+def get_header_ansi(version: str = __version__) -> str:
+    panel = _build_header_panel(version)
+    term_width = shutil.get_terminal_size().columns
+    str_console = Console(file=io.StringIO(), force_terminal=True, width=term_width)
+    str_console.print(panel)
+    return str_console.file.getvalue()
+
+
+def draw_header(version: str = __version__) -> None:
+    clear_screen()
+    console.print(_build_header_panel(version))
+
+
+def launch_in_new_window(
+    arg: str,
+    *,
+    environment: dict[str, str] | None = None,
+) -> None:
+    script_path = ROOT_DIR / "jawl.py"
+    cmd = [sys.executable, str(script_path), arg]
+    system = platform.system()
+    child_env = os.environ.copy()
+    if environment:
+        child_env.update(environment)
+
+    try:
+        if system == "Windows":
+            subprocess.Popen(
+                cmd,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                env=child_env,
+            )
+        elif system == "Darwin":
+            cmd_str = f'"{sys.executable}" "{script_path}" {arg}'
+            cmd_str_escaped = cmd_str.replace('"', '\\"')
+            script = f'tell application "Terminal" to do script "{cmd_str_escaped}"'
+            subprocess.Popen(["osascript", "-e", script], env=child_env)
+        else:
+            terminals = [
+                ("gnome-terminal", ["--"]),
+                ("konsole", ["-e"]),
+                ("xfce4-terminal", ["-e"]),
+                ("alacritty", ["-e"]),
+                ("xterm", ["-e"]),
+            ]
+            for term, args in terminals:
+                if shutil.which(term):
+                    subprocess.Popen([term] + args + cmd, env=child_env)
+                    return
+
+            print_error("Could not find a graphical terminal. Opening in the current window.")
+            print_info(
+                "Press Ctrl+C at any moment to close the tool and return to the main menu."
+            )
+            import time
+
+            time.sleep(2)
+            try:
+                subprocess.call(cmd, env=child_env)
+            except KeyboardInterrupt:
+                pass
+            return
+
+    except Exception as e:
+        print_error(f"Error opening new window: {e}")
+
+
+def flush_input() -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            while msvcrt.kbhit():
+                msvcrt.getch()
+        else:
+            import termios
+
+            termios.tcflush(sys.stdin, termios.TCIOFLUSH)
+    except Exception:
+        pass
+
+
+def clear_screen() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
+
+
+def print_success(msg: str) -> None:
+    console.print(f"[bold green] ✓ {msg}[/bold green]")
+
+
+def print_error(msg: str) -> None:
+    console.print(f"[bold red]✗ {msg}[/bold red]")
+
+
+def print_info(msg: str) -> None:
+    console.print(f"[bold blue]ℹ {msg}[/bold blue]")
+
+
+def wait_for_enter() -> None:
+    console.print("\n[dim]Press Enter to continue.[/dim]")
+    input()
+
+
+def get_custom_style() -> questionary.Style:
+    return questionary.Style(
+        [
+            ("pointer", "fg:cyan bold"),
+            ("highlighted", "fg:cyan bold"),
+            ("question", "bold"),
+            ("answer", "fg:cyan bold"),
+        ]
+    )

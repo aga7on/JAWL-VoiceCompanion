@@ -1,0 +1,281 @@
+identity:
+  agent_name: Agent # Имя вашего агента
+
+# Подробнее: docs/yaml/settings/llm.md
+llm:
+  main_model: unknown # Добавьте свою LLM модель
+  language: "ru" # Целевой язык размышлений и ответов агента ("ru", "en", "auto")
+  # Optional provider-side cadence. Keep QWB interactive by default; raise
+  # this only when a provider explicitly requires request spacing.
+  min_call_interval_sec: 0.0
+  available_models:
+    - claude-opus-4.7
+    - claude-opus-4.6
+    - gemini-3.1-pro-preview
+    - gemini-3-flash-preview
+  # ...можно добавить свои, главное - убедитесь, что LLM_API_URL и ключи правильно настроены
+
+  is_multimodal: false
+  temperature: 1.0
+  max_react_steps: 15
+  # Retry provider-side input/session rejection once. Unsupported models and
+  # deterministic configuration errors still fail immediately.
+  invalid_request_retries: 1
+  # provider_default, always, never, or first_step. QWB understands the
+  # enable_thinking extension; provider_default sends no extra field.
+  thinking_policy: provider_default
+  # Select qwb for the Qwen Web bridge or openai_compatible for a standard
+  # Chat Completions endpoint. Secrets and base_url stay in .env.
+  provider:
+    kind: openai_compatible
+    display_name: ""
+    health_url: ""
+    request_timeout_seconds:
+    retry:
+      transport_retries: 1
+      provider_retries: 2
+      invalid_response_retries: 1
+      tool_protocol_retries: 1
+      base_delay_seconds: 1.0
+      max_delay_seconds: 8.0
+  # auto chooses from declared capabilities; json_envelope preserves JAWL's
+  # provider-independent action plan; native exposes selected skills directly.
+  tool_transport: auto
+  native_tool_prefixes:
+    - HostOSCoding
+    - HostOSReader
+    - HostOSSearch
+    - HostOSEditor
+  native_tool_limit: 64
+
+system:
+  # Смещение от UTC в часах (например, 3 для МСК)
+  timezone: 0
+
+  logging:
+    max_file_size_mb: 5.0
+    backup_count: 1
+    
+  # Подробнее: docs/yaml/settings/heartbeat.md
+  heartbeat_interval: 600
+  continuous_cycle: false
+  proactive_guidance: false
+
+  # Durable long-running execution. JAWL stores one active goal locally,
+  # continues it across Heartbeat cycles/restarts, and gives QWB a stable lane.
+  goal_mode:
+    enabled: true
+    compact_context: true
+    compact_max_chars: 36000
+    suppress_waiting_heartbeats: true
+    # Compact local execution state survives Qwen chat/account resets.
+    task_ledger_enabled: true
+    task_ledger_max_chars: 10000
+    # Start a clean QWB lane after the upstream conversation grows this large.
+    # Set 0 to disable automatic rebasing.
+    provider_rebase_prompt_tokens: 65000
+
+  # Подробнее: docs/yaml/settings/event_acceleration.md
+  # Repeated timer heartbeats which complete without any action back off
+  # exponentially. Incoming events are never delayed by this policy.
+  idle_heartbeat_backoff:
+    enabled: true
+    no_op_threshold: 2
+    max_multiplier: 8
+    # Keep below QWB's default one-hour active-chat expiry.
+    max_interval_sec: 3300
+
+  event_acceleration:
+    # Keep long provider requests alive; yield before stale actions and run the
+    # urgent event as the next primary ReAct trigger.
+    active_cycle_policy: defer
+    # Bound both sleeping and active-cycle event context. Only these explicitly
+    # noisy state notifications are merged; user messages remain individual.
+    queue_max_events: 100
+    coalesce_window_sec: 2.0
+    coalesce_payload_samples: 3
+    coalesce_event_names:
+      - AIOGRAM_CHAT_ACTION
+      - HOST_OS_FILE_DELETED
+      - OS_FILE_CREATED
+      - OS_FILE_MODIFIED
+      - REACT_TICK_SAVED
+      - SYSTEM_DASHBOARD_UPDATE
+      - TELETHON_CHAT_ACTION
+    critical_multiplier: 0.0
+    high_multiplier: 0.2
+    medium_multiplier: 0.6
+    low_multiplier: 0.7
+    background_multiplier: 0.8
+
+  # Shell-free local lifecycle automation. Commands are disabled unless the
+  # user declares exact argv profiles here. A repository may only select a
+  # profile with scope: repository through its .jawl/hooks.json manifest.
+  # Supported phases cover tool use, actual context compaction, graceful stop,
+  # and Swarm delegation. Only pre_tool_use and pre_delegation may deny.
+  lifecycle_hooks:
+    enabled: false
+    fail_closed: true
+    handler_timeout_seconds: 15
+    command_timeout_seconds: 10
+    max_output_chars: 8000
+    commands: []
+    # Example user-approved repository profile:
+    # commands:
+    #   - name: python-tests
+    #     phase: post_tool_use
+    #     argv: [python, -m, pytest, -q]
+    #     tool_patterns: ["HostOSCodingFiles.*"]
+    #     scope: repository
+    #     working_directory: workspace
+    #     priority: 0
+    #     deny_exit_code: 10
+
+  # Подробнее: docs/yaml/settings/context.md
+  context_depth:
+    high_ticks: 4
+    medium_ticks: 7
+    low_ticks: 10
+
+    tick_action_max_chars: 500
+    tick_result_max_chars: 10000
+
+    tick_thoughts_short_max_chars: 1000
+    tick_action_short_max_chars: 100
+    tick_result_short_max_chars: 200
+
+    # Bounds repeated per-step context. Adaptive skills include likely
+    # namespaces plus a searchable index instead of every tool signature.
+    budget:
+      enabled: true
+      max_dynamic_chars: 60000
+      skill_policy: adaptive
+      skills_max_chars: 16000
+      recent_ticks_max_chars: 24000
+      hypotheses_max_chars: 5000
+      provider_max_chars: 10000
+
+    # Подробнее: docs/yaml/settings/rag.md
+    rag:
+      enabled: true
+      depth_limit: 2
+      max_vector_blocks: 5
+      max_graph_nodes: 5
+      max_query_chars: 200
+
+
+  db:
+    # Подробнее: docs/yaml/settings/vector_db.md 
+    vector:
+      similarity_threshold: 0.65
+      embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+      vector_size: 384
+      
+    # Подробнее: docs/yaml/settings/sql/db.md
+    sql:
+      # Подробнее: docs/yaml/settings/sql/tasks.md
+      tasks: 
+        enabled: true
+        max_tasks: 5
+
+      # Подробнее: docs/yaml/settings/sql/notes.md
+      notes:
+        enabled: true
+        max_notes: 5
+
+      # Подробнее: docs/yaml/settings/sql/personality_traits.md
+      personality_traits:
+        enabled: true
+        max_traits: 5
+
+      # Подробнее: docs/yaml/settings/sql/mental_states.md
+      mental_states:
+        enabled: true
+        max_entities: 10
+
+      # Подробнее: docs/yaml/settings/sql/drives.md
+      drives:
+        enabled: true
+        dynamic_reduction: true
+        pause_on_offline: true
+
+        max_reflections_history: 3
+        max_custom_drives: 5
+
+        fundamental:
+          curiosity:
+            enabled: true
+            decay:
+              rate: 12.0
+              interval_sec: 1200
+
+          social:
+            enabled: true
+            decay:
+              rate: 10.0
+              interval_sec: 1200
+
+          mastery:
+            enabled: true
+            decay:
+              rate: 8.0
+              interval_sec: 1200
+
+      # Подробнее: docs/yaml/settings/sql/hypotheses.md
+      hypotheses:
+        enabled: true
+        max_clusters: 3
+        max_hypotheses: 10
+
+    # Подробнее: docs/yaml/settings/graph_db.md
+    graph:
+      max_nodes: 5000
+      max_edges_per_node: 20
+
+
+  # Подробнее: docs/subagents.md
+  swarm:
+    enabled: true
+    subagent_model: unknown
+    max_concurrent_workers: 3
+    
+    context_depth:
+      max_steps: 20
+      detailed_steps: 3
+      action_max_chars: 10000
+      result_max_chars: 20000
+      thoughts_short_max_chars: 2000
+      action_short_max_chars: 500
+      result_short_max_chars: 1000
+
+
+  # Подробнее: docs/yaml/settings/tot.md
+  tree_of_thoughts:
+    enabled: false
+    llm_model: unknown
+    mode: "manual"  # "manual", "auto", "hybrid"
+
+    auto_interval_steps: 5
+    
+    branches: 3                # Количество макро-стратегий (Уровень 1)
+    simulations_per_branch: 3  # Количество вложенных сценариев на каждый узел (1.1, 1.2, 1.3, ...)
+    max_depth: 4               # Максимальная глубина вложенности (1 -> 1.1 -> 1.1.1)
+
+
+  # Подробнее: docs/yaml/settings/subconscious.md
+  subconscious:
+      enabled: false
+      llm_model: unknown
+
+      patterns:
+        consolidation:
+          enabled: true
+          activation_limit_ticks: 20
+
+        reflection:
+          enabled: true
+          activation_limit_ticks: 20
+
+        forgetting:
+          enabled: true
+          activation_limit_ticks: 60

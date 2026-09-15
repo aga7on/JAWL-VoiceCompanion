@@ -1,0 +1,124 @@
+"""
+Facade for the Hybrid Search System (Vector-Graph RAG).
+
+Intercepts current events, system triggers, and active thoughts of the agent,
+passing them to the GraphRAGOrchestrator. Gathers retrieved facts and maps them
+into a unified Markdown block for the context builder.
+"""
+
+from typing import Dict, Any, List, TYPE_CHECKING
+
+from src.utils.settings import RAGConfig
+
+from src.l3_agent.context.rag.entity_extractor import EntityExtractor
+from src.l3_agent.context.rag.search.vector import VectorSearchWrapper
+from src.l3_agent.context.rag.search.graph import GraphSearchWrapper
+from src.l3_agent.context.rag.orchestrator import GraphRAGOrchestrator
+
+if TYPE_CHECKING:
+    from src.l1_databases.vector.management.knowledge import VectorKnowledge
+    from src.l1_databases.vector.management.thoughts import VectorThoughts
+    from src.l1_databases.vector.embedding import EmbeddingModel
+    from src.l1_databases.graph.manager import GraphManager
+    from src.l0_state.agent.state import AgentState
+
+
+class RAGMemories:
+    """
+    Context provider responsible for automated hybrid search (Vector-Graph RAG).
+    """
+
+    def __init__(
+        self,
+        vector_knowledge: "VectorKnowledge",
+        vector_thoughts: "VectorThoughts",
+        graph_manager: "GraphManager",
+        embedding_model: "EmbeddingModel",
+        agent_state: "AgentState",
+        rag_config: RAGConfig,
+    ) -> None:
+
+        self.agent_state = agent_state
+        self.config = rag_config
+
+        self.extractor = EntityExtractor(
+            max_query_chars=rag_config.max_query_chars, engine=rag_config.extraction_engine
+        )
+
+        self.vector_search = VectorSearchWrapper(
+            vector_knowledge=vector_knowledge,
+            vector_thoughts=vector_thoughts,
+            top_k=rag_config.max_vector_blocks + 2,
+        )
+
+        self.graph_search = GraphSearchWrapper(graph_manager=graph_manager, max_neighbors=10)
+
+        self.orchestrator = GraphRAGOrchestrator(
+            vector_search=self.vector_search,
+            graph_search=self.graph_search,
+            extractor=self.extractor,
+            embedding_model=embedding_model,
+            config=self.config,
+        )
+
+    async def get_context_block(
+        self,
+        payload: Dict[str, Any],
+        missed_events: List[Dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        """
+        Gathers raw text streams from the current wakeup context and initiates the RAG cycle.
+
+        Args:
+            payload: Current event payload.
+            missed_events: Background events logs.
+
+        Returns:
+            str: Formatted 'RELEVANT INFORMATION' Markdown block or empty string.
+        """
+
+        if not self.config.enabled:
+            return ""
+
+        input_texts = set()
+
+        # ---------------------------------------------------------------------
+        # Step 1 context collection
+        # ---------------------------------------------------------------------
+
+        if self.agent_state.current_step == 1:
+            sender = payload.get("sender_name")
+            if sender and sender.lower() != "unknown":
+                input_texts.add(sender.strip())
+
+            chat_name = payload.get("chat_name")
+            if chat_name and chat_name.lower() != "unknown":
+                input_texts.add(chat_name.strip())
+
+            msg = payload.get("raw_text") or payload.get("message", "")
+            if len(msg) > 10 or len(msg.split()) > 2:
+                input_texts.add(msg.strip())
+
+            if missed_events:
+                last_evt = missed_events[-1].get("payload", {})
+                match_msg = last_evt.get("raw_text") or last_evt.get("message", "")
+                if len(match_msg) > 15 or len(match_msg.split()) > 3:
+                    input_texts.add(match_msg.strip())
+
+        # ---------------------------------------------------------------------
+        # Mid-cycle step context collection
+        # ---------------------------------------------------------------------
+
+        else:
+            if self.agent_state.last_thoughts:
+                input_texts.add(self.agent_state.last_thoughts)
+
+            for arg in self.agent_state.last_action_args:
+                if isinstance(arg, str) and len(arg) > 3:
+                    input_texts.add(arg)
+
+        if not input_texts:
+            return ""
+
+        return await self.orchestrator.run(list(input_texts))

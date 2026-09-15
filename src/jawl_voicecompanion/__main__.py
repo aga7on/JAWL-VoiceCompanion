@@ -5,30 +5,22 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import threading
 from pathlib import Path
-from urllib.parse import urlsplit
 
-from .gateway import TextGateway
-from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
-from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
-from .ambient_triage import OpenAICompatibleTriageProvider
-from .asr import ExternalASRService, OpenAICompatibleASRClient
-from .browser_adapter import BrowserAdapter
-from .avatar import AvatarAssetStore
-from .jawl_adapter import JawlTerminalAdapter
-from .jawl_web import JawlWebChatAdapter
-from .hostos_tools import HostOSExecutor
-from .llm import OpenAICompatibleChatClient
-from .screen_adapter import ScreenCaptureAdapter
-from .tts import Qwen3TTSHttpClient, TeraTTSHttpClient, TTSService
-from .vision import OpenAICompatibleVisionClient
-from .voicemem_client import VoiceMemProcessClient
-from .user_activity import WindowsUserActivity
-from .windows_ui import WindowsUIAutomationAdapter
-from .windows_pointer import WindowsPointerAdapter
-from .windows_keyboard import WindowsKeyboardAdapter
-from .web import create_presentation_server, create_server, is_loopback_host
+
+def _boot_trace(label: str) -> None:
+    try:
+        import time as _boot_time
+        with open(os.path.join(os.environ.get("TEMP", "."), "companion-boot.log"), "a", encoding="utf-8") as _fh:
+            _fh.write(f"{_boot_time.strftime('%H:%M:%S')} {label} pid={os.getpid()}\n")
+    except Exception:
+        pass
+
+
+_boot_trace("module-start")
+
+from .companion_runtime import CompanionRuntime
+from .composition import build_companion_runtime
 
 
 def _default_frontend_dir() -> Path:
@@ -60,6 +52,7 @@ def _parse_redaction_rects(values: list[str]) -> tuple[tuple[int, int, int, int]
 
 
 def main() -> None:
+    _boot_trace('main-enter')
     parser = argparse.ArgumentParser(description="JAWL VoiceCompanion Phase 1 server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=2367)
@@ -189,10 +182,22 @@ def main() -> None:
         help="start the explicit opt-in SCREEN_DELTA watcher",
     )
     parser.add_argument(
+        "--hostos-level",
+        type=int,
+        choices=(0, 1, 2, 3),
+        default=None,
+        help="set the companion HostOS access level at startup (screen capture needs 1)",
+    )
+    parser.add_argument(
         "--screen-watch-interval",
         type=float,
         default=10.0,
         help="seconds between SCREEN_DELTA watcher polls",
+    )
+    parser.add_argument(
+        "--sensory-file",
+        default="",
+        help="tail the sensory worker NDJSON file into bounded ambient memory",
     )
     parser.add_argument(
         "--user-activity",
@@ -271,6 +276,15 @@ def main() -> None:
     parser.add_argument("--asr-timeout", type=float, default=30.0)
     parser.add_argument("--asr-max-utterance-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument(
+        "--streaming-asr",
+        action="store_true",
+        help="enable the streaming ASR lane (CrispASR) for sub-second drafts and adaptive endpointing",
+    )
+    parser.add_argument("--streaming-asr-exe", default="", help="path to the crispasr executable")
+    parser.add_argument("--streaming-asr-model", default="", help="path to the streaming ASR GGUF model")
+    parser.add_argument("--streaming-asr-backend", default="gigaam", help="CrispASR backend name")
+    parser.add_argument("--streaming-asr-step-ms", type=int, default=500, help="streaming step between partials")
+    parser.add_argument(
         "--ambient-memory",
         action="store_true",
         help="enable bounded ambient evidence; capture remains stopped until enabled in the browser",
@@ -305,11 +319,27 @@ def main() -> None:
     )
     parser.add_argument(
         "--tts-provider",
-        choices=("tera", "qwen"),
+        choices=("tera", "qwen", "voxcpm"),
         default="tera",
         help="explicit worker contract behind --tts-url (default: tera)",
     )
     parser.add_argument("--tts-timeout", type=float, default=120.0)
+    parser.add_argument(
+        "--prosody-planner",
+        action="store_true",
+        help="annotate TTS sentences with per-sentence emotion envelopes via the local LLM",
+    )
+    parser.add_argument(
+        "--prosody-url",
+        default=os.environ.get("LLM_API_URL", "http://127.0.0.1:11434/v1"),
+        help="OpenAI-compatible base URL for the prosody planner",
+    )
+    parser.add_argument(
+        "--prosody-model",
+        default="qwen3.8-27b-abliterated:latest",
+        help="planner model name on the prosody provider",
+    )
+    parser.add_argument("--prosody-timeout", type=float, default=6.0)
     parser.add_argument("--live2d-assets", type=Path, default=None)
     parser.add_argument("--live2d-model", default="model3.json")
     parser.add_argument("--live2d-runtime", default="live2d-runtime.js")
@@ -318,6 +348,12 @@ def main() -> None:
         type=Path,
         default=None,
         help="metadata-only HostOS audit JSONL path (default: runtime/audit.ndjson)",
+    )
+    parser.add_argument(
+        "--history-file",
+        type=Path,
+        default=None,
+        help="conversation history JSONL path (default: runtime/conversation.ndjson)",
     )
     parser.add_argument("--sandbox-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
@@ -335,218 +371,27 @@ def main() -> None:
         screen_redaction_rects = _parse_redaction_rects(args.screen_redact_rect)
     except ValueError as exc:
         parser.error(str(exc))
-    responder = None
-    brain_name = "phase1_mock_brain"
-    jawl_web = None
-    if (args.llm_url or args.llm_model) and (args.jawl_web_url or args.jawl_port_file):
-        parser.error("--llm-url/--llm-model cannot be combined with a JAWL adapter")
-    if args.jawl_web_url:
-        try:
-            jawl_web = JawlWebChatAdapter(
-                args.jawl_web_url,
-                token=os.environ.get(args.jawl_web_token_env, ""),
-                timeout_seconds=args.jawl_web_timeout,
-                chat_timeout_seconds=args.jawl_chat_timeout,
-                native_gateway=True,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-        responder = jawl_web
-        brain_name = "jawl_web_chat"
-    elif args.jawl_port_file:
-        responder = JawlTerminalAdapter(args.jawl_port_file)
-        brain_name = "jawl_terminal"
-    elif args.llm_url or args.llm_model:
-        if not args.llm_url or not args.llm_model:
-            parser.error("--llm-url and --llm-model must be provided together")
-        responder = OpenAICompatibleChatClient(
-            args.llm_url,
-            args.llm_model,
-            api_key=os.environ.get(args.llm_api_key_env, ""),
-            timeout_seconds=args.llm_timeout,
-            user_agent=args.llm_user_agent,
-        )
-        brain_name = "openai_compatible_chat"
-    if args.jawl_hostos_control and not args.jawl_web_url:
-        parser.error("--jawl-hostos-control requires --jawl-web-url")
-    if args.jawl_hostos_control and not os.environ.get(args.jawl_web_token_env, ""):
-        host = urlsplit(args.jawl_web_url).hostname if args.jawl_web_url else None
-        if host not in {"127.0.0.1", "localhost", "::1"}:
-            parser.error(f"--jawl-hostos-control requires a token in {args.jawl_web_token_env} for non-loopback JAWL URLs")
-    gateway = TextGateway(responder=responder, brain_name=brain_name, jawl_web=jawl_web)
-    hostos_executor = None
-    if args.hostos_live:
-        project_root = Path(__file__).resolve().parents[2]
-        hostos_executor = HostOSExecutor(
-            policy=gateway.policy,
-            sandbox_root=args.sandbox_root or project_root / "runtime" / "sandbox",
-            workspace_roots=tuple(args.workspace_root),
-            host_roots=tuple(args.host_root),
-            dry_run=False,
-            allowed_executables=frozenset(args.allowed_executable),
-            ui_automation=WindowsUIAutomationAdapter(),
-            pointer=WindowsPointerAdapter(require_fresh_token=True),
-            keyboard=WindowsKeyboardAdapter(),
-            screen_capture=ScreenCaptureAdapter(
-                enabled=args.screen_enabled,
-                max_width=args.screen_max_width,
-                max_height=args.screen_max_height,
-                max_bytes=args.screen_max_bytes,
-                ocr_enabled=args.screen_ocr,
-                redaction_rects=screen_redaction_rects,
-            ),
-        )
-        hostos_executor.browser = BrowserAdapter(ui_automation=hostos_executor.ui_automation)
-    vision_describer = None
-    if args.vision_url or args.vision_model:
-        if not args.vision_url or not args.vision_model:
-            parser.error("--vision-url and --vision-model must be provided together")
-        vision_describer = OpenAICompatibleVisionClient(
-            args.vision_url,
-            args.vision_model,
-            api_key=os.environ.get(args.vision_api_key_env, ""),
-            timeout_seconds=args.vision_timeout,
-        )
-    if args.screen_watch and not (args.hostos_live and args.screen_enabled and vision_describer):
-        parser.error("--screen-watch requires --hostos-live, --screen-enabled, --vision-url and --vision-model")
-    voicemem_args = [
-        "--mode", args.voicemem_mode,
-        "--audio-sample-rate", str(args.voicemem_audio_rate),
-    ]
-    if args.voicemem_local_memory:
-        voicemem_args.append("--local-memory")
-    voice_mem = (
-        VoiceMemProcessClient(
-            args.voicemem_python,
-            args=tuple(voicemem_args),
-            timeout_seconds=args.voicemem_timeout,
-        )
-        if args.voicemem_python
-        else None
-    )
-    if voice_mem is not None and args.voicemem_warmup != "none":
-        try:
-            voice_mem.warmup(kind=args.voicemem_warmup)
-        except Exception as exc:
-            voice_mem.close()
-            parser.error(f"VoiceMem {args.voicemem_warmup} warmup failed: {type(exc).__name__}")
-    if args.asr_url or args.asr_model:
-        if not args.asr_url or not args.asr_model:
-            parser.error("--asr-url and --asr-model must be provided together")
-        asr_service = ExternalASRService(
-            OpenAICompatibleASRClient(
-                args.asr_url,
-                args.asr_model,
-                api_key=os.environ.get(args.asr_api_key_env, ""),
-                timeout_seconds=args.asr_timeout,
-            ),
-            max_utterance_bytes=args.asr_max_utterance_bytes,
-        )
-    else:
-        asr_service = None
-    if args.ambient_triage_url or args.ambient_triage_model:
-        if not args.ambient_triage_url or not args.ambient_triage_model:
-            parser.error("--ambient-triage-url and --ambient-triage-model must be provided together")
-        triage_provider = OpenAICompatibleTriageProvider(
-            args.ambient_triage_url,
-            args.ambient_triage_model,
-            api_key=os.environ.get(args.ambient_triage_api_key_env, ""),
-            timeout=args.ambient_triage_timeout,
-        )
-    else:
-        triage_provider = None
-    if args.ambient_triage_interval < 0:
-        parser.error("--ambient-triage-interval must be zero or positive")
-    ambient_memory = AmbientMemoryBuffer(enabled=args.ambient_memory, triage_provider=triage_provider)
-    ambient_scheduler = (
-        AmbientTriageScheduler(ambient_memory, args.ambient_triage_interval)
-        if args.ambient_triage_interval > 0 else None
-    )
-    if ambient_scheduler is not None:
-        ambient_scheduler.start()
-    ambient_audio = None
-    if args.ambient_audio:
-        if voice_mem is None:
-            parser.error("--ambient-audio requires --voicemem-python")
-        ambient_audio = AmbientAudioService(AmbientAudioASRBridge(
-            voice_mem,
-            ambient_memory,
-            final_asr=asr_service,
-        ))
-    if args.tts_url:
-        tts_client = Qwen3TTSHttpClient if args.tts_provider == "qwen" else TeraTTSHttpClient
-        tts_service = TTSService(tts_client(args.tts_url, timeout_seconds=args.tts_timeout))
-    else:
-        tts_service = None
-    avatar_assets = None
-    if args.live2d_assets:
-        try:
-            avatar_assets = AvatarAssetStore(
-                args.live2d_assets, model=args.live2d_model, runtime=args.live2d_runtime,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-    server = create_server(
-        args.host,
-        args.port,
-        args.frontend or _default_frontend_dir(),
-        gateway,
-        hostos_executor,
-        vision_describer,
-        screen_watch=args.screen_watch,
-        screen_watch_interval=args.screen_watch_interval,
-        voice_mem=voice_mem,
-        tts_service=tts_service,
-        avatar_assets=avatar_assets,
-        jawl_event_dir=args.jawl_event_dir,
-        ambient_memory=ambient_memory,
-        ambient_audio=ambient_audio,
-        ambient_scheduler=ambient_scheduler,
-        asr_service=asr_service,
-        activity_provider=(
-            WindowsUserActivity(args.user_activity_idle_seconds).sample
-            if args.user_activity else None
-        ),
-        jawl_hostos_control=args.jawl_hostos_control,
-        audit_file=args.audit_file or Path(__file__).resolve().parents[2] / "runtime" / "audit.ndjson",
-        presence_file=Path(__file__).resolve().parents[2] / "runtime" / "presence.json",
-        legacy_presentation=False,
-        lan_mode=args.lan,
+    runtime = build_companion_runtime(
+        args,
+        frontend_dir=args.frontend or _default_frontend_dir(),
+        screen_redaction_rects=screen_redaction_rects,
         lan_access_token=lan_access_token,
-        lan_auth_user=args.lan_auth_user,
-        tls_cert_file=args.tls_cert,
-        tls_key_file=args.tls_key,
+        error=parser.error,
     )
-    presentation = None
     try:
-        presentation = create_presentation_server(
-            server,
-            host=args.presentation_host,
-            port=args.presentation_port,
-            lan_mode=args.lan,
-            tls_cert_file=(args.tls_cert if not is_loopback_host(args.presentation_host) else None),
-            tls_key_file=(args.tls_key if not is_loopback_host(args.presentation_host) else None),
-        )
-        presentation_thread = threading.Thread(
-            target=presentation.serve_forever,
-            name="avatar-presentation",
-            daemon=True,
-        )
-        presentation_thread.start()
+        server = runtime.control
         display_host = args.lan_public_host or args.host
         if display_host in {"0.0.0.0", "::"}:
             display_host = "<LAN-IP>"
         host_part = f"[{display_host}]" if ":" in display_host and not display_host.startswith("[") else display_host
         print(f"JAWL VoiceCompanion control: {server.url_scheme}://{host_part}:{server.server_port}")
         print(f"JAWL VoiceCompanion avatar/OBS: {server.presentation_url}")
-        server.serve_forever()
+        _boot_trace('serving')
+        runtime.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        if presentation is not None:
-            presentation.shutdown()
-            presentation.server_close()
-        server.server_close()
+        runtime.close()
 
 
 if __name__ == "__main__":

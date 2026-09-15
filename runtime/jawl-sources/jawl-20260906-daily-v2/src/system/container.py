@@ -1,0 +1,82 @@
+"""
+JAWL System Dependency Container.
+
+Anemic DTO container. Serves as a single registry for all initialized
+subsystems grouped across L0-L3 layers.
+"""
+
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+from src.utils.settings import SettingsConfig, InterfacesConfig
+from src.utils.event.bus import EventBus
+
+from src.l0_state.agent.state import AgentState
+
+from src.l1_databases.sql.manager import SQLManager
+from src.l1_databases.vector.manager import VectorManager
+from src.l1_databases.graph.manager import GraphManager
+
+from src.l3_agent.llm.client import LLMClient
+from src.l3_agent.heartbeat import Heartbeat
+from src.l3_agent.context.registry import ContextRegistry
+from src.instances.paths import get_instance_paths
+
+
+class SystemContainer:
+    """Assembled system dependencies container."""
+
+    def __init__(
+        self,
+        settings: SettingsConfig,
+        interfaces_config: InterfacesConfig,
+        event_bus: EventBus,
+    ) -> None:
+        # Global dependencies
+        self.settings = settings
+        self.interfaces_config = interfaces_config
+        self.event_bus = event_bus
+
+        instance_paths = get_instance_paths()
+        self.instance_id = instance_paths.instance_id
+        self.instance_paths = instance_paths
+        self.root_dir = instance_paths.project_root
+        self.local_data_dir = instance_paths.data_dir
+        self.sandbox_dir = instance_paths.sandbox_dir
+        self.private_sandbox_system_dir = (
+            instance_paths.private_sandbox_system_dir
+        )
+        self.prompt_dir = instance_paths.prompt_dir
+        self.log_dir = instance_paths.log_dir
+        self.exit_code: int = 0
+
+        # L0 State
+        self.agent_state: Optional[AgentState] = None
+        self.l0_states: Dict[str, Any] = {}  # Extracted from l2_interfaces state.py files
+
+        # L1 Databases
+        self.sql: Optional[SQLManager] = None
+        self.vector: Optional[VectorManager] = None
+        self.graph: Optional[GraphManager] = None
+
+        # L2 Interfaces
+        self.l2_clients: Dict[str, Any] = {}
+        self.lifecycle_components: List[Any] = []
+
+        # L3 Agent
+        self.llm_client: Optional[LLMClient] = None
+        self.sub_llm_client: Optional[LLMClient] = None
+        self.llm_provider = None
+        self.sub_llm_provider = None
+        self.heartbeat: Optional[Heartbeat] = None
+        self.context_registry: Optional[ContextRegistry] = None
+        self.subconscious_orchestrator: Optional[Any] = None
+        self.lifecycle_hooks: Optional[Any] = None
+        self.lifecycle_command_adapter: Optional[Any] = None
+        self.coding_workspaces: Optional[Any] = None
+        self.coding_plans: Optional[Any] = None
+        self.coding_approvals: Optional[Any] = None
+        self.coding_lsp: Optional[Any] = None
+        self.action_journal: Optional[Any] = None
+        self.goal_manager: Optional[Any] = None
+        self.instance_mesh: Optional[Any] = None

@@ -1,0 +1,7 @@
+FROM G:/AI/LMStudio/models/lmstudio-community/gemma-4-12B-it-QAT-GGUF/gemma-4-12B-it-QAT-Q4_0.gguf
+TEMPLATE {{ .Prompt }}
+RENDERER gemma4
+PARSER gemma4
+PARAMETER temperature 0.2
+PARAMETER num_ctx 32768
+PARAMETER stop <turn|>

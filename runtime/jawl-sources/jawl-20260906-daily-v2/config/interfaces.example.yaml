@@ -1,0 +1,284 @@
+host:
+  # Подробнее: docs/yaml/interfaces/host_os.md
+  os:
+    enabled: false
+    desktop_interactions: false
+    desktop_max_windows: 20
+    desktop_max_elements: 250
+    desktop_max_text_chars: 500
+    desktop_max_result_chars: 60000
+    desktop_operation_timeout_sec: 30
+
+    access_level: 0
+    env_access: false 
+
+    require_deploy_sessions: true 
+    deploy_max_retries: 5 
+
+    framework_tree_depth: 1
+    monitoring_interval_sec: 30
+    execution_timeout_sec: 60 
+
+    # Task-scoped argv execution: disabled, explicitly pre-approved host
+    # executables, or an isolated Docker/Podman container.
+    coding_execution_backend: disabled
+    coding_host_allowed_commands: []
+    # Optional one-shot local operator approval for every task command.
+    coding_approval_mode: disabled
+    coding_approval_ttl_sec: 900
+    # Exact reusable argv profiles; they still inherit backend/approval policy.
+    coding_command_profiles: []
+    # coding_command_profiles:
+    #   - name: python-tests
+    #     argv: [python.exe, -m, pytest, -q]
+    #     relative_cwd: "."
+    #     timeout_seconds: 60
+    #     container_profile: python-ci
+    # Reusable exact OCI isolation policies. Omit container_profile on a command
+    # to retain the compatible global coding_container_* defaults below.
+    coding_container_profiles: []
+    # coding_container_profiles:
+    #   - name: python-ci
+    #     image: "python@sha256:<64 lowercase hex chars>"
+    #     network: none
+    #     memory_mb: 2048
+    #     cpus: 2.0
+    #     pids: 256
+    coding_container_runtime: docker
+    coding_container_image: "python:3.11-slim"
+    coding_container_network: none
+    coding_container_memory_mb: 2048
+    coding_container_cpus: 2.0
+    coding_container_pids: 256
+
+    file_read_max_chars: 10000
+    file_list_limit: 100
+    top_processes_limit: 10
+    file_diff_max_chars: 200 
+
+    workspace_max_opened_files: 15 
+    recent_file_changes_limit: 3 
+    workspace_max_file_chars: 20000 
+
+  terminal:
+    enabled: true
+    history_limit: 50 
+    context_limit: 10 
+
+# Подробнее: docs/yaml/interfaces/code_graph.md
+code_graph:
+  enabled: false
+  max_search_results: 15
+  max_structure_items: 200
+  exclude_dirs:
+    - "venv"
+    - ".venv"
+    - "env"
+    - "__pycache__"
+    - ".git"
+    - "node_modules"
+    - ".pytest_cache"
+    - "dist"
+    - "build"
+
+telegram:
+  # Подробнее: docs/yaml/interfaces/telegram/telethon.md
+  telethon:
+    enabled: false
+    session_name: "agent_telethon"
+    recent_chats_limit: 20
+    private_chat_history_limit: 2
+    incoming_history_limit: 8
+    download_visual_media: true
+    visual_media_max_mb: 50
+    # Optional passive push target for redacted coding approval requests.
+    coding_approval_chat_id: null
+    # Opt-in exact /jawl_approve and /jawl_deny interception. Remote decisions
+    # require numeric chat and actor IDs and never enter agent context.
+    coding_approval_remote_decisions: false
+    coding_approval_actor_id: null
+
+  # Подробнее: docs/yaml/interfaces/telegram/aiogram.md
+  aiogram:
+    enabled: false
+    recent_chats_limit: 20
+    download_visual_media: true
+    visual_media_max_mb: 20
+    # Optional passive push target for redacted coding approval requests.
+    coding_approval_chat_id: null
+    # Opt-in exact /jawl_approve and /jawl_deny interception. Remote decisions
+    # require numeric chat and actor IDs and never enter agent context.
+    coding_approval_remote_decisions: false
+    coding_approval_actor_id: null
+
+
+# Подробнее: docs/yaml/interfaces/github.md
+github:
+  enabled: false
+  agent_account: false
+  request_timeout_sec: 15
+  history_limit: 5
+  polling_interval_sec: 120
+
+
+# Подробнее: docs/yaml/interfaces/email.md
+email:
+  enabled: false
+  polling_interval_sec: 60
+  recent_limit: 3
+
+
+web:
+  # Подробнее: docs/yaml/interfaces/web/http.md
+  http:
+    enabled: false
+    request_timeout_sec: 15
+    max_response_chars: 10000
+
+  # Подробнее: docs/yaml/interfaces/web/search.md
+  search:
+    enabled: false
+    search_engine: "duckduckgo" # "duckduckgo", "tavily"
+    reader_engine: "trafilatura" # "trafilatura", "jina"
+    request_timeout_sec: 15
+    max_page_chars: 10000
+
+    # Подробнее: docs/yaml/interfaces/web/deep_research.md
+    deep_research:
+      max_queries: 10
+      max_results_per_query: 5
+      max_pages_to_read: 15
+      total_max_chars: 30000
+
+  # Подробнее: docs/yaml/interfaces/web/browser.md
+  browser:
+    enabled: false
+    headless: true
+    timeout_sec: 30
+    idle_timeout_sec: 900
+
+  # Подробнее: docs/yaml/interfaces/web/hooks.md
+  hooks:
+    enabled: false
+    host: "127.0.0.1"
+    port: 8080
+    history_limit: 10
+    preview_max_chars: 200
+
+  # Подробнее: docs/yaml/interfaces/web/rss.md
+  rss:
+    enabled: false
+    polling_interval_sec: 3600
+    recent_limit: 3
+
+    feeds:
+      - name: "Habr"
+        url: "https://habr.com/ru/rss/hub/artificial_intelligence/"
+
+# Подробнее: docs/yaml/interfaces/meta.md
+meta:
+  enabled: false
+
+  access_level: 0
+  custom_skills_enabled: true
+
+# Подробнее: docs/yaml/interfaces/multimodality.md
+multimodality:
+  enabled: false
+  video_understanding_enabled: false
+  media_generation_enabled: false
+  media_request_timeout_sec: 30
+  media_poll_interval_sec: 5.0
+  media_max_upload_mb: 50
+  media_max_download_mb: 500
+
+# Подробнее: docs/yaml/interfaces/mcp.md
+mcp:
+  enabled: false
+  startup_timeout_sec: 30
+  request_timeout_sec: 60
+  max_catalog_items: 500
+  max_result_chars: 20000
+  max_binary_bytes: 10485760
+  servers: []
+  # servers:
+  #   - name: local_tools
+  #     transport: stdio
+  #     command: python
+  #     args: ["path/to/server.py"]
+  #     cwd: "."
+  #     env_passthrough: ["EXAMPLE_API_KEY"]
+  #     allowed_tools: ["search", "read"]
+  #     resources_enabled: false
+  #     prompts_enabled: false
+  #   - name: remote_tools
+  #     transport: streamable_http
+  #     url: "https://mcp.example.com/mcp"
+  #     bearer_token_env: "EXAMPLE_MCP_TOKEN"
+  #     headers_from_env:
+  #       X-Workspace: "EXAMPLE_WORKSPACE"
+  #     allowed_tools: ["search"]
+  #     resources_enabled: false
+  #     prompts_enabled: false
+
+# Debug Broker: docs/yaml/interfaces/debug_broker.md
+debug_broker:
+  enabled: false
+  re_root: "G:/RE"
+  auto_start: true
+  startup_timeout_sec: 30
+  request_timeout_sec: 180
+  max_result_chars: 30000
+  max_sessions: 20
+  x64dbg_port_start: 8888
+  x64dbg_port_end: 8899
+  enabled_providers:
+    - x64dbg
+    - ghidra
+    - frida
+    - windbg
+    - radare2
+    - qiling
+    - triton
+
+# Calendar: docs/yaml/interfaces/calendar.md
+calendar:
+  enabled: false
+  polling_interval_sec: 60
+  upcoming_events_limit: 10
+
+# Подробнее: docs/yaml/interfaces/voice.md
+voice:
+  stt:
+    cloud:
+      whisper:
+        enabled: false
+        model: "whisper-1"
+        temperature: 0.0
+        timeout_sec: 120
+
+  tts:
+    cloud:
+      elevenlabs:
+        enabled: false
+        tts_model: "eleven_multilingual_v2"
+        main_voice: "CwhRBWXzGAHq8TQ4Fs17"
+
+        available_voices: [] 
+
+        stability: 0.5
+        similarity_boost: 0.75
+
+      edge:
+        enabled: false
+        main_voice: "ru-RU-SvetlanaNeural"
+
+        available_voices: 
+          - "ru-RU-SvetlanaNeural"
+          - "ru-RU-DmitryNeural"
+          - "en-US-AriaNeural"
+          - "en-US-GuyNeural"
+
+        rate: "+0%"
+        volume: "+0%"
+        pitch: "+0Hz"

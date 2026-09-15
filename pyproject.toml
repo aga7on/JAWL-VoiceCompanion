@@ -19,5 +19,9 @@ where = ["src"]
 system-audio = ["PyAudioWPatch==0.2.12.8; platform_system == 'Windows'"]
 test = ["aiohttp==3.14.1", "pytest==9.1.1"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["runtime", ".git", ".venv", "venv"]
+
 [project.scripts]
 jawl-voicecompanion = "jawl_voicecompanion.__main__:main"

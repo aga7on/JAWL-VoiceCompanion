@@ -1,0 +1,629 @@
+"""
+Skills for searching files and generating directory trees.
+"""
+
+import asyncio
+import fnmatch
+import json
+import os
+import re
+import shutil
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from src.utils.logger import main_logger
+from src.utils._tools import format_size, get_python_module_docstring
+from src.l2_interfaces.host.os.polls.utils import is_ignored
+
+from src.l2_interfaces.host.os.client import HostOSClient, HostOSAccessLevel
+from src.l2_interfaces.host.os.decorators import require_access
+
+from src.l3_agent.skills.registry import SkillResult, skill
+from src.l3_agent.swarm.roles import Subagents
+
+
+class HostOSSearch:
+    """File search and directory tree mapping tools."""
+
+    def __init__(self, host_os_client: HostOSClient):
+        self.host_os = host_os_client
+
+    @skill(swarm=[Subagents.CODER, Subagents.QA_ENGINEER, Subagents.SYSADMIN])
+    @require_access(HostOSAccessLevel.SANDBOX)
+    async def list_directory(self, path: str = ".", max_depth: int = 1) -> SkillResult:
+        """
+        Lists directory contents.
+
+        max_depth: Subfolder scan depth (0 = current only).
+        """
+        limit = self.host_os.config.file_list_limit
+
+        try:
+            safe_path = self.host_os.validate_path(path, is_write=False)
+
+            if not safe_path.is_dir():
+                return SkillResult.fail(f"Error: Path is not a directory ({path}).")
+
+            try:
+                dir_display = safe_path.relative_to(self.host_os.framework_dir).as_posix()
+            except ValueError:
+                dir_display = safe_path.name
+
+            meta = self.host_os.get_file_metadata()
+
+            ignore_exts = {".pyc", ".pyo", ".pyd", ".tmp", ".swp"}
+            ignore_dirs = {
+                ".git",
+                "venv",
+                ".venv",
+                "env",
+                "__pycache__",
+                "node_modules",
+                ".pytest_cache",
+            }
+
+            lines = []
+            lines_count = 0
+
+            def _build_tree(current_dir: Path, current_depth: int, prefix: str):
+                nonlocal lines_count
+                if current_depth > max_depth or lines_count >= limit:
+                    return
+
+                try:
+                    items = []
+                    for p in current_dir.iterdir():
+                        if p.name.startswith(".") and p.name not in {".env"}:
+                            continue
+                        if p.is_dir() and p.name in ignore_dirs:
+                            continue
+                        if p.is_file() and p.suffix.lower() in ignore_exts:
+                            continue
+                        items.append(p)
+
+                    items.sort(key=lambda x: (not x.is_dir(), x.name.lower()))
+                    total_items = len(items)
+
+                    for i, item in enumerate(items):
+                        if lines_count >= limit:
+                            return
+
+                        is_last = i == total_items - 1
+                        connector = "└── " if is_last else "├── "
+
+                        if item.is_dir():
+                            lines.append(f"{prefix}{connector}📂 {item.name}/")
+                            lines_count += 1
+
+                            if current_depth < max_depth:
+                                extension = "    " if is_last else "│   "
+                                _build_tree(item, current_depth + 1, prefix + extension)
+                        else:
+                            try:
+                                size_str = format_size(item.stat().st_size)
+                            except Exception:
+                                size_str = "???"
+
+                            desc = ""
+                            try:
+                                if item.is_relative_to(self.host_os.sandbox_dir):
+                                    rel_path = item.relative_to(
+                                        self.host_os.sandbox_dir
+                                    ).as_posix()
+                                    if rel_path in meta:
+                                        desc = f" [Description: {meta[rel_path]}]"
+                            except Exception:
+                                pass
+
+                            desc += get_python_module_docstring(item)
+
+                            lines.append(
+                                f"{prefix}{connector}📄 {item.name} ({size_str}){desc}"
+                            )
+                            lines_count += 1
+
+                except Exception:
+                    pass
+
+            root_icon = "🏠" if dir_display == self.host_os.framework_dir.name else "📂"
+            lines.append(f"{root_icon} {dir_display}/")
+
+            _build_tree(safe_path, 0, "")
+
+            if lines_count >= limit:
+                lines.append(
+                    f"└── ... [Output limit of {limit} elements reached. Others hidden]"
+                )
+
+            if len(lines) == 1:
+                lines.append("└── (Empty directory)")
+
+            main_logger.info(f"[Host OS] Directory lookup (tree): {safe_path.name}")
+            return SkillResult.ok("\n".join(lines))
+
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+
+        except Exception as e:
+            return SkillResult.fail(f"Error reading directory: {e}")
+
+    @skill(swarm=[Subagents.CODER, Subagents.QA_ENGINEER, Subagents.SYSADMIN])
+    @require_access(HostOSAccessLevel.SANDBOX)
+    async def search_files(self, pattern: str, path: str = ".") -> SkillResult:
+        """
+        Searches files by glob pattern (e.g., '*.py', 'log_*.txt').
+        """
+
+        limit = self.host_os.config.file_list_limit
+
+        try:
+            safe_path = self.host_os.validate_path(path, is_write=False)
+
+            if not safe_path.is_dir():
+                return SkillResult.fail("Error: Base search path must be a directory.")
+
+            meta = self.host_os.get_file_metadata()
+
+            found = []
+            for i, file_path in enumerate(safe_path.rglob(pattern)):
+                if i >= limit:
+                    found.append(f"...[Search limit: found more than {limit} matches] ...")
+                    break
+
+                try:
+                    rel_path = file_path.relative_to(self.host_os.framework_dir).as_posix()
+                except ValueError:
+                    rel_path = str(file_path)
+
+                try:
+                    size_str = (
+                        format_size(file_path.stat().st_size) if file_path.is_file() else "DIR"
+                    )
+                except Exception:
+                    size_str = "???"
+
+                desc = ""
+                try:
+                    if file_path.is_relative_to(self.host_os.sandbox_dir):
+                        full_rel_path = file_path.relative_to(
+                            self.host_os.sandbox_dir
+                        ).as_posix()
+                        if full_rel_path in meta:
+                            desc = f" [Description: {meta[full_rel_path]}]"
+                except Exception:
+                    pass
+
+                desc += get_python_module_docstring(file_path)
+
+                found.append(f"- {rel_path} ({size_str}){desc}")
+
+            if not found:
+                return SkillResult.ok(f"No matches found for pattern '{pattern}'.")
+
+            main_logger.info(f"[Host OS] Searching files '{pattern}' in {safe_path.name}")
+            return SkillResult.ok("\n".join(found))
+
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+
+        except Exception as e:
+            return SkillResult.fail(f"Error searching files: {e}")
+
+    @skill(swarm=[Subagents.CODER, Subagents.QA_ENGINEER, Subagents.SYSADMIN])
+    @require_access(HostOSAccessLevel.SANDBOX)
+    async def search_content_in_files(
+        self,
+        search_string: str,
+        path: str = ".",
+        case_sensitive: bool = False,
+        recursive: bool = True,
+    ) -> SkillResult:
+        """
+        Global search.
+        Finds exact text string across all files in directory.
+        """
+
+        if not search_string:
+            return SkillResult.fail("Search string cannot be empty.")
+
+        try:
+            safe_path = self.host_os.validate_path(path, is_write=False)
+
+            if not safe_path.is_dir():
+                return SkillResult.fail(f"Error: Path is not a directory ({path}).")
+
+            max_matches = 150
+
+            def _search():
+                matches = []
+                ignore_dirs = {
+                    ".git",
+                    "venv",
+                    ".venv",
+                    "env",
+                    "__pycache__",
+                    "node_modules",
+                    ".pytest_cache",
+                }
+
+                iterator = safe_path.rglob("*") if recursive else safe_path.iterdir()
+                search_query = search_string if case_sensitive else search_string.lower()
+
+                for item in iterator:
+                    if not item.is_file():
+                        continue
+
+                    rel_path = item.relative_to(safe_path)
+
+                    if any(part in ignore_dirs for part in rel_path.parts):
+                        continue
+
+                    try:
+                        with open(item, "r", encoding="utf-8") as f:
+                            for line_num, line in enumerate(f, 1):
+                                check_line = line if case_sensitive else line.lower()
+
+                                if search_query in check_line:
+                                    try:
+                                        display_path = item.relative_to(
+                                            self.host_os.framework_dir
+                                        ).as_posix()
+                                    except ValueError:
+                                        display_path = item.name
+
+                                    clean_line = line.strip()
+                                    limit = 300
+                                    if len(clean_line) > limit:
+                                        clean_line = (
+                                            clean_line[:limit] + " ... [line truncated]"
+                                        )
+
+                                    matches.append(
+                                        f"- {display_path}:{line_num}: {clean_line}"
+                                    )
+
+                                    if len(matches) >= max_matches:
+                                        matches.append(
+                                            f"\n... [Reached limit of {max_matches} matches. Search stopped]"
+                                        )
+                                        return matches
+
+                    except UnicodeDecodeError:
+                        continue
+
+                    except Exception:
+                        continue
+
+                return matches
+
+            results = await asyncio.to_thread(_search)
+
+            if not results:
+                return SkillResult.ok(
+                    f"No matches found for string '{search_string}' in '{safe_path.name}'."
+                )
+
+            main_logger.info(
+                f"[Host OS] Executed global search for text '{search_string}' in {safe_path.name}"
+            )
+            return SkillResult.ok(
+                f"Search results for '{search_string}':\n" + "\n".join(results)
+            )
+
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+
+        except Exception as e:
+            return SkillResult.fail(f"Error searching text: {e}")
+
+    @staticmethod
+    def _clean_search_line(text: str, max_chars: int = 500) -> str:
+        cleaned = text.rstrip("\r\n")
+        return cleaned if len(cleaned) <= max_chars else cleaned[:max_chars] + "..."
+
+    async def _search_with_rg(
+        self,
+        rg_path: str,
+        root: Path,
+        query: str,
+        regex: bool,
+        case_sensitive: bool,
+        globs: List[str],
+        context_lines: int,
+        max_matches: int,
+        max_output_chars: int,
+    ) -> Dict[str, Any]:
+        args = [
+            rg_path,
+            "--json",
+            "--no-messages",
+            "--max-filesize",
+            "5M",
+        ]
+        if not regex:
+            args.append("--fixed-strings")
+        if not case_sensitive:
+            args.append("--ignore-case")
+        if context_lines:
+            args.extend(["--context", str(context_lines)])
+        for pattern in globs:
+            args.extend(["--glob", pattern])
+        args.extend(["--", query, "."])
+
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=str(root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        assert process.stdout is not None and process.stderr is not None
+        stderr_task = asyncio.create_task(process.stderr.read(64_000))
+        matches: List[Dict[str, Any]] = []
+        context: Dict[str, Dict[int, str]] = {}
+        output_chars = 0
+        truncated = False
+        try:
+            while True:
+                raw_event = await process.stdout.readline()
+                if not raw_event:
+                    break
+                try:
+                    event = json.loads(raw_event)
+                except json.JSONDecodeError:
+                    continue
+                event_type = event.get("type")
+                data = event.get("data", {})
+                if event_type not in {"match", "context"}:
+                    continue
+                path = data.get("path", {}).get("text")
+                line_number = data.get("line_number")
+                if not path or not isinstance(line_number, int):
+                    continue
+                path = path.replace("\\", "/")
+                raw_line = data.get("lines", {}).get("text", "")
+                line = self._clean_search_line(raw_line)
+                context.setdefault(path, {})[line_number] = line
+                if event_type != "match":
+                    continue
+                submatches = data.get("submatches") or []
+                if submatches:
+                    byte_offset = int(submatches[0].get("start", 0))
+                    prefix = raw_line.encode("utf-8")[:byte_offset].decode(
+                        "utf-8", errors="ignore"
+                    )
+                    column = len(prefix) + 1
+                else:
+                    column = 1
+                matches.append(
+                    {
+                        "path": path,
+                        "line": line_number,
+                        "column": column,
+                        "text": line,
+                    }
+                )
+                output_chars += len(path) + len(line)
+                if len(matches) >= max_matches or output_chars >= max_output_chars:
+                    truncated = True
+                    process.terminate()
+                    break
+            await process.wait()
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+            raise
+        stderr = (await stderr_task).decode("utf-8", errors="replace").strip()[:2000]
+        if process.returncode not in (0, 1, -15):
+            if not truncated:
+                raise ValueError(stderr or f"ripgrep exited with {process.returncode}")
+
+        for match in matches:
+            file_context = context.get(match["path"], {})
+            line_number = match["line"]
+            match["before"] = [
+                {"line": number, "text": file_context[number]}
+                for number in range(line_number - context_lines, line_number)
+                if number in file_context
+            ]
+            match["after"] = [
+                {"line": number, "text": file_context[number]}
+                for number in range(line_number + 1, line_number + context_lines + 1)
+                if number in file_context
+            ]
+        return {
+            "backend": "ripgrep",
+            "matches": matches,
+            "truncated": truncated,
+            "stderr": stderr or None,
+        }
+
+    def _search_with_python(
+        self,
+        root: Path,
+        query: str,
+        regex: bool,
+        case_sensitive: bool,
+        globs: List[str],
+        context_lines: int,
+        max_matches: int,
+        max_output_chars: int,
+    ) -> Dict[str, Any]:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        expression = re.compile(query if regex else re.escape(query), flags)
+        matches: List[Dict[str, Any]] = []
+        output_chars = 0
+        truncated = False
+        for current_root, directories, filenames in os.walk(root):
+            current = Path(current_root)
+            directories[:] = [
+                name for name in directories if not is_ignored(current / name)
+            ]
+            for filename in filenames:
+                path = current / filename
+                relative = path.relative_to(root)
+                if is_ignored(relative):
+                    continue
+                relative_text = relative.as_posix()
+                if globs and not any(
+                    fnmatch.fnmatch(relative_text, pattern)
+                    or relative.match(pattern)
+                    for pattern in globs
+                ):
+                    continue
+                try:
+                    if path.stat().st_size > 5 * 1024 * 1024:
+                        continue
+                    raw = path.read_bytes()
+                    if b"\x00" in raw[:4096]:
+                        continue
+                    lines = raw.decode("utf-8", errors="replace").splitlines()
+                except OSError:
+                    continue
+                for index, line in enumerate(lines):
+                    found = expression.search(line)
+                    if not found:
+                        continue
+                    cleaned = self._clean_search_line(line)
+                    match = {
+                        "path": relative_text,
+                        "line": index + 1,
+                        "column": found.start() + 1,
+                        "text": cleaned,
+                        "before": [
+                            {
+                                "line": context_index + 1,
+                                "text": self._clean_search_line(lines[context_index]),
+                            }
+                            for context_index in range(
+                                max(0, index - context_lines), index
+                            )
+                        ],
+                        "after": [
+                            {
+                                "line": context_index + 1,
+                                "text": self._clean_search_line(lines[context_index]),
+                            }
+                            for context_index in range(
+                                index + 1,
+                                min(len(lines), index + context_lines + 1),
+                            )
+                        ],
+                    }
+                    matches.append(match)
+                    output_chars += len(relative_text) + len(cleaned)
+                    if len(matches) >= max_matches or output_chars >= max_output_chars:
+                        truncated = True
+                        break
+                if truncated:
+                    break
+            if truncated:
+                break
+        return {
+            "backend": "python",
+            "matches": matches,
+            "truncated": truncated,
+            "stderr": None,
+        }
+
+    @skill(swarm=[Subagents.CODER, Subagents.QA_ENGINEER, Subagents.SYSADMIN])
+    @require_access(HostOSAccessLevel.SANDBOX)
+    async def search_repository(
+        self,
+        query: str,
+        path: str = ".",
+        regex: bool = False,
+        case_sensitive: bool = False,
+        globs: Optional[List[str]] = None,
+        context_lines: int = 2,
+        max_matches: int = 50,
+    ) -> SkillResult:
+        """Search a repository with bounded structured results and line context.
+
+        Uses ripgrep when available and a bounded Python fallback otherwise.
+        ``globs`` may restrict files (for example ``['*.py', 'src/**']``).
+        """
+
+        if not query:
+            return SkillResult.fail("query cannot be empty.")
+        if len(query) > 2000:
+            return SkillResult.fail("query cannot exceed 2000 characters.")
+        if context_lines < 0 or context_lines > 5:
+            return SkillResult.fail("context_lines must be between 0 and 5.")
+        if max_matches < 1 or max_matches > 200:
+            return SkillResult.fail("max_matches must be between 1 and 200.")
+        patterns = list(globs or [])
+        if len(patterns) > 20 or any(not pattern or len(pattern) > 200 for pattern in patterns):
+            return SkillResult.fail("globs must contain at most 20 non-empty patterns.")
+        try:
+            safe_path = self.host_os.validate_path(path, is_write=False)
+            if not safe_path.is_dir():
+                return SkillResult.fail(f"Error: Path is not a directory ({path}).")
+            max_output_chars = self.host_os.config.file_read_max_chars * 2
+            rg_path = shutil.which("rg")
+            if rg_path:
+                result = await self._search_with_rg(
+                    rg_path,
+                    safe_path,
+                    query,
+                    regex,
+                    case_sensitive,
+                    patterns,
+                    context_lines,
+                    max_matches,
+                    max_output_chars,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    self._search_with_python,
+                    safe_path,
+                    query,
+                    regex,
+                    case_sensitive,
+                    patterns,
+                    context_lines,
+                    max_matches,
+                    max_output_chars,
+                )
+            result.update(
+                {
+                    "query": query,
+                    "root": str(safe_path),
+                    "match_count": len(result["matches"]),
+                }
+            )
+            result["serialized_chars"] = 0
+            while (
+                len(json.dumps(result, ensure_ascii=False)) > max(256, max_output_chars - 16)
+                and result["matches"]
+            ):
+                changed = False
+                for match in reversed(result["matches"]):
+                    if match["after"]:
+                        match["after"].pop()
+                        changed = True
+                        break
+                    if match["before"]:
+                        match["before"].pop(0)
+                        changed = True
+                        break
+                if not changed:
+                    result["matches"].pop()
+                    result["match_count"] = len(result["matches"])
+                result["truncated"] = True
+            for _ in range(3):
+                result["serialized_chars"] = len(
+                    json.dumps(result, ensure_ascii=False)
+                )
+            main_logger.info(
+                f"[Host OS] Repository search via {result['backend']}: "
+                f"{len(result['matches'])} matches."
+            )
+            return SkillResult.ok(json.dumps(result, ensure_ascii=False))
+        except re.error as e:
+            return SkillResult.fail(f"Invalid regular expression: {e}")
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+        except Exception as e:
+            return SkillResult.fail(f"Repository search error: {e}")

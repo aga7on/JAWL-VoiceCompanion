@@ -1,0 +1,1016 @@
+"""
+Skills for physical interaction with the host system's graphical user interface (GUI).
+Cross-platform implementation supporting Windows, macOS, and Linux.
+Returns failure gracefully on headless servers without crashing the system.
+"""
+
+import os
+import sys
+import asyncio
+import subprocess
+import webbrowser
+import shutil
+import ctypes
+from ctypes import wintypes
+import hashlib
+import json
+import threading
+from PIL import ImageGrab
+import time
+
+from src.utils._tools import draw_image_grid
+
+from src.l2_interfaces.host.os.client import HostOSClient, HostOSAccessLevel
+from src.l2_interfaces.host.os.decorators import require_access
+from src.l2_interfaces.host.os.desktop_automation import (
+    DesktopAutomationError,
+    WindowsDesktopAutomation,
+)
+
+from src.l3_agent.skills.registry import SkillResult, skill
+
+
+class HostOSDesktop:
+    """
+    Agent tools for interacting with the host OS Desktop GUI.
+    Cross-platform implementation. Safely returns fail on headless servers (VPS).
+    """
+
+    def __init__(self, host_os_client: HostOSClient):
+        self.host_os = host_os_client
+        self._semantic_client = None
+
+    def _semantic(self) -> WindowsDesktopAutomation:
+        if sys.platform != "win32":
+            raise DesktopAutomationError(
+                "Semantic desktop automation currently requires Windows UI Automation."
+            )
+        if self._semantic_client is None:
+            config = self.host_os.config
+            self._semantic_client = WindowsDesktopAutomation(
+                max_windows=config.desktop_max_windows,
+                max_elements=config.desktop_max_elements,
+                max_text_chars=config.desktop_max_text_chars,
+                max_result_chars=config.desktop_max_result_chars,
+            )
+        return self._semantic_client
+
+    async def _run_semantic(
+        self,
+        operation: str,
+        function,
+        *,
+        operation_timeout_sec: float | None = None,
+        **kwargs,
+    ):
+        """Run one potentially blocking UIA call behind a hard async boundary."""
+
+        configured_timeout = float(
+            self.host_os.config.desktop_operation_timeout_sec
+        )
+        effective_timeout = (
+            configured_timeout
+            if operation_timeout_sec is None
+            else float(operation_timeout_sec)
+        )
+        loop = asyncio.get_running_loop()
+        result_future = loop.create_future()
+
+        def deliver_result(value=None, error: Exception | None = None) -> None:
+            if result_future.done():
+                return
+            if error is not None:
+                result_future.set_exception(error)
+            else:
+                result_future.set_result(value)
+
+        def invoke() -> None:
+            try:
+                value = function(**kwargs)
+            except Exception as exc:
+                try:
+                    loop.call_soon_threadsafe(deliver_result, None, exc)
+                except RuntimeError:
+                    pass
+            else:
+                try:
+                    loop.call_soon_threadsafe(deliver_result, value, None)
+                except RuntimeError:
+                    pass
+
+        # UIA/COM can block below Python with no cancellation primitive. A
+        # daemon thread lets the async boundary time out without registering a
+        # stuck default-executor worker that prevents process shutdown.
+        threading.Thread(
+            target=invoke,
+            name=f"jawl-desktop-{operation}",
+            daemon=True,
+        ).start()
+        try:
+            return await asyncio.wait_for(
+                result_future,
+                timeout=effective_timeout,
+            )
+        except TimeoutError as exc:
+            # The OS call runs in a worker thread and cannot be killed safely.
+            # Drop the client so later calls do not queue behind its held lock.
+            self._semantic_client = None
+            raise DesktopAutomationError(
+                f"Desktop {operation} exceeded {effective_timeout:g}s; "
+                "the UI Automation client was reset."
+            ) from exc
+
+    @skill()
+    @require_access(HostOSAccessLevel.OBSERVER)
+    async def observe_desktop(
+        self,
+        window_title: str = "",
+        max_depth: int = 6,
+        max_elements: int | None = None,
+    ) -> SkillResult:
+        """[GUI] Observe bounded Windows UIA windows and semantic controls.
+
+        Returns short-lived element references and exact element hashes. Prefer
+        these semantic controls over coordinate clicks. Re-observe after any UI
+        change because references and hashes deliberately become stale.
+        """
+
+        try:
+            semantic = self._semantic()
+            result = await self._run_semantic(
+                "observation",
+                semantic.observe,
+                window_title=window_title,
+                max_depth=max_depth,
+                max_elements=max_elements,
+            )
+            return SkillResult.ok(json.dumps(result, ensure_ascii=False))
+        except DesktopAutomationError as exc:
+            return SkillResult.fail(str(exc))
+        except Exception as exc:
+            return SkillResult.fail(f"Desktop observation failed: {exc}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def act_on_desktop_element(
+        self,
+        element_ref: str,
+        expected_element_sha256: str,
+        action: str,
+        value: str | None = None,
+        settle_sec: float = 0.5,
+    ) -> SkillResult:
+        """[GUI] Act on one exactly observed UIA element, then verify its state.
+
+        Supported actions: invoke, click, focus, set_value, toggle, select,
+        expand, collapse. A stale element fails before dispatch. `verified=false`
+        means the action was dispatched but no semantic postcondition was seen;
+        observe or wait before continuing and never assume success.
+        """
+
+        try:
+            semantic = self._semantic()
+            result = await self._run_semantic(
+                "action",
+                semantic.act,
+                element_ref=element_ref,
+                expected_element_sha256=expected_element_sha256,
+                action=action,
+                value=value,
+                settle_sec=settle_sec,
+            )
+            return SkillResult.ok(json.dumps(result, ensure_ascii=False))
+        except DesktopAutomationError as exc:
+            return SkillResult.fail(str(exc))
+        except Exception as exc:
+            return SkillResult.fail(f"Desktop action failed: {exc}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OBSERVER)
+    async def wait_for_desktop_element(
+        self,
+        window_title: str = "",
+        name: str = "",
+        automation_id: str = "",
+        control_type: str = "",
+        expected_exists: bool = True,
+        timeout_sec: float = 10,
+        poll_interval_sec: float = 0.25,
+    ) -> SkillResult:
+        """[GUI] Wait for a bounded semantic UI postcondition.
+
+        At least one window/control selector is required. Use this after actions
+        whose success is represented by a dialog or a newly appearing control.
+        """
+
+        try:
+            semantic = self._semantic()
+            result = await self._run_semantic(
+                "wait",
+                semantic.wait_for_element,
+                operation_timeout_sec=min(
+                    120,
+                    max(
+                        float(timeout_sec) + 5,
+                        float(
+                            self.host_os.config.desktop_operation_timeout_sec
+                        ),
+                    ),
+                ),
+                window_title=window_title,
+                name=name,
+                automation_id=automation_id,
+                control_type=control_type,
+                expected_exists=expected_exists,
+                timeout_sec=timeout_sec,
+                poll_interval_sec=poll_interval_sec,
+            )
+            message = json.dumps(result, ensure_ascii=False)
+            if result["condition_met"]:
+                return SkillResult.ok(message)
+            return SkillResult.fail(message)
+        except DesktopAutomationError as exc:
+            return SkillResult.fail(str(exc))
+        except Exception as exc:
+            return SkillResult.fail(f"Desktop wait failed: {exc}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def open_url_in_browser(self, url: str) -> SkillResult:
+        """
+        [GUI] Opens URL in default OS browser.
+        """
+
+        try:
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+
+            success = await asyncio.to_thread(webbrowser.open, url)
+            if success:
+                return SkillResult.ok("True")
+            return SkillResult.fail(
+                "Browser not found or the OS does not support this operation."
+            )
+
+        except Exception as e:
+            return SkillResult.fail(f"Error opening browser: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def open_path_in_explorer(self, path: str = ".") -> SkillResult:
+        """
+        [GUI] Opens path in system file explorer.
+        """
+        try:
+            safe_path = self.host_os.validate_path(path, is_write=False)
+            if not safe_path.exists():
+                return SkillResult.fail(f"Error: Path does not exist ({path}).")
+
+            def _open_native():
+                if sys.platform == "win32":
+                    os.startfile(str(safe_path))
+                elif sys.platform == "darwin":
+                    subprocess.run(["open", str(safe_path)])
+                else:
+                    subprocess.run(["xdg-open", str(safe_path)])
+
+            await asyncio.to_thread(_open_native)
+            return SkillResult.ok("True")
+
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+
+        except Exception as e:
+            return SkillResult.fail(f"Error opening window: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def send_notification(self, title: str, message: str) -> SkillResult:
+        """
+        [GUI] Sends system push notification.
+        """
+        try:
+
+            def _notify():
+                if sys.platform == "win32":
+                    ps_script = f"""
+                    [Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null;
+                    $notify = New-Object System.Windows.Forms.NotifyIcon;
+                    $notify.Icon = [System.Drawing.SystemIcons]::Information;
+                    $notify.BalloonTipTitle = '{title.replace("'", "''")}';
+                    $notify.BalloonTipText = '{message.replace("'", "''")}';
+                    $notify.Visible = $True;
+                    $notify.ShowBalloonTip(5000);
+                    Start-Sleep -Seconds 5;
+                    $notify.Dispose();
+                    """
+                    subprocess.run(
+                        ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script]
+                    )
+                elif sys.platform == "darwin":
+                    apple_script = f'display notification "{message}" with title "{title}"'
+                    subprocess.run(["osascript", "-e", apple_script])
+                else:
+                    subprocess.run(["notify-send", title, message])
+
+            asyncio.create_task(asyncio.to_thread(_notify))
+            return SkillResult.ok("True")
+
+        except FileNotFoundError:
+            return SkillResult.fail(
+                "Notification service is unavailable in this OS (likely a headless server)."
+            )
+
+        except Exception as e:
+            return SkillResult.fail(f"Error sending notification: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OBSERVER)
+    async def take_screenshot(
+        self,
+        filename: str = "",
+        with_grid: bool = False,
+        grid_step: int = 100,
+        all_screens: bool = False,
+        save_path: str = "",
+    ) -> SkillResult:
+        """
+        [GUI] Captures main screen screenshot and saves to sandbox.
+
+        filename: Optional destination path. ``save_path`` is a compatibility
+            alias. When both are omitted, a unique sandbox filename is used.
+        with_grid: Overlays coordinate grid.
+        grid_step: Grid step in pixels.
+        """
+        try:
+            if filename and save_path and filename != save_path:
+                return SkillResult.fail(
+                    "Specify either filename or save_path, not two different paths."
+                )
+            filename = filename or save_path
+            if not filename:
+                filename = f"screenshot-{time.time_ns()}.png"
+
+            if "/" not in filename and "\\" not in filename:
+                filename = f"sandbox/_system/download/{filename}"
+
+            safe_path = self.host_os.validate_path(filename, is_write=True)
+            safe_path.parent.mkdir(parents=True, exist_ok=True)
+
+            def _grab():
+                img = ImageGrab.grab(all_screens=all_screens)
+                img.save(safe_path)
+
+                if with_grid:
+                    draw_image_grid(safe_path, step=grid_step)
+
+            capture_error: OSError | None = None
+            for capture_attempt in range(2):
+                try:
+                    await asyncio.to_thread(_grab)
+                    capture_error = None
+                    break
+                except PermissionError:
+                    raise
+                except OSError as exc:
+                    capture_error = exc
+                    if capture_attempt == 0:
+                        await asyncio.sleep(0.25)
+            if capture_error is not None:
+                return SkillResult.fail(
+                    "Failed to take screenshot after 2 attempts. "
+                    "Graphical interface may be temporarily unavailable "
+                    "or headless "
+                    f"(last error: {capture_error})."
+                )
+            digest = await asyncio.to_thread(
+                lambda: hashlib.sha256(safe_path.read_bytes()).hexdigest()
+            )
+            return SkillResult.ok(
+                json.dumps(
+                    {
+                        "path": safe_path.relative_to(
+                            self.host_os.framework_dir
+                        ).as_posix(),
+                        "sha256": digest,
+                        "all_screens": all_screens,
+                        "with_grid": with_grid,
+                    }
+                )
+            )
+
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+        except OSError as e:
+            return SkillResult.fail(
+                "Failed to take screenshot. Graphical interface may be "
+                f"unavailable or headless (last error: {e})."
+            )
+        except Exception as e:
+            return SkillResult.fail(f"Error taking screenshot: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def lock_screen(self) -> SkillResult:
+        """
+        [GUI] Locks screen.
+        """
+        try:
+
+            def _lock():
+                if sys.platform == "win32":
+                    subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"])
+                elif sys.platform == "darwin":
+                    subprocess.run(["pmset", "displaysleepnow"])
+                else:
+                    if shutil.which("xdg-screensaver"):
+                        subprocess.run(["xdg-screensaver", "lock"])
+                    elif shutil.which("gnome-screensaver-command"):
+                        subprocess.run(["gnome-screensaver-command", "-l"])
+                    else:
+                        raise FileNotFoundError("Screen lock command not found.")
+
+            await asyncio.to_thread(_lock)
+            return SkillResult.ok("True")
+
+        except FileNotFoundError as e:
+            return SkillResult.fail(f"Failed to lock screen (GUI is unavailable): {e}")
+
+        except Exception as e:
+            return SkillResult.fail(f"Error locking screen: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def click_coordinates(self, x: int, y: int) -> SkillResult:
+        """
+        [GUI] Performs left mouse click at monitor coordinates.
+        """
+
+        try:
+            return await self._pointer_result("click", x, y)
+        except Exception as e:
+            return SkillResult.fail(f"Error executing mouse click: {e}")
+
+    async def _pointer_result(self, action: str, x: int, y: int) -> SkillResult:
+        success, message = await asyncio.to_thread(self._pointer_action, action, x, y)
+        verified = False
+        if success and sys.platform == "win32":
+            verified = await asyncio.to_thread(self._cursor_is_at, x, y)
+        detail = {
+            "action": action,
+            "dispatched": bool(success),
+            "verification": "cursor_at_target",
+            "verified": bool(verified),
+        }
+        if success:
+            return SkillResult.ok(json.dumps(detail, separators=(",", ":")))
+        return SkillResult.fail(message)
+
+    @staticmethod
+    def _cursor_is_at(x: int, y: int) -> bool:
+        """Verify the cursor position after a native Windows input call."""
+        point = wintypes.POINT()
+        return bool(ctypes.windll.user32.GetCursorPos(ctypes.byref(point))) and (
+            int(point.x) == int(x) and int(point.y) == int(y)
+        )
+
+    @staticmethod
+    def _pointer_action(action: str, x: int, y: int) -> tuple[bool, str]:
+        """Run one bounded pointer primitive on the host desktop."""
+        if action not in {"move", "click", "double_click", "right_click", "middle_click"}:
+            raise ValueError(f"Unsupported pointer action: {action}")
+
+        if sys.platform == "win32":
+            ctypes.windll.user32.SetCursorPos(x, y)
+            flags = {
+                "click": (2, 4),
+                "double_click": (2, 4),
+                "right_click": (8, 16),
+                "middle_click": (32, 64),
+            }
+            if action in flags:
+                down, up = flags[action]
+                repetitions = 2 if action == "double_click" else 1
+                for index in range(repetitions):
+                    ctypes.windll.user32.mouse_event(down, 0, 0, 0, 0)
+                    ctypes.windll.user32.mouse_event(up, 0, 0, 0, 0)
+                    if repetitions == 2 and index == 0:
+                        time.sleep(0.05)
+            return True, f"Pointer action {action} at coordinates ({x}, {y}) executed."
+
+        if sys.platform == "darwin":
+            cliclick = shutil.which("cliclick")
+            if not cliclick:
+                if action == "click":
+                    script = f'tell application "System Events"\nclick at {{{x}, {y}}}\nend tell'
+                    subprocess.run(["osascript", "-e", script], check=True)
+                    return True, f"Click at coordinates ({x}, {y}) executed."
+                raise FileNotFoundError(
+                    "To perform this pointer action on macOS, install 'cliclick'."
+                )
+            cliclick_action = {
+                "move": "m",
+                "click": "c",
+                "double_click": "dc",
+                "right_click": "rc",
+                "middle_click": "mc",
+            }[action]
+            subprocess.run([cliclick, f"{cliclick_action}:{x},{y}"], check=True)
+            return True, f"Pointer action {action} at coordinates ({x}, {y}) executed."
+
+        if shutil.which("xdotool"):
+            if action == "move":
+                command = ["xdotool", "mousemove", str(x), str(y)]
+            else:
+                button = {
+                    "click": "1",
+                    "double_click": "1",
+                    "right_click": "3",
+                    "middle_click": "2",
+                }[action]
+                command = ["xdotool", "mousemove", str(x), str(y), "click"]
+                if action == "double_click":
+                    command.extend(["--repeat", "2", "--delay", "50"])
+                command.append(button)
+            subprocess.run(command, check=True)
+            return True, f"Pointer action {action} at coordinates ({x}, {y}) executed."
+
+        raise FileNotFoundError("To control the mouse, please install 'xdotool'.")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def double_click_coordinates(self, x: int, y: int) -> SkillResult:
+        """[GUI] Performs a double left click at monitor coordinates."""
+        try:
+            return await self._pointer_result("double_click", x, y)
+        except Exception as e:
+            return SkillResult.fail(f"Error executing mouse double click: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def right_click_coordinates(self, x: int, y: int) -> SkillResult:
+        """[GUI] Performs a right mouse click at monitor coordinates."""
+        try:
+            return await self._pointer_result("right_click", x, y)
+        except Exception as e:
+            return SkillResult.fail(f"Error executing mouse right click: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def middle_click_coordinates(self, x: int, y: int) -> SkillResult:
+        """[GUI] Performs a middle mouse click at monitor coordinates."""
+        try:
+            return await self._pointer_result("middle_click", x, y)
+        except Exception as e:
+            return SkillResult.fail(f"Error executing mouse middle click: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def move_pointer(self, x: int, y: int) -> SkillResult:
+        """[GUI] Moves the pointer to monitor coordinates without clicking."""
+        try:
+            return await self._pointer_result("move", x, y)
+        except Exception as e:
+            return SkillResult.fail(f"Error moving mouse pointer: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def type_text(self, text: str) -> SkillResult:
+        """
+        [GUI] Types specified text via keyboard.
+        """
+
+        def _type():
+            if sys.platform == "win32":
+                escaped = text
+                for char in "+^%~()[]{}":
+                    escaped = escaped.replace(char, f"{{{char}}}")
+                escaped = escaped.replace("'", "''")
+
+                ps_script = f"""
+                Add-Type -AssemblyName System.Windows.Forms
+                [System.Windows.Forms.SendKeys]::SendWait('{escaped}')
+                """
+
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps_script],
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    check=True,
+                )
+                return True, f"Text '{text}' successfully typed."
+
+            elif sys.platform == "darwin":
+                escaped_text = text.replace('"', '\\"')
+                script = f'tell application "System Events" to keystroke "{escaped_text}"'
+                subprocess.run(["osascript", "-e", script], check=True)
+                return True, f"Text '{text}' successfully typed."
+
+            else:
+                if shutil.which("xdotool"):
+                    subprocess.run(["xdotool", "type", text], check=True)
+                    return True, f"Text '{text}' successfully typed."
+                else:
+                    raise FileNotFoundError(
+                        "To emulate keyboard typing, please install 'xdotool'."
+                    )
+
+        try:
+            success, msg = await asyncio.to_thread(_type)
+            return SkillResult.ok("True") if success else SkillResult.fail(msg)
+
+        except Exception as e:
+            return SkillResult.fail(f"Error typing text: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def play_audio(self, filepath: str) -> SkillResult:
+        """
+        [GUI] Plays audio file.
+        """
+        try:
+            safe_path = self.host_os.validate_path(filepath, is_write=False)
+
+            if not safe_path.is_file():
+                return SkillResult.fail(f"Error: Audio file not found ({safe_path.name}).")
+
+            def _play():
+                if sys.platform == "win32":
+                    os.startfile(str(safe_path))
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["afplay", str(safe_path)])
+                else:
+                    if shutil.which("paplay"):
+                        subprocess.Popen(["paplay", str(safe_path)])
+                    elif shutil.which("mpg123"):
+                        subprocess.Popen(["mpg123", str(safe_path)])
+                    else:
+                        subprocess.Popen(["xdg-open", str(safe_path)])
+
+            await asyncio.to_thread(_play)
+            return SkillResult.ok("True")
+
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+
+        except OSError:
+            return SkillResult.fail("Failed to play audio. No default player found.")
+
+        except Exception as e:
+            return SkillResult.fail(f"Error playing audio: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OBSERVER)
+    async def get_clipboard(self) -> SkillResult:
+        """
+        [GUI] Reads system clipboard.
+        """
+        import base64
+
+        try:
+
+            def _read_clipboard():
+                if sys.platform == "win32":
+                    ps_script = "try { $t = Get-Clipboard -Raw; if ($t) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($t)) } } catch {}"
+                    b64_str = subprocess.check_output(
+                        ["powershell", "-NoProfile", "-Command", ps_script],
+                        text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    ).strip()
+
+                    return base64.b64decode(b64_str).decode("utf-8") if b64_str else ""
+                elif sys.platform == "darwin":
+                    return subprocess.check_output(["pbpaste"], text=True).strip()
+                else:
+                    if shutil.which("xclip"):
+                        return subprocess.check_output(
+                            ["xclip", "-o", "-selection", "clipboard"], text=True
+                        ).strip()
+                    elif shutil.which("xsel"):
+                        return subprocess.check_output(["xsel", "-ob"], text=True).strip()
+                    return ""
+
+            content = await asyncio.to_thread(_read_clipboard)
+
+            if not content:
+                return SkillResult.ok(
+                    "Clipboard is empty (or contains non-text data, e.g., a file or image)."
+                )
+
+            from src.utils._tools import truncate_text
+
+            clean_content = truncate_text(content, 10000)
+
+            return SkillResult.ok(f"Clipboard content:\n```\n{clean_content}\n```")
+
+        except FileNotFoundError:
+            return SkillResult.fail(
+                "Failed to read clipboard. On Linux, ensure 'xclip' or 'xsel' is installed."
+            )
+        except Exception as e:
+            return SkillResult.fail(f"Failed to access clipboard: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def set_clipboard(self, text: str) -> SkillResult:
+        """
+        [GUI] Writes text to system clipboard.
+        """
+        import base64
+
+        try:
+
+            def _write_clipboard():
+                if sys.platform == "win32":
+                    b64_str = base64.b64encode(text.encode("utf-8")).decode("utf-8")
+                    ps_script = f"[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64_str}')) | Set-Clipboard"
+
+                    subprocess.run(
+                        ["powershell", "-NoProfile", "-Command", ps_script],
+                        check=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                else:
+                    text_bytes = text.encode("utf-8")
+                    if sys.platform == "darwin":
+                        subprocess.run(["pbcopy"], input=text_bytes, check=True)
+                    else:
+                        if shutil.which("xclip"):
+                            subprocess.run(
+                                ["xclip", "-selection", "clipboard"],
+                                input=text_bytes,
+                                check=True,
+                            )
+                        elif shutil.which("xsel"):
+                            subprocess.run(["xsel", "-ib"], input=text_bytes, check=True)
+                        else:
+                            raise FileNotFoundError("xclip/xsel not found")
+
+            await asyncio.to_thread(_write_clipboard)
+            return SkillResult.ok("True")
+
+        except FileNotFoundError:
+            return SkillResult.fail(
+                "Failed to update clipboard. On Linux, ensure 'xclip' or 'xsel' is installed."
+            )
+        except Exception as e:
+            return SkillResult.fail(f"Error writing to clipboard: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OBSERVER)
+    async def list_active_windows(self) -> SkillResult:
+        """
+        [GUI] Lists visible/active OS window titles.
+        """
+
+        def _list():
+            titles = []
+            if sys.platform == "win32":
+                import win32gui
+
+                def enum_cb(hwnd, ctx):
+                    if win32gui.IsWindowVisible(hwnd):
+                        title = win32gui.GetWindowText(hwnd)
+                        if title and title not in ["Program Manager", "Settings"]:
+                            titles.append(title)
+
+                win32gui.EnumWindows(enum_cb, None)
+
+            elif sys.platform == "darwin":
+                script = """tell application "System Events"
+                    set windowList to {}
+                    repeat with proc in (every process whose background only is false)
+                        set windowList to windowList & (name of every window of proc)
+                    end repeat
+                    return windowList
+                end tell"""
+                out = subprocess.check_output(["osascript", "-e", script], text=True)
+                titles = [
+                    t.strip()
+                    for t in out.split(",")
+                    if t.strip() and t.strip() != "missing value"
+                ]
+
+            else:
+                if shutil.which("wmctrl"):
+                    out = subprocess.check_output(["wmctrl", "-l"], text=True)
+                    for line in out.splitlines():
+                        parts = line.split(maxsplit=3)
+                        if len(parts) >= 4:
+                            titles.append(parts[3])
+                else:
+                    raise FileNotFoundError("To switch windows, please install 'wmctrl'.")
+
+            return titles
+
+        try:
+            windows = await asyncio.to_thread(_list)
+            if not windows:
+                return SkillResult.ok("No active graphical windows found.")
+            unique_windows = list(dict.fromkeys(windows))
+
+            return SkillResult.ok("List of open windows:\n- " + "\n- ".join(unique_windows))
+
+        except FileNotFoundError as e:
+            return SkillResult.fail(str(e))
+
+        except Exception as e:
+            return SkillResult.fail(f"Error getting window list: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def maximize_active_window(self) -> SkillResult:
+        """
+        [GUI] Maximizes active window.
+        """
+
+        def _maximize():
+            if sys.platform == "win32":
+                import win32gui
+                import win32con
+
+                hwnd = win32gui.GetForegroundWindow()
+                if hwnd:
+                    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+                    return True, "Active window successfully maximized."
+                return False, "Active window not found."
+
+            elif sys.platform == "darwin":
+                script = """tell application "System Events"
+                    set frontApp to first application process whose frontmost is true
+                    set frontWindow to front window of frontApp
+                    set value of attribute "AXFullScreen" of frontWindow to true
+                end tell"""
+                subprocess.run(["osascript", "-e", script], check=True)
+                return True, "Active window maximized."
+
+            else:
+                if shutil.which("xdotool"):
+                    subprocess.run(
+                        ["xdotool", "getactivewindow", "windowsize", "100%", "100%"],
+                        check=True,
+                    )
+                    return True, "Active window maximized."
+                return False, "Linux requires the xdotool utility."
+
+        try:
+            success, msg = await asyncio.to_thread(_maximize)
+            return SkillResult.ok("True") if success else SkillResult.fail(msg)
+        except Exception as e:
+            return SkillResult.fail(f"Error maximizing window: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def focus_window(self, title_substring: str) -> SkillResult:
+        """
+        [GUI] Focuses window containing title substring.
+        """
+
+        def _focus():
+            if sys.platform == "win32":
+                import win32gui
+                import win32con
+
+                target_hwnd = None
+
+                def enum_cb(hwnd, ctx):
+                    nonlocal target_hwnd
+                    if win32gui.IsWindowVisible(hwnd):
+                        if title_substring.lower() in win32gui.GetWindowText(hwnd).lower():
+                            target_hwnd = hwnd
+
+                win32gui.EnumWindows(enum_cb, None)
+
+                if target_hwnd:
+                    ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
+                    win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(target_hwnd)
+                    return True, f"Focus switched to window '{title_substring}'."
+                return False, f"Window with title '{title_substring}' not found."
+
+            elif sys.platform == "darwin":
+                script = f"""tell application "System Events"
+                    set targetProc to first process whose name of every window contains "{title_substring}"
+                    set frontmost of targetProc to true
+                end tell"""
+                subprocess.run(["osascript", "-e", script], check=True)
+                return True, "Focus switched."
+
+            else:
+                if shutil.which("wmctrl"):
+                    subprocess.run(["wmctrl", "-a", title_substring], check=True)
+                    return True, "Focus switched."
+
+                else:
+                    raise FileNotFoundError("To switch windows, please install 'wmctrl'.")
+
+        try:
+            success, msg = await asyncio.to_thread(_focus)
+            return SkillResult.ok("True") if success else SkillResult.fail(msg)
+
+        except Exception as e:
+            return SkillResult.fail(f"Error switching focus: {e}")
+
+    @skill()
+    @require_access(HostOSAccessLevel.OPERATOR)
+    async def press_hotkey(self, hotkey: str) -> SkillResult:
+        """
+        [GUI] Emulates hotkey press (e.g., 'alt+tab', 'enter').
+        """
+
+        def _press():
+            hk = hotkey.lower().replace(" ", "")
+
+            if sys.platform == "win32":
+                vk_map = {
+                    "ctrl": 0x11,
+                    "alt": 0x12,
+                    "shift": 0x10,
+                    "win": 0x5B,
+                    "tab": 0x09,
+                    "enter": 0x0D,
+                    "esc": 0x1B,
+                    "space": 0x20,
+                    "up": 0x26,
+                    "down": 0x28,
+                    "left": 0x25,
+                    "right": 0x27,
+                }
+                for i in range(26):
+                    vk_map[chr(0x61 + i)] = 0x41 + i
+
+                for i in range(10):
+                    vk_map[str(i)] = 0x30 + i
+
+                keys = hk.split("+")
+                vks = []
+                for k in keys:
+                    if k in vk_map:
+                        vks.append(vk_map[k])
+                    else:
+                        return False, f"Unknown key for Windows: {k}"
+
+                for vk in vks:
+                    ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+
+                time.sleep(0.05)
+                for vk in reversed(vks):
+                    ctypes.windll.user32.keybd_event(vk, 0, 2, 0)
+
+                return True, f"Combination '{hotkey}' successfully pressed."
+
+            elif sys.platform == "darwin":
+                keys = hk.split("+")
+                modifiers, main_key = [], ""
+                mod_map = {
+                    "ctrl": "control down",
+                    "alt": "option down",
+                    "shift": "shift down",
+                    "win": "command down",
+                    "cmd": "command down",
+                }
+
+                for k in keys:
+                    if k in mod_map:
+                        modifiers.append(mod_map[k])
+                    else:
+                        main_key = k
+
+                if not main_key:
+                    return False, "Main key not specified."
+
+                using_str = f" using {{{', '.join(modifiers)}}}" if modifiers else ""
+
+                if main_key in ["enter", "return"]:
+                    script = f'tell application "System Events" to key code 36{using_str}'
+
+                elif main_key == "tab":
+                    script = f'tell application "System Events" to key code 48{using_str}'
+
+                elif main_key == "esc":
+                    script = f'tell application "System Events" to key code 53{using_str}'
+
+                elif main_key == "space":
+                    script = f'tell application "System Events" to key code 49{using_str}'
+
+                else:
+                    script = f'tell application "System Events" to keystroke "{main_key}"{using_str}'
+
+                subprocess.run(["osascript", "-e", script], check=True)
+                return True, f"Combination '{hotkey}' successfully pressed."
+
+            else:
+                if shutil.which("xdotool"):
+                    linux_hk = hk.replace("win", "super").replace("cmd", "super")
+                    subprocess.run(["xdotool", "key", linux_hk], check=True)
+                    return True, f"Combination '{hotkey}' successfully pressed."
+
+                else:
+                    raise FileNotFoundError("Please install 'xdotool'.")
+
+        try:
+            success, msg = await asyncio.to_thread(_press)
+            return SkillResult.ok(msg) if success else SkillResult.fail(msg)
+
+        except Exception as e:
+            return SkillResult.fail(f"Error during keystroke emulation: {e}")

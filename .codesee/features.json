@@ -1,0 +1,1914 @@
+{
+  "version": "0",
+  "manifest": {
+    "repo": "JAWL-VoiceCompanion",
+    "generated_at": "2026-09-12T18:30:00Z",
+    "generator": "ai@opencode",
+    "lang": "ru"
+  },
+  "epics": [
+    {
+      "id": "ops",
+      "name": "Запуск и воркеры",
+      "summary": "Единый лаунчер профиля, локальные воркеры, гигиена процессов",
+      "order": 0,
+      "importance": "core"
+    },
+    {
+      "id": "voice",
+      "name": "Голосовой контур",
+      "summary": "Полный дуплекс: слух, перебивание, синтез с просодией",
+      "order": 1,
+      "importance": "core"
+    },
+    {
+      "id": "mind",
+      "name": "Мозг и маршрут LLM",
+      "summary": "Нативный транспорт JAWL и модельные полосы",
+      "order": 1,
+      "importance": "core"
+    },
+    {
+      "id": "memory",
+      "name": "Память и отражение",
+      "summary": "Каноническая память, VoiceMem, ambient, рефлексия",
+      "order": 2,
+      "importance": "core"
+    },
+    {
+      "id": "initiative",
+      "name": "Инициатива и присутствие",
+      "summary": "Проактивный канал, экранные дельты, арбитр внимания",
+      "order": 2,
+      "importance": "normal"
+    },
+    {
+      "id": "control",
+      "name": "Пульт и витрина",
+      "summary": "Браузерный контроль, avatar-сцена, диагностика",
+      "order": 3,
+      "importance": "normal"
+    },
+    {
+      "id": "safety",
+      "name": "Политика и безопасность",
+      "summary": "Уровни доступа, согласования, аудит, экстренный стоп",
+      "order": 3,
+      "importance": "normal"
+    }
+  ],
+  "features": [
+    {
+      "id": "f-profile-launch",
+      "name": "Запуск профиля",
+      "summary": "Один скрипт поднимает JAWL, воркеры и компаньона",
+      "epicId": "ops",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "run_integrated_profile.ps1 -ProfileName daily"
+        }
+      ],
+      "steps": [
+        {
+          "id": "args",
+          "name": "Разбор параметров",
+          "role": "input",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
+        },
+        {
+          "id": "workers",
+          "name": "Запуск воркеров",
+          "role": "side-effect",
+          "note": "Tera/ASR/планер; здоровые остатки переиспользуются",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
+        },
+        {
+          "id": "jawl",
+          "name": "Старт консоли JAWL",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
+        },
+        {
+          "id": "heartbeat",
+          "name": "Ожидание heartbeat",
+          "role": "validation",
+          "note": "Ждёт свежий маркер завершённого цикла; ошибка — fail closed",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
+        },
+        {
+          "id": "timeout",
+          "name": "Отказ при таймауте",
+          "role": "error",
+          "note": "Профиль не поднимается, если маркер не пришёл за 300 с",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
+        },
+        {
+          "id": "companion",
+          "name": "Старт компаньона",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
+        },
+        {
+          "id": "ready",
+          "name": "Профиль готов",
+          "role": "output",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "args",
+          "to": "workers",
+          "kind": "next"
+        },
+        {
+          "from": "workers",
+          "to": "jawl",
+          "kind": "next"
+        },
+        {
+          "from": "jawl",
+          "to": "heartbeat",
+          "kind": "next"
+        },
+        {
+          "from": "heartbeat",
+          "to": "timeout",
+          "kind": "error",
+          "condition": "таймаут 300 с"
+        },
+        {
+          "from": "heartbeat",
+          "to": "companion",
+          "kind": "next"
+        },
+        {
+          "from": "companion",
+          "to": "ready",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-zombie-hygiene",
+      "name": "Гигиена перезапуска",
+      "summary": "Убивает осиротевших агентов до старта, иначе heartbeat таймаут",
+      "epicId": "ops",
+      "triggers": [
+        {
+          "kind": "manual",
+          "detail": "перед перезапуском профиля"
+        }
+      ],
+      "steps": [
+        {
+          "id": "ports",
+          "name": "Освободить порты",
+          "role": "side-effect"
+        },
+        {
+          "id": "scan",
+          "name": "Найти src/main.py",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/proactive.py"
+            }
+          ]
+        },
+        {
+          "id": "kill",
+          "name": "Снять зомби",
+          "role": "side-effect"
+        },
+        {
+          "id": "lock",
+          "name": "Дождаться run.lock",
+          "role": "validation"
+        }
+      ],
+      "flow": [
+        {
+          "from": "ports",
+          "to": "scan",
+          "kind": "next"
+        },
+        {
+          "from": "scan",
+          "to": "kill",
+          "kind": "conditional",
+          "condition": "найден осиротевший агент"
+        },
+        {
+          "from": "kill",
+          "to": "lock",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.75,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-voice-turn",
+      "name": "Голосовой ход",
+      "summary": "Микрофон → партиалы → финальный ASR → ответ голосом",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "ui",
+          "detail": "hands-free микрофон в браузере"
+        }
+      ],
+      "steps": [
+        {
+          "id": "capture",
+          "name": "Захват PCM",
+          "role": "input",
+          "refs": [
+            {
+              "file": "frontend/index.html"
+            }
+          ]
+        },
+        {
+          "id": "partials",
+          "name": "Партиалы в стрим-ASR",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/streaming_asr.py"
+            }
+          ]
+        },
+        {
+          "id": "endpoint",
+          "name": "Решение о конце",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/turn_policy.py"
+            }
+          ]
+        },
+        {
+          "id": "final-asr",
+          "name": "Финальный Qwen3-ASR",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        },
+        {
+          "id": "asr-fail",
+          "name": "Отказ ASR",
+          "role": "error",
+          "note": "Ход не уходит в JAWL, UI показывает деградацию",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/asr.py"
+            }
+          ]
+        },
+        {
+          "id": "turn",
+          "name": "Ход в JAWL",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/gateway.py"
+            }
+          ]
+        },
+        {
+          "id": "speak",
+          "name": "Озвучка ответа",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/tts.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "capture",
+          "to": "partials",
+          "kind": "next"
+        },
+        {
+          "from": "partials",
+          "to": "endpoint",
+          "kind": "next"
+        },
+        {
+          "from": "endpoint",
+          "to": "final-asr",
+          "kind": "conditional",
+          "condition": "реплика завершена"
+        },
+        {
+          "from": "final-asr",
+          "to": "asr-fail",
+          "kind": "error",
+          "condition": "ASR недоступен"
+        },
+        {
+          "from": "final-asr",
+          "to": "turn",
+          "kind": "next"
+        },
+        {
+          "from": "turn",
+          "to": "speak",
+          "kind": "async"
+        }
+      ],
+      "confidence": 0.85,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-streaming-asr",
+      "name": "Стриминговые партиалы",
+      "summary": "CrispASR+GigaAM дают черновики текста за доли секунды",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "PCM-чанки из /api/voice/audio"
+        }
+      ],
+      "steps": [
+        {
+          "id": "feed",
+          "name": "Подача PCM",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/streaming_asr.py"
+            }
+          ]
+        },
+        {
+          "id": "step",
+          "name": "Шаг декодера",
+          "role": "compute",
+          "note": "шаг 500 мс, bounded буфер"
+        },
+        {
+          "id": "snapshot",
+          "name": "Снапшот партиала",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "feed",
+          "to": "step",
+          "kind": "loop",
+          "condition": "на каждый PCM-чанк"
+        },
+        {
+          "from": "step",
+          "to": "snapshot",
+          "kind": "async"
+        }
+      ],
+      "confidence": 0.8,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-endpoint-policy",
+      "name": "Семантика конца реплики",
+      "summary": "Не обрывает фразу на «и/но/что», держит паузу до 2 с",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "партиал обновился"
+        }
+      ],
+      "steps": [
+        {
+          "id": "text",
+          "name": "Нормализация текста",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/turn_policy.py"
+            }
+          ]
+        },
+        {
+          "id": "tail",
+          "name": "Проверка хвоста",
+          "role": "compute",
+          "note": "continuation-лексикон + незакрытые слова"
+        },
+        {
+          "id": "decide",
+          "name": "Продлить или завершить",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/turn_policy.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "text",
+          "to": "tail",
+          "kind": "next"
+        },
+        {
+          "from": "tail",
+          "to": "decide",
+          "kind": "conditional",
+          "condition": "хвост выглядит незаконченным"
+        }
+      ],
+      "confidence": 0.85,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-barge-in",
+      "name": "Перебивание",
+      "summary": "Реплика пользователя мгновенно останавливает речь и слушает",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "речь во время озвучки"
+        }
+      ],
+      "steps": [
+        {
+          "id": "detect",
+          "name": "Детект голоса",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "frontend/index.html"
+            }
+          ]
+        },
+        {
+          "id": "duck",
+          "name": "DUCK-гейн",
+          "role": "transform",
+          "note": "фейд ~120 мс"
+        },
+        {
+          "id": "cancel",
+          "name": "Отмена TTS",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/tts.py"
+            }
+          ]
+        },
+        {
+          "id": "listen",
+          "name": "Непрерывное слушание",
+          "role": "output"
+        }
+      ],
+      "flow": [
+        {
+          "from": "detect",
+          "to": "duck",
+          "kind": "next"
+        },
+        {
+          "from": "duck",
+          "to": "cancel",
+          "kind": "next"
+        },
+        {
+          "from": "cancel",
+          "to": "listen",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.8,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-prosody",
+      "name": "Просодия Tera",
+      "summary": "Планер эмоций на предложение + WORLD2-контуры в синтезе",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "ответ готов к озвучке"
+        }
+      ],
+      "steps": [
+        {
+          "id": "plan",
+          "name": "План эмоций",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/prosody_planner.py"
+            }
+          ]
+        },
+        {
+          "id": "world",
+          "name": "WORLD2-контуры",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "scripts/teratts_server.py"
+            }
+          ]
+        },
+        {
+          "id": "synth",
+          "name": "Синтез с паузами",
+          "role": "output",
+          "refs": [
+            {
+              "file": "scripts/teratts_server.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "plan",
+          "to": "world",
+          "kind": "next"
+        },
+        {
+          "from": "world",
+          "to": "synth",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.75,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-chat-transport",
+      "name": "Нативный транспорт JAWL",
+      "summary": "Курсорный стрим событий и валидированные конверты ответов",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "http",
+          "detail": "POST /api/companion/turn + SSE /api/companion/stream"
+        }
+      ],
+      "steps": [
+        {
+          "id": "open",
+          "name": "Открыть стрим",
+          "role": "data-read",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            }
+          ]
+        },
+        {
+          "id": "submit",
+          "name": "Отправить ход",
+          "role": "input"
+        },
+        {
+          "id": "deltas",
+          "name": "Дельта-события",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/gateway.py"
+            }
+          ]
+        },
+        {
+          "id": "envelope",
+          "name": "Валидация конверта",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_gateway_contract.py"
+            }
+          ]
+        },
+        {
+          "id": "final",
+          "name": "Финальный ответ",
+          "role": "output"
+        }
+      ],
+      "flow": [
+        {
+          "from": "open",
+          "to": "submit",
+          "kind": "next"
+        },
+        {
+          "from": "submit",
+          "to": "deltas",
+          "kind": "async"
+        },
+        {
+          "from": "deltas",
+          "to": "envelope",
+          "kind": "next"
+        },
+        {
+          "from": "envelope",
+          "to": "final",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.85,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-llm-relay",
+      "name": "Zen-релей",
+      "summary": "Локальный прокси к открытому Zen-эндпоинту для быстрой полосы",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "cron",
+          "detail": "запускается лаунчером на 8891"
+        }
+      ],
+      "steps": [
+        {
+          "id": "key",
+          "name": "Ключ из auth.json",
+          "role": "auth",
+          "refs": [
+            {
+              "file": "scripts/opencode_header_relay.py"
+            }
+          ]
+        },
+        {
+          "id": "proxy",
+          "name": "Проксировать запрос",
+          "role": "transform"
+        },
+        {
+          "id": "denied",
+          "name": "Отказ апстрима",
+          "role": "error",
+          "note": "Ошибки Zen (например 500 на free-tier) возвращаются как есть"
+        },
+        {
+          "id": "stream",
+          "name": "Ретрансляция SSE",
+          "role": "output"
+        }
+      ],
+      "flow": [
+        {
+          "from": "key",
+          "to": "proxy",
+          "kind": "next"
+        },
+        {
+          "from": "proxy",
+          "to": "denied",
+          "kind": "error",
+          "condition": "апстрим вернул ошибку"
+        },
+        {
+          "from": "proxy",
+          "to": "stream",
+          "kind": "async"
+        }
+      ],
+      "confidence": 0.8,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-model-lanes",
+      "name": "Модельные полосы",
+      "summary": "big-pickle через релей, Bonsai локально, кодер на 8986",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "startup",
+          "detail": "LLM_API_URL из окружения профиля"
+        }
+      ],
+      "steps": [
+        {
+          "id": "route",
+          "name": "Выбор полосы",
+          "role": "compute"
+        },
+        {
+          "id": "probe",
+          "name": "Прогрев модели",
+          "role": "validation",
+          "note": "холодная загрузка ломает heartbeat"
+        },
+        {
+          "id": "answer",
+          "name": "Ответ модели",
+          "role": "output"
+        }
+      ],
+      "flow": [
+        {
+          "from": "route",
+          "to": "probe",
+          "kind": "next"
+        },
+        {
+          "from": "probe",
+          "to": "answer",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.7,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-reflection",
+      "name": "Ночная рефлексия",
+      "summary": "Сегменты диалога сворачиваются в каноническую память JAWL",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "cron",
+          "detail": "цикл раз в 20 минут"
+        }
+      ],
+      "steps": [
+        {
+          "id": "split",
+          "name": "Нарезка сегментов",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "scripts/voice_reflection.py"
+            }
+          ]
+        },
+        {
+          "id": "llm",
+          "name": "Один LLM-вызов",
+          "role": "compute",
+          "note": "big-pickle через релей"
+        },
+        {
+          "id": "remember",
+          "name": "Запись в память",
+          "role": "data-write",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            }
+          ]
+        },
+        {
+          "id": "checkpoint",
+          "name": "Чекпойнт и журнал",
+          "role": "other",
+          "refs": [
+            {
+              "file": "runtime/reflection-state.json"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "split",
+          "to": "llm",
+          "kind": "next"
+        },
+        {
+          "from": "llm",
+          "to": "remember",
+          "kind": "next"
+        },
+        {
+          "from": "remember",
+          "to": "checkpoint",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-ambient-memory",
+      "name": "Ambient-память",
+      "summary": "Ограниченный буфер наблюдений с триажем в эпизоды",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "системный звук/сенсорные события"
+        }
+      ],
+      "steps": [
+        {
+          "id": "ingest",
+          "name": "Приём наблюдения",
+          "role": "data-write",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/ambient_memory.py"
+            }
+          ]
+        },
+        {
+          "id": "privacy",
+          "name": "Фильтр приватности",
+          "role": "validation",
+          "note": "пароли/секреты/чувствительные окна"
+        },
+        {
+          "id": "triage",
+          "name": "Триаж в эпизоды",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/ambient_memory.py"
+            }
+          ]
+        },
+        {
+          "id": "promote",
+          "name": "Промоут в JAWL",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "ingest",
+          "to": "privacy",
+          "kind": "next"
+        },
+        {
+          "from": "privacy",
+          "to": "triage",
+          "kind": "conditional",
+          "condition": "текст не приватный"
+        },
+        {
+          "from": "triage",
+          "to": "promote",
+          "kind": "conditional",
+          "condition": "эпизод — кандидат на промоут"
+        }
+      ],
+      "confidence": 0.85,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-sensory-ingest",
+      "name": "Сенсорный NDJSON",
+      "summary": "Хвост файла воркера превращается в ambient-наблюдения",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "--sensory-file runtime/sensory-events.ndjson"
+        }
+      ],
+      "steps": [
+        {
+          "id": "tail",
+          "name": "Чтение новых строк",
+          "role": "data-read",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/sensory_ingest.py"
+            }
+          ]
+        },
+        {
+          "id": "screen",
+          "name": "Экран → визуальное",
+          "role": "transform",
+          "note": "только changed-кадры"
+        },
+        {
+          "id": "music",
+          "name": "Музыка → аудио",
+          "role": "transform",
+          "note": "дедуп 5 минут на один трек"
+        },
+        {
+          "id": "speech",
+          "name": "Речь → аудио",
+          "role": "transform"
+        },
+        {
+          "id": "buffer",
+          "name": "В ambient-буфер",
+          "role": "data-write"
+        }
+      ],
+      "flow": [
+        {
+          "from": "tail",
+          "to": "screen",
+          "kind": "next"
+        },
+        {
+          "from": "tail",
+          "to": "music",
+          "kind": "next"
+        },
+        {
+          "from": "tail",
+          "to": "speech",
+          "kind": "next"
+        },
+        {
+          "from": "screen",
+          "to": "buffer",
+          "kind": "next"
+        },
+        {
+          "from": "music",
+          "to": "buffer",
+          "kind": "next"
+        },
+        {
+          "from": "speech",
+          "to": "buffer",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.8,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-proactive",
+      "name": "Проактивный канал",
+      "summary": "Инициатива JAWL доставляется только в паузах и с лимитами",
+      "epicId": "initiative",
+      "triggers": [
+        {
+          "kind": "ui",
+          "detail": "карточка «Инициатива JAWL» / GET /api/proactive"
+        }
+      ],
+      "steps": [
+        {
+          "id": "poll",
+          "name": "Поллинг истории",
+          "role": "data-read",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/proactive.py"
+            }
+          ]
+        },
+        {
+          "id": "baseline",
+          "name": "Baseline старого",
+          "role": "other",
+          "note": "первый поллинг ничего не доставляет"
+        },
+        {
+          "id": "echo",
+          "name": "Отсев эхо",
+          "role": "validation",
+          "note": "ответы на ходы компаньона не инициатива"
+        },
+        {
+          "id": "gate",
+          "name": "Гейт простоя",
+          "role": "compute",
+          "note": "45 с после хода, 5 мин/6 в час"
+        },
+        {
+          "id": "hours",
+          "name": "Активные часы",
+          "role": "compute",
+          "note": "EOPA-lite: часы с перепиской на 2+ разных дня"
+        },
+        {
+          "id": "feedback",
+          "name": "Фидбек и кулдаун",
+          "role": "validation",
+          "note": "«шум» открывает экспоненциальную тишину"
+        },
+        {
+          "id": "deliver",
+          "name": "Выдача или очередь",
+          "role": "output"
+        }
+      ],
+      "flow": [
+        {
+          "from": "poll",
+          "to": "baseline",
+          "kind": "conditional",
+          "condition": "первый поллинг"
+        },
+        {
+          "from": "baseline",
+          "to": "echo",
+          "kind": "next"
+        },
+        {
+          "from": "echo",
+          "to": "gate",
+          "kind": "next"
+        },
+        {
+          "from": "gate",
+          "to": "hours",
+          "kind": "next"
+        },
+        {
+          "from": "hours",
+          "to": "feedback",
+          "kind": "next"
+        },
+        {
+          "from": "feedback",
+          "to": "deliver",
+          "kind": "conditional",
+          "condition": "диалог свободен, час активен, нет кулдауна"
+        },
+        {
+          "from": "gate",
+          "to": "deliver",
+          "kind": "loop",
+          "condition": "очередь ждёт"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-screen-watch",
+      "name": "Экранные дельты",
+      "summary": "VLM раз в интервал описывает изменение окна без речи",
+      "epicId": "initiative",
+      "triggers": [
+        {
+          "kind": "startup",
+          "detail": "--screen-watch"
+        }
+      ],
+      "steps": [
+        {
+          "id": "poll",
+          "name": "Полл раз в интервал",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/presence.py"
+            }
+          ]
+        },
+        {
+          "id": "arbiter",
+          "name": "Проверка арбитра",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/arbiter.py"
+            }
+          ]
+        },
+        {
+          "id": "look",
+          "name": "VLM-описание",
+          "role": "compute"
+        },
+        {
+          "id": "event",
+          "name": "SCREEN_DELTA событие",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_events.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "poll",
+          "to": "arbiter",
+          "kind": "next"
+        },
+        {
+          "from": "arbiter",
+          "to": "look",
+          "kind": "conditional",
+          "condition": "приоритет свободен"
+        },
+        {
+          "from": "look",
+          "to": "event",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.8,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-control-api",
+      "name": "Пульт управления",
+      "summary": "HTTP API и браузерный UI компаньона с сессией и CSRF",
+      "epicId": "control",
+      "triggers": [
+        {
+          "kind": "http",
+          "detail": "127.0.0.1:2367"
+        }
+      ],
+      "steps": [
+        {
+          "id": "session",
+          "name": "Сессия и CSRF",
+          "role": "auth",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        },
+        {
+          "id": "api",
+          "name": "Разбор маршрута",
+          "role": "input"
+        },
+        {
+          "id": "gateway",
+          "name": "Ход через шлюз",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/gateway.py"
+            }
+          ]
+        },
+        {
+          "id": "render",
+          "name": "Отрисовка UI",
+          "role": "output",
+          "refs": [
+            {
+              "file": "frontend/index.html"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "session",
+          "to": "api",
+          "kind": "next"
+        },
+        {
+          "from": "api",
+          "to": "gateway",
+          "kind": "conditional",
+          "condition": "это ход диалога"
+        },
+        {
+          "from": "gateway",
+          "to": "render",
+          "kind": "async"
+        }
+      ],
+      "confidence": 0.85,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-console-proxy",
+      "name": "Единый origin консоли",
+      "summary": "Консоль JAWL отдаётся через origin компаньона с инъекцией токена",
+      "epicId": "control",
+      "triggers": [
+        {
+          "kind": "http",
+          "detail": "GET /console/ и /console-api/*"
+        }
+      ],
+      "steps": [
+        {
+          "id": "gate",
+          "name": "Проверка сессии",
+          "role": "auth",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        },
+        {
+          "id": "map",
+          "name": "Маппинг путей",
+          "role": "transform",
+          "note": "/console-api/* → /api/* консоли"
+        },
+        {
+          "id": "inject",
+          "name": "Инъекция токена",
+          "role": "auth",
+          "note": "X-Console-Token подставляется сервером"
+        },
+        {
+          "id": "proxy",
+          "name": "Проксирование",
+          "role": "side-effect"
+        },
+        {
+          "id": "rewrite",
+          "name": "Перезапись JS",
+          "role": "transform",
+          "note": "«/api/» → «/console-api/» в served JS"
+        },
+        {
+          "id": "stream",
+          "name": "SSE-релей",
+          "role": "transform",
+          "note": "Логи и чат стримятся без буферизации"
+        },
+        {
+          "id": "deliver",
+          "name": "Отдать ответ",
+          "role": "output"
+        },
+        {
+          "id": "fail",
+          "name": "Отказ апстрима",
+          "role": "error",
+          "note": "502, если консоль недоступна"
+        }
+      ],
+      "flow": [
+        {
+          "from": "gate",
+          "to": "map",
+          "kind": "next"
+        },
+        {
+          "from": "map",
+          "to": "inject",
+          "kind": "next"
+        },
+        {
+          "from": "inject",
+          "to": "proxy",
+          "kind": "next"
+        },
+        {
+          "from": "proxy",
+          "to": "rewrite",
+          "kind": "conditional",
+          "condition": "ответ — JavaScript"
+        },
+        {
+          "from": "rewrite",
+          "to": "deliver",
+          "kind": "next"
+        },
+        {
+          "from": "proxy",
+          "to": "stream",
+          "kind": "conditional",
+          "condition": "ответ — SSE"
+        },
+        {
+          "from": "stream",
+          "to": "deliver",
+          "kind": "next"
+        },
+        {
+          "from": "proxy",
+          "to": "deliver",
+          "kind": "next"
+        },
+        {
+          "from": "proxy",
+          "to": "fail",
+          "kind": "error",
+          "condition": "консоль недоступна"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T19:10:00Z"
+    },
+    {
+      "id": "f-doctor",
+      "name": "Диагностика",
+      "summary": "Единая панель здоровья: JAWL, голос, воркеры, хелперы",
+      "epicId": "control",
+      "triggers": [
+        {
+          "kind": "http",
+          "detail": "GET /api/doctor"
+        }
+      ],
+      "steps": [
+        {
+          "id": "collect",
+          "name": "Сбор состояний",
+          "role": "data-read",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/doctor.py"
+            }
+          ]
+        },
+        {
+          "id": "probe",
+          "name": "Пробы хелперов",
+          "role": "validation",
+          "note": "bounded 1.5 с, fail-soft"
+        },
+        {
+          "id": "report",
+          "name": "Отчёт панели",
+          "role": "output"
+        }
+      ],
+      "flow": [
+        {
+          "from": "collect",
+          "to": "probe",
+          "kind": "next"
+        },
+        {
+          "from": "probe",
+          "to": "report",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-hostos-policy",
+      "name": "Политика доступа",
+      "summary": "Уровни прав, согласования опасных действий, dry-run по умолчанию",
+      "epicId": "safety",
+      "triggers": [
+        {
+          "kind": "http",
+          "detail": "POST /api/hostos/approvals/*"
+        }
+      ],
+      "steps": [
+        {
+          "id": "request",
+          "name": "Запрос действия",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/hostos_policy.py"
+            }
+          ]
+        },
+        {
+          "id": "level",
+          "name": "Проверка уровня",
+          "role": "auth"
+        },
+        {
+          "id": "approve",
+          "name": "Согласование",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/approvals.py"
+            }
+          ]
+        },
+        {
+          "id": "execute",
+          "name": "Исполнение",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/hostos_tools.py"
+            }
+          ]
+        },
+        {
+          "id": "audit",
+          "name": "Запись в аудит",
+          "role": "data-write",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/audit.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "request",
+          "to": "level",
+          "kind": "next"
+        },
+        {
+          "from": "level",
+          "to": "approve",
+          "kind": "conditional",
+          "condition": "действие требует согласования"
+        },
+        {
+          "from": "approve",
+          "to": "execute",
+          "kind": "conditional",
+          "condition": "одобрено"
+        },
+        {
+          "from": "execute",
+          "to": "audit",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.8,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T18:30:00Z"
+    },
+    {
+      "id": "f-terminal-gateway",
+      "name": "Прямой сокет к агенту",
+      "summary": "P0: постоянный TCP к терминалу JAWL с replay по курсору",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "startup",
+          "detail": "JAWL_GATEWAY <seq> handshake по terminal.port"
+        }
+      ],
+      "steps": [
+        {
+          "id": "handshake",
+          "name": "Handshake и replay",
+          "role": "auth",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_terminal.py"
+            }
+          ]
+        },
+        {
+          "id": "submit",
+          "name": "Отправка хода",
+          "role": "input",
+          "note": "newline-JSON {text, turn_id}"
+        },
+        {
+          "id": "events",
+          "name": "Приём событий",
+          "role": "data-read",
+          "note": "turn.started/delta/final по turn_id"
+        },
+        {
+          "id": "cancel",
+          "name": "Отмена хода",
+          "role": "side-effect",
+          "note": "control-линия {type: cancel}"
+        },
+        {
+          "id": "reconnect",
+          "name": "Реконнект с курсором",
+          "role": "other",
+          "note": "last_event_seq, backoff"
+        },
+        {
+          "id": "error",
+          "name": "Отказ канала",
+          "role": "error",
+          "note": "таймаут или разрыв → JawlUnavailable"
+        }
+      ],
+      "flow": [
+        {
+          "from": "handshake",
+          "to": "submit",
+          "kind": "next"
+        },
+        {
+          "from": "submit",
+          "to": "events",
+          "kind": "async"
+        },
+        {
+          "from": "events",
+          "to": "reconnect",
+          "kind": "error",
+          "condition": "разрыв соединения"
+        },
+        {
+          "from": "submit",
+          "to": "cancel",
+          "kind": "conditional",
+          "condition": "ход вытеснен новым"
+        },
+        {
+          "from": "events",
+          "to": "error",
+          "kind": "error",
+          "condition": "нет терминального события"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-09-12T22:10:00Z"
+    },
+    {
+      "id": "f-perception-fusion",
+      "name": "Склейка восприятия",
+      "summary": "Экран, окно, музыка и речь сливаются в одно наблюдение",
+      "epicId": "initiative",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "каналы восприятия обновляются асинхронно"
+        }
+      ],
+      "steps": [
+        {
+          "id": "note",
+          "name": "Приём каналов",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            }
+          ]
+        },
+        {
+          "id": "ttl",
+          "name": "Свежесть по TTL",
+          "role": "validation",
+          "note": "экран 90с, окно 120с, музыка 240с, речь 300с"
+        },
+        {
+          "id": "compose",
+          "name": "Одно наблюдение",
+          "role": "transform",
+          "note": "«Экран: … Окно: … Звук: … Слышно: …»"
+        },
+        {
+          "id": "gate",
+          "name": "Гейт внимания",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/attention.py"
+            }
+          ]
+        },
+        {
+          "id": "bridge",
+          "name": "Событие в JAWL",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_events.py"
+            }
+          ]
+        },
+        {
+          "id": "log",
+          "name": "Живой лог",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/event_log.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "note",
+          "to": "ttl",
+          "kind": "next"
+        },
+        {
+          "from": "ttl",
+          "to": "compose",
+          "kind": "next"
+        },
+        {
+          "from": "compose",
+          "to": "gate",
+          "kind": "next"
+        },
+        {
+          "from": "gate",
+          "to": "bridge",
+          "kind": "conditional",
+          "condition": "значимость и кулдаун позволяют"
+        },
+        {
+          "from": "gate",
+          "to": "log",
+          "kind": "next"
+        },
+        {
+          "from": "bridge",
+          "to": "log",
+          "kind": "async"
+        }
+      ],
+      "confidence": 0.85,
+      "provenance": "ai",
+      "updated_at": "2026-09-13T00:30:00Z"
+    },
+    {
+      "id": "f-ws-transport",
+      "name": "Один сокет для голоса",
+      "summary": "P2: чат и аудио через WebSocket /api/ws",
+      "epicId": "control",
+      "triggers": [
+        {
+          "kind": "ui",
+          "detail": "localStorage['jawl-ws']=1 включает WS-транспорт"
+        }
+      ],
+      "steps": [
+        {
+          "id": "handshake",
+          "name": "Рукопожатие RFC6455",
+          "role": "auth",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/ws_server.py"
+            }
+          ]
+        },
+        {
+          "id": "chat",
+          "name": "Чат-стрим",
+          "role": "compute",
+          "note": "delta/final по одному сокету"
+        },
+        {
+          "id": "voice",
+          "name": "Чанки и финал",
+          "role": "input",
+          "note": "voice_chunk/voice_end/voice_reset"
+        },
+        {
+          "id": "shared",
+          "name": "Общие хелперы с HTTP",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        },
+        {
+          "id": "ack",
+          "name": "Ответ клиенту",
+          "role": "output"
+        },
+        {
+          "id": "fail",
+          "name": "Отказ канала",
+          "role": "error",
+          "note": "клиент откатывается на HTTP"
+        }
+      ],
+      "flow": [
+        {
+          "from": "handshake",
+          "to": "chat",
+          "kind": "next"
+        },
+        {
+          "from": "handshake",
+          "to": "voice",
+          "kind": "next"
+        },
+        {
+          "from": "voice",
+          "to": "shared",
+          "kind": "next"
+        },
+        {
+          "from": "chat",
+          "to": "ack",
+          "kind": "async"
+        },
+        {
+          "from": "shared",
+          "to": "ack",
+          "kind": "next"
+        },
+        {
+          "from": "voice",
+          "to": "fail",
+          "kind": "error",
+          "condition": "сокет закрыт"
+        }
+      ],
+      "confidence": 0.85,
+      "provenance": "ai",
+      "updated_at": "2026-09-13T01:20:00Z"
+    }
+  ],
+  "cross_feature": [
+    {
+      "from": "f-profile-launch",
+      "to": "f-voice-turn",
+      "kind": "triggers",
+      "note": "профиль поднимает голосовой контур"
+    },
+    {
+      "from": "f-streaming-asr",
+      "to": "f-endpoint-policy",
+      "kind": "flow",
+      "mode": "async",
+      "note": "партиалы питают решение о конце реплики"
+    },
+    {
+      "from": "f-endpoint-policy",
+      "to": "f-voice-turn",
+      "kind": "flow",
+      "note": "endpoint определяет момент финального ASR"
+    },
+    {
+      "from": "f-voice-turn",
+      "to": "f-chat-transport",
+      "kind": "depends_on",
+      "note": "ход идёт через нативный транспорт"
+    },
+    {
+      "from": "f-chat-transport",
+      "to": "f-reflection",
+      "kind": "flow",
+      "mode": "async",
+      "note": "история ходов — сырьё для рефлексии"
+    },
+    {
+      "from": "f-sensory-ingest",
+      "to": "f-ambient-memory",
+      "kind": "flow",
+      "note": "NDJSON-события превращаются в наблюдения"
+    },
+    {
+      "from": "f-ambient-memory",
+      "to": "f-proactive",
+      "kind": "depends_on",
+      "note": "эпизоды памяти питают инициативу"
+    },
+    {
+      "from": "f-proactive",
+      "to": "f-control-api",
+      "kind": "flow",
+      "note": "канал виден в пульте"
+    },
+    {
+      "from": "f-console-proxy",
+      "to": "f-control-api",
+      "kind": "depends_on",
+      "note": "прокси живёт в том же HTTP-сервере пульта"
+    },
+    {
+      "from": "f-voice-turn",
+      "to": "f-prosody",
+      "kind": "triggers",
+      "note": "ответ запускает планер просодии"
+    },
+    {
+      "from": "f-barge-in",
+      "to": "f-voice-turn",
+      "kind": "flow",
+      "note": "перебивание перезапускает слушание"
+    },
+    {
+      "from": "f-voice-turn",
+      "to": "f-terminal-gateway",
+      "kind": "depends_on",
+      "note": "ходы идут напрямую через сокет агента"
+    },
+    {
+      "from": "f-perception-fusion",
+      "to": "f-proactive",
+      "kind": "flow",
+      "note": "склеенные наблюдения питают инициативу через события JAWL"
+    },
+    {
+      "from": "f-ws-transport",
+      "to": "f-voice-turn",
+      "kind": "depends_on",
+      "note": "WS-транспорт несёт голосовые чанки и финализацию"
+    }
+  ],
+  "epic_flow": [
+    {
+      "from": "ops",
+      "to": "voice",
+      "kind": "next",
+      "note": "профиль поднимает голосовой контур"
+    },
+    {
+      "from": "voice",
+      "to": "mind",
+      "kind": "next",
+      "note": "реплика уходит в мозг и возвращается ответом"
+    },
+    {
+      "from": "mind",
+      "to": "memory",
+      "kind": "next",
+      "note": "каждый ход оседает в памяти и сворачивается рефлексией"
+    },
+    {
+      "from": "memory",
+      "to": "initiative",
+      "kind": "next",
+      "note": "память и наблюдения питают собственную инициативу"
+    },
+    {
+      "from": "control",
+      "to": "voice",
+      "kind": "depends_on",
+      "note": "пульт — окно в любой контур"
+    },
+    {
+      "from": "safety",
+      "to": "control",
+      "kind": "depends_on",
+      "note": "действия проходят политику и аудит"
+    }
+  ]
+}

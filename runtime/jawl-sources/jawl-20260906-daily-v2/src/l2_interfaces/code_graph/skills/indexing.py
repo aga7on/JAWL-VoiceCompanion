@@ -1,0 +1,260 @@
+"""
+Skills for creating and indexing Code Graphs.
+
+Code graphs store dependencies, descriptions, and help understand complex codebases,
+thanks to semantic vector search over relations in a deterministic graph.
+"""
+
+import ast
+import asyncio
+import os
+from pathlib import Path
+from typing import Dict
+
+from src.utils.logger import main_logger
+from src.l3_agent.skills.registry import skill, SkillResult
+from src.l3_agent.swarm.roles import Subagents
+
+from src.l2_interfaces.code_graph.client import CodeGraphClient
+from src.l1_databases.graph.management.crud_ast import GraphASTCRUD
+from src.l1_databases.vector.management.code_ast import VectorCodeAST
+
+
+class CodeGraphIndexing:
+    """Skill for creating the AST-graph of a codebase."""
+
+    def __init__(
+        self, client: CodeGraphClient, graph_crud: GraphASTCRUD, vector_crud: VectorCodeAST
+    ):
+        self.client = client
+        self.graph = graph_crud
+        self.vector = vector_crud
+
+    @skill(swarm=[Subagents.CODER, Subagents.QA_ENGINEER])
+    async def index_codebase(self, target_dir: str, project_id: str) -> SkillResult:
+        """
+        Scans directory and builds architecture graph.
+
+        target_dir: Code path.
+        project_id: Unique graph ID.
+        """
+
+        try:
+            safe_path = self.client.host_os.validate_path(target_dir, is_write=False)
+            if not safe_path.is_dir():
+                return SkillResult.fail(f"Error: Path is not a directory ({target_dir}).")
+
+            project_id = project_id.strip().replace(" ", "_")
+
+            main_logger.info(
+                f"[Code Graph] Starting indexing of project '{project_id}' in {safe_path.name}."
+            )
+
+            # Parse all files asynchronously to not block the Event Loop
+            stats = await asyncio.to_thread(self._parse_and_build_sync, safe_path, project_id)
+
+            # Save to state — use relative path if inside framework, absolute otherwise
+            try:
+                rel_path = safe_path.relative_to(self.client.host_os.framework_dir).as_posix()
+            except ValueError:
+                rel_path = safe_path.as_posix()
+            self.client.state.active_indexes[project_id] = rel_path
+            self.client.state.save()
+
+            msg = (
+                f"Codebase '{project_id}' successfully indexed.\n"
+                f"Found: {stats['files']} files, {stats['classes']} classes, {stats['functions']} functions.\n"
+                f"Now you can explore it in more detail using the appropriate skills."
+            )
+            main_logger.info(f"[Code Graph] Indexing of '{project_id}' completed.")
+            return SkillResult.ok(msg)
+
+        except PermissionError as e:
+            return SkillResult.fail(str(e))
+
+        except Exception as e:
+            return SkillResult.fail(f"Critical error during indexing: {e}")
+
+    @skill(swarm=[Subagents.CODER])
+    async def delete_index(self, project_id: str) -> SkillResult:
+        """
+        Deletes project graph from databases.
+        """
+
+        if project_id not in self.client.state.active_indexes:
+            return SkillResult.fail(f"Index '{project_id}' not found.")
+
+        try:
+            await self.graph.delete_project(project_id)
+            await self.vector.delete_project(project_id)
+
+            del self.client.state.active_indexes[project_id]
+            self.client.state.save()
+            return SkillResult.ok(f"Graph '{project_id}' successfully deleted.")
+
+        except Exception as e:
+            return SkillResult.fail(f"Error deleting: {e}")
+
+    # =========================================================================
+    # Internal synchronous parsing logic
+    # =========================================================================
+
+    def _parse_and_build_sync(self, root_dir: Path, project_id: str) -> Dict[str, int]:
+        """
+        Synchronous wrapper for CPU-bound parsing task.
+        """
+
+        stats = {"files": 0, "classes": 0, "functions": 0}
+        exclude_dirs = set(self.client.config.exclude_dirs)
+
+        py_files = []
+        for root, dirs, files in os.walk(root_dir):
+            # Modify dirs in-place to prevent entering venv/.git
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            for file in files:
+                if file.endswith(".py"):
+                    py_files.append(Path(root) / file)
+
+        # 1st pass: Create nodes (Files, Classes, Functions)
+        # We use asyncio.run() inside the thread - this is acceptable since we are in a separate Thread
+        async def _process_nodes():
+            for filepath in py_files:
+                try:
+                    rel_path = filepath.relative_to(root_dir).as_posix()
+                    file_id = f"{project_id}::{rel_path}"
+
+                    # Read source
+                    source = filepath.read_text(encoding="utf-8")
+                    tree = ast.parse(source, filename=str(filepath))
+
+                    # FILE node
+                    await self.graph.upsert_node(
+                        file_id, rel_path, "FILE", rel_path, project_id
+                    )
+                    stats["files"] += 1
+
+                    # Parse structure
+                    for node in tree.body:
+                        # If it is a CLASS
+                        if isinstance(node, ast.ClassDef):
+                            class_id = f"{file_id}::{node.name}"
+                            await self.graph.upsert_node(
+                                class_id, node.name, "CLASS", rel_path, project_id
+                            )
+                            await self.graph.link_nodes(file_id, class_id, "CONTAINS")
+                            stats["classes"] += 1
+
+                            docstring = ast.get_docstring(node)
+                            if docstring:
+                                await self.vector.save_doc(
+                                    class_id, docstring, project_id, "CLASS"
+                                )
+
+                            # Search for methods inside the class
+                            for item in node.body:
+                                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                                    func_id = f"{class_id}.{item.name}"
+                                    await self.graph.upsert_node(
+                                        func_id, item.name, "FUNCTION", rel_path, project_id
+                                    )
+                                    await self.graph.link_nodes(class_id, func_id, "DEFINES")
+                                    stats["functions"] += 1
+
+                                    func_doc = ast.get_docstring(item)
+                                    if func_doc:
+                                        await self.vector.save_doc(
+                                            func_id, func_doc, project_id, "FUNCTION"
+                                        )
+
+                        # If it is a FUNCTION outside a class
+                        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            func_id = f"{file_id}::{node.name}"
+                            await self.graph.upsert_node(
+                                func_id, node.name, "FUNCTION", rel_path, project_id
+                            )
+                            await self.graph.link_nodes(file_id, func_id, "CONTAINS")
+                            stats["functions"] += 1
+
+                            func_doc = ast.get_docstring(node)
+                            if func_doc:
+                                await self.vector.save_doc(
+                                    func_id, func_doc, project_id, "FUNCTION"
+                                )
+
+                except Exception as e:
+                    main_logger.debug(f"[Code Graph] Error parsing {filepath.name}: {e}")
+
+        # 2nd pass: Build import relationships
+        async def _process_imports():
+            # Create module mapping: "src.utils" -> "src/utils.py"
+            module_map = {}
+            for filepath in py_files:
+                rel_path = filepath.relative_to(root_dir)
+                mod = str(rel_path.with_suffix("")).replace("\\", ".").replace("/", ".")
+                if mod.endswith(".__init__"):
+                    mod = mod[:-9]
+                elif mod == "__init__":
+                    mod = ""
+                module_map[mod] = rel_path.as_posix()
+
+            for filepath in py_files:
+                try:
+                    rel_path = filepath.relative_to(root_dir).as_posix()
+                    file_id = f"{project_id}::{rel_path}"
+                    source = filepath.read_text(encoding="utf-8")
+                    tree = ast.parse(source)
+
+                    base_mod = (
+                        str(filepath.relative_to(root_dir).with_suffix(""))
+                        .replace("\\", ".")
+                        .replace("/", ".")
+                    )
+                    if base_mod.endswith(".__init__"):
+                        base_mod = base_mod[:-9]
+                    base_parts = base_mod.split(".") if base_mod else []
+
+                    deps = set()
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.Import):
+                            for alias in node.names:
+                                if alias.name in module_map:
+                                    deps.add(module_map[alias.name])
+                        elif isinstance(node, ast.ImportFrom):
+                            level = node.level
+                            mod = node.module or ""
+                            resolved_mod = (
+                                mod
+                                if level == 0
+                                else ".".join(
+                                    base_parts[: len(base_parts) - level]
+                                    + ([mod] if mod else [])
+                                )
+                            )
+
+                            for alias in node.names:
+                                full_target = (
+                                    f"{resolved_mod}.{alias.name}"
+                                    if resolved_mod
+                                    else alias.name
+                                )
+                                if full_target in module_map:
+                                    deps.add(module_map[full_target])
+                                elif resolved_mod in module_map:
+                                    deps.add(module_map[resolved_mod])
+
+                    for dep_path in deps:
+                        target_id = f"{project_id}::{dep_path}"
+                        await self.graph.link_nodes(file_id, target_id, "IMPORTS")
+
+                except Exception as e:
+                    main_logger.debug(
+                        f"[Code Graph] Failed to resolve imports for file {filepath.name}: {e}"
+                    )
+
+        # Execute asynchronous tasks in our isolated thread
+        new_loop = asyncio.new_event_loop()
+        new_loop.run_until_complete(_process_nodes())
+        new_loop.run_until_complete(_process_imports())
+        new_loop.close()
+
+        return stats
