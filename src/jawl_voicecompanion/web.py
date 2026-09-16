@@ -1716,6 +1716,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
+    def do_PUT(self) -> None:  # noqa: N802 - stdlib handler API
+        """Forward PUT requests to the JAWL console proxy (session-gated)."""
+        if not self._authenticate_network_request():
+            return
+        try:
+            if self._proxy_jawl_console():
+                return
+            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
+        except PermissionError as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
     def log_message(self, format: str, *args: Any) -> None:
         # The first server must not leak request contents into stdout.
         return
@@ -1765,7 +1778,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         if adapter is None:
             self._json({"error": "JAWL console proxy is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
             return True
-        if self.command == "POST":
+        if self.command in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = self.headers.get("Origin")
             if origin and not self.server.origin_allowed(origin, self.headers.get("Host")):
                 self._json({"error": "request origin is not allowed"}, status=HTTPStatus.FORBIDDEN)

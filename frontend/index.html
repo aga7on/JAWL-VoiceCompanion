@@ -341,6 +341,7 @@
             <div class="field"><label>RAG: глубина<input type="number" id="cfg-rag-depth" min="0"></label></div>
             <div class="field"><label>RAG: векторных блоков<input type="number" id="cfg-rag-vector" min="0"></label></div>
             <div class="field"><label>Swarm: одновременных воркеров<input type="number" id="cfg-swarm-workers" min="1" max="10"></label></div>
+            <div class="field"><label>Swarm: модель субагента<input type="text" id="cfg-subagent-model"></label></div>
           </article><article class="glass-card"><div class="card-head"><div><h3>Память и подсознание</h3><p>Векторный/графовый потолок, гипотезы, ToT и фоновые процессы.</p></div></div>
             <div class="field"><label>Порог схожести векторов<input type="number" id="cfg-vector-sim" min="0" max="1" step="0.01"></label></div>
             <div class="field"><label>Граф: макс. узлов<input type="number" id="cfg-graph-nodes" min="10"></label></div>
@@ -348,9 +349,12 @@
             <div class="field"><label>Заметок максимум<input type="number" id="cfg-max-notes" min="1"></label></div>
             <div class="field"><label><input type="checkbox" id="cfg-hypotheses"> Гипотезы включены</label></div>
             <div class="field"><label><input type="checkbox" id="cfg-tot"> Tree of Thoughts включён</label></div>
+            <div class="field"><label>ToT: режим<input type="text" id="cfg-tot-mode" placeholder="auto / manual / off"></label></div>
+            <div class="field"><label>ToT: модель<input type="text" id="cfg-tot-model"></label></div>
             <div class="field"><label>ToT: ветвей<input type="number" id="cfg-tot-branches" min="1"></label></div>
             <div class="field"><label>ToT: симуляций на ветвь<input type="number" id="cfg-tot-sims" min="1"></label></div>
             <div class="field"><label><input type="checkbox" id="cfg-subconscious"> Подсознание включено</label></div>
+            <div class="field"><label>Подсознание: модель<input type="text" id="cfg-sub-model"></label></div>
           </article><article class="glass-card"><div class="card-head"><div><h3>Мотивация</h3><p>Drives: затухание и потолки; состояния драйвов живут в SQLite.</p></div></div>
             <div class="field"><label><input type="checkbox" id="cfg-drives-enabled"> Drives включены</label></div>
             <div class="field"><label><input type="checkbox" id="cfg-drives-dynamic"> Динамическое снижение</label></div>
@@ -2252,6 +2256,8 @@
       scheduleShellStatus();
     }
     let configRevision = null;
+    let configLoadedValues = {};
+    let configLoadedLists = {};
     const ENV_FIELD_LABELS = {
       'env:LLM_API_URL': 'LLM API URL',
       'env:PROXY_URL': 'Proxy URL',
@@ -2665,7 +2671,7 @@
       try {
         const response = await fetch('/console-api/drives', {cache: 'no-store'});
         const data = await response.json();
-        const rows = (data.drives || []).filter(d => String(d.type || '') !== 'fundamental');
+        const rows = (data.drives || []).filter(d => String(d.type || '') === 'custom');
         wrap.replaceChildren();
         if (!rows.length) { wrap.textContent = 'Своих мотиваторов нет (фундаментальные — в карточке «Мотивация»).'; return; }
         for (const drive of rows) {
@@ -2676,20 +2682,40 @@
           const rate = document.createElement('input');
           rate.type = 'number';
           rate.step = '0.5';
-          rate.title = 'Скорость затухания';
+          rate.min = '0.5';
+          rate.title = 'Скорость затухания (decayRate)';
           rate.value = String(drive.decay_rate ?? '');
           const interval = document.createElement('input');
           interval.type = 'number';
-          interval.title = 'Интервал, сек';
+          interval.min = '1';
+          interval.title = 'Интервал, сек (decayIntervalSec)';
           interval.value = String(drive.decay_interval_sec ?? '');
           const save = document.createElement('button');
           save.textContent = 'Сохранить';
           save.onclick = async () => {
-            await fetch('/console-api/drives', {
-              method: 'PUT',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({updates: {[drive.name]: {rate: Number(rate.value), interval: Number(interval.value)}}}),
-            });
+            // The console contract keys custom-drive updates by ID and expects
+            // decayRate/decayIntervalSec; a bad request must be visible.
+            try {
+              const response = await fetch('/console-api/drives', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({updates: {[drive.id]: {
+                  decayRate: Number(rate.value),
+                  decayIntervalSec: Number(interval.value),
+                }}}),
+              });
+              const result = await response.json().catch(() => ({}));
+              if (response.ok && result.ok) {
+                save.textContent = 'Сохранено';
+                window.setTimeout(() => { save.textContent = 'Сохранить'; }, 1500);
+              } else {
+                save.textContent = 'Ошибка';
+                save.title = String(result.error || response.status);
+              }
+            } catch (error) {
+              save.textContent = 'Ошибка';
+              save.title = String(error.message);
+            }
             void loadCustomDrives();
           };
           const actions = document.createElement('span');
@@ -2742,6 +2768,10 @@
         set('#cfg-rag-depth', data.values['settings:system.context_depth.rag.depth_limit']);
         set('#cfg-rag-vector', data.values['settings:system.context_depth.rag.max_vector_blocks']);
         set('#cfg-swarm-workers', data.values['settings:system.swarm.max_concurrent_workers']);
+        set('#cfg-subagent-model', data.values['settings:system.swarm.subagent_model']);
+        set('#cfg-tot-mode', data.values['settings:system.tree_of_thoughts.mode']);
+        set('#cfg-tot-model', data.values['settings:system.tree_of_thoughts.llm_model']);
+        set('#cfg-sub-model', data.values['settings:system.subconscious.llm_model']);
         set('#cfg-vector-sim', data.values['settings:system.db.vector.similarity_threshold']);
         set('#cfg-graph-nodes', data.values['settings:system.db.graph.max_nodes']);
         set('#cfg-max-tasks', data.values['settings:system.db.sql.tasks.max_tasks']);
@@ -2785,50 +2815,70 @@
         const parsed = Number(value);
         return Number.isFinite(parsed) ? parsed : value;
       };
-      const payload = {
-        lists: {...collectListEditors(), ...collectObjectListEditors()},
-        values: {
-          ...collectEnvValues(),
-          ...collectInterfacesCards(),
-          'settings:identity.agent_name': String(document.querySelector('#cfg-agent-name')?.value || '').trim(),
-          'settings:llm.main_model': String(document.querySelector('#cfg-main-model')?.value || '').trim(),
-          'settings:llm.temperature': num(document.querySelector('#cfg-temperature')?.value),
-          'settings:llm.min_call_interval_sec': num(document.querySelector('#cfg-min-interval')?.value || 0),
-          'settings:llm.max_react_steps': num(document.querySelector('#cfg-max-steps')?.value || 15),
-          'settings:llm.language': String(document.querySelector('#cfg-language')?.value || '').trim(),
-          'settings:system.continuous_cycle': !!document.querySelector('#cfg-continuous-cycle')?.checked,
-          'settings:system.heartbeat_interval': num(document.querySelector('#cfg-heartbeat')?.value || 5),
-          'settings:system.timezone': String(document.querySelector('#cfg-timezone')?.value || '').trim(),
-          'settings:system.event_acceleration.critical_multiplier': num(document.querySelector('#cfg-critical-mult')?.value || 1),
-          'settings:system.context_depth.rag.depth_limit': num(document.querySelector('#cfg-rag-depth')?.value || 0),
-          'settings:system.context_depth.rag.max_vector_blocks': num(document.querySelector('#cfg-rag-vector')?.value || 0),
-          'settings:system.swarm.max_concurrent_workers': num(document.querySelector('#cfg-swarm-workers')?.value || 3),
-          'settings:system.db.vector.similarity_threshold': num(document.querySelector('#cfg-vector-sim')?.value || 0.35),
-          'settings:system.db.graph.max_nodes': num(document.querySelector('#cfg-graph-nodes')?.value || 5000),
-          'settings:system.db.sql.tasks.max_tasks': num(document.querySelector('#cfg-max-tasks')?.value || 200),
-          'settings:system.db.sql.notes.max_notes': num(document.querySelector('#cfg-max-notes')?.value || 500),
-          'settings:system.db.sql.hypotheses.enabled': !!document.querySelector('#cfg-hypotheses')?.checked,
-          'settings:system.tree_of_thoughts.enabled': !!document.querySelector('#cfg-tot')?.checked,
-          'settings:system.tree_of_thoughts.branches': num(document.querySelector('#cfg-tot-branches')?.value || 3),
-          'settings:system.tree_of_thoughts.simulations_per_branch': num(document.querySelector('#cfg-tot-sims')?.value || 2),
-          'settings:system.subconscious.enabled': !!document.querySelector('#cfg-subconscious')?.checked,
-          'settings:system.db.sql.drives.enabled': !!document.querySelector('#cfg-drives-enabled')?.checked,
-          'settings:system.db.sql.drives.dynamic_reduction': !!document.querySelector('#cfg-drives-dynamic')?.checked,
-          'settings:system.db.sql.drives.pause_on_offline': !!document.querySelector('#cfg-drives-pause')?.checked,
-          'settings:system.db.sql.drives.max_custom_drives': num(document.querySelector('#cfg-max-custom')?.value || 5),
-          'settings:system.db.sql.drives.max_reflections_history': num(document.querySelector('#cfg-reflections')?.value || 3),
-          'settings:system.db.sql.drives.fundamental.curiosity.enabled': !!document.querySelector('#cfg-curi-enabled')?.checked,
-          'settings:system.db.sql.drives.fundamental.curiosity.decay.rate': num(document.querySelector('#cfg-curi-rate')?.value || 12),
-          'settings:system.db.sql.drives.fundamental.curiosity.decay.interval_sec': num(document.querySelector('#cfg-curi-interval')?.value || 1200),
-          'settings:system.db.sql.drives.fundamental.mastery.enabled': !!document.querySelector('#cfg-mast-enabled')?.checked,
-          'settings:system.db.sql.drives.fundamental.mastery.decay.rate': num(document.querySelector('#cfg-mast-rate')?.value || 8),
-          'settings:system.db.sql.drives.fundamental.mastery.decay.interval_sec': num(document.querySelector('#cfg-mast-interval')?.value || 1200),
-          'settings:system.db.sql.drives.fundamental.social.enabled': !!document.querySelector('#cfg-soc-enabled')?.checked,
-          'settings:system.db.sql.drives.fundamental.social.decay.rate': num(document.querySelector('#cfg-soc-rate')?.value || 10),
-          'settings:system.db.sql.drives.fundamental.social.decay.interval_sec': num(document.querySelector('#cfg-soc-interval')?.value || 1200),
-        },
-        expected_revision: configRevision,
+      const allValues = {
+        ...collectEnvValues(),
+        ...collectInterfacesCards(),
+        'settings:identity.agent_name': String(document.querySelector('#cfg-agent-name')?.value || '').trim(),
+        'settings:llm.main_model': String(document.querySelector('#cfg-main-model')?.value || '').trim(),
+        'settings:llm.temperature': num(document.querySelector('#cfg-temperature')?.value),
+        'settings:llm.min_call_interval_sec': num(document.querySelector('#cfg-min-interval')?.value || 0),
+        'settings:llm.max_react_steps': num(document.querySelector('#cfg-max-steps')?.value || 15),
+        'settings:llm.language': String(document.querySelector('#cfg-language')?.value || '').trim(),
+        'settings:system.continuous_cycle': !!document.querySelector('#cfg-continuous-cycle')?.checked,
+        'settings:system.heartbeat_interval': num(document.querySelector('#cfg-heartbeat')?.value || 5),
+        'settings:system.timezone': String(document.querySelector('#cfg-timezone')?.value || '').trim(),
+        'settings:system.event_acceleration.critical_multiplier': num(document.querySelector('#cfg-critical-mult')?.value || 1),
+        'settings:system.context_depth.rag.depth_limit': num(document.querySelector('#cfg-rag-depth')?.value || 0),
+        'settings:system.context_depth.rag.max_vector_blocks': num(document.querySelector('#cfg-rag-vector')?.value || 0),
+        'settings:system.swarm.max_concurrent_workers': num(document.querySelector('#cfg-swarm-workers')?.value || 3),
+        'settings:system.swarm.subagent_model': String(document.querySelector('#cfg-subagent-model')?.value || '').trim(),
+        'settings:system.db.vector.similarity_threshold': num(document.querySelector('#cfg-vector-sim')?.value || 0.35),
+        'settings:system.db.graph.max_nodes': num(document.querySelector('#cfg-graph-nodes')?.value || 5000),
+        'settings:system.db.sql.tasks.max_tasks': num(document.querySelector('#cfg-max-tasks')?.value || 200),
+        'settings:system.db.sql.notes.max_notes': num(document.querySelector('#cfg-max-notes')?.value || 500),
+        'settings:system.db.sql.hypotheses.enabled': !!document.querySelector('#cfg-hypotheses')?.checked,
+        'settings:system.tree_of_thoughts.enabled': !!document.querySelector('#cfg-tot')?.checked,
+        'settings:system.tree_of_thoughts.mode': String(document.querySelector('#cfg-tot-mode')?.value || '').trim(),
+        'settings:system.tree_of_thoughts.llm_model': String(document.querySelector('#cfg-tot-model')?.value || '').trim(),
+        'settings:system.tree_of_thoughts.branches': num(document.querySelector('#cfg-tot-branches')?.value || 3),
+        'settings:system.tree_of_thoughts.simulations_per_branch': num(document.querySelector('#cfg-tot-sims')?.value || 2),
+        'settings:system.subconscious.enabled': !!document.querySelector('#cfg-subconscious')?.checked,
+        'settings:system.subconscious.llm_model': String(document.querySelector('#cfg-sub-model')?.value || '').trim(),
+        'settings:system.db.sql.drives.enabled': !!document.querySelector('#cfg-drives-enabled')?.checked,
+        'settings:system.db.sql.drives.dynamic_reduction': !!document.querySelector('#cfg-drives-dynamic')?.checked,
+        'settings:system.db.sql.drives.pause_on_offline': !!document.querySelector('#cfg-drives-pause')?.checked,
+        'settings:system.db.sql.drives.max_custom_drives': num(document.querySelector('#cfg-max-custom')?.value || 5),
+        'settings:system.db.sql.drives.max_reflections_history': num(document.querySelector('#cfg-reflections')?.value || 3),
+        'settings:system.db.sql.drives.fundamental.curiosity.enabled': !!document.querySelector('#cfg-curi-enabled')?.checked,
+        'settings:system.db.sql.drives.fundamental.curiosity.decay.rate': num(document.querySelector('#cfg-curi-rate')?.value || 12),
+        'settings:system.db.sql.drives.fundamental.curiosity.decay.interval_sec': num(document.querySelector('#cfg-curi-interval')?.value || 1200),
+        'settings:system.db.sql.drives.fundamental.mastery.enabled': !!document.querySelector('#cfg-mast-enabled')?.checked,
+        'settings:system.db.sql.drives.fundamental.mastery.decay.rate': num(document.querySelector('#cfg-mast-rate')?.value || 8),
+        'settings:system.db.sql.drives.fundamental.mastery.decay.interval_sec': num(document.querySelector('#cfg-mast-interval')?.value || 1200),
+        'settings:system.db.sql.drives.fundamental.social.enabled': !!document.querySelector('#cfg-soc-enabled')?.checked,
+        'settings:system.db.sql.drives.fundamental.social.decay.rate': num(document.querySelector('#cfg-soc-rate')?.value || 10),
+        'settings:system.db.sql.drives.fundamental.social.decay.interval_sec': num(document.querySelector('#cfg-soc-interval')?.value || 1200),
       };
+      const allLists = {...collectListEditors(), ...collectObjectListEditors()};
+      const unchanged = (key, value, kind) => {
+        const loaded = (kind === 'values' ? configLoadedValues : configLoadedLists)[key];
+        if (loaded === undefined) return false;
+        if (kind === 'values' && loaded === '__SET__' && (value === '' || value === '__SET__')) return true;
+        return JSON.stringify(loaded) === JSON.stringify(value);
+      };
+      const values = {};
+      for (const [key, value] of Object.entries(allValues)) {
+        if (!unchanged(key, value, 'values')) values[key] = value;
+      }
+      const lists = {};
+      for (const [key, value] of Object.entries(allLists)) {
+        if (!unchanged(key, value, 'lists')) lists[key] = value;
+      }
+      if (!Object.keys(values).length && !Object.keys(lists).length) {
+        statusEl.textContent = 'Нет изменений для сохранения.';
+        return;
+      }
+      const payload = {lists, values, expected_revision: configRevision};
       const button = document.querySelector('#settings-save');
       if (button) button.disabled = true;
       try {
@@ -2836,16 +2886,19 @@
         const data = await response.json();
         if (data.ok) {
           configRevision = data.revision;
+          configLoadedValues = data.readback?.values || configLoadedValues;
+          configLoadedLists = data.readback?.lists || configLoadedLists;
           const written = (data.written || []).join(', ') || 'ничего';
           statusEl.textContent = `Сохранено (${written}). Рестарт агента применит значения.`
             + (data.unknown?.length ? ` Неизвестные ключи: ${data.unknown.join(', ')}.` : '');
-          const changed = Object.entries(payload.values)
-            .filter(([key, value]) => data.readback?.values?.[key] !== undefined && data.readback.values[key] !== value)
+          const drifted = Object.entries(payload.values)
+            .filter(([key, value]) => data.readback?.values?.[key] !== undefined && JSON.stringify(data.readback.values[key]) !== JSON.stringify(value))
             .map(([key]) => key);
-          if (changed.length) statusEl.textContent += ` Readback: ${changed.join(', ')}.`;
+          if (drifted.length) statusEl.textContent += ` Readback: ${drifted.join(', ')}.`;
         } else if (data.status === 'conflict') {
-          statusEl.textContent = 'Конфликт: конфиг изменился с момента чтения — перечитываю…';
-          await loadSettingsHub();
+          // Conflict must never destroy the draft: keep the form as-is and
+          // ask the user to review the fresh values manually.
+          statusEl.textContent = 'Конфликт: конфиг изменён другим клиентом. Черновик не тронут — нажмите «Перечитать», чтобы увидеть свежие значения, затем сохраните нужные поля.';
         } else {
           statusEl.textContent = `Ошибка: ${data.error || 'unknown'}`;
         }

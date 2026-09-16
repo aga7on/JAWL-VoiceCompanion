@@ -29,6 +29,8 @@ WEBHOOK_SECRET=whsec-123
 """
 
 
+
+
 def _prepare(tmp: Path) -> Path:
     config = tmp / "config"
     config.mkdir()
@@ -136,6 +138,60 @@ class ConfigHubTests(unittest.TestCase):
         empty = self.hub.write({"values": {}}, expected_revision=self.hub.revision())
         self.assertFalse(empty["restart_required"])
 
+    def test_secret_list_merge_never_writes_placeholder(self):
+        # env prefixed list: LLM_API_KEY_1 exists; the UI masks it as __SET__.
+        result = self.hub.write(
+            {
+                "lists": {"keyList": ["__SET__", "sk-brand-new-key"]},
+                "values": {},
+            },
+            expected_revision=self.hub.revision(),
+        )
+        self.assertTrue(result["ok"])
+        env_text = (Path(self.tmp.name) / ".env").read_text(encoding="utf-8")
+        self.assertIn('LLM_API_KEY_1="sk-secret-value"', env_text)  # stored key kept
+        self.assertIn('LLM_API_KEY_2="sk-brand-new-key"', env_text)  # new key appended
+        self.assertNotIn("__SET__", env_text)  # placeholder never written literally
 
+    def test_secret_list_dash_deletes_and_tail_merge_keeps(self):
+        self.hub.write(
+            {"lists": {"keyList": ["sk-one", "sk-two", "sk-three"]}},
+            expected_revision=self.hub.revision(),
+        )
+        env_text = (Path(self.tmp.name) / ".env").read_text(encoding="utf-8")
+        self.assertIn('LLM_API_KEY_1="sk-one"', env_text)
+        self.assertIn('LLM_API_KEY_3="sk-three"', env_text)
+        # "-" deletes the middle key; a trailing masked slot keeps nothing
+        # extra (only three slots, second removed).
+        self.hub.write(
+            {"lists": {"keyList": ["__SET__", "-", "__SET__"]}},
+            expected_revision=self.hub.revision(),
+        )
+        env_text = (Path(self.tmp.name) / ".env").read_text(encoding="utf-8")
+        self.assertIn('LLM_API_KEY_1="sk-one"', env_text)
+        self.assertIn('LLM_API_KEY_2="sk-three"', env_text)
+        self.assertNotIn("sk-two", env_text)
+
+    def test_concurrent_writes_conflict(self):
+        import threading as _threading
+
+        state = self.hub.read()
+        results = []
+
+        def writer(value):
+            results.append(self.hub.write(
+                {"values": {"settings:llm.temperature": value}},
+                expected_revision=state["revision"],
+            ))
+
+        threads = [_threading.Thread(target=writer, args=(value,)) for value in (0.6, 0.7)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        ok_results = [r for r in results if r.get("ok")]
+        conflicts = [r for r in results if r.get("status") == "conflict"]
+        self.assertEqual(len(ok_results), 1)
+        self.assertEqual(len(conflicts), 1)
 if __name__ == "__main__":
     unittest.main()

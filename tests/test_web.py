@@ -1321,5 +1321,44 @@ class SettingsHubUITests(unittest.TestCase):
         del state
 
 
+class PutProxyTests(unittest.TestCase):
+    def setUp(self):
+        self.server = create_server(port=0, frontend_dir=Path(__file__).parents[1] / "frontend", gateway=TextGateway())
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def test_put_requires_session_and_proxies_console_paths(self):
+        request = Request(
+            self.base + "/console-api/drives",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="PUT",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+        self.assertEqual(context.exception.code, 403)
+
+    def test_put_outside_console_paths_is_method_not_allowed(self):
+        request = Request(
+            self.base + "/api/anything",
+            data=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "X-Companion-Session": self.server.session_token,
+                "X-Companion-CSRF": self.server.csrf_token,
+            },
+            method="PUT",
+        )
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=3)
+        self.assertEqual(context.exception.code, 405)
+
+
 if __name__ == "__main__":
     unittest.main()

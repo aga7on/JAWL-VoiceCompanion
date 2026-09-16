@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -86,6 +87,9 @@ class ConfigHub:
         # owns the snapshot import (the console is not running here), so point
         # it at OUR profile env once, at startup.
         self.cio.ENV_FILE = Path(self.env_file)
+        # One writer per process: the revision check, the backups and the
+        # write must be atomic against concurrent requests.
+        self._writer_lock = threading.Lock()
         self.backup_keep = 5
 
     # ------------------------------------------------------------- revision
@@ -156,6 +160,10 @@ class ConfigHub:
     def write(self, payload: Dict[str, Any], expected_revision: str | None = None) -> Dict[str, Any]:
         values = payload.get("values") or {}
         lists = payload.get("lists") or {}
+        with self._writer_lock:
+            return self._write_locked(values, lists, expected_revision)
+
+    def _write_locked(self, values: Dict[str, Any], lists: Dict[str, Any], expected_revision: str | None) -> Dict[str, Any]:
         current = self.revision()
         if expected_revision and expected_revision != current:
             return {
@@ -255,12 +263,21 @@ class ConfigHub:
             if prefix is None:
                 continue
             if self._is_secret_prefix(prefix):
-                entries = [str(x).strip() for x in items]
-                current = self.cio.env_prefixed(prefix)
-                # only replace entries that are not masked placeholders
-                if not any(e and e != "__SET__" for e in entries):
-                    continue
-                env_prefixed[prefix] = entries
+                # Masked placeholders must never be written literally. Merge
+                # positionally: a "__SET__"/empty slot keeps the stored key at
+                # the same index, a typed value replaces it, "-" deletes it,
+                # and extra typed values append as new keys.
+                stored = self.cio.env_prefixed(prefix)
+                merged: List[str] = []
+                for index, item in enumerate(items):
+                    value = str(item or "").strip()
+                    if value == "-":
+                        continue
+                    if value and value != "__SET__":
+                        merged.append(value)
+                    elif index < len(stored):
+                        merged.append(str(stored[index]).strip())
+                env_prefixed[prefix] = [entry for entry in merged if entry]
             else:
                 env_prefixed[prefix] = [str(x).strip() for x in items if str(x).strip()]
         return env_values, env_prefixed

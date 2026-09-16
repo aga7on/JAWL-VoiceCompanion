@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-16 - Audit fixes: drives save, secret merge, write lock, draft-safe conflicts
+
+- **Drives save fixed**: the companion gains a session-gated `do_PUT` that
+  forwards console paths through the existing proxy (Origin-gated for
+  mutating methods); the UI now keys updates by drive **id** with
+  `decayRate/decayIntervalSec` and surfaces response errors on the button.
+- **Secret lists merge safely**: masked `__SET__` slots keep the stored key
+  positionally, `-` deletes, new text appends — the placeholder is never
+  written literally into `.env` (regression tests for merge and delete).
+- **Concurrent writes serialized**: revision check, backups and write run
+  under one `threading.Lock`; a two-writer test proves one conflict.
+- **Conflicts keep the draft**: no auto-reload; only changed fields are
+  saved (dirty-compare against the loaded snapshot), and the user is asked
+  to review fresh values manually.
+- **Completeness**: missing fields added — swarm subagent model, ToT
+  mode/model, subconscious model; parity status document rewritten to the
+  factual state (audit list closed, browser acceptance still pending).
+- Tests: 11/11 hub, 67/67 web (incl. PUT proxy guards).
+
 ## 2026-09-15 - U6 closure: object lists, custom drives, iframe retired to a flag
 
 - Object-list editors for the four schema object lists (RSS feeds, MCP
