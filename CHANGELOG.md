@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-15 - U6 closure: object lists, custom drives, iframe retired to a flag
+
+- Object-list editors for the four schema object lists (RSS feeds, MCP
+  servers, coding command/container profiles) — line format
+  `col1 | col2 | …`, written through the hub's object-list support with a
+  round-trip test.
+- Custom drives editor via the console data API (rate/interval per custom
+  drive; fundamentals stay in the Motivation card and SQLite holds states).
+- The transitional JAWL iframe leaves the navigation: the tab+panel mount
+  only with the rollback flag `localStorage['jawl-embed']='1'`; the console
+  itself stays reachable at /console/ (the Система card links it).
+- Parity: all controllable surfaces migrated (scalars 187 + 6 string lists
+  + 4 object lists + custom drives); deferred rows: none. 65/65 web tests.
+
 ## 2026-09-15 - U6 final slice: list editors and the guarded DB wipe
 
 - String-list editors land for the six schema lists (LLM available models,

@@ -1102,7 +1102,7 @@ class SettingsHubUITests(unittest.TestCase):
         config = self.tmp.name + "/config"
         Path(config).mkdir()
         (Path(config) / "settings.yaml").write_text(
-            "identity:\n  agent_name: Компаньон\nllm:\n  main_model: deepseek-v4-flash\n  temperature: 0.4\n  language: ru\n",
+            "identity:\n  agent_name: Компаньон\nllm:\n  main_model: deepseek-v4-flash\n  temperature: 0.4\n  language: ru\n  available_models: []\n",
             encoding="utf-8",
         )
         (Path(config) / "interfaces.yaml").write_text(
@@ -1136,7 +1136,7 @@ class SettingsHubUITests(unittest.TestCase):
             "  browser:\n    enabled: false\n    headless: true\n    timeout_sec: 30\n    idle_timeout_sec: 900\n"
             "  hooks:\n    enabled: false\n    host: 127.0.0.1\n    port: 8080\n    history_limit: 10\n"
             "    preview_max_chars: 200\n"
-            "  rss:\n    enabled: false\n    polling_interval_sec: 3600\n    recent_limit: 3\n"
+            "  rss:\n    enabled: false\n    polling_interval_sec: 3600\n    recent_limit: 3\n    feeds: []\n"
             "host:\n  os:\n    enabled: true\n    access_level: 0\n    env_access: false\n"
             "    desktop_interactions: false\n    desktop_max_windows: 20\n    desktop_max_elements: 250\n"
             "    desktop_max_text_chars: 500\n    desktop_max_result_chars: 60000\n"
@@ -1296,6 +1296,18 @@ class SettingsHubUITests(unittest.TestCase):
         })
         self.assertTrue(result["ok"])
         self.assertEqual(result["readback"]["lists"]["lstExcludeDirs"], ["venv", "dist", "node_modules", "build2"])
+
+    def test_object_list_roundtrip(self):
+        # sanity: feeds list exists in the fixture via a minimal feed entry
+        state = self._get()
+        result = self._post({
+            "lists": {"lstFeeds": [{"name": "Habr", "url": "https://habr.com/rss/"}], "modelList": ["m1", "m2"]},
+            "values": {},
+            "expected_revision": state["revision"],
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["readback"]["lists"]["lstFeeds"], [{"name": "Habr", "url": "https://habr.com/rss/"}])
+        self.assertEqual(result["readback"]["lists"]["modelList"], ["m1", "m2"])
 
     def test_conflict_returns_conflict_status(self):
         state = self._get()

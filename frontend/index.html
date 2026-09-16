@@ -391,7 +391,11 @@
           </article></div>
           <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Списки</h3><p>Строковые списки интеграций; по одному элементу в строке.</p></div></div>
             <div id="ifc-lists"></div>
-          </article><article class="glass-card"><div class="card-head"><div><h3>База данных · стирание</h3><p>Необратимо. Требует слово подтверждения и диалог.</p></div></div>
+            <div id="ifc-object-lists"></div>
+          </article><article class="glass-card"><div class="card-head"><div><h3>Мотиваторы (свои)</h3><p>Скорость и интервал затухания собственных драйвов; состояния — в SQLite агента.</p></div><div><button id="drives-refresh" type="button">Обновить</button></div></div>
+            <div id="drives-custom" class="meta">Загрузка…</div>
+          </article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>База данных · стирание</h3><p>Необратимо. Требует слово подтверждения и диалог.</p></div></div>
             <div class="field"><label>Введите УДАЛИТЬ для подтверждения<input type="text" id="wipe-confirm" autocomplete="off"></label></div>
             <div class="button-row"><button id="wipe-run" class="danger" type="button">Стереть базы профиля</button></div>
             <p id="wipe-status" class="meta"></p>
@@ -2615,6 +2619,98 @@
       }
     }
     document.querySelector('#wipe-run')?.addEventListener('click', () => void wipeJawlDatabases());
+    const OBJECT_LIST_EDITORS = [
+      {id: 'lstFeeds', label: 'RSS: ленты', columns: ['name', 'url']},
+      {id: 'lstMcpServers', label: 'MCP: серверы', columns: ['name', 'transport']},
+      {id: 'lstCodingCommandProfiles', label: 'Coding: профили команд', columns: ['name', 'argv', 'relative_cwd', 'timeout_seconds', 'container_profile']},
+      {id: 'lstCodingContainerProfiles', label: 'Coding: контейнер-профили', columns: ['name', 'image', 'network', 'memory_mb', 'cpus', 'pids']},
+    ];
+    function renderObjectListEditors(lists) {
+      const wrap = document.querySelector('#ifc-object-lists');
+      if (!wrap) return;
+      wrap.replaceChildren();
+      for (const spec of OBJECT_LIST_EDITORS) {
+        const field = document.createElement('div');
+        field.className = 'field';
+        const label = document.createElement('label');
+        label.textContent = `${spec.label} (строка: ${spec.columns.join(' | ')})`;
+        const area = document.createElement('textarea');
+        area.rows = 2;
+        area.id = `olist-${spec.id}`;
+        const rows = Array.isArray(lists?.[spec.id]) ? lists[spec.id] : [];
+        area.value = rows.map(row => spec.columns.map(col => String(row?.[col] ?? '')).join(' | ')).join('\n');
+        label.append(area);
+        field.append(label);
+        wrap.append(field);
+      }
+    }
+    function collectObjectListEditors() {
+      const out = {};
+      for (const spec of OBJECT_LIST_EDITORS) {
+        const area = document.querySelector(`#olist-${spec.id}`);
+        if (!area) continue;
+        out[spec.id] = String(area.value || '').split('\n').map(line => {
+          const parts = line.split('|').map(part => part.trim());
+          if (!parts.some(Boolean)) return null;
+          const row = {};
+          spec.columns.forEach((col, index) => { row[col] = parts[index] || ''; });
+          return row;
+        }).filter(Boolean);
+      }
+      return out;
+    }
+    async function loadCustomDrives() {
+      const wrap = document.querySelector('#drives-custom');
+      if (!wrap) return;
+      try {
+        const response = await fetch('/console-api/drives', {cache: 'no-store'});
+        const data = await response.json();
+        const rows = (data.drives || []).filter(d => String(d.type || '') !== 'fundamental');
+        wrap.replaceChildren();
+        if (!rows.length) { wrap.textContent = 'Своих мотиваторов нет (фундаментальные — в карточке «Мотивация»).'; return; }
+        for (const drive of rows) {
+          const row = document.createElement('div');
+          row.className = 'memory-row';
+          const label = document.createElement('span');
+          label.textContent = `${drive.name} · дефицит ${Number(drive.deficit || 0).toFixed(1)}`;
+          const rate = document.createElement('input');
+          rate.type = 'number';
+          rate.step = '0.5';
+          rate.title = 'Скорость затухания';
+          rate.value = String(drive.decay_rate ?? '');
+          const interval = document.createElement('input');
+          interval.type = 'number';
+          interval.title = 'Интервал, сек';
+          interval.value = String(drive.decay_interval_sec ?? '');
+          const save = document.createElement('button');
+          save.textContent = 'Сохранить';
+          save.onclick = async () => {
+            await fetch('/console-api/drives', {
+              method: 'PUT',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({updates: {[drive.name]: {rate: Number(rate.value), interval: Number(interval.value)}}}),
+            });
+            void loadCustomDrives();
+          };
+          const actions = document.createElement('span');
+          actions.append(rate, ' ', interval, ' ', save);
+          row.append(label, actions);
+          wrap.append(row);
+        }
+      } catch (error) {
+        wrap.textContent = `Мотиваторы недоступны: ${error.message}`;
+      }
+    }
+    document.querySelector('#drives-refresh')?.addEventListener('click', () => void loadCustomDrives());
+    // Rollback flag for the transitional console embed: the JAWL tab lives only
+    // when explicitly re-enabled (localStorage['jawl-embed']='1'); the console
+    // itself stays reachable at /console/.
+    try {
+      if (localStorage.getItem('jawl-embed') !== '1') {
+        document.querySelector('[data-tab="jawl"]')?.remove();
+        document.querySelector('[data-panel="jawl"]')?.remove();
+      }
+    } catch (_) { /* private browsing */ }
     async function loadSettingsHub() {
       const statusEl = document.querySelector('#settings-status');
       if (!statusEl) return;
@@ -2674,6 +2770,8 @@
         renderInterfacesCards();
         fillInterfacesCards(data.values || {});
         renderListEditors(data.lists || {});
+        renderObjectListEditors(data.lists || {});
+        void loadCustomDrives();
         statusEl.textContent = `Загружено · ревизия ${String(data.revision).slice(0, 12)}…`;
       } catch (error) {
         statusEl.textContent = `Config hub недоступен: ${error.message}`;
@@ -2688,7 +2786,7 @@
         return Number.isFinite(parsed) ? parsed : value;
       };
       const payload = {
-        lists: {...collectListEditors()},
+        lists: {...collectListEditors(), ...collectObjectListEditors()},
         values: {
           ...collectEnvValues(),
           ...collectInterfacesCards(),
