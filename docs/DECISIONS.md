@@ -553,3 +553,55 @@ page presents the same character without private chat/memory/control tokens.
 Biological metaphors guide coherence, not claims of sentience or artificial
 distress to retain user engagement. This decision does not start capture or
 external account actions during development.
+
+## ADR-036 — Native Rust client as audio owner and Live2D host
+
+Status: Accepted
+Date: 2026-10-05
+
+The browser tab must not own the character's hearing or body. A thin native
+client (Rust + native Cubism SDK, not a game engine) owns the audio devices
+(WASAPI capture with hardware-level gate, playback), renders Live2D, hosts the
+standalone character window and the OBS surface. The web panel stays as a
+control/pult surface and the LAN/tablet URL, but the character no longer
+depends on any tab being open. Godot/Unity are rejected as heavy engines; the
+game-engine path was discussed and superseded by this decision. The browser
+voice pipeline is not removed until the native pipeline duplicates it and
+passes the same live acceptance.
+
+## ADR-037 — OpenCode GO deepseek-v4-flash is the baseline brain
+
+Status: Accepted
+Date: 2026-10-05
+
+The brain is the already-working deepseek-v4-flash via the OpenCode GO relay
+(:8891), covering fast speech, swarm workers and deep thinking. No local LLM
+is kept as the default. The provider remains pluggable: the runtime may select
+any compatible model, including a user-chosen local model from disk, through
+the same JAWL provider contract without breaking the JSON protocol.
+
+## ADR-038 — Episodic timeline as the shared TimeService
+
+Status: Accepted
+Date: 2026-10-05
+
+Time is modeled as machine process-time (event log, timestamps) projected
+into one episodic timeline — episodes cut on activity boundaries (conversation
+start/end, focus change, silence, owner sleep). This timeline is the single
+source of "now / recently / long ago" for Heartbeat, memory, attention and
+the avatar, replacing per-module clocks, TTLs and cooldowns. Real-time SLOs
+apply to the interactive loop (voice/answer/barge-in/avatar); background
+processes (memory consolidation, ambient triage) are best-effort and yield to
+user turns. Acceptance is a lived 24h scenario, not a test suite pass.
+
+## ADR-039 — Resource budget: Bonsai to GPU1, on-demand unload
+
+Status: Accepted
+Date: 2026-10-05
+
+Bonsai moves from CPU RAM to GPU1 (same weights, no quality loss), freeing
+~12.5 GB RAM. Screen-watching models unload after an idle window and reload
+on the first screen delta with an honest "waking" state, not a masked one.
+Quantization is allowed only through the MULTIMODAL_MODEL_GATE mini-bench
+(IQ2/IQ1 need the F16+imatrix path); the earlier Q1 Bonsai failure stands.
+Target profile: <= 8 GB RAM, ~14 GB VRAM. 20 GB is a ceiling, not the norm.

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-05 - Phase A start: native client, baseline brain, episodic time, resources
+
+- **Architecture decisions recorded** (docs/DECISIONS.md ADR-036..039):
+  a thin native Rust client (+ native Cubism SDK) as audio owner and
+  Live2D/window/OBS host, web panel stays as control/pult and LAN URL;
+  deepseek-v4-flash via the OpenCode GO relay as baseline brain with a
+  pluggable provider; a single episodic timeline as the shared TimeService;
+  Bonsai moves to GPU1 with on-demand unload (target ≤8 GB RAM, quant only
+  via the model gate).
+- **Phase A plan added to TODO.md** (A0–A5): U6 live browser acceptance,
+  episodic timeline, coherence E2E, interactive SLO, resource cut, native
+  Rust client prototype.
+- Docs-only commit; runtime untouched.
+
 ## 2026-09-16 - Audit fixes: drives save, secret merge, write lock, draft-safe conflicts
 
 - **Drives save fixed**: the companion gains a session-gated `do_PUT` that
