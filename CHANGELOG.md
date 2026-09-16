@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-17 - Phase A / A0: live Settings acceptance on the live profile
+
+- New `scripts/run_settings_browser_acceptance.py` drives the real control
+  panel (headless Edge) against the live integrated profile: session,
+  Settings hub load, all cards rendered, hub revision present, a scalar
+  round-trip through the real save path (write → profile file → readback →
+  restore), and the live shell rail. Result: **PASS**
+  (`runtime/settings-browser-acceptance.json`).
+- Fixed two real defects the acceptance surfaced:
+  - **Telegram card save crash**: the `telegram` entry in `IFACE_SECTIONS`
+    used `keys:` instead of `fields:`, so `spec.fields` was undefined and
+    `renderInterfacesCards`/`collectInterfacesCards` threw
+    "spec.fields is not iterable", breaking the whole Settings save.
+  - **Timezone readback drift**: the UI saved `settings:system.timezone` as a
+    string while the canonical schema stores an integer UTC offset, so every
+    save stayed "dirty" (permanent `Readback: settings:system.timezone`).
+    Numeric input is now coerced to int on save.
+- Web regression: tests/test_web.py 67/67 passed.
+
 ## 2026-10-05 - Phase A start: native client, baseline brain, episodic time, resources
 
 - **Architecture decisions recorded** (docs/DECISIONS.md ADR-036..039):

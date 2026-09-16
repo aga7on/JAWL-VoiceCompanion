@@ -6,8 +6,15 @@
 и Live2D-хост, deepseek-v4-flash как мозг через OpenCode-релей с заменяемым
 провайдером, единый episodic timeline как TimeService, Bonsai на GPU1.
 
-- [ ] A0: U6 — живая браузерная приёмка на живом профиле, все карточки
+- [x] A0: U6 — живая браузерная приёмка на живом профиле, все карточки
   «Настроек» кликабельны и пишут через hub.
+  - 2026-09-17: `scripts/run_settings_browser_acceptance.py` против живого
+    профиля (control 2367) — panel load, session, settings load, cards
+    rendered, hub revision, save→profile file, restore, shell rail — **PASS**
+    (`runtime/settings-browser-acceptance.json`). Два реальных дефекта
+    исправлены: telegram-секция IFACE_SECTIONS использовала `keys:` вместо
+    `fields:` (save падал «spec.fields is not iterable»), и timezone писался
+    строкой вместо int (постоянный «грязный» readback drift).
 - [ ] A1: episodic timeline — единый TimeService с границами эпизодов
   (разговор/фокус/тишина/сон), один источник «сейчас/недавно/давно» для
   Heartbeat, памяти, внимания и аватара.

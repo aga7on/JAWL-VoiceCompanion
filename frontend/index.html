@@ -2484,7 +2484,7 @@
       },
       telegram: {
         title: 'Telegram',
-        keys: [
+        fields: [
           {key: 'interfaces:telegram.telethon.enabled', label: 'Telethon: включён', type: 'bool'},
           {key: 'interfaces:telegram.telethon.session_name', label: 'Telethon: имя сессии', type: 'text'},
           {key: 'interfaces:telegram.telethon.recent_chats_limit', label: 'Telethon: недавние чаты', type: 'int'},
@@ -2826,7 +2826,10 @@
         'settings:llm.language': String(document.querySelector('#cfg-language')?.value || '').trim(),
         'settings:system.continuous_cycle': !!document.querySelector('#cfg-continuous-cycle')?.checked,
         'settings:system.heartbeat_interval': num(document.querySelector('#cfg-heartbeat')?.value || 5),
-        'settings:system.timezone': String(document.querySelector('#cfg-timezone')?.value || '').trim(),
+        // Canonical schema stores timezone as an integer UTC offset
+        // (e.g. "timezone: 3"), not an IANA name; coerce numeric input so the
+        // saved value round-trips and does not stay permanently "dirty".
+        'settings:system.timezone': (() => { const v = String(document.querySelector('#cfg-timezone')?.value || '').trim(); return v !== '' && Number.isFinite(Number(v)) ? Number(v) : v; })(),
         'settings:system.event_acceleration.critical_multiplier': num(document.querySelector('#cfg-critical-mult')?.value || 1),
         'settings:system.context_depth.rag.depth_limit': num(document.querySelector('#cfg-rag-depth')?.value || 0),
         'settings:system.context_depth.rag.max_vector_blocks': num(document.querySelector('#cfg-rag-vector')?.value || 0),

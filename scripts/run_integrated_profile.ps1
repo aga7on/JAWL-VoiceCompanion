@@ -131,7 +131,7 @@ if (-not $env:LLM_API_KEY_1 -and $loopbackProvider) {
     # a non-empty key field, so use a process-local marker never sent remotely.
     $env:LLM_API_KEY_1 = 'local-loopback'
 }
-if (-not $env:LLM_API_KEY_1) {
+if (-not $env:LLM_API_KEY_1 -and -not $UseOpenCodeRelay) {
     throw 'Live JAWL provider is not configured: set LLM_API_KEY_1 in the process environment. No credential is read or stored by this launcher.'
 }
 # OpenCode Zen free tier toggle: the Console only serves "-free"/contributor
