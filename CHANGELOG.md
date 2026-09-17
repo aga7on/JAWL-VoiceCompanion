@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-17 - Phase A / A2: coherence E2E on the live profile
+
+- **All three coherence invariants verified live** (runtime profile, deepseek
+  brain via OpenCode relay, HostOS OBSERVER):
+  1. *Memory*: a fact told in one turn ("кодовое слово coh-…") was recalled
+     correctly in a later turn.
+  2. *Tool + postcondition*: the agent invoked `HostOSSearch.list_directory`
+     on the sandbox, got a real listing and answered in 37 s using the actual
+     names (`_system`, `izumrudny`, `voice`, `bird_atmosphere.txt`) — the log
+     shows the tool result feeding the terminal message.
+  3. *Unified expression*: answers carry aligned text + emotion + avatar
+     state in a single envelope.
+- **Prompt fix**: `RESPOND_DIRECTLY.md` now names `HostOSSearch.list_directory`
+  directly for "list files" requests. Before this, the agent burned all 15
+  ReAct steps in `SkillCatalog.search_skills` (HostOSSearch is not in the
+  always-loaded prefix list) and concluded with no action.
+- **jawl_web.set_hostos_level** hardened with status polling + start retries
+  (the previous stop/start-through-console path returned 503). Code committed;
+  live level-change acceptance still pending.
+
 ## 2026-09-17 - Phase A / A1: episodic timeline TimeService
 
 - New `src/jawl_voicecompanion/episodic_timeline.py` (ADR-038): a bounded,

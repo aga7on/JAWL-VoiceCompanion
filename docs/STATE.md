@@ -15,7 +15,17 @@
   (sandbox, мутации запрещены), а смена уровня через UI падает 503
   (set_hostos_level делает stop/start агента через console API и теряет связь).
   Длинный многошаговый ReAct-ход через релей выбил companion (launcher exited).
-- Дальше: A2 (task postcondition), A3 (SLO), A4 (ресурсы), A5 (Rust-клиент).
+- **A2 — DONE (live, частично в scope)**: все три инварианта подтверждены живьём.
+  (1) Память: факт «кодовое слово coh-…» сохранён и отозван в следующем ходу.
+  (2) Инструмент+postcondition: agent вызвал `HostOSSearch.list_directory` по
+  промпт-фиксу (раньше 15 шагов уходило в `search_skills` dead-end), получил
+  реальный листинг sandbox (`_system`, `izumrudny`, `voice`) и ответил за 37 с
+  с именами из результата — postcondition доказан логом. (3) Текст+эмоция+
+  аватар приходят в одном envelope. Граница: OBSERVER читает только framework
+  dir; для host-wide поручений нужен OPERATOR (смена уровня через UI падала
+  503 — сделан устойчивый retry в jawl_web.set_hostos_level, код закоммичен,
+  live-проверка уровня ещё впереди).
+- Дальше: A3 (SLO), A4 (ресурсы), A5 (Rust-клиент).
 
 ## Текущий goal — 2026-10-05
 

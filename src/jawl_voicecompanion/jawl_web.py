@@ -398,11 +398,28 @@ class JawlWebAdapter:
         )
         if written.get("ok") is not True:
             raise JawlWebUnavailable("JAWL rejected the HostOS configuration")
-        stopped = self._request_json("/api/agent/stop", method="POST", payload={})
-        if stopped.get("ok") is not True:
-            raise JawlWebUnavailable("JAWL agent could not be stopped after HostOS configuration")
-        started = self._request_json("/api/agent/start", method="POST", payload={})
-        if started.get("ok") is not True:
+        # Restart the agent so the new level takes effect. The console's
+        # stop/start can be slow to report; retry a few times and only treat a
+        # still-running old agent as a real failure.
+        self._request_json("/api/agent/stop", method="POST", payload={})
+        for _ in range(30):
+            try:
+                status = self._request_json("/api/agent/status")
+                if not status.get("running"):
+                    break
+            except JawlWebUnavailable:
+                pass
+            time.sleep(1.0)
+        started = None
+        for attempt in range(5):
+            try:
+                started = self._request_json("/api/agent/start", method="POST", payload={})
+                if started.get("ok") is True:
+                    break
+            except JawlWebUnavailable:
+                started = None
+            time.sleep(2.0)
+        if not (isinstance(started, dict) and started.get("ok") is True):
             raise JawlWebUnavailable("JAWL agent could not be started with the new HostOS level")
         return {
             "status": "synchronized",
