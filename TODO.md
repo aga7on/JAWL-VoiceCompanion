@@ -31,8 +31,13 @@
   без потери контекста.
   - 2026-09-17 live: warm turn→audio p50 6.9 с, max 8.4 с; cold 8.9 с.
     Barge-in (playback_suppression) реализован; live voice E2E в бэклоге R3.
-- [ ] A4: ресурсы — Bonsai на GPU1, on-demand unload, целевой профиль ≤ 8 ГБ
+- [x] A4: ресурсы — Bonsai на GPU1, on-demand unload, целевой профиль ≤ 8 ГБ
   RAM, кванты только через MULTIMODAL_MODEL_GATE.
+  - 2026-09-17: Bonsai подтверждён на GPU1 (VRAM 13.4/16 GB, util 94%).
+    Профиль без Bonsai ≈ 4 GB committed RAM — в бюджете ≤8 GB. 17 GB «private»
+    Bonsai — reclaimable mmap page cache (WS→240 MB после trim). dio/no-mmap не
+    применён (риск скорости vision). Открытый follow-up: VLM 27B слишком медленный
+    для постоянного watching (~100 с/скриншот) — рассмотреть лёгкую модель зрения.
 - [ ] A5: Rust-клиент (audio owner + Live2D + окно + OBS) как отдельный
   прототип поверх существующего профиля; браузерный голос не удалять до
   live-приёмки нативного контура.
