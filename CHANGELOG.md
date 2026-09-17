@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-17 - Phase B / B1: lightweight VLM for screen-watch (Qwen3-VL-2B)
+
+- Screen-watch vision moved from Bonsai-27B (8986) to **Qwen3-VL-2B Q4_K_M**
+  (8983, GPU1). Weights were already on disk; the model had already passed the
+  full RU screen-OCR gate (docs/MULTIMODAL_MODEL_GATE.md Round 4).
+- **Live benchmark on the gate fixtures**: RU form OCR read exactly
+  (заголовок «Загрузка отчёта - Сводка по продажам», прибыль «1 240 500
+  рублей», статус «Установлено») in 798 ms cold; live screen captions
+  174–738 ms warm. This replaces Bonsai's ~100 s/screenshot (135× faster) and
+  drops GPU1 VRAM from 13.4 GB to 10.9 GB.
+- `run_integrated_profile.ps1` now defaults screen-watch to
+  `--vision-url http://127.0.0.1:8983/v1 --vision-model qwen3-vl` and starts a
+  dedicated Qwen3-VL llama-server on 8983 (GPU1) when the port is free.
+  Bonsai 27B stays on 8986 for on-demand heavy analysis.
+
 ## 2026-09-17 - Phase A / A3+A4+A5: SLO verified, resources measured, native client prototype
 
 - **A3 interactive SLO (live)**: warm turn→first-audio p50 6.9 s / max 8.4 s

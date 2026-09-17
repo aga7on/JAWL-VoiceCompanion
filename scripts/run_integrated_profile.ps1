@@ -33,8 +33,8 @@ param(
 [string]$SensoryFile = '',
 [switch]$EnableScreenWatch,
 [switch]$EnableSensoryWorker,
-[string]$VisionUrl = 'http://127.0.0.1:8986/v1',
-[string]$VisionModel = 'bonsai',
+[string]$VisionUrl = 'http://127.0.0.1:8983/v1',
+[string]$VisionModel = 'qwen3-vl',
 [int]$ScreenWatchInterval = 15,
 [int]$HostosLevel = -1,
 [int]$AmbientTriageSeconds = 0,
@@ -457,6 +457,25 @@ try {
         if ($AmbientTriageSeconds -gt 0) { $companionArgs += " --ambient-triage-interval $AmbientTriageSeconds" }
     }
     if ($EnableScreenWatch) {
+        # Lightweight vision server (ADR/Phase B): Qwen3-VL-2B on GPU1 port 8983
+        # is the screen-watch describer (Bonsai 27B stays for on-demand heavy
+        # analysis on 8986). Start it if the port is free; skip if already up.
+        if ($VisionModel -eq 'qwen3-vl' -and -not (Test-NetConnection 127.0.0.1 -Port 8983 -WarningAction SilentlyContinue -InformationLevel Quiet)) {
+            $vlmExe = 'G:\AI\llamacpp-taardis\build\bin\llama-server.exe'
+            $vlmModel = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf'
+            $vlmMmproj = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf'
+            if ((Test-Path -LiteralPath $vlmExe) -and (Test-Path -LiteralPath $vlmModel) -and (Test-Path -LiteralPath $vlmMmproj)) {
+                $env:CUDA_VISIBLE_DEVICES = '1'
+                $vlmArgs = @('--model', $vlmModel, '--alias', 'qwen3-vl', '--host', '127.0.0.1', '--port', '8983', '--ctx-size', '8192', '--threads', '8', '-ngl', '99', '--no-webui', '--reasoning', 'off', '--mmproj', $vlmMmproj)
+                $vlmProc = Start-Process -FilePath $vlmExe -ArgumentList $vlmArgs -WindowStyle Hidden -PassThru
+                Write-Host "Vision server (qwen3-vl) starting (pid $($vlmProc.Id)) on 8983"
+                $vlmDeadline = (Get-Date).AddSeconds(30)
+                do { Start-Sleep -Milliseconds 800; $vlmUp = Test-NetConnection 127.0.0.1 -Port 8983 -WarningAction SilentlyContinue -InformationLevel Quiet } until ($vlmUp -or (Get-Date) -gt $vlmDeadline)
+                if (-not $vlmUp) { Write-Warning 'qwen3-vl vision server did not open 8983; screen-watch will use a slow/missing describer.' }
+            } else {
+                Write-Warning 'qwen3-vl weights/server missing; screen-watch describer unavailable.'
+            }
+        }
         if (-not $JawlEventDir) { $JawlEventDir = Join-Path $profileHome 'sandbox\_system\instances\daily\.jawl_events' }
         New-Item -ItemType Directory -Force -Path $JawlEventDir | Out-Null
         $companionArgs += " --hostos-live --screen-enabled --vision-url $VisionUrl --vision-model $VisionModel --screen-watch --screen-watch-interval $ScreenWatchInterval --jawl-event-dir `"$JawlEventDir`""
