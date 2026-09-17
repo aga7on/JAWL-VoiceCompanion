@@ -61,7 +61,16 @@
   174–387 мс. VRAM GPU1 упала с 13.4 до 10.9 GB. `run_integrated_profile.ps1`
   теперь поднимает qwen3-vl на 8983 и подключает screen-watch к нему; Bonsai
   остаётся на 8986 для тяжёлого анализа по запросу.
-- Дальше: B2 (HostOS уровни live), B3 (Rust-клиент → аватар).
+- **B2 — DONE (механизм), задача на OPERATOR открыта**: уровни HostOS меняются
+  через config+restart (SANDBOX → OPERATOR подтверждён `access_level=2`,
+  персистится). Устойчивый stop→poll→start с retry работает. НО: на OPERATOR
+  многошаговый task-turn в «sandbox»-формулировке ушёл в timeout — агент после
+  рестарта начал новый цикл, а anti-repeat подавил повторный ответ. Это не
+  баг уровня, а известная хрупкость turn-lifecycle после restart (heartbeat +
+  anti-repeat глушат follow-up). Нужна отдельная правка turn-recovery.
+- Дальше: B3 (Rust-клиент → аватар); открыто — turn-recovery после agent
+  restart (anti-repeat + heartbeat глушат повторный ответ).
+
 
 ## Текущий goal — 2026-10-05
 
