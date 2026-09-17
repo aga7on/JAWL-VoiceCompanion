@@ -310,6 +310,13 @@ class CompanionServer(ThreadingHTTPServer):
         self.tts = tts_service
         self.avatar_assets = avatar_assets
         self.attention = attention or AttentionPresence()
+        # Episodic timeline (ADR-038): the single shared TimeService. It owns
+        # "now / recently / long ago" for Heartbeat, memory, attention and the
+        # avatar. Bounded, one owner, no reasoning — it records episodes and
+        # exposes them; consumers read best-effort.
+        from .episodic_timeline import EpisodicTimeline
+
+        self.timeline = EpisodicTimeline()
         self.presence_file = Path(presence_file).resolve() if presence_file else None
         self._load_presence_preferences()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
@@ -601,6 +608,26 @@ class CompanionServer(ThreadingHTTPServer):
         except Exception:  # noqa: BLE001 - prefetch is best-effort
             pass
 
+    def _start_timeline_tick(self) -> None:
+        """Background tick that lets the timeline cut idle/silence episodes.
+
+        The interactive path never calls poll(); only this daemon thread does,
+        on a slow cadence well below the silence cut.
+        """
+        if self.timeline is None:
+            return
+        self._timeline_stop = threading.Event()
+
+        def _tick() -> None:
+            while not self._timeline_stop.wait(30.0):
+                try:
+                    self.timeline.poll()
+                except Exception:  # noqa: BLE001 - the tick must never crash the server
+                    pass
+
+        thread = threading.Thread(target=_tick, name="episodic-timeline-tick", daemon=True)
+        thread.start()
+
     def server_close(self) -> None:
         errors: list[str] = []
 
@@ -625,6 +652,9 @@ class CompanionServer(ThreadingHTTPServer):
         step("hostos", self.hostos.stop_all)
         if self.voice_mem_async is not None:
             step("voice_mem_async", self.voice_mem_async.close)
+        timeline_stop = getattr(self, "_timeline_stop", None)
+        if timeline_stop is not None:
+            step("timeline_tick", timeline_stop.set)
         if self.voice_mem is not None:
             step("voice_mem", self.voice_mem.close)
         if self.asr is not None:
@@ -759,6 +789,7 @@ class CompanionServer(ThreadingHTTPServer):
                 "asr": self.asr is not None,
                 "streaming_active": bool(streaming_state.get("active")) if streaming_state else False,
             },
+            "timeline": self.timeline.state() if self.timeline is not None else None,
         }
 
 
@@ -857,6 +888,35 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
                 return
             self._json(self.server.shell_status())
+            return
+        if path == "/api/timeline":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            if self.server.timeline is None:
+                self._json({"ok": False, "error": "timeline not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            query = urlsplit(self.path).query
+            limit = 20
+            window_s: float | None = None
+            for part in query.split("&"):
+                if part.startswith("limit="):
+                    try:
+                        limit = int(part.split("=", 1)[1])
+                    except ValueError:
+                        pass
+                elif part.startswith("window="):
+                    try:
+                        window_s = float(part.split("=", 1)[1])
+                    except ValueError:
+                        pass
+            self._json({
+                "ok": True,
+                "state": self.server.timeline.state(),
+                "episodes": self.server.timeline.window(window_s) if window_s is not None else self.server.timeline.recent(limit),
+            })
             return
         if path == "/api/logs/agent":
             try:
@@ -1158,6 +1218,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 )})
                 return
             if self.path == "/api/chat":
+                if self.server.timeline is not None:
+                    self.server.timeline.record("conversation", "user_chat", str(payload.get("text") or "")[:120])
                 self._json(self.server.gateway.handle_text(
                     self.server.enrich_turn_text(payload.get("text", "")),
                     session_id=str(payload.get("session_id") or self.server.session_token)[:200],
@@ -2023,6 +2085,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     "filtered": "asr_noise_hallucination",
                 }
             log_event("asr_final", text=text, session=session_id[:40], source=asr_source)
+            if self.server.timeline is not None:
+                self.server.timeline.record("conversation", f"user_voice:{asr_source}", text[:120])
             correlation_id = self._correlation_id(payload)
             events = self._external_asr_events(text, session_id, correlation_id)
             memory_sync = (
@@ -2586,4 +2650,5 @@ def create_server(
     )
     if watcher is not None:
         watcher.start()
+    server._start_timeline_tick()
     return server
