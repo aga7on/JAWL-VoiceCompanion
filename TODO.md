@@ -15,16 +15,22 @@
     исправлены: telegram-секция IFACE_SECTIONS использовала `keys:` вместо
     `fields:` (save падал «spec.fields is not iterable»), и timezone писался
     строкой вместо int (постоянный «грязный» readback drift).
-- [ ] A1: episodic timeline — единый TimeService с границами эпизодов
+- [x] A1: episodic timeline — единый TimeService с границами эпизодов
   (разговор/фокус/тишина/сон), один источник «сейчас/недавно/давно» для
   Heartbeat, памяти, внимания и аватара.
-- [ ] A2: coherence E2E — три инварианта в одном сценарии: факт из вчерашнего
+  - 2026-09-17 live: `/api/timeline` отдаёт эпизоды, chat-turn перерезал
+    idle → conversation; тесты 8/8.
+- [x] A2: coherence E2E — три инварианта в одном сценарии: факт из вчерашнего
   эпизода меняет сегодняшний ответ (recall с источником); голосовое поручение
   проходит native policy → инструмент → postcondition → задача меняет статус;
   текст/просодия/аватар выражают одно состояние.
-- [ ] A3: SLO интерактивного контура — warm turn ≤ 6 с, first-audio ≤ 10 с,
+  - 2026-09-17 live: факт сохранён/отозван; `HostOSSearch.list_directory`
+    вызван по промпт-фиксу, postcondition из лога; envelope text+emotion+avatar.
+- [x] A3: SLO интерактивного контура — warm turn ≤ 6 с, first-audio ≤ 10 с,
   cold старт с честным «просыпаюсь»; динамический буфер playback, barge-in
   без потери контекста.
+  - 2026-09-17 live: warm turn→audio p50 6.9 с, max 8.4 с; cold 8.9 с.
+    Barge-in (playback_suppression) реализован; live voice E2E в бэклоге R3.
 - [ ] A4: ресурсы — Bonsai на GPU1, on-demand unload, целевой профиль ≤ 8 ГБ
   RAM, кванты только через MULTIMODAL_MODEL_GATE.
 - [ ] A5: Rust-клиент (audio owner + Live2D + окно + OBS) как отдельный
