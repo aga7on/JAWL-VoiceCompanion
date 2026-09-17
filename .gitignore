@@ -71,3 +71,7 @@ Thumbs.db
 
 # VoiceMem generated demo memory space (biometric voiceprints and vector stores)
 voicemem_memoryspace/demo/
+
+# Rust build output (source is tracked)
+rust-client/target/
+

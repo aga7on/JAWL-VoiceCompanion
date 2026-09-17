@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-17 - Phase A / A3+A4+A5: SLO verified, resources measured, native client prototype
+
+- **A3 interactive SLO (live)**: warm turn→first-audio p50 6.9 s / max 8.4 s
+  (target ≤6 s turn, ≤10 s first-audio); cold first-audio 8.9 s after restart.
+  deepseek relay answers in 3.4–7.6 s, TeraTTS 0.5–1.9 s.
+- **A4 resources (measured)**: Bonsai confirmed on GPU1 (VRAM 13.4/16 GB, 94%
+  util); the companion profile excluding Bonsai is ~4 GB committed RAM (in the
+  ≤8 GB budget). Bonsai's 17 GB "private" is reclaimable mmap page cache
+  (working set → 240 MB after trim), so no risky `--load-mode` change was made.
+  **Flagged**: the 27B Q1 VLM takes ~100 s per screenshot on a 16 GB card — too
+  slow for continuous screen-watching; a lighter VLM is a follow-up.
+- **A5 native client prototype**: new `rust-client/` (Rust 1.95, cpal + ureq +
+  winit + ctrlc). Live-verified the two seams that justify ADR-036: the client
+  reached `/api/health` (`jawl_terminal_gateway`) and opened the real microphone
+  (Chat-Audeze Maxwell, 48000 Hz/1ch). Browser voice is untouched; next layer is
+  native Cubism rendering on the window + audio streaming into the companion.
+
 ## 2026-09-17 - Phase A / A2: coherence E2E on the live profile
 
 - **All three coherence invariants verified live** (runtime profile, deepseek
