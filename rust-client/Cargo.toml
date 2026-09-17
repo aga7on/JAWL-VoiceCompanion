@@ -12,6 +12,7 @@ serde_json = "1"
 ureq = { version = "2", features = ["json"] }   # tiny blocking HTTP client
 winit = "0.29"          # windowing for the character window
 ctrlc = "3"             # clean shutdown on Ctrl+C
+base64 = "0.22"
 
 [profile.release]
 opt-level = 2

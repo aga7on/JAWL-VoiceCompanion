@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-17 - Phase B / B2+B3: HostOS levels live, native voice pipeline
+
+- **B2**: HostOS access level changes verified live via the hardened path —
+  config write + robust stop→poll→start moved the policy SANDBOX → OPERATOR
+  (`access_level=2`, persisted). Flagged a separate turn-recovery fragility:
+  after an agent restart a follow-up multi-step turn can time out because
+  heartbeat + anti-repeat suppress the re-answer (not a level bug).
+- **B3 native voice pipeline (live)**: `rust-client/` now owns the microphone
+  (cpal/WASAPI), opens a companion session (cookie + CSRF), resamples to
+  16 kHz mono s16le and streams bounded PCM chunks into `/api/voice/audio`
+  (HTTP 200). This proves the native audio owner (ADR-036) end-to-end outside
+  the browser. Native Live2D render is deferred: the proprietary Cubism Native
+  SDK is not on disk and the current avatar is a web runtime; the render
+  approach for the native window needs a separate decision.
+
 ## 2026-09-17 - Phase B / B1: lightweight VLM for screen-watch (Qwen3-VL-2B)
 
 - Screen-watch vision moved from Bonsai-27B (8986) to **Qwen3-VL-2B Q4_K_M**

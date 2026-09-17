@@ -68,8 +68,15 @@
   рестарта начал новый цикл, а anti-repeat подавил повторный ответ. Это не
   баг уровня, а известная хрупкость turn-lifecycle после restart (heartbeat +
   anti-repeat глушат follow-up). Нужна отдельная правка turn-recovery.
-- Дальше: B3 (Rust-клиент → аватар); открыто — turn-recovery после agent
-  restart (anti-repeat + heartbeat глушат повторный ответ).
+- **B3 — DONE (native voice pipeline live)**: `rust-client/` теперь владеет
+  микрофоном, делает session-handshake с компаньоном и стримит аудио в
+  `/api/voice/audio`. Live-проверено: 48000 Hz/1ch → 16 kHz mono s16le, чанки
+  по ~37 KB уходят и принимаются (HTTP 200) в ASR-контур. Это доказывает
+  нативный аудио-владелец (ADR-036) вне браузера. Live2D рендер в Rust —
+  отдельный шаг: нативный Cubism SDK (C++, проприетарный) на диске нет, а
+  текущий аватар — web-runtime; для нативного окна нужен либо Cubism Native,
+  либо решение о рендере (см. DECISIONS при выборе).
+- Дальше: нативный Live2D (выбор рендера) + turn-recovery после agent restart.
 
 
 ## Текущий goal — 2026-10-05
