@@ -1,5 +1,22 @@
 # Состояние разработки
 
+## Прогресс Фазы A — 2026-09-17 (в работе)
+
+- **A0 — DONE (live)**: браузерная приёмка настроек на живом профиле прошла
+  (`scripts/run_settings_browser_acceptance.py` → PASS, `runtime/settings-browser-acceptance.json`).
+  Исправлены два реальных дефекта: telegram-секция IFACE_SECTIONS (`keys:` →
+  `fields:`) и timezone readback drift (строка → int).
+- **A1 — DONE (live)**: episodic timeline TimeService (`episodic_timeline.py`),
+  `/api/timeline`, подключён к chat/voice; live-verified — реальный chat-turn
+  перерезал idle → conversation. Тесты 8/8, web 67/67.
+- **A2 — частично (live)**: инвариант памяти подтверждён (факт сохранён и
+  отозван в следующем ходу, текст+эмоция+аватар согласованы). Инвариант
+  «голос→policy→инструмент→postcondition» НЕ закрыт: профиль на HostOS level 0
+  (sandbox, мутации запрещены), а смена уровня через UI падает 503
+  (set_hostos_level делает stop/start агента через console API и теряет связь).
+  Длинный многошаговый ReAct-ход через релей выбил companion (launcher exited).
+- Дальше: A2 (task postcondition), A3 (SLO), A4 (ресурсы), A5 (Rust-клиент).
+
 ## Текущий goal — 2026-10-05
 
 Приняты и зафиксированы решения (ADR-036..039): Rust-клиент как владелец

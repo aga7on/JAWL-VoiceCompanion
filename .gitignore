@@ -61,9 +61,11 @@ logs/
 # Temporary files
 tmp/
 temp/
+tmp_*/
 .tmp-wheel/
 *.tmp
 *.bak
+codex-thread-*.json
 .DS_Store
 Thumbs.db
 

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-09-17 - Phase A / A1: episodic timeline TimeService
+
+- New `src/jawl_voicecompanion/episodic_timeline.py` (ADR-038): a bounded,
+  single-owner `EpisodicTimeline` that projects machine process-time into
+  episodes cut on activity boundaries (conversation / focus / silence / sleep).
+  One open episode at a time; `poll()` cuts to idle after sustained silence
+  (background tick only, never the interactive path); hard caps on episodes
+  and per-episode events. This is the shared "now / recently / long ago"
+  source for Heartbeat, memory, attention and the avatar.
+- Wired into `web.py`: conversation turns (`/api/chat`, ASR final) record
+  `conversation` events; the server owns a daemon tick for silence cuts;
+  state is surfaced on `/api/shell/status` and a new session-gated
+  `GET /api/timeline` (recent / windowed episodes).
+- Tests: `tests/test_episodic_timeline.py` 8/8 (boundary cuts, no re-cut,
+  silence, sleep/wake, bounded growth, window, state fields).
+- **Live verification** on the running integrated profile: `/api/timeline`
+  returned a real episode list, and a live `/api/chat` turn cut the timeline
+  from `idle` to a new open `conversation` episode.
+- Also on the live profile: A2 memory invariant verified — a stored fact
+  ("кодовое слово coh-…") was recalled correctly in a later turn, and the
+  answer carried aligned text + emotion + avatar state in one envelope.
+
 ## 2026-09-17 - Phase A / A0: live Settings acceptance on the live profile
 
 - New `scripts/run_settings_browser_acceptance.py` drives the real control
