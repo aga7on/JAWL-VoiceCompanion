@@ -20,7 +20,7 @@ use std::time::Duration;
 const COMPANION_URL: &str = "http://127.0.0.1:2367";
 const TARGET_RATE: u32 = 16_000;
 const CHUNK_SECONDS: f32 = 1.0;
-/// Default model: Hiyori (moc3 v3) — fully supported by the pure-Rust Mocari
+/// Default model: Hiyori (moc3 v3) вЂ” fully supported by the pure-Rust Mocari
 /// runtime including the mouth parameter (ParamMouthOpenY). mao_pro (moc3 v5)
 /// needs Cubism Core blendshapes which Mocari does not apply yet; select it
 /// only via the JAWL_AVATAR_MODEL env override once that lands.
@@ -93,7 +93,7 @@ fn run_mic(running: Arc<AtomicBool>) {
     let config = match device.default_input_config() { Ok(c) => c, Err(e) => { eprintln!("[mic] no input config: {e}"); return; } };
     let src_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
-    println!("[mic] {} В· {} Hz В· {} ch -> {} Hz mono", device.name().unwrap_or_default(), src_rate, channels, TARGET_RATE);
+    println!("[mic] {} Р’В· {} Hz Р’В· {} ch -> {} Hz mono", device.name().unwrap_or_default(), src_rate, channels, TARGET_RATE);
 
     let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
     let buf2 = buf.clone();
@@ -129,20 +129,20 @@ fn run_mic(running: Arc<AtomicBool>) {
 
 /// Software texture-mapped triangle rasterizer for the Live2D mesh.
 /// Draws each drawable mesh's triangles with its texture, honoring opacity.
-fn rasterize(
+fn rasterize_with_bg(
     model: &mocari::assets::RuntimeModel,
     frame: &mut [u32],
     width: usize,
     height: usize,
+    bg_color: u32,
 ) {
-    // Mint-tinted background to match the panel's Windows Aero palette.
     for px in frame.iter_mut() {
-        *px = 0x00_1a2b26; // dark teal
+        *px = bg_color;
     }
     let canvas = model.runtime().canvas();
     let _ = canvas; // canvas units are pixels; vertices are normalized model units.
-    // Vertices are in normalized model space (roughly xв€€[-0.6,0.6],
-    // yв€€[-2.0,1.0] for this model). Fit that bbox into the window.
+    // Vertices are in normalized model space (roughly xРІв‚¬в‚¬[-0.6,0.6],
+    // yРІв‚¬в‚¬[-2.0,1.0] for this model). Fit that bbox into the window.
     let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for m in model.runtime().meshes() {
         for v in m.vertices() {
@@ -177,6 +177,14 @@ fn rasterize(
         }
     }
 }
+
+/// Default raster: mint-tinted panel background.
+fn rasterize(model: &mocari::assets::RuntimeModel, frame: &mut [u32], width: usize, height: usize) {
+    rasterize_with_bg(model, frame, width, height, 0x00_1a2b26);
+}
+
+/// D5 OBS mode background: pure chroma green, keyed out in OBS.
+pub const OBS_CHROMA_BG: u32 = 0x00_ff00;
 
 fn raster_tri(
     frame: &mut [u32],
@@ -358,6 +366,11 @@ fn run_avatar() {
         let mouth: f32 = args.get(pos + 2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
         let out = args.get(pos + 3).cloned()
             .unwrap_or_else(|| r"G:\AI\JAWL-VoiceCompanion\runtime\avatar-render.png".to_string());
+        // An explicit background after the output path (e.g. "0x00FF00" for an
+        // OBS chroma frame test).
+        let headless_bg = args.get(pos + 4)
+            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).ok())
+            .unwrap_or(0x00_1a2b26u32);
         let (w, h) = (480usize, 640usize);
 
         // Apply the requested expression (mao_pro style files, if present),
@@ -380,9 +393,8 @@ fn run_avatar() {
         model.runtime_mut().apply_parameter_overrides();
         model.runtime_mut().update_meshes();
         let mut frame = vec![0u32; w * h];
-        rasterize(&model, &mut frame, w, h);
-        let bg = 0x00_1a2b26u32;
-        let drawn = frame.iter().filter(|&&p| p != bg).count();
+        rasterize_with_bg(&model, &mut frame, w, h, headless_bg);
+        let drawn = frame.iter().filter(|&&p| p != headless_bg).count();
         let mut rgba = Vec::with_capacity(w * h * 4);
         for &p in &frame {
             rgba.push(((p >> 16) & 0xff) as u8);
@@ -396,6 +408,14 @@ fn run_avatar() {
         }
         return;
     }
+
+    // D5 OBS mode: `--obs` swaps the mint panel background for pure chroma
+    // green (#00FF00) that OBS keys out with the color-key filter. The window
+    // is already frameless-capable via --webview; for the software raster the
+    // chroma background is the simplest reliable OBS source.
+    let obs_mode = std::env::args().any(|a| a == "--obs");
+    let bg_color = if obs_mode { OBS_CHROMA_BG } else { 0x00_1a2b26 };
+    if obs_mode { println!("[avatar] OBS chroma-key background (#00FF00)"); }
 
     let event_loop = winit::event_loop::EventLoop::new().expect("event loop");
     let attrs = winit::window::Window::default_attributes()
@@ -531,7 +551,7 @@ fn run_avatar() {
                 model.runtime_mut().update_meshes();
                 surface.resize(std::num::NonZeroU32::new(w as u32).unwrap(), std::num::NonZeroU32::new(h as u32).unwrap()).unwrap();
                 let mut buf = surface.buffer_mut().unwrap();
-                rasterize(&model, &mut buf, w, h);
+                rasterize_with_bg(&model, &mut buf, w, h, bg_color);
                 buf.present().unwrap();
                 window.request_redraw();
             }
@@ -561,7 +581,7 @@ fn run_all() {
 
     let mut children: Vec<Child> = Vec::new();
 
-    // Qwen3-VL screen-watch describer (GPU1) on 8983 вЂ” the only always-on
+    // Qwen3-VL screen-watch describer (GPU1) on 8983 РІР‚вЂќ the only always-on
     // vision model. Bonsai 27B was dropped from the default profile (ADR-040):
     // it held 13 GB VRAM + 17 GB RAM for ~100 s/screenshot. Heavy analysis is
     // manual via scripts\run_coding_server.ps1, not part of the stack.
@@ -608,7 +628,7 @@ fn run_all() {
         std::thread::sleep(Duration::from_secs(2));
     }
     if port_open(2367) {
-        println!("[launcher] READY вЂ” control http://127.0.0.1:2367  avatar http://127.0.0.1:8766/avatar");
+        println!("[launcher] READY РІР‚вЂќ control http://127.0.0.1:2367  avatar http://127.0.0.1:8766/avatar");
     } else {
         println!("[launcher] profile did not open 2367 in time; check logs in runtime\\instances\\daily\\logs");
     }
@@ -628,7 +648,7 @@ fn run_all() {
 
 /// Production avatar window: WebView2 hosting the existing /avatar page.
 /// Cubism Core renders the model at full quality (mouth, physics, emotions,
-/// lip-sync) — the exact pipeline already accepted in the browser, now owned
+/// lip-sync) вЂ” the exact pipeline already accepted in the browser, now owned
 /// by a native window (frameless, transparent, always-on-top) for the desktop
 /// and OBS. Mocari remains available as a pure-native fallback (--avatar).
 fn run_webview() {
@@ -657,7 +677,7 @@ fn run_webview() {
         .build_as_child(&window)
         .expect("webview (is WebView2 Runtime installed?)");
 
-    println!("[webview] window open — close the window to exit");
+    println!("[webview] window open вЂ” close the window to exit");
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = tao::event_loop::ControlFlow::Poll;
         if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
