@@ -397,7 +397,8 @@ fn run_all() {
 
 fn main() {
     println!("JAWL Companion native client");
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "--mic".to_string());
+    // Default (no args, e.g. double-click) = launch the whole stack.
+    let mode = std::env::args().nth(1).unwrap_or_else(|| "--all".to_string());
     let running = Arc::new(AtomicBool::new(true));
     let r2 = running.clone();
     let _ = ctrlc::set_handler(move || r2.store(false, Ordering::SeqCst));
