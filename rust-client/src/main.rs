@@ -265,6 +265,22 @@ fn run_avatar() {
     println!("[avatar] window open (close to exit)");
 
     let start = std::time::Instant::now();
+    // Poll the companion's live avatar-audio signal (speaking + amplitude) for
+    // lip-sync, in a background thread, so the render loop never blocks on I/O.
+    let lip = Arc::new(Mutex::new((false, 0.0f32))); // (speaking, amplitude)
+    {
+        let lip = lip.clone();
+        std::thread::spawn(move || loop {
+            if let Ok(resp) = ureq::get(&format!("{COMPANION_URL}/api/avatar/audio")).call() {
+                if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                    let speaking = v.get("speaking").and_then(|x| x.as_bool()).unwrap_or(false);
+                    let amp = v.get("amplitude").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                    if let Ok(mut g) = lip.lock() { *g = (speaking, amp); }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(80));
+        });
+    }
     let _ = event_loop.run(move |event, elwt| {
         use winit::event::{Event, WindowEvent};
         match event {
@@ -272,11 +288,15 @@ fn run_avatar() {
             Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
                 let size = window.inner_size();
                 let (w, h) = (size.width.max(1) as usize, size.height.max(1) as usize);
-                // Animate a gentle idle sway + breathing so the avatar is alive.
                 let t = start.elapsed().as_secs_f32();
+                // Idle sway/breathing.
                 model.runtime_mut().set_parameter_normalized("ParamAngleX", 0.5 + 0.15 * (t * 0.6).sin());
                 model.runtime_mut().set_parameter_normalized("ParamAngleY", 0.5 + 0.1 * (t * 0.4).cos());
-                model.runtime_mut().set_parameter_normalized("ParamMouthOpenY", 0.5 + 0.5 * (t * 2.2).sin().abs());
+                // Lip-sync: drive the mouth from the companion's live speech
+                // amplitude when speaking, else a soft idle breath.
+                let (speaking, amp) = lip.lock().map(|g| *g).unwrap_or((false, 0.0));
+                let mouth = if speaking { amp.clamp(0.0, 1.0) } else { 0.5 + 0.2 * (t * 1.4).sin().abs() };
+                model.runtime_mut().set_parameter_normalized("ParamMouthOpenY", mouth);
                 model.runtime_mut().update_meshes();
                 surface.resize(std::num::NonZeroU32::new(w as u32).unwrap(), std::num::NonZeroU32::new(h as u32).unwrap()).unwrap();
                 let mut buf = surface.buffer_mut().unwrap();
