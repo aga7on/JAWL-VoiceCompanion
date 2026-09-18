@@ -1,4 +1,4 @@
-﻿//! JAWL Companion native client (C1/C2: mic stream + native Live2D avatar).
+//! JAWL Companion native client (C1/C2: mic stream + native Live2D avatar).
 //!
 //! ADR-036: a thin native client owns the audio devices and hosts the Live2D
 //! character window / OBS surface. The web panel stays as the control/pult.
@@ -67,7 +67,21 @@ fn run_mic(running: Arc<AtomicBool>) {
     if session.is_some() { println!("[companion] session established"); }
 
     let host = cpal::default_host();
-    let device = match host.default_input_device() { Some(d) => d, None => { eprintln!("[mic] no input device"); return; } };
+    // Prefer the owner's real microphone (fifine) over a virtual/headset
+    // default; fall back to the OS default when it's not present.
+    let device = {
+        let mut chosen = host.default_input_device();
+        for d in host.input_devices().into_iter().flatten() {
+            if let Ok(name) = d.name() {
+                if name.to_lowercase().contains("fifine") {
+                    println!("[mic] selected device: {name}");
+                    chosen = Some(d);
+                    break;
+                }
+            }
+        }
+        match chosen { Some(d) => d, None => { eprintln!("[mic] no input device"); return; } }
+    };
     let config = match device.default_input_config() { Ok(c) => c, Err(e) => { eprintln!("[mic] no input config: {e}"); return; } };
     let src_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
