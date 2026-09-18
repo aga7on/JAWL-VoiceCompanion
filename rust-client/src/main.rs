@@ -20,7 +20,15 @@ use std::time::Duration;
 const COMPANION_URL: &str = "http://127.0.0.1:2367";
 const TARGET_RATE: u32 = 16_000;
 const CHUNK_SECONDS: f32 = 1.0;
-const MODEL_PATH: &str = r"G:\AI\JAWL-VoiceCompanion\runtime\live2d\mao_pro\mao_pro.model3.json";
+/// Default model: Hiyori (moc3 v3) — fully supported by the pure-Rust Mocari
+/// runtime including the mouth parameter (ParamMouthOpenY). mao_pro (moc3 v5)
+/// needs Cubism Core blendshapes which Mocari does not apply yet; select it
+/// only via the JAWL_AVATAR_MODEL env override once that lands.
+const MODEL_PATH_DEFAULT: &str = r"G:\AI\JAWL-VoiceCompanion\runtime\live2d\hiyori\Hiyori.model3.json";
+
+fn model_path() -> String {
+    std::env::var("JAWL_AVATAR_MODEL").unwrap_or_else(|_| MODEL_PATH_DEFAULT.to_string())
+}
 
 #[derive(Debug, Deserialize)]
 struct Health { status: String, mode: String }
@@ -235,12 +243,110 @@ fn raster_tri(
     }
 }
 
+/// Canonical emotion slots shared by the expression files and direct params.
+fn emotion_name(idx: usize) -> &'static str {
+    match idx {
+        1 => "happy",
+        2 => "attentive",
+        3 => "sad",
+        4 => "angry",
+        5 => "surprised",
+        6 => "concerned",
+        7 => "confused",
+        _ => "neutral",
+    }
+}
+
+fn emotion_index(name: &str) -> usize {
+    match name {
+        "happy" | "joy" => 1,
+        "attentive" => 2,
+        "sad" => 3,
+        "angry" => 4,
+        "surprised" => 5,
+        "concerned" => 6,
+        "confused" => 7,
+        _ => 0,
+    }
+}
+
+/// D2: drive the face by direct parameters (proven to deform meshes in Mocari
+/// for standard Cubism params: eyes/brows/cheek) instead of expression files.
+/// Values are 0..1 normalized targets; callers fade toward them per frame.
+fn apply_emotion_params(rt: &mut mocari::runtime::ModelRuntime, name: &str) {
+    let set = |rt: &mut mocari::runtime::ModelRuntime, id: &str, v: f32| {
+        rt.set_parameter_normalized(id, v);
+    };
+    match name {
+        "happy" => {
+            set(rt, "ParamEyeLSmile", 1.0); set(rt, "ParamEyeRSmile", 1.0);
+            set(rt, "ParamBrowLY", 0.65); set(rt, "ParamBrowRY", 0.65);
+            set(rt, "ParamCheek", 0.8);
+        }
+        "sad" => {
+            set(rt, "ParamEyeLSmile", 0.0); set(rt, "ParamEyeRSmile", 0.0);
+            set(rt, "ParamBrowLY", 0.25); set(rt, "ParamBrowRY", 0.25);
+            set(rt, "ParamBrowLAngle", 0.25); set(rt, "ParamBrowRAngle", 0.25);
+            set(rt, "ParamCheek", 0.0);
+        }
+        "angry" => {
+            set(rt, "ParamBrowLY", 0.2); set(rt, "ParamBrowRY", 0.2);
+            set(rt, "ParamBrowLAngle", 0.1); set(rt, "ParamBrowRAngle", 0.9);
+            set(rt, "ParamBrowLForm", 0.15); set(rt, "ParamBrowRForm", 0.15);
+            set(rt, "ParamCheek", 0.4);
+        }
+        "surprised" => {
+            set(rt, "ParamEyeLOpen", 1.2); set(rt, "ParamEyeROpen", 1.2);
+            set(rt, "ParamBrowLY", 0.95); set(rt, "ParamBrowRY", 0.95);
+            set(rt, "ParamCheek", 0.3);
+        }
+        "concerned" => {
+            set(rt, "ParamBrowLY", 0.4); set(rt, "ParamBrowRY", 0.4);
+            set(rt, "ParamBrowLAngle", 0.35); set(rt, "ParamBrowRAngle", 0.65);
+            set(rt, "ParamCheek", 0.1);
+        }
+        "confused" => {
+            set(rt, "ParamBrowLY", 0.6); set(rt, "ParamBrowRY", 0.35);
+            set(rt, "ParamBrowLAngle", 0.3); set(rt, "ParamBrowRAngle", 0.7);
+            set(rt, "ParamEyeBallX", 0.35);
+        }
+        "attentive" => {
+            set(rt, "ParamEyeLOpen", 1.1); set(rt, "ParamEyeROpen", 1.1);
+            set(rt, "ParamBrowLY", 0.55); set(rt, "ParamBrowRY", 0.55);
+        }
+        _ => {} // neutral keeps defaults
+    }
+}
+
+/// Current emotion parameter targets (same map as apply_emotion_params) as a
+/// list of (id, normalized target) so the render loop can fade smoothly.
+fn emotion_targets(name: &str) -> Vec<(&'static str, f32)> {
+    match name {
+        "happy" => vec![("ParamEyeLSmile",1.0),("ParamEyeRSmile",1.0),("ParamBrowLY",0.65),("ParamBrowRY",0.65),("ParamCheek",0.8)],
+        "sad" => vec![("ParamEyeLSmile",0.0),("ParamEyeRSmile",0.0),("ParamBrowLY",0.25),("ParamBrowRY",0.25),("ParamBrowLAngle",0.25),("ParamBrowRAngle",0.25),("ParamCheek",0.0)],
+        "angry" => vec![("ParamBrowLY",0.2),("ParamBrowRY",0.2),("ParamBrowLAngle",0.1),("ParamBrowRAngle",0.9),("ParamBrowLForm",0.15),("ParamBrowRForm",0.15),("ParamCheek",0.4)],
+        "surprised" => vec![("ParamEyeLOpen",1.2),("ParamEyeROpen",1.2),("ParamBrowLY",0.95),("ParamBrowRY",0.95),("ParamCheek",0.3)],
+        "concerned" => vec![("ParamBrowLY",0.4),("ParamBrowRY",0.4),("ParamBrowLAngle",0.35),("ParamBrowRAngle",0.65),("ParamCheek",0.1)],
+        "confused" => vec![("ParamBrowLY",0.6),("ParamBrowRY",0.35),("ParamBrowLAngle",0.3),("ParamBrowRAngle",0.7),("ParamEyeBallX",0.35)],
+        "attentive" => vec![("ParamEyeLOpen",1.1),("ParamEyeROpen",1.1),("ParamBrowLY",0.55),("ParamBrowRY",0.55)],
+        _ => vec![],
+    }
+}
+
 fn run_avatar() {
     println!("[mode] avatar window (Mocari Live2D, software raster)");
-    let mut model = match mocari::assets::load_model_runtime(MODEL_PATH) {
+    let model_path = model_path();
+    let mut model = match mocari::assets::load_model_runtime(&model_path) {
         Ok(m) => m,
-        Err(e) => { eprintln!("[avatar] failed to load {MODEL_PATH}: {e}"); return; }
+        Err(e) => { eprintln!("[avatar] failed to load {model_path}: {e}"); return; }
     };
+    // The mouth parameter name differs per model: Hiyori/most v3 models use
+    // ParamMouthOpenY; mao_pro (v5) uses ParamA. Pick whichever exists.
+    let mouth_param = ["ParamMouthOpenY", "ParamA"]
+        .iter()
+        .find(|p| model.runtime().parameter_index(p).is_some())
+        .unwrap_or(&"ParamMouthOpenY");
+    println!("[avatar] mouth parameter: {mouth_param}");
     println!("[avatar] model loaded: {} drawables, {} textures",
         model.runtime().meshes().len(), model.textures().len());
 
@@ -254,8 +360,9 @@ fn run_avatar() {
             .unwrap_or_else(|| r"G:\AI\JAWL-VoiceCompanion\runtime\avatar-render.png".to_string());
         let (w, h) = (480usize, 640usize);
 
-        // Apply the requested expression, then the mouth parameter.
-        let model_dir = std::path::Path::new(MODEL_PATH).parent().unwrap().to_path_buf();
+        // Apply the requested expression (mao_pro style files, if present),
+        // then the mouth parameter (model-specific name).
+        let model_dir = std::path::Path::new(&model_path).parent().unwrap().to_path_buf();
         let mut mgr = mocari::expression::ExpressionManager::new();
         let p = model_dir.join("expressions").join(format!("exp_{:02}.exp3.json", expr_idx + 1));
         if let Ok(e) = mocari::expression::load_expression(&p) {
@@ -265,9 +372,12 @@ fn run_avatar() {
             mgr.apply(model.runtime_mut());
             println!("[avatar] expression exp_{:02} applied", expr_idx + 1);
         } else {
-            println!("[avatar] expression exp_{:02} NOT FOUND ({})", expr_idx + 1, p.display());
+            // No expression files (Hiyori): drive emotion parameters directly.
+            apply_emotion_params(model.runtime_mut(), emotion_name(expr_idx));
+            println!("[avatar] direct params for emotion '{:?}' applied", emotion_name(expr_idx));
         }
-        model.runtime_mut().set_parameter_normalized("ParamA", mouth);
+        model.runtime_mut().set_parameter_normalized(mouth_param, mouth);
+        model.runtime_mut().apply_parameter_overrides();
         model.runtime_mut().update_meshes();
         let mut frame = vec![0u32; w * h];
         rasterize(&model, &mut frame, w, h);
@@ -299,16 +409,32 @@ fn run_avatar() {
     let start = std::time::Instant::now();
     // Load the model's expression files (exp_01..08) once; an ExpressionManager
     // blends the active one each frame.
-    let model_dir = std::path::Path::new(MODEL_PATH).parent().unwrap().to_path_buf();
+    let model_dir = std::path::Path::new(&model_path).parent().unwrap().to_path_buf();
     let mut expressions: Vec<mocari::json::Expression3> = Vec::new();
     for i in 1..=8 {
         let p = model_dir.join("expressions").join(format!("exp_{i:02}.exp3.json"));
         if let Ok(e) = mocari::expression::load_expression(&p) { expressions.push(e); }
     }
-    println!("[avatar] {} expressions loaded", expressions.len());
+    println!("[avatar] {} expression files loaded", expressions.len());
+    let use_expr_files = !expressions.is_empty();
     let mut expr_manager = mocari::expression::ExpressionManager::new();
     let mut current_expr: usize = 0;
+
+    // D3: idle motion from the model's "Idle" group (first file), looping.
+    let idle_motion = {
+        let model3: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&model_path).unwrap_or_default()).unwrap_or(serde_json::Value::Null);
+        model3.pointer("/FileReferences/Motions/Idle/0/File")
+            .and_then(|v| v.as_str())
+            .and_then(|rel| mocari::motion::load_motion(model_dir.join(rel)).ok())
+    };
+    let mut motion_player = idle_motion.map(|m| mocari::motion::MotionPlayer::with_looping(m, true));
+    if motion_player.is_some() { println!("[avatar] idle motion loaded (looping)"); }
+
     let mut last_frame = std::time::Instant::now();
+    // D2: per-parameter emotion fade state (current normalized values).
+    let mut face_current: Vec<(String, f32)> = Vec::new();
+    let mut last_emotion = String::new();
     // Poll the companion's live state for lip-sync (avatar_audio: speaking +
     // amplitude) and the last turn's emotion (to drive the expression later).
     // Runs in a background thread so the render loop never blocks on I/O.
@@ -349,36 +475,59 @@ fn run_avatar() {
                 let size = window.inner_size();
                 let (w, h) = (size.width.max(1) as usize, size.height.max(1) as usize);
                 let t = start.elapsed().as_secs_f32();
-                // Idle sway/breathing.
-                model.runtime_mut().set_parameter_normalized("ParamAngleX", 0.5 + 0.15 * (t * 0.6).sin());
-                model.runtime_mut().set_parameter_normalized("ParamAngleY", 0.5 + 0.1 * (t * 0.4).cos());
-                // Lip-sync: the model's LipSync group targets `ParamA`
-                // (see mao_pro.model3.json Groups), not ParamMouthOpenY.
-                let (speaking, amp) = lip.lock().map(|g| *g).unwrap_or((false, 0.0));
-                let mouth = if speaking { amp.clamp(0.0, 1.0) } else { 0.2 * (t * 1.4).sin().abs() };
-                model.runtime_mut().set_parameter_normalized("ParamA", mouth);
-                // Expression from the companion's last-turn emotion. The mao_pro
-                // bundle ships 8 expression slots (exp_01..08); map the agent's
-                // emotion id onto them. Switch only on change (mocari fades).
-                let emo = emotion.lock().map(|g| g.clone()).unwrap_or_default();
-                let expr_idx = match emo.as_str() {
-                    "happy" | "joy" => 1,
-                    "sad" => 3,
-                    "angry" => 4,
-                    "surprised" => 5,
-                    "concerned" => 6,
-                    "confused" => 7,
-                    "attentive" => 2,
-                    _ => 0, // neutral
-                };
-                if expr_idx != current_expr && expr_idx < expressions.len() {
-                    expr_manager.play(expressions[expr_idx].clone());
-                    current_expr = expr_idx;
-                }
-                let dt = last_frame.elapsed().as_secs_f32();
+                let dt = last_frame.elapsed().as_secs_f32().min(0.1);
                 last_frame = std::time::Instant::now();
-                expr_manager.tick(dt);
-                expr_manager.apply(model.runtime_mut());
+
+                // D3: idle motion first (it writes body/head params), then we
+                // overlay face + mouth so lip-sync always wins over the motion.
+                if let Some(mp) = &mut motion_player {
+                    mp.tick(dt);
+                    mp.apply(model.runtime_mut());
+                } else {
+                    // No motion file: gentle procedural sway/breath.
+                    model.runtime_mut().set_parameter_normalized("ParamAngleX", 0.5 + 0.15 * (t * 0.6).sin());
+                    model.runtime_mut().set_parameter_normalized("ParamAngleY", 0.5 + 0.1 * (t * 0.4).cos());
+                    model.runtime_mut().set_parameter_normalized("ParamBreath", 0.5 + 0.4 * (t * 0.8).sin());
+                }
+
+                // D2: emotion -> direct parameter fade (~250 ms).
+                let emo = emotion.lock().map(|g| g.clone()).unwrap_or_default();
+                if emo != last_emotion { last_emotion = emo.clone(); }
+                let targets = emotion_targets(&emo);
+                // Seed current values for any new target keys.
+                for (id, _) in &targets {
+                    if !face_current.iter().any(|(k, _)| k == id) {
+                        face_current.push((id.to_string(), 0.5));
+                    }
+                }
+                let fade = (dt / 0.25).min(1.0);
+                for (id, cur) in face_current.iter_mut() {
+                    let target = targets.iter().find(|(k, _)| *k == id.as_str()).map(|(_, v)| *v);
+                    if let Some(tv) = target {
+                        *cur += (tv - *cur) * fade;
+                        model.runtime_mut().set_parameter_normalized(id, *cur);
+                    }
+                }
+                // Expression files (mao_pro) still play via the manager on top.
+                if use_expr_files {
+                    let expr_idx = emotion_index(&emo);
+                    if expr_idx != current_expr && expr_idx < expressions.len() {
+                        expr_manager.play(expressions[expr_idx].clone());
+                        current_expr = expr_idx;
+                    }
+                    expr_manager.tick(dt);
+                    expr_manager.apply(model.runtime_mut());
+                }
+
+                // Lip-sync: speaking -> live amplitude; idle -> soft breath.
+                let (speaking, amp) = lip.lock().map(|g| *g).unwrap_or((false, 0.0));
+                let mouth = if speaking { amp.clamp(0.05, 1.0) } else { 0.05 * (t * 1.2).sin().abs() };
+                model.runtime_mut().set_parameter_normalized(mouth_param, mouth);
+
+                model.runtime_mut().apply_parameter_overrides();
+                // D3: physics + pose after parameters, before mesh rebuild.
+                model.runtime_mut().apply_physics(dt);
+                model.runtime_mut().apply_pose(dt);
                 model.runtime_mut().update_meshes();
                 surface.resize(std::num::NonZeroU32::new(w as u32).unwrap(), std::num::NonZeroU32::new(h as u32).unwrap()).unwrap();
                 let mut buf = surface.buffer_mut().unwrap();
