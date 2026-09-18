@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-18 - Phase D: native avatar quality pass (D2-D5)
+
+- **D1 finding**: Mocari (pure-Rust Cubism runtime) does not apply moc3 v5
+  blendshapes — proven by scanning all 128 mao_pro parameters (0 changed
+  vertices / 0 opacity deltas for every mouth param) while the official Hiyori
+  sample (moc3 v3) deforms correctly (ParamMouthOpenY: 171 vertices). The
+  avatar's default model is now Hiyori (`JAWL_AVATAR_MODEL` overrides);
+  mao_pro returns once Mocari is vendored+patched or via the WebView2 path.
+- **D2**: emotions drive face parameters directly (ParamEyeLSmile/RSmi le,
+  ParamBrowL/R Angle/Form/Y, ParamCheek) with a ~250 ms fade instead of the
+  near-neutral exp files. Headless pixel evidence: happy 597 px, surprised
+  832 px, angry 512 px delta vs neutral, all in the face region.
+- **D3**: idle motion playback (Mocari MotionPlayer, looping) plus
+  `apply_physics(dt)` + `apply_pose(dt)` every frame; procedural
+  sway/breath fallback when no motion file exists.
+- **D4 turn-recovery**: the terminal gateway now tracks a connection
+  generation; a turn that loses the transport before its first event fails
+  fast and is resubmitted exactly once on the fresh connection. The
+  anti-repeat prompt gained an explicit exception: a direct user message
+  always gets an answer (synced to `config/jawl` so `prepare --sync` keeps
+  it). Tests: terminal 11/11, web 78/78.
+- **D5**: `--obs` chroma-key mode (#00FF00 background) for OBS color-key
+  capture; headless frame verified 87% keyable background.
+
 ## 2026-09-17 - Phase B / B2+B3: HostOS levels live, native voice pipeline
 
 - **B2**: HostOS access level changes verified live via the hardened path —

@@ -1,5 +1,30 @@
 # Состояние разработки
 
+## Прогресс Фазы D — 2026-09-18 (ночная сессия)
+
+- **D1 — решено обходным путём, v5-blendshapes отложены**: Mocari не применяет
+  blendshapes moc3 v5 (доказано сканом всех 128 параметров mao_pro: 0 вершин/
+  0 opacity на рот; `apply_art_mesh_blend_shape_delta` существует, но не
+  вызывается). Hiyori (moc3 v3, официальный free sample) работает полностью:
+  ParamMouthOpenY двигает 171 вершину, diff рта в нижней трети лица. Дефолтная
+  модель аватара — Hiyori (`JAWL_AVATAR_MODEL` переопределяет); mao_pro
+  вернётся после патча Mocari или через WebView2/Cubism Core.
+- **D2 — DONE**: эмоции через прямые параметры (EyeSmile/BrowAngle/BrowForm/
+  Cheek — доказанно деформируют сетку) с фейдом ~250 мс. Headless: happy
+  597 px, surprised 832 px, angry 512 px отличий от neutral, все в области
+  лица (y 102–145).
+- **D3 — DONE**: idle motion (MotionPlayer, looping) + apply_physics(dt) +
+  apply_pose(dt) каждый кадр; процедурный sway/breath как фолбэк.
+- **D4 — DONE**: turn-recovery в terminal gateway: generation-счётчик
+  транспорта, быстрый fail при рестарте агента до первого события turn'а,
+  один авторесабмит с новым turn id. Anti-repeat промпт: прямой
+  пользовательский запрос требует ответа всегда (синхронизировано в
+  config/jawl). Тесты 11/11 terminal, 78/78 web.
+- **D5 — DONE**: OBS chroma-key `--obs` (#00FF00); headless-кадр: 87% keyable
+  фона, персонаж 12.9% кадра.
+- Остаток D1: вендорить Mocari и реализовать blendshape-секцию moc3 v5 для
+  mao_pro (рот/щёки) — отдельная исследовательская задача.
+
 ## Прогресс Фазы A — 2026-09-17 (в работе)
 
 - **A0 — DONE (live)**: браузерная приёмка настроек на живом профиле прошла

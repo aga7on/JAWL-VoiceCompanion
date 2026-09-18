@@ -1,5 +1,17 @@
 # TODO — единый агент-компаньон
 
+## Приоритет: Фаза D — нативный аватар (ночь 2026-09-18)
+
+- [x] D2: эмоции прямыми параметрами с фейдом (evidence: pixel-diff happy 597/surprised 832/angry 512)
+- [x] D3: idle motion + physics + pose каждый кадр
+- [x] D4: turn-recovery — fast-fail + один ресабмит после рестарта транспорта;
+  anti-repeat исключение для прямых запросов (config/jawl синхронизирован).
+  Тесты 11/11 terminal, 78/78 web. Live-проверка после рестарта стека.
+- [x] D5: OBS chroma-key `--obs` (evidence: 87% keyable фон в headless-кадре)
+- [ ] D1-остаток: blendshapes moc3 v5 в Mocari (вендоринг + патч keyform/mesh
+  пути), чтобы mao_pro снова стал основной моделью. Обход: дефолт Hiyori (v3),
+  `JAWL_AVATAR_MODEL` переопределяет; WebView2-окно как fallback полного качества.
+
 ## Приоритет: Phase A — coherence E2E и episodic timeline — 2026-10-05
 
 Зафиксировано в ADR-036..039 (docs/DECISIONS.md): Rust-клиент как audio owner
