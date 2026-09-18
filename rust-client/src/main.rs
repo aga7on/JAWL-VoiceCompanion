@@ -291,6 +291,90 @@ fn run_avatar() {
     });
 }
 
+/// Launch the whole companion stack as owned child processes and keep this
+/// window alive (so the user sees status and nothing silently closes).
+///
+/// Order matters: model servers first (they load slowly), then the integrated
+/// profile launcher which waits for them. All children stay alive as long as
+/// this process runs; closing the window stops them.
+fn run_all() {
+    use std::process::{Child, Command, Stdio};
+    use std::net::TcpStream;
+
+    println!("[launcher] starting full stack");
+
+    let port_open = |port: u16| TcpStream::connect(("127.0.0.1", port)).is_ok();
+    let spawn_hidden = |exe: &str, args: &[&str]| -> Option<Child> {
+        Command::new(exe).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok()
+    };
+
+    let mut children: Vec<Child> = Vec::new();
+
+    // Qwen3-VL screen-watch describer (GPU1) on 8983 — the only always-on
+    // vision model. Bonsai 27B was dropped from the default profile (ADR-040):
+    // it held 13 GB VRAM + 17 GB RAM for ~100 s/screenshot. Heavy analysis is
+    // manual via scripts\run_coding_server.ps1, not part of the stack.
+    if !port_open(8983) {
+        if let Some(c) = spawn_hidden(r"G:\AI\llamacpp-taardis\build\bin\llama-server.exe", &[
+            "--model", r"G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf",
+            "--alias", "qwen3-vl", "--host", "127.0.0.1", "--port", "8983",
+            "--ctx-size", "8192", "--threads", "8", "-ngl", "99",
+            "--no-webui", "--reasoning", "off",
+            "--mmproj", r"G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf",
+        ]) { children.push(c); println!("[launcher] qwen3-vl starting (8983)"); }
+    } else { println!("[launcher] qwen3-vl already up (8983)"); }
+
+    // Wait for the vision server to accept connections before the profile.
+    for (name, port) in [("qwen3-vl", 8983u16)] {
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        while !port_open(port) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(800));
+        }
+        println!("[launcher] {} port {} {}", name, port, if port_open(port) { "up" } else { "TIMEOUT" });
+    }
+
+    // 3) Integrated profile (companion + JAWL + voice + relay)
+    if !port_open(2367) {
+        let prof = Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                r"G:\AI\JAWL-VoiceCompanion\scripts\run_integrated_profile.ps1",
+                "-ProfileName", "daily", "-StartLocalAudio", "-UseVoiceMem",
+                "-AsrBackend", "gigaam", "-TtsProvider", "tera", "-EnableProsodyPlanner",
+                "-EnableStreamingAsr", "-UseOpenCodeRelay", "-EnableScreenWatch",
+                "-EnableSensoryWorker", "-AmbientTriageSeconds", "300",
+                "-JawlModelOverride", "deepseek-v4-flash", "-StartupTimeoutSeconds", "420"])
+            .current_dir(r"G:\AI\JAWL-VoiceCompanion")
+            .spawn();
+        match prof {
+            Ok(c) => { children.push(c); println!("[launcher] integrated profile starting"); }
+            Err(e) => eprintln!("[launcher] profile spawn failed: {e}"),
+        }
+    } else { println!("[launcher] profile already up (2367)"); }
+
+    // Report readiness, then keep the window alive until Ctrl+C.
+    let deadline = std::time::Instant::now() + Duration::from_secs(420);
+    while !port_open(2367) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    if port_open(2367) {
+        println!("[launcher] READY — control http://127.0.0.1:2367  avatar http://127.0.0.1:8766/avatar");
+    } else {
+        println!("[launcher] profile did not open 2367 in time; check logs in runtime\\instances\\daily\\logs");
+    }
+    println!("[launcher] hold this window open to keep the stack alive; Ctrl+C to stop");
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r2 = running.clone();
+    let _ = ctrlc::set_handler(move || r2.store(false, Ordering::SeqCst));
+    while running.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    println!("[launcher] stopping stack");
+    for mut c in children {
+        let _ = c.kill();
+    }
+}
+
 fn main() {
     println!("JAWL Companion native client");
     let mode = std::env::args().nth(1).unwrap_or_else(|| "--mic".to_string());
@@ -299,6 +383,7 @@ fn main() {
     let _ = ctrlc::set_handler(move || r2.store(false, Ordering::SeqCst));
     match mode.as_str() {
         "--avatar" => run_avatar(),
+        "--all" => run_all(),
         _ => run_mic(running),
     }
 }

@@ -605,3 +605,15 @@ on the first screen delta with an honest "waking" state, not a masked one.
 Quantization is allowed only through the MULTIMODAL_MODEL_GATE mini-bench
 (IQ2/IQ1 need the F16+imatrix path); the earlier Q1 Bonsai failure stands.
 Target profile: <= 8 GB RAM, ~14 GB VRAM. 20 GB is a ceiling, not the norm.
+## ADR-040 — Bonsai removed from the default profile
+
+Status: Accepted
+Date: 2026-09-17
+
+Bonsai-27B (Q1) is dropped from the always-on stack. Measured on this machine:
+~100 s per screenshot on a 16 GB GPU, 13 GB VRAM + 17 GB RAM resident — far
+too slow and heavy for continuous screen-watching. Screen-watch now uses
+Qwen3-VL-2B (port 8983): 4.2 s live answers, ~0.2–0.8 s warm inference,
+~11 GB VRAM. Bonsai stays available only as an on-demand manual tool via
+`scripts/run_coding_server.ps1` (8986), started explicitly when a heavy
+coding/vision task needs it. The `--all` launcher no longer starts Bonsai.
