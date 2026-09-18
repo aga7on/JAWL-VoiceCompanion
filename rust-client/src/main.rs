@@ -358,6 +358,61 @@ fn run_avatar() {
     println!("[avatar] model loaded: {} drawables, {} textures",
         model.runtime().meshes().len(), model.textures().len());
 
+    // D3 self-test (no GUI, no stack): tick the idle motion + physics + pose
+    // over N frames and prove vertices actually move frame-to-frame. Numeric
+    // evidence for the animation pipeline without a window or the companion.
+    if std::env::args().any(|a| a == "--selftest") {
+        let model_dir = std::path::Path::new(&model_path).parent().unwrap().to_path_buf();
+        let model3: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&model_path).unwrap_or_default()).unwrap_or(serde_json::Value::Null);
+        let idle = model3.pointer("/FileReferences/Motions/Idle/0/File")
+            .and_then(|v| v.as_str())
+            .and_then(|rel| mocari::motion::load_motion(model_dir.join(rel)).ok());
+        let mut motion_player = idle.map(|m| mocari::motion::MotionPlayer::with_looping(m, true));
+        println!("[selftest] idle motion loaded: {}", motion_player.is_some());
+
+        // Baseline mesh snapshot.
+        model.runtime_mut().update_meshes();
+        let snap = |m: &mocari::assets::RuntimeModel| -> Vec<[f32; 2]> {
+            m.runtime().meshes().iter()
+                .flat_map(|mm| mm.vertices().iter().map(|v| v.position()))
+                .collect()
+        };
+        let base = snap(&model);
+        let mut moved_frames = 0usize;
+        let mut max_delta = 0.0f32;
+        let dt = 1.0 / 30.0;
+        for frame in 0..90 {
+            if let Some(mp) = &mut motion_player {
+                mp.tick(dt);
+                mp.apply(model.runtime_mut());
+            } else {
+                // No motion file: procedural idle so the test still exercises
+                // the per-frame pipeline.
+                let t = frame as f32 * dt;
+                model.runtime_mut().set_parameter_normalized("ParamAngleX", 0.5 + 0.3 * (t * 2.0).sin());
+                model.runtime_mut().set_parameter_normalized("ParamBreath", 0.5 + 0.4 * (t * 1.5).sin());
+            }
+            model.runtime_mut().apply_parameter_overrides();
+            model.runtime_mut().apply_physics(dt);
+            model.runtime_mut().apply_pose(dt);
+            model.runtime_mut().update_meshes();
+            let cur = snap(&model);
+            let mut frame_delta = 0.0f32;
+            for (a, b) in cur.iter().zip(base.iter()) {
+                let d = (a[0] - b[0]).abs().max((a[1] - b[1]).abs());
+                if d > frame_delta { frame_delta = d; }
+            }
+            if frame_delta > 1e-4 { moved_frames += 1; }
+            if frame_delta > max_delta { max_delta = frame_delta; }
+        }
+        println!("[selftest] frames with movement: {moved_frames}/90, max vertex delta: {max_delta:.4} model-units");
+        // A live idle animation must move most frames and visibly (>=0.005 units).
+        let pass = moved_frames >= 45 && max_delta >= 0.005;
+        println!("[selftest] D3 motion+physics+pose: {}", if pass { "PASS" } else { "FAIL" });
+        return;
+    }
+
     // Headless render proof: rasterize frames for automated VL testing.
     // Usage: --headless [expression_index] [mouth_open_0..1] [out_path]
     if let Some(pos) = std::env::args().position(|a| a == "--headless") {
