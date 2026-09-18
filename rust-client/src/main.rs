@@ -244,17 +244,35 @@ fn run_avatar() {
     println!("[avatar] model loaded: {} drawables, {} textures",
         model.runtime().meshes().len(), model.textures().len());
 
-    // Headless render proof: rasterize one frame and save a PNG so we can
-    // verify the character actually draws (not a blank window) without a GUI.
-    if std::env::args().any(|a| a == "--headless") {
+    // Headless render proof: rasterize frames for automated VL testing.
+    // Usage: --headless [expression_index] [mouth_open_0..1] [out_path]
+    if let Some(pos) = std::env::args().position(|a| a == "--headless") {
+        let args: Vec<String> = std::env::args().collect();
+        let expr_idx: usize = args.get(pos + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let mouth: f32 = args.get(pos + 2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let out = args.get(pos + 3).cloned()
+            .unwrap_or_else(|| r"G:\AI\JAWL-VoiceCompanion\runtime\avatar-render.png".to_string());
         let (w, h) = (480usize, 640usize);
-        model.runtime_mut().set_parameter_normalized("ParamMouthOpenY", 0.6);
+
+        // Apply the requested expression, then the mouth parameter.
+        let model_dir = std::path::Path::new(MODEL_PATH).parent().unwrap().to_path_buf();
+        let mut mgr = mocari::expression::ExpressionManager::new();
+        let p = model_dir.join("expressions").join(format!("exp_{:02}.exp3.json", expr_idx + 1));
+        if let Ok(e) = mocari::expression::load_expression(&p) {
+            mgr.play(e);
+            // Drive the fade to full weight.
+            for _ in 0..60 { mgr.tick(0.05); }
+            mgr.apply(model.runtime_mut());
+            println!("[avatar] expression exp_{:02} applied", expr_idx + 1);
+        } else {
+            println!("[avatar] expression exp_{:02} NOT FOUND ({})", expr_idx + 1, p.display());
+        }
+        model.runtime_mut().set_parameter_normalized("ParamA", mouth);
         model.runtime_mut().update_meshes();
         let mut frame = vec![0u32; w * h];
         rasterize(&model, &mut frame, w, h);
         let bg = 0x00_1a2b26u32;
         let drawn = frame.iter().filter(|&&p| p != bg).count();
-        let out = std::path::Path::new(r"G:\AI\JAWL-VoiceCompanion\runtime\avatar-render.png");
         let mut rgba = Vec::with_capacity(w * h * 4);
         for &p in &frame {
             rgba.push(((p >> 16) & 0xff) as u8);
@@ -262,8 +280,8 @@ fn run_avatar() {
             rgba.push((p & 0xff) as u8);
             rgba.push(255u8);
         }
-        match image::save_buffer(out, &rgba, w as u32, h as u32, image::ColorType::Rgba8) {
-            Ok(()) => println!("[avatar] headless frame saved: {} ({} px drawn of {})", out.display(), drawn, w * h),
+        match image::save_buffer(std::path::Path::new(&out), &rgba, w as u32, h as u32, image::ColorType::Rgba8) {
+            Ok(()) => println!("[avatar] frame saved: {out} (expr={expr_idx}, mouth={mouth}, {drawn} px drawn)"),
             Err(e) => eprintln!("[avatar] save failed: {e}"),
         }
         return;
@@ -459,6 +477,46 @@ fn run_all() {
     }
 }
 
+/// Production avatar window: WebView2 hosting the existing /avatar page.
+/// Cubism Core renders the model at full quality (mouth, physics, emotions,
+/// lip-sync) — the exact pipeline already accepted in the browser, now owned
+/// by a native window (frameless, transparent, always-on-top) for the desktop
+/// and OBS. Mocari remains available as a pure-native fallback (--avatar).
+fn run_webview() {
+    use tao::event::{Event, WindowEvent};
+    use tao::event_loop::EventLoop;
+    use tao::window::WindowBuilder;
+    use wry::WebViewBuilder;
+
+    // The presentation origin serves /avatar with no control privileges.
+    let url = std::env::args().nth(2).unwrap_or_else(|| "http://127.0.0.1:8766/avatar".to_string());
+    println!("[webview] avatar window -> {url}");
+
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("JAWL Companion")
+        .with_transparent(true)
+        .with_decorations(false)
+        .with_always_on_top(true)
+        .with_inner_size(tao::dpi::LogicalSize::new(420.0, 620.0))
+        .build(&event_loop)
+        .expect("window");
+
+    let _webview = WebViewBuilder::new()
+        .with_url(&url)
+        .with_transparent(true)
+        .build_as_child(&window)
+        .expect("webview (is WebView2 Runtime installed?)");
+
+    println!("[webview] window open — close the window to exit");
+    event_loop.run(move |event, _target, control_flow| {
+        *control_flow = tao::event_loop::ControlFlow::Poll;
+        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
+            *control_flow = tao::event_loop::ControlFlow::Exit;
+        }
+    });
+}
+
 fn main() {
     println!("JAWL Companion native client");
     // Default (no args, e.g. double-click) = launch the whole stack.
@@ -468,6 +526,7 @@ fn main() {
     let _ = ctrlc::set_handler(move || r2.store(false, Ordering::SeqCst));
     match mode.as_str() {
         "--avatar" => run_avatar(),
+        "--webview" => run_webview(),
         "--all" => run_all(),
         _ => run_mic(running),
     }
