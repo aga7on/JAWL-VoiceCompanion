@@ -75,3 +75,4 @@ voicemem_memoryspace/demo/
 # Rust build output (source is tracked)
 rust-client/target/
 
+jawl-companion.exe
