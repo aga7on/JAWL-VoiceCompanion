@@ -166,8 +166,13 @@ def _pcm_rms(audio: bytes, *, header_skip: int = 44) -> float:
         sample = int.from_bytes(data[i * 2 : i * 2 + 2], "little", signed=True)
         total += sample * sample
     rms = (total / sample_count) ** 0.5
-    # 32768 = full-scale s16; scale to 0..1 and clamp.
-    return max(0.0, min(1.0, rms / 32768.0))
+    # 32768 = full-scale s16. Spoken-sentence chunks include pauses, so raw
+    # RMS sits near 0.02-0.05; a sqrt-compression gain curve maps that into
+    # the visible 0..1 mouth range without clipping loud chunks.
+    normalized = min(1.0, rms / 32768.0)
+    if normalized <= 0.0:
+        return 0.0
+    return max(0.0, min(1.0, (normalized ** 0.5) * 3.0))
 
 
 def _redact_log_line(line: str) -> str:
