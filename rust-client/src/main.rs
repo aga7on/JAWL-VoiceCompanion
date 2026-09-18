@@ -1,4 +1,4 @@
-//! JAWL Companion native client (C1/C2: mic stream + native Live2D avatar).
+﻿//! JAWL Companion native client (C1/C2: mic stream + native Live2D avatar).
 //!
 //! ADR-036: a thin native client owns the audio devices and hosts the Live2D
 //! character window / OBS surface. The web panel stays as the control/pult.
@@ -71,7 +71,7 @@ fn run_mic(running: Arc<AtomicBool>) {
     let config = match device.default_input_config() { Ok(c) => c, Err(e) => { eprintln!("[mic] no input config: {e}"); return; } };
     let src_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
-    println!("[mic] {} · {} Hz · {} ch -> {} Hz mono", device.name().unwrap_or_default(), src_rate, channels, TARGET_RATE);
+    println!("[mic] {} В· {} Hz В· {} ch -> {} Hz mono", device.name().unwrap_or_default(), src_rate, channels, TARGET_RATE);
 
     let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
     let buf2 = buf.clone();
@@ -119,8 +119,8 @@ fn rasterize(
     }
     let canvas = model.runtime().canvas();
     let _ = canvas; // canvas units are pixels; vertices are normalized model units.
-    // Vertices are in normalized model space (roughly x∈[-0.6,0.6],
-    // y∈[-2.0,1.0] for this model). Fit that bbox into the window.
+    // Vertices are in normalized model space (roughly xв€€[-0.6,0.6],
+    // yв€€[-2.0,1.0] for this model). Fit that bbox into the window.
     let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for m in model.runtime().meshes() {
         for v in m.vertices() {
@@ -265,20 +265,48 @@ fn run_avatar() {
     println!("[avatar] window open (close to exit)");
 
     let start = std::time::Instant::now();
-    // Poll the companion's live avatar-audio signal (speaking + amplitude) for
-    // lip-sync, in a background thread, so the render loop never blocks on I/O.
+    // Load the model's expression files (exp_01..08) once; an ExpressionManager
+    // blends the active one each frame.
+    let model_dir = std::path::Path::new(MODEL_PATH).parent().unwrap().to_path_buf();
+    let mut expressions: Vec<mocari::json::Expression3> = Vec::new();
+    for i in 1..=8 {
+        let p = model_dir.join("expressions").join(format!("exp_{i:02}.exp3.json"));
+        if let Ok(e) = mocari::expression::load_expression(&p) { expressions.push(e); }
+    }
+    println!("[avatar] {} expressions loaded", expressions.len());
+    let mut expr_manager = mocari::expression::ExpressionManager::new();
+    let mut current_expr: usize = 0;
+    let mut last_frame = std::time::Instant::now();
+    // Poll the companion's live state for lip-sync (avatar_audio: speaking +
+    // amplitude) and the last turn's emotion (to drive the expression later).
+    // Runs in a background thread so the render loop never blocks on I/O.
+    // The companion exposes this on GET /api/state (session-gated).
     let lip = Arc::new(Mutex::new((false, 0.0f32))); // (speaking, amplitude)
+    let emotion = Arc::new(Mutex::new(String::new())); // last turn emotion id
     {
         let lip = lip.clone();
-        std::thread::spawn(move || loop {
-            if let Ok(resp) = ureq::get(&format!("{COMPANION_URL}/api/avatar/audio")).call() {
-                if let Ok(v) = resp.into_json::<serde_json::Value>() {
-                    let speaking = v.get("speaking").and_then(|x| x.as_bool()).unwrap_or(false);
-                    let amp = v.get("amplitude").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
-                    if let Ok(mut g) = lip.lock() { *g = (speaking, amp); }
+        let emotion = emotion.clone();
+        std::thread::spawn(move || {
+            // Establish a session once; the state endpoint needs it.
+            let session = open_session().ok();
+            loop {
+                let mut req = ureq::get(&format!("{COMPANION_URL}/api/state"));
+                if let Some(s) = &session {
+                    req = req.set("Cookie", &s.cookie).set("X-Companion-CSRF", &s.csrf);
                 }
+                if let Ok(resp) = req.call() {
+                    if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                        let aa = v.get("avatar_audio");
+                        let speaking = aa.and_then(|a| a.get("speaking")).and_then(|x| x.as_bool()).unwrap_or(false);
+                        let amp = aa.and_then(|a| a.get("amplitude")).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                        if let Ok(mut g) = lip.lock() { *g = (speaking, amp); }
+                        if let Some(e) = v.pointer("/last_turn/response/emotion/id").and_then(|x| x.as_str()) {
+                            if let Ok(mut g) = emotion.lock() { *g = e.to_string(); }
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(120));
             }
-            std::thread::sleep(Duration::from_millis(80));
         });
     }
     let _ = event_loop.run(move |event, elwt| {
@@ -292,11 +320,33 @@ fn run_avatar() {
                 // Idle sway/breathing.
                 model.runtime_mut().set_parameter_normalized("ParamAngleX", 0.5 + 0.15 * (t * 0.6).sin());
                 model.runtime_mut().set_parameter_normalized("ParamAngleY", 0.5 + 0.1 * (t * 0.4).cos());
-                // Lip-sync: drive the mouth from the companion's live speech
-                // amplitude when speaking, else a soft idle breath.
+                // Lip-sync: the model's LipSync group targets `ParamA`
+                // (see mao_pro.model3.json Groups), not ParamMouthOpenY.
                 let (speaking, amp) = lip.lock().map(|g| *g).unwrap_or((false, 0.0));
-                let mouth = if speaking { amp.clamp(0.0, 1.0) } else { 0.5 + 0.2 * (t * 1.4).sin().abs() };
-                model.runtime_mut().set_parameter_normalized("ParamMouthOpenY", mouth);
+                let mouth = if speaking { amp.clamp(0.0, 1.0) } else { 0.2 * (t * 1.4).sin().abs() };
+                model.runtime_mut().set_parameter_normalized("ParamA", mouth);
+                // Expression from the companion's last-turn emotion. The mao_pro
+                // bundle ships 8 expression slots (exp_01..08); map the agent's
+                // emotion id onto them. Switch only on change (mocari fades).
+                let emo = emotion.lock().map(|g| g.clone()).unwrap_or_default();
+                let expr_idx = match emo.as_str() {
+                    "happy" | "joy" => 1,
+                    "sad" => 3,
+                    "angry" => 4,
+                    "surprised" => 5,
+                    "concerned" => 6,
+                    "confused" => 7,
+                    "attentive" => 2,
+                    _ => 0, // neutral
+                };
+                if expr_idx != current_expr && expr_idx < expressions.len() {
+                    expr_manager.play(expressions[expr_idx].clone());
+                    current_expr = expr_idx;
+                }
+                let dt = last_frame.elapsed().as_secs_f32();
+                last_frame = std::time::Instant::now();
+                expr_manager.tick(dt);
+                expr_manager.apply(model.runtime_mut());
                 model.runtime_mut().update_meshes();
                 surface.resize(std::num::NonZeroU32::new(w as u32).unwrap(), std::num::NonZeroU32::new(h as u32).unwrap()).unwrap();
                 let mut buf = surface.buffer_mut().unwrap();
@@ -330,7 +380,7 @@ fn run_all() {
 
     let mut children: Vec<Child> = Vec::new();
 
-    // Qwen3-VL screen-watch describer (GPU1) on 8983 — the only always-on
+    // Qwen3-VL screen-watch describer (GPU1) on 8983 вЂ” the only always-on
     // vision model. Bonsai 27B was dropped from the default profile (ADR-040):
     // it held 13 GB VRAM + 17 GB RAM for ~100 s/screenshot. Heavy analysis is
     // manual via scripts\run_coding_server.ps1, not part of the stack.
@@ -377,7 +427,7 @@ fn run_all() {
         std::thread::sleep(Duration::from_secs(2));
     }
     if port_open(2367) {
-        println!("[launcher] READY — control http://127.0.0.1:2367  avatar http://127.0.0.1:8766/avatar");
+        println!("[launcher] READY вЂ” control http://127.0.0.1:2367  avatar http://127.0.0.1:8766/avatar");
     } else {
         println!("[launcher] profile did not open 2367 in time; check logs in runtime\\instances\\daily\\logs");
     }
