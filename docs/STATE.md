@@ -67,6 +67,15 @@
   `runtime/avatar-render.png`; проверка структуры кадра подтвердила связную
   фигуру с тонами кожи/волос, не шум. Исправлен маппинг координат: вершины в
   нормализованных model units, не в пикселях (bbox-fit).
+- [!] Ограничение этой сессии: живой стек (компаньон + релей) поднимается
+  лаунчером, но фон-запуски из моей сессии снимаются очисткой обёртки между
+  goal-раундами (AGENTS.md уже предупреждал). Поэтому live-проверка
+  «аватар реагирует на состояние компаньона» и C3/C4 требуют, чтобы стек
+  был запущен из обычного окна PowerShell (см. TODO: каноническая команда).
+  Команда: `powershell -File scripts\run_integrated_profile.ps1 -ProfileName
+  daily -StartLocalAudio -UseVoiceMem -AsrBackend gigaam -TtsProvider tera
+  -EnableProsodyPlanner -EnableStreamingAsr -UseOpenCodeRelay -EnableScreenWatch
+  -EnableSensoryWorker -AmbientTriageSeconds 300 -JawlModelOverride deepseek-v4-flash`
 - Следующее: управление выражением/движением от состояния компаньона
   (emotion/motion/lip-sync из ответа), затем C3 turn-recovery, C4 overnight.
 
