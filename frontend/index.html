@@ -586,6 +586,24 @@
       messages.scrollTop = messages.scrollHeight;
       return item;
     }
+    // Duplicate guard: the heartbeat re-broadcasts terminal messages, so a
+    // background line whose text already appeared in the chat must not be
+    // shown again ("Фон" echo). Bounded set of recent normalized texts.
+    const recentChatTexts = new Set();
+    const recentChatOrder = [];
+    function rememberChatText(text) {
+      const key = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 400);
+      if (!key) return;
+      if (!recentChatTexts.has(key)) {
+        recentChatTexts.add(key);
+        recentChatOrder.push(key);
+        if (recentChatOrder.length > 50) recentChatTexts.delete(recentChatOrder.shift());
+      }
+    }
+    function isDuplicateChatText(text) {
+      const key = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 400);
+      return !!key && recentChatTexts.has(key);
+    }
     // Fast situational hint while the brain is busy: a dim provisional line
     // from the freshest perception fusion, replaced by the real answer.
     let provisionalMessage = null;
@@ -1706,6 +1724,7 @@
         const data = await response.json();
         for (const answer of data.responses || []) {
           addMessage('Компаньон', answer.text || answer.error);
+          rememberChatText(answer.text);
           // Voice audio chunks must not own playback. Final voice/end selects
           // one speech response; speaking here would cancel it on the next
           // chunk and produce an abrupt cut.
@@ -1751,6 +1770,7 @@
       }
       for (const answer of answers) {
         addMessage('Companion', answer.text || answer.error);
+        rememberChatText(answer.text);
       }
       // Render every protocol response, but allow only one speech owner.
       // Calling speak() for each item would cancel the previous TTS stream.
@@ -2926,7 +2946,9 @@
       const bg = data.background;
       if (bg && bg.last_ts && Number(bg.last_ts) > lastBackgroundTs && bg.last_text) {
         lastBackgroundTs = Number(bg.last_ts);
-        addMessage('Фон', bg.last_text);
+        // The heartbeat re-broadcasts terminal replies: a background line that
+        // duplicates text already shown in the chat is noise, not new info.
+        if (!isDuplicateChatText(bg.last_text)) addMessage('Фон', bg.last_text);
       }
       let agent;
       if (tick && tick.known && tick.phase === 'sleep') {
@@ -2992,7 +3014,7 @@
           const reply = turn.response && typeof turn.response === 'object' ? turn.response : null;
           const replyText = String(reply ? (reply.text || '') : '').trim();
           if (userText) addMessage('Вы', userText);
-          if (replyText) addMessage('Компаньон', replyText);
+          if (replyText) { addMessage('Компаньон', replyText); rememberChatText(replyText); }
         }
         const historySummary = document.querySelector('#history-summary');
         if (historySummary) historySummary.textContent = `История сессии: ${turns.length} реплик.`;
@@ -3035,6 +3057,7 @@
           });
           const data = await response.json();
           addMessage('Компаньон', data.text || data.error);
+          rememberChatText(data.text);
           if (response.ok && shouldVoice(data)) speak(data.text, data.emotion);
         }
       } catch (error) {
