@@ -150,6 +150,26 @@ def voice_memory_block(memory_context: str, *, limit: int = 800) -> str:
     return "\n\n[ФОНОВАЯ ПАМЯТЬ ГОЛОСА (VoiceMem, фон, не цитировать дословно): " + clean + "]"
 
 
+def _pcm_rms(audio: bytes, *, header_skip: int = 44) -> float:
+    """RMS loudness of a little-endian s16 PCM chunk, normalized to 0..1.
+
+    Used to drive the avatar's lip-sync amplitude from real audio instead of a
+    constant. Skips a WAV header when present; returns 0.0 for silent/short
+    chunks so a gap between sentences reads as a closed mouth.
+    """
+    data = audio[header_skip:] if len(audio) > header_skip else audio
+    sample_count = len(data) // 2
+    if sample_count == 0:
+        return 0.0
+    total = 0
+    for i in range(sample_count):
+        sample = int.from_bytes(data[i * 2 : i * 2 + 2], "little", signed=True)
+        total += sample * sample
+    rms = (total / sample_count) ** 0.5
+    # 32768 = full-scale s16; scale to 0..1 and clamp.
+    return max(0.0, min(1.0, rms / 32768.0))
+
+
 def _redact_log_line(line: str) -> str:
     """Mask secret-shaped substrings in a log line before display."""
     clean = str(line or "")
@@ -2220,8 +2240,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 # Mark the avatar as speaking while real audio flows so native
                 # clients (not just the browser) get a live lip-sync signal.
                 # The snapshot goes stale 0.75 s after the last update, so this
-                # must refresh on EVERY chunk, not just the first.
-                self.server.set_avatar_audio(0.6, True, int(time.time() * 1000))
+                # must refresh on EVERY chunk. Amplitude is the real RMS of the
+                # PCM payload (skip the 44-byte WAV header), scaled 0..1.
+                amplitude = _pcm_rms(audio)
+                self.server.set_avatar_audio(amplitude, True, int(time.time() * 1000))
                 self._stream_event({
                     "type": "audio",
                     "index": index,
