@@ -2219,8 +2219,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             for index, audio in enumerate(stream):
                 # Mark the avatar as speaking while real audio flows so native
                 # clients (not just the browser) get a live lip-sync signal.
-                if index == 0:
-                    self.server.set_avatar_audio(0.6, True, int(time.time() * 1000))
+                # The snapshot goes stale 0.75 s after the last update, so this
+                # must refresh on EVERY chunk, not just the first.
+                self.server.set_avatar_audio(0.6, True, int(time.time() * 1000))
                 self._stream_event({
                     "type": "audio",
                     "index": index,
