@@ -69,6 +69,11 @@ class JawlTerminalGateway:
         self._last_seq = 0
         self._failure_streak = 0
         self._blocked_until = 0.0
+        # D4 turn-recovery: a connection generation counter and per-turn
+        # "saw any event" flags let a turn that lost the transport fail fast
+        # and resubmit exactly once instead of burning the full timeout.
+        self._conn_generation = 0
+        self._turn_saw_event: dict[str, bool] = {}
 
     # ------------------------------------------------------------------ API
 
@@ -121,47 +126,59 @@ class JawlTerminalGateway:
             self._done_turns.pop(turn_id, None)
         self.last_chat_status = "starting"
         self.last_chat_error = ""
-        try:
-            self._submit(clean, turn_id)
-            for event in self._wait_events(turn_id, cancel_event):
-                event_type = str(event.get("type") or "")
-                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-                if event_type == "assistant.delta":
-                    try:
-                        fragment = filter_user_delta(payload.get("text", ""))
-                    except JawlUnsafeResponse as exc:
-                        self.last_chat_status = "invalid_response"
-                        raise JawlUnavailable("JAWL returned an unsafe Companion delta") from exc
-                    if fragment:
-                        yield {"type": "delta", "text": fragment}
-                elif event_type == "assistant.final":
-                    response = dict(payload.get("response") or {})
-                    try:
-                        response["text"] = filter_user_response(response.get("text", ""))
-                    except JawlUnsafeResponse as exc:
-                        self.last_chat_status = "invalid_response"
-                        raise JawlUnavailable("JAWL returned an unsafe Companion response") from exc
-                    self.last_chat_status = "connected"
+        # D4 turn-recovery: if the agent restarts before this turn produced any
+        # event, resubmit once on the fresh transport (with a new turn id so a
+        # replayed journal cannot collide) instead of surfacing an error.
+        attempt = 0
+        while True:
+            attempt_turn_id = turn_id if attempt == 0 else f"{turn_id}-r{attempt}"
+            try:
+                self._submit(clean, attempt_turn_id)
+                for event in self._wait_events(attempt_turn_id, cancel_event):
+                    event_type = str(event.get("type") or "")
+                    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                    if event_type == "assistant.delta":
+                        try:
+                            fragment = filter_user_delta(payload.get("text", ""))
+                        except JawlUnsafeResponse as exc:
+                            self.last_chat_status = "invalid_response"
+                            raise JawlUnavailable("JAWL returned an unsafe Companion delta") from exc
+                        if fragment:
+                            yield {"type": "delta", "text": fragment}
+                    elif event_type == "assistant.final":
+                        response = dict(payload.get("response") or {})
+                        try:
+                            response["text"] = filter_user_response(response.get("text", ""))
+                        except JawlUnsafeResponse as exc:
+                            self.last_chat_status = "invalid_response"
+                            raise JawlUnavailable("JAWL returned an unsafe Companion response") from exc
+                        self.last_chat_status = "connected"
+                        self._failure_streak = 0
+                        yield {"type": "final", "response": response}
+                        return
+                    elif event_type == "turn.cancelled":
+                        self.last_chat_status = "cancelled"
+                        raise JawlTurnCancelled("JAWL cancelled the turn")
+                    elif event_type == "turn.error":
+                        self.last_chat_status = "offline"
+                        raise JawlUnavailable(str(payload.get("reason") or "JAWL turn failed"))
+                raise JawlUnavailable("JAWL produced no terminal Companion event")
+            except JawlUnavailable as exc:
+                self._turn_saw_event.pop(attempt_turn_id, None)
+                if attempt < 1 and "transport restarted" in str(exc):
+                    attempt += 1
+                    # Give the reader a moment to reconnect, then resubmit.
+                    time.sleep(1.0)
+                    continue
+                self._failure_streak += 1
+                if self._failure_streak >= 4:
+                    # Circuit breaker: stop hammering a broken transport and let
+                    # it cool down before the next attempt.
+                    self._blocked_until = time.monotonic() + 30.0
                     self._failure_streak = 0
-                    yield {"type": "final", "response": response}
-                    return
-                elif event_type == "turn.cancelled":
-                    self.last_chat_status = "cancelled"
-                    raise JawlTurnCancelled("JAWL cancelled the turn")
-                elif event_type == "turn.error":
-                    self.last_chat_status = "offline"
-                    raise JawlUnavailable(str(payload.get("reason") or "JAWL turn failed"))
-            raise JawlUnavailable("JAWL produced no terminal Companion event")
-        except JawlUnavailable:
-            self._failure_streak += 1
-            if self._failure_streak >= 4:
-                # Circuit breaker: stop hammering a broken transport and let
-                # it cool down before the next attempt.
-                self._blocked_until = time.monotonic() + 30.0
-                self._failure_streak = 0
-            raise
-        finally:
-            self._finish_turn(turn_id)
+                raise
+            finally:
+                self._finish_turn(attempt_turn_id)
 
     def respond(
         self,
@@ -214,6 +231,11 @@ class JawlTerminalGateway:
             try:
                 self._connect()
                 delay_index = 0
+                with self._wait_lock:
+                    self._conn_generation += 1
+                    # Wake waiters so in-flight turns notice the new transport
+                    # generation instead of waiting out the full timeout.
+                    self._wait_lock.notify_all()
                 self._read_loop()
             except Exception as exc:  # noqa: BLE001 - the reader must survive any transport fault
                 self.last_chat_error = f"{type(exc).__name__}: {exc}"[:200]
@@ -337,6 +359,7 @@ class JawlTerminalGateway:
     def _finish_turn(self, turn_id: str) -> None:
         """Forget a finished turn and remember it briefly for late replays."""
         now = time.monotonic()
+        self._turn_saw_event.pop(turn_id, None)
         with self._wait_lock:
             self._pending.pop(turn_id, None)
             self._done_turns[turn_id] = now
@@ -381,11 +404,13 @@ class JawlTerminalGateway:
 
     def _wait_events(self, turn_id: str, cancel_event: threading.Event | None) -> Iterator[dict[str, Any]]:
         deadline = time.monotonic() + self.timeout_seconds
+        start_generation = self._conn_generation
         while True:
             with self._wait_lock:
                 bucket = self._pending.get(turn_id)
                 event = bucket.popleft() if bucket else None
             if event is not None:
+                self._turn_saw_event[turn_id] = True
                 if cancel_event is not None and cancel_event.is_set():
                     self._cancel_turn(turn_id)
                     raise JawlTurnCancelled("JAWL turn superseded by a newer message")
@@ -394,6 +419,14 @@ class JawlTerminalGateway:
             if cancel_event is not None and cancel_event.is_set():
                 self._cancel_turn(turn_id)
                 raise JawlTurnCancelled("JAWL turn superseded by a newer message")
+            # D4: the agent restarted (or the socket dropped) before this turn
+            # produced ANY event — the submit is lost. Fail fast so the caller
+            # can resubmit once on the fresh transport instead of waiting out
+            # the full timeout for events that will never arrive.
+            with self._write_lock:
+                transport_lost = self._socket is None
+            if transport_lost and self._conn_generation != start_generation and not self._turn_saw_event.get(turn_id):
+                raise JawlUnavailable("JAWL transport restarted before the turn produced any event")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise JawlUnavailable("JAWL produced no terminal event before timeout")
