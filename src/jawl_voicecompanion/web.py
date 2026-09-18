@@ -2217,6 +2217,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         try:
             count = 0
             for index, audio in enumerate(stream):
+                # Mark the avatar as speaking while real audio flows so native
+                # clients (not just the browser) get a live lip-sync signal.
+                if index == 0:
+                    self.server.set_avatar_audio(0.6, True, int(time.time() * 1000))
                 self._stream_event({
                     "type": "audio",
                     "index": index,
@@ -2225,6 +2229,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 })
                 count += 1
             self._stream_event({"type": "done", "count": count})
+            self.server.set_avatar_audio(0.0, False, int(time.time() * 1000))
         except TTSCancelled:
             try:
                 self._stream_event({"type": "cancelled"})
