@@ -1,5 +1,35 @@
 # Repository Research
 
+## 2026-09-17 — LFM2.5-Audio-1.5B: пригодность для русского голосового дуплекса
+
+Запрос владельца: проверить поддержку русского, наличие русских файнтюнов,
+возможность дообучения.
+
+**Факты (по карточке HF LiquidAI/LFM2.5-Audio-1.5B и API поиска):**
+- Поддерживаемые языки: **только English** (явно в карточке: «Supported
+  languages: English»). Аудио-энкодер — NVIDIA FastConformer (canary-180m-flash,
+  тоже англоязычный). Детокенизатор — Mimi-совместимый (Kyutai), 8 codebooks.
+- Существует официальный файнтюн **LFM2.5-Audio-1.5B-JP** (японский) — значит
+  мультиязычное дообучение технически возможно и LiquidAI его делают сами.
+  Русского файнтюна в поиске HF не нашлось (проверены все ~30 моделей по
+  запросу LFM2.5-Audio: EN, JP, tool-aware форки — RU нет).
+- Community-форки: GGUF (официальный и Mungert), ONNX (официальный),
+  MLX (Apple), tool-aware файнтюны (matbee), IFEval SFT+GRPO. Все EN.
+- Дообучение: технически возможно (есть JP-прецедент; есть peft/LoRA адаптер
+  Omni-Post-Train; код обучения у LiquidAI частично открыт через liquid-audio
+  пакет). Но для русского speech-to-speech потребуется: русский аудио-датасет
+  разговорной речи (тысячи часов для качественного дуплекса), переобучение
+  аудио-энкодера (FastConformer — английский), и отдельный гейт на качество
+  русского ASR+TTS. Оценка: недели работы и GPU-время, результат не гарантирован
+  — наша текущая связка GigaAM (RU ASR) + TeraTTS (RU TTS) уже даёт русский
+  голос с доказанным качеством и low-latency.
+
+**Вердикт:** LFM2.5-Audio сейчас для нас REJECT по gate (RU_NATURAL_SPEECH_ASR
+не поддержан). Дообучение под русский — возможная, но тяжёлая R&D-задача;
+возвращаемся к ней только если текущая связка ASR→LLM→TTS упрётся в задержку,
+которую нельзя решить иначе. LFM2-VL-3B (зрение) — REJECT без прогона: в списке
+языков нет русского, а Qwen3-VL-2B уже доказан на RU-фикстурах.
+
 Historical research snapshot, not a current runtime instruction. Native gateway
 findings and provider/model choices below may have been superseded; consult
 [PRODUCT.md](PRODUCT.md), [STATE.md](STATE.md), and [DECISIONS.md](DECISIONS.md).
