@@ -100,7 +100,7 @@
     .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
     .card-head h3, .card-head h2 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
     .card-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
-    .home-grid { display: grid; grid-template-columns: minmax(290px, .82fr) minmax(390px, 1.18fr); gap: 16px; align-items: stretch; }
+    .home-grid { display: grid; grid-template-columns: minmax(290px, .4fr) minmax(430px, .6fr); gap: 16px; align-items: stretch; }
     .companion-card { display: flex; flex-direction: column; }
     .stage { position: relative; min-height: 408px; overflow: hidden; border: 1px solid rgba(71,169,149,.18); border-radius: 15px; background: radial-gradient(circle at 50% 28%, #ecfff9 0 8%, transparent 40%), linear-gradient(145deg, rgba(226,252,244,.9), rgba(158,218,205,.42)); }
     #stage-avatar { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; }
@@ -155,10 +155,6 @@
     .signal-light::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #9bb8b2; transition: .2s ease; }
     .signal-light.active::before { background: #48c5a5; box-shadow: 0 0 0 5px rgba(72,197,165,.18), 0 0 13px rgba(72,197,165,.75); }
     .device-select { width: 100%; }
-    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 11px; margin-top: 16px; }
-    .stat { padding: 12px 13px; border: 1px solid rgba(255,255,255,.72); border-radius: 14px; background: rgba(255,255,255,.55); box-shadow: 0 7px 18px rgba(43,119,106,.08); }
-    .stat label { display: block; color: var(--muted); font-size: 11px; }
-    .stat strong { display: block; margin-top: 5px; font-size: 14px; }
     .split-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
     .stack { display: grid; gap: 16px; }
     .field { display: grid; gap: 6px; margin: 11px 0; }
@@ -235,7 +231,6 @@
       .chat-tools { gap: 4px; }
       .chat-tools button { min-height: 44px; min-width: 44px; padding: 6px; }
       .chat-tools .send-button { min-width: 82px; font-size: 13px; }
-      .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
       .stat { padding: 9px; }
       .field input, .field select, .field textarea { font-size: 16px; }
       .button-row button { min-height: 44px; }
@@ -899,17 +894,24 @@
       window.renderMiniAvatar?.(stateData);
       const gatewayState = String(statusData.status || 'unknown');
       document.querySelector('#top-connection').textContent = `Локальный контур · ${gatewayState}`;
-      document.querySelector('#home-gateway-status').textContent = gatewayState;
+      const homeGateway = document.querySelector('#home-gateway-status');
+      if (homeGateway) homeGateway.textContent = gatewayState;
       ttsConfigured = Boolean(ttsStatusData.configured && ttsStatusData.status !== 'offline');
       document.querySelector('#tts-status').textContent = ttsConfigured
         ? `TTS готов · ${ttsStatusData.provider || 'локальный провайдер'}`
         : 'TTS не настроен; доступен текстовый режим.';
-      document.querySelector('#home-tts-status').textContent = ttsConfigured
+      const homeTts = document.querySelector('#home-tts-status');
+      if (homeTts) homeTts.textContent = ttsConfigured
         ? (ttsStatusData.provider || 'готов') : 'не настроен';
       document.querySelector('#level').textContent = stateData.policy.active_level;
       document.querySelector('#level-name').textContent = stateData.policy.active_name;
-      document.querySelector('#home-level-name').textContent = stateData.policy.active_name;
-      document.querySelector('#home-access-status').textContent = stateData.policy.active_name;
+      const homeLevel = document.querySelector('#home-level-name');
+      if (homeLevel) homeLevel.textContent = stateData.policy.active_name;
+      const homeAccess = document.querySelector('#home-access-status');
+      if (homeAccess) homeAccess.textContent = stateData.policy.active_name;
+      // Drive the life rail's access pill from the same source.
+      window.__currentAccessName = stateData.policy.active_name;
+      window.__currentAccessLevel = stateData.policy.active_level;
       document.querySelector('#level-select').value = stateData.policy.active_level;
       document.querySelector('#unattended').checked = Boolean(stateData.policy.unattended);
       document.querySelector('#unattended-status').textContent = stateData.policy.unattended
@@ -979,7 +981,8 @@
       const memoryRecords = jawlMemoryData.structured?.memories || [];
       const memoryQuery = String(document.querySelector('#jawl-memory-search')?.value || '').trim().toLowerCase();
       const memoryFilter = document.querySelector('#jawl-memory-filter')?.value || 'all';
-      document.querySelector('#home-memory-status').textContent = jawlMemoryData.configured
+      const homeMemory = document.querySelector('#home-memory-status');
+      if (homeMemory) homeMemory.textContent = jawlMemoryData.configured
         ? `${Array.isArray(memoryRecords) ? memoryRecords.length : 0} записей` : 'не подключена';
       if (!jawlMemoryData.configured || !Array.isArray(memoryRecords) || !memoryRecords.length) {
         memoryEditor.textContent = jawlMemoryData.configured ? 'Активных структурированных записей нет.' : 'Каноническая память JAWL не подключена.';
