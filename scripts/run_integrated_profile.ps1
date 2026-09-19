@@ -35,7 +35,7 @@ param(
 [switch]$EnableSensoryWorker,
 [string]$VisionUrl = 'http://127.0.0.1:8983/v1',
 [string]$VisionModel = 'qwen3-vl',
-[int]$ScreenWatchInterval = 15,
+[int]$ScreenWatchInterval = 30,
 [int]$HostosLevel = -1,
 [int]$AmbientTriageSeconds = 0,
 [string]$JawlEventDir = '',
@@ -466,9 +466,12 @@ try {
             $vlmMmproj = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf'
             if ((Test-Path -LiteralPath $vlmExe) -and (Test-Path -LiteralPath $vlmModel) -and (Test-Path -LiteralPath $vlmMmproj)) {
                 $env:CUDA_VISIBLE_DEVICES = '1'
-                $vlmArgs = @('--model', $vlmModel, '--alias', 'qwen3-vl', '--host', '127.0.0.1', '--port', '8983', '--ctx-size', '8192', '--threads', '8', '-ngl', '99', '--no-webui', '--reasoning', 'off', '--mmproj', $vlmMmproj)
-                $vlmProc = Start-Process -FilePath $vlmExe -ArgumentList $vlmArgs -WindowStyle Hidden -PassThru
-                Write-Host "Vision server (qwen3-vl) starting (pid $($vlmProc.Id)) on 8983"
+                # VLM runs as a low-priority process with few CPU threads so its
+                # periodic screen scans (every ~30s) never micro-freeze the
+                # interactive workload (vision encoder + mmproj prefill run on CPU).
+                $vlmArgs = @('--model', $vlmModel, '--alias', 'qwen3-vl', '--host', '127.0.0.1', '--port', '8983', '--ctx-size', '8192', '--threads', '4', '-ngl', '99', '--no-webui', '--reasoning', 'off', '--mmproj', $vlmMmproj)
+                $vlmProc = Start-Process -FilePath $vlmExe -ArgumentList $vlmArgs -WindowStyle Hidden -Priority Low -PassThru
+                Write-Host "Vision server (qwen3-vl, low priority, 4 threads) starting (pid $($vlmProc.Id)) on 8983"
                 $vlmDeadline = (Get-Date).AddSeconds(30)
                 do { Start-Sleep -Milliseconds 800; $vlmUp = Test-NetConnection 127.0.0.1 -Port 8983 -WarningAction SilentlyContinue -InformationLevel Quiet } until ($vlmUp -or (Get-Date) -gt $vlmDeadline)
                 if (-not $vlmUp) { Write-Warning 'qwen3-vl vision server did not open 8983; screen-watch will use a slow/missing describer.' }

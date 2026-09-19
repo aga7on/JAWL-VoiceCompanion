@@ -763,9 +763,6 @@ fn run_all() {
     println!("[launcher] repo={} profile={}", cfg.repo_root.display(), cfg.profile);
 
     let port_open = |port: u16| TcpStream::connect(("127.0.0.1", port)).is_ok();
-    let spawn_hidden = |exe: &str, args: &[&str]| -> Option<Child> {
-        Command::new(exe).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok()
-    };
 
     let mut children: Vec<Child> = Vec::new();
 
@@ -780,11 +777,21 @@ fn run_all() {
         let args = [
             "--model", &vl_model,
             "--alias", "qwen3-vl", "--host", "127.0.0.1", "--port", &vl_port.to_string(),
-            "--ctx-size", "8192", "--threads", "8", "-ngl", "99",
+            "--ctx-size", "8192", "--threads", "4", "-ngl", "99",
             "--no-webui", "--reasoning", "off",
             "--mmproj", &vl_mmproj,
         ];
-        if let Some(c) = spawn_hidden(&vl_exe, &args) { children.push(c); println!("[launcher] qwen3-vl starting ({vl_port})"); }
+        let mut cmd = Command::new(&vl_exe);
+        cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
+        // Low priority: periodic screen scans must not micro-freeze the
+        // interactive workload (vision encoder + mmproj run on CPU threads).
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x00004000;
+            cmd.creation_flags(BELOW_NORMAL_PRIORITY_CLASS);
+        }
+        if let Ok(c) = cmd.spawn() { children.push(c); println!("[launcher] qwen3-vl starting ({vl_port}, below-normal priority)"); }
     } else { println!("[launcher] qwen3-vl already up ({vl_port})"); }
 
     // Wait for the vision server to accept connections before the profile.
