@@ -65,7 +65,10 @@ tmp_*/
 .tmp-wheel/
 *.tmp
 *.bak
+*.incomplete
 codex-thread-*.json
+runtime/integrated-launcher/
+runtime/avatar-tests/
 .DS_Store
 Thumbs.db
 

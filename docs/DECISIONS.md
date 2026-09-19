@@ -557,7 +557,7 @@ external account actions during development.
 ## ADR-036 — Native Rust client as audio owner and Live2D host
 
 Status: Accepted
-Date: 2026-10-05
+Date: 2026-09-17
 
 The browser tab must not own the character's hearing or body. A thin native
 client (Rust + native Cubism SDK, not a game engine) owns the audio devices
@@ -572,7 +572,7 @@ passes the same live acceptance.
 ## ADR-037 — OpenCode GO deepseek-v4-flash is the baseline brain
 
 Status: Accepted
-Date: 2026-10-05
+Date: 2026-09-17
 
 The brain is the already-working deepseek-v4-flash via the OpenCode GO relay
 (:8891), covering fast speech, swarm workers and deep thinking. No local LLM
@@ -583,7 +583,7 @@ the same JAWL provider contract without breaking the JSON protocol.
 ## ADR-038 — Episodic timeline as the shared TimeService
 
 Status: Accepted
-Date: 2026-10-05
+Date: 2026-09-17
 
 Time is modeled as machine process-time (event log, timestamps) projected
 into one episodic timeline — episodes cut on activity boundaries (conversation
@@ -597,7 +597,7 @@ user turns. Acceptance is a lived 24h scenario, not a test suite pass.
 ## ADR-039 — Resource budget: Bonsai to GPU1, on-demand unload
 
 Status: Accepted
-Date: 2026-10-05
+Date: 2026-09-17
 
 Bonsai moves from CPU RAM to GPU1 (same weights, no quality loss), freeing
 ~12.5 GB RAM. Screen-watching models unload after an idle window and reload

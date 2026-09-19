@@ -12,7 +12,7 @@
   пути), чтобы mao_pro снова стал основной моделью. Обход: дефолт Hiyori (v3),
   `JAWL_AVATAR_MODEL` переопределяет; WebView2-окно как fallback полного качества.
 
-## Приоритет: Phase A — coherence E2E и episodic timeline — 2026-10-05
+## Приоритет: Phase A — coherence E2E и episodic timeline — 2026-09-17
 
 Зафиксировано в ADR-036..039 (docs/DECISIONS.md): Rust-клиент как audio owner
 и Live2D-хост, deepseek-v4-flash как мозг через OpenCode-релей с заменяемым

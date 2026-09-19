@@ -132,7 +132,7 @@
     Numeric input is now coerced to int on save.
 - Web regression: tests/test_web.py 67/67 passed.
 
-## 2026-10-05 - Phase A start: native client, baseline brain, episodic time, resources
+## 2026-09-17 - Phase A start: native client, baseline brain, episodic time, resources
 
 - **Architecture decisions recorded** (docs/DECISIONS.md ADR-036..039):
   a thin native Rust client (+ native Cubism SDK) as audio owner and
