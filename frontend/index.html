@@ -3188,7 +3188,10 @@
         const row = document.createElement('details');
         row.className = 'task-row';
         const planId = String(plan.plan_id || plan.id || 'задача');
-        const title = String(plan.title || plan.goal || planId);
+        const outcomes = Array.isArray(plan.outcomes) ? plan.outcomes : [];
+        const firstAction = outcomes.length ? String(outcomes[0].tool_name || 'действие').split('.').pop() : '';
+        const actionCount = outcomes.length || Number(plan.action_count || 0);
+        const title = String(plan.title || plan.goal || (firstAction ? `${firstAction} · ${actionCount} шаг(а)` : `План из ${actionCount} действий`));
         const state = String(plan.state || 'unknown');
         const mark = TASK_STATE_LABEL[state] || '·';
         const sum = document.createElement('summary');
@@ -3196,13 +3199,15 @@
         sum.querySelector('strong').textContent = title;
         sum.querySelector('.task-state').textContent = state.replace('_', ' ');
         const body = document.createElement('div');
-        const steps = Array.isArray(plan.steps) ? plan.steps : [];
-        if (steps.length) {
+        if (outcomes.length) {
           const ol = document.createElement('ol');
-          steps.forEach((step, i) => {
+          outcomes.forEach((o, i) => {
             const li = document.createElement('li');
-            li.textContent = `${i + 1}. ${String(step.title || step.action || step).slice(0, 120)}`;
-            if (step.status) li.textContent += ` — ${step.status}`;
+            const name = String(o.tool_name || o.action || 'действие').split('.').pop();
+            const ok = o.is_success;
+            li.textContent = `${i + 1}. ${name}${ok === false ? ' ✗' : (ok === true ? ' ✓' : '')}`;
+            const msg = String(o.message || '').slice(0, 120);
+            if (msg && msg !== 'True' && msg !== 'False') li.textContent += ` — ${msg}`;
             ol.append(li);
           });
           body.append(ol);
