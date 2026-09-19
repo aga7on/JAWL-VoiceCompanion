@@ -305,7 +305,7 @@
 
         <section class="tab-panel" data-panel="memory">
           <div class="page-heading"><div><span class="eyebrow">JAWL memory</span><h2>Память</h2><p>Каноническая память остаётся в JAWL; здесь только обзор и явные изменения.</p></div></div>
-          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Библиотека памяти</h3><p>JAWL заполняет её сам; здесь можно найти, исправить или забыть запись.</p></div></div><pre id="jawl-overview" class="meta">JAWL не подключён.</pre><div class="memory-toolbar"><input id="jawl-memory-search" type="search" placeholder="Поиск по памяти" aria-label="Поиск по памяти"><select id="jawl-memory-filter" aria-label="Слой памяти"><option value="all">Все слои</option><option value="trait">Черты</option><option value="fact">Факты</option><option value="preference">Предпочтения</option><option value="summary">Сводки</option></select></div><div id="jawl-memory-editor" class="memory-list empty-state">Каноническая память JAWL не подключена.</div><div class="field"><label for="jawl-memory-key">Ключ записи</label><input id="jawl-memory-key" type="text" placeholder="memory_key (для новой записи можно пусто)"></div><div class="split-grid"><div class="field"><label for="jawl-memory-kind">Слой</label><select id="jawl-memory-kind"><option value="fact">Факт</option><option value="trait">Черта</option><option value="preference">Предпочтение</option><option value="summary">Сводка</option></select></div><div class="field"><label for="jawl-memory-source">Источник</label><input id="jawl-memory-source" type="text" placeholder="user, voice, ambient…"></div></div><div class="field"><label for="jawl-memory-value">Значение</label><input id="jawl-memory-value" type="text" placeholder="Факт, черта, предпочтение или сводка"></div><div class="button-row"><button id="jawl-memory-save" class="primary" type="button">Сохранить в JAWL</button><button id="jawl-memory-cancel" type="button" hidden>Отмена редактирования</button></div><span id="jawl-memory-status" class="meta"></span></article><article class="glass-card"><div class="card-head"><div><h3>Журнал автономности</h3><p>Решения и планы, полученные из JAWL.</p></div></div><pre id="jawl-journal" class="meta">Журнал JAWL не подключён.</pre><details><summary>Как это работает</summary><p class="meta">Companion не создаёт второго мозга: чтение, коррекция и забывание проходят через native JAWL memory API.</p></details></article></div>
+          <div class="split-grid"><article class="glass-card"><div class="card-head"><div><h3>Библиотека памяти</h3><p>JAWL заполняет её сам; здесь можно найти, исправить или забыть запись.</p></div></div><pre id="jawl-overview" class="meta">JAWL не подключён.</pre><div class="memory-toolbar"><input id="jawl-memory-search" type="search" placeholder="Поиск по памяти" aria-label="Поиск по памяти"><select id="jawl-memory-filter" aria-label="Слой памяти"><option value="all">Все слои</option><option value="trait">Черты</option><option value="fact">Факты</option><option value="preference">Предпочтения</option><option value="summary">Сводки</option></select></div><div id="jawl-memory-editor" class="memory-list empty-state">Каноническая память JAWL не подключена.</div><div class="field"><label for="jawl-memory-key">Ключ записи</label><input id="jawl-memory-key" type="text" placeholder="memory_key (для новой записи можно пусто)"></div><div class="split-grid"><div class="field"><label for="jawl-memory-kind">Слой</label><select id="jawl-memory-kind"><option value="fact">Факт</option><option value="trait">Черта</option><option value="preference">Предпочтение</option><option value="summary">Сводка</option></select></div><div class="field"><label for="jawl-memory-source">Источник</label><input id="jawl-memory-source" type="text" placeholder="user, voice, ambient…"></div></div><div class="field"><label for="jawl-memory-value">Значение</label><input id="jawl-memory-value" type="text" placeholder="Факт, черта, предпочтение или сводка"></div><div class="button-row"><button id="jawl-memory-save" class="primary" type="button">Сохранить в JAWL</button><button id="jawl-memory-cancel" type="button" hidden>Отмена редактирования</button></div><span id="jawl-memory-status" class="meta"></span></article></div>
         </section>
 
         <section class="tab-panel" data-panel="settings">
@@ -914,8 +914,10 @@
       const homeTts = document.querySelector('#home-tts-status');
       if (homeTts) homeTts.textContent = ttsConfigured
         ? (ttsStatusData.provider || 'готов') : 'не настроен';
-      document.querySelector('#level').textContent = stateData.policy.active_level;
-      document.querySelector('#level-name').textContent = stateData.policy.active_name;
+      const levelBox = document.querySelector('#level');
+      if (levelBox) levelBox.textContent = stateData.policy.active_level;
+      const levelNameBox = document.querySelector('#level-name');
+      if (levelNameBox) levelNameBox.textContent = stateData.policy.active_name;
       const homeLevel = document.querySelector('#home-level-name');
       if (homeLevel) homeLevel.textContent = stateData.policy.active_name;
       const homeAccess = document.querySelector('#home-access-status');
@@ -972,6 +974,8 @@
         }
       }
       document.querySelector('#jawl-overview').textContent = JSON.stringify({...jawlData, hostos: jawlHostosData}, null, 2);
+      // The autonomy journal was moved to the Tasks section; keep the fetch
+      // (it feeds tasks) but the old memory-panel element is gone.
       const journalPlans = Array.isArray(jawlJournalData.plans)
         ? jawlJournalData.plans.map(plan => ({
             plan_id: plan.plan_id,
@@ -984,7 +988,8 @@
             outcomes: plan.outcomes,
           }))
         : [];
-      document.querySelector('#jawl-journal').textContent = jawlJournalData.configured
+      const journalBox = document.querySelector('#jawl-journal');
+      if (journalBox) journalBox.textContent = jawlJournalData.configured
         ? JSON.stringify({source: jawlJournalData.source, plans: journalPlans}, null, 2)
         : 'Канонический журнал JAWL не подключён.';
       const memoryEditor = document.querySelector('#jawl-memory-editor');
@@ -1008,24 +1013,40 @@
           row.className = 'memory-row';
           const textWrap = document.createElement('div');
           const text = document.createElement('span');
-          text.textContent = `[${record.kind || 'fact'}] ${record.memory_key || 'без ключа'} · ${record.subject || '—'}: ${record.predicate || 'значение'} = ${record.value || '—'}`;
+          // Human-readable phrasing: a memory is a sentence "О тебе: ..." for
+          // preferences/traits, or a plain fact/observation. Provenance stays
+          // available but collapsed, never the first thing the user sees.
+          const kindLabel = record.kind === 'preference' ? 'Предпочтение'
+            : record.kind === 'trait' ? 'Черта'
+            : record.kind === 'summary' ? 'Сводка' : 'Факт';
+          const subject = String(record.subject || '—');
+          const predicate = String(record.predicate || '');
+          const value = String(record.value || '');
+          let phrase;
+          if (record.kind === 'preference' && predicate) phrase = `О тебе: ${predicate} — ${value}`;
+          else if (predicate) phrase = `${subject}: ${predicate} — ${value}`;
+          else phrase = value || subject;
+          text.textContent = `[${kindLabel}] ${phrase}`;
           textWrap.append(text);
-          // Evidence line: provenance, confidence and revision are first-class
-          // fields of the canonical memory contract.
+          // Evidence line folded into collapsible "Подробнее" (debug/trust details).
           const prov = record.provenance || {};
+          const details = document.createElement('details');
+          details.className = 'memory-details';
+          const summary = document.createElement('summary');
+          summary.textContent = 'Подробнее';
+          const meta = document.createElement('div');
+          meta.className = 'memory-meta';
           const metaParts = [];
+          metaParts.push(`ключ: ${record.memory_key || '—'}`);
           if (record.source) metaParts.push(`источник: ${record.source}`);
-          if (typeof record.confidence === 'number') metaParts.push(`уверенность ${record.confidence}`);
-          if (record.revision) metaParts.push(`ревизия ${record.revision}`);
-          if (record.created_at) metaParts.push(new Date(record.created_at).toLocaleString());
+          if (typeof record.confidence === 'number') metaParts.push(`уверенность: ${Math.round(record.confidence * 100)}%`);
+          if (record.revision) metaParts.push(`ревизия: ${record.revision}`);
+          if (record.created_at) metaParts.push(new Date(record.created_at).toLocaleDateString('ru-RU'));
           if (prov.actor) metaParts.push(`актёр: ${prov.actor}`);
           if (prov.day) metaParts.push(prov.day);
-          if (metaParts.length) {
-            const meta = document.createElement('div');
-            meta.className = 'memory-meta';
-            meta.textContent = metaParts.join(' · ');
-            textWrap.append(meta);
-          }
+          meta.textContent = metaParts.join(' · ');
+          details.append(summary, meta);
+          textWrap.append(details);
           const actions = document.createElement('span');
           const edit = document.createElement('button');
           edit.textContent = 'Изменить';
