@@ -66,6 +66,14 @@
     .top-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
     .status-pill, .level-pill, .eyebrow, .tag { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--muted); background: rgba(255,255,255,.58); font-size: 12px; }
     #shell-rail.stale { opacity: .55; }
+    .rail-state.rail-busy { color: #8a5b00; border-color: #e0b84a; }
+    .rail-emergency { border: 1px solid #d9534f88; background: #d9534f18; color: #b23b37; font-size: 15px; padding: 4px 9px; border-radius: 999px; cursor: pointer; }
+    .task-row { border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; margin: 8px 0; background: rgba(255,255,255,.5); }
+    .task-row summary { cursor: pointer; display: flex; align-items: center; gap: 8px; list-style: none; }
+    .task-row summary::-webkit-details-marker { display: none; }
+    .task-mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #57bda722; color: var(--mint-strong); font-weight: 700; }
+    .task-state { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .task-row ol { margin: 8px 0 0; padding-left: 22px; color: var(--muted); font-size: 13px; }
     .status-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--mint-strong); box-shadow: 0 0 0 4px #57bda722; }
     .layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 18px; margin-top: 18px; }
     .sidebar { display: flex; flex-direction: column; min-height: calc(100vh - 122px); padding: 12px; border: 1px solid rgba(255,255,255,.7); border-radius: 20px; background: rgba(255,255,255,.45); box-shadow: var(--shadow); backdrop-filter: blur(19px); }
@@ -245,31 +253,29 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark">J·</div>
-        <div><h1>JAWL VoiceCompanion</h1><p>Ваш игровой центр управления компаньоном</p></div>
+        <div><h1>Компаньон</h1><p>Один персонаж рядом с вами</p></div>
       </div>
       <div class="top-actions">
         <span id="top-connection" class="status-pill">Локальный контур</span>
+        <span id="rail-state" class="tag rail-state" title="Состояние компаньона">готов к диалогу</span>
+        <span id="rail-perception" class="tag" title="Источник восприятия">—</span>
+        <span id="rail-access" class="tag" title="Эффективный доступ">SANDBOX ▾</span>
+        <button id="rail-emergency" class="danger rail-emergency" type="button" title="Аварийная остановка">⛔</button>
         <span id="shell-rail" class="tag" title="Живая телеметрия">агент: — · голос: — · сенсорика: —</span>
       </div>
     </header>
     <div class="layout">
       <aside class="sidebar" aria-label="Основная навигация">
         <div class="profile-chip"><div class="profile-orb">✦</div><div><strong>Компаньон</strong><span id="sidebar-state">готов к диалогу</span></div></div>
-        <div class="nav-label">Центр</div>
-        <button class="nav-item active" data-tab="home" aria-selected="true"><span class="nav-icon">⌂</span><span>Обзор</span></button>
-        <button class="nav-item" data-tab="voice" aria-selected="false"><span class="nav-icon">◉</span><span>Голос</span></button>
-        <button class="nav-item" data-tab="perception" aria-selected="false"><span class="nav-icon">◌</span><span>Восприятие</span></button>
+        <div class="nav-label">Рядом</div>
+        <button class="nav-item active" data-tab="home" aria-selected="true"><span class="nav-icon">✦</span><span>Компаньон</span></button>
+        <button class="nav-item" data-tab="tasks" aria-selected="false"><span class="nav-icon">✓</span><span>Задачи</span></button>
         <button class="nav-item" data-tab="memory" aria-selected="false"><span class="nav-icon">▤</span><span>Память</span></button>
-        <div class="nav-label">Контроль</div>
         <button class="nav-item" data-tab="settings" aria-selected="false"><span class="nav-icon">⚙</span><span>Настройки</span></button>
-        <button class="nav-item" data-tab="access" aria-selected="false"><span class="nav-icon">⌁</span><span>Доступ</span></button>
-        <button class="nav-item" data-tab="system" aria-selected="false"><span class="nav-icon">⚙</span><span>Система</span></button>
-        <button class="nav-item" data-tab="jawl" aria-selected="false"><span class="nav-icon">▣</span><span>Пульт JAWL</span></button>
         <div class="sidebar-foot">2D avatar · OBS<br><span id="sidebar-port">presentation 8766</span></div>
       </aside>
       <main class="content">
         <section class="tab-panel active" data-panel="home">
-          <div class="page-heading"><div><span class="eyebrow">Control center</span><h2>Добро пожаловать</h2><p>Состояние компаньона, диалог и быстрые действия — на одном экране.</p></div><span class="level-pill">Режим: <strong id="home-level-name">SANDBOX</strong></span></div>
           <div class="home-grid">
             <article class="glass-card companion-card">
               <div class="card-head"><div><h3>Мой компаньон</h3><p>2D-персонаж · локальная презентация</p></div><span class="tag" id="mini-emotion">neutral</span></div>
@@ -285,7 +291,6 @@
               <div class="composer"><div id="emoji-picker" class="emoji-picker" aria-label="Эмодзи"></div><textarea id="input" rows="3" placeholder="Напишите компаньону… Поддерживаются /команды"></textarea><div id="attachment-list" class="attachment-list"></div><div class="chat-tools"><button id="attach" type="button" title="Добавить TXT или MD">＋</button><input id="attachment-input" type="file" hidden multiple accept=".txt,.md,text/plain,text/markdown"><button id="emoji" type="button" title="Эмодзи">☺</button><button id="slash" type="button" title="Команды">/</button><button id="mic" type="button" title="Микрофон">🎙</button><button id="send" class="primary send-button">Отправить</button></div><span id="mic-status" class="meta">Микрофон выключен.</span><div id="mic-live-transcript" class="mic-live-transcript" hidden></div></div>
             </article>
           </div>
-          <div class="stat-grid"><div class="stat"><label>Подключение</label><strong id="home-gateway-status">Проверка…</strong></div><div class="stat"><label>Голосовой вывод</label><strong id="home-tts-status">Не настроен</strong></div><div class="stat"><label>Память</label><strong id="home-memory-status">Проверка…</strong></div><div class="stat"><label>Доступ</label><strong id="home-access-status">SANDBOX</strong></div></div>
         </section>
 
         <section class="tab-panel" data-panel="voice">
@@ -303,6 +308,15 @@
             <article class="glass-card"><div class="card-head"><div><h3>Системный звук</h3><p>Loopback → ASR → bounded ambient memory.</p></div><span class="tag">без записи raw audio</span></div><label><input id="ambient-memory-enabled" type="checkbox"> Разрешить ограниченные наблюдения</label><p id="ambient-memory-status" class="meta">Ambient memory: checking...</p><div id="ambient-memory-candidates" class="empty-state">Нет кандидатов для сохранения в JAWL.</div><div class="button-row"><button id="ambient-audio-toggle" type="button" disabled>Системный звук не настроен</button><button id="ambient-triage" type="button">Сжать сейчас</button></div><p id="ambient-audio-status" class="meta">Loopback: checking...</p><button id="ambient-clear" type="button">Очистить буфер</button><button id="ambient-disable-erase" class="danger" type="button">Отключить и стереть</button></article>
           </div>
           <article class="glass-card" style="margin-top:16px"><div class="card-head"><div><h3>Присутствие</h3><p>Тихие часы и DND управляют проактивными репликами.</p></div></div><div class="split-grid"><label><input id="attention-dnd" type="checkbox"> DND для проактивного наблюдения</label><div class="field" style="margin:0"><label for="quiet-hours">Тихие часы (HH:MM-HH:MM)</label><input id="quiet-hours" type="text" placeholder="22:00-07:00"><button id="save-quiet-hours" type="button">Сохранить тихие часы</button></div></div><p id="attention-status" class="meta">Attention/Presence: checking...</p></article>
+        </section>
+
+        <section class="tab-panel" data-panel="tasks">
+          <div class="page-heading"><div><span class="eyebrow">Активность</span><h2>Задачи</h2><p>Что компаньон делает сейчас, что ждёт решения и что завершил.</p></div></div>
+          <div class="split-grid">
+            <article class="glass-card"><div class="card-head"><div><h3>Активные</h3><p>Планы в работе с шагами и результатами.</p></div><span class="tag">сейчас</span></div><div id="tasks-active" class="empty-state">Загрузка активных задач…</div></article>
+            <article class="glass-card"><div class="card-head"><div><h3>Ожидают решения</h3><p>Действия, которым нужно подтверждение владельца.</p></div></div><div id="tasks-awaiting" class="empty-state">Нет ожидающих запросов.</div></article>
+          </div>
+          <article class="glass-card" style="margin-top:16px"><div class="card-head"><div><h3>Недавние</h3><p>Завершённые, прерванные и ошибочные планы.</p></div></div><div id="tasks-recent" class="empty-state">Нет недавних задач.</div></article>
         </section>
 
         <section class="tab-panel" data-panel="memory">
@@ -2938,9 +2952,41 @@
     let shellStatusTimer = null;
     let shellStatusStale = false;
     let lastBackgroundTs = 0;
+    // Life rail: state, perception source, effective access, emergency stop.
+    function renderLifeRail(data, tick) {
+      const stateEl = document.querySelector('#rail-state');
+      const percEl = document.querySelector('#rail-perception');
+      const accessEl = document.querySelector('#rail-access');
+      if (stateEl) {
+        const chat = data?.agent?.chat_status;
+        let label = chat === 'connected' ? '● готова' : (chat === 'starting' ? '◌ подключается' : '× нет связи');
+        if (tick && tick.known) {
+          if (tick.phase === 'sleep') label = '◌ спит';
+          else if (tick.phase === 'wake' && tick.step > 0) label = `↻ шаг ${tick.step}/${tick.maxSteps || '—'}`;
+        }
+        if (data?.plans?.in_progress > 0) label = '↻ выполняет задачу';
+        stateEl.textContent = label;
+        stateEl.classList.toggle('rail-busy', label.startsWith('↻'));
+      }
+      if (percEl) {
+        const parts = [];
+        if (data?.screen?.running) parts.push('◉ экран');
+        if (data?.sensory?.running) parts.push('♪ звук');
+        if (data?.voice?.asr) parts.push('🎙 микрофон');
+        if (data?.background?.count > 0) parts.push('· фон');
+        percEl.textContent = parts.length ? parts.join(' ') : 'нет источников';
+      }
+      if (accessEl && data) {
+        const levelName = window.__currentAccessName || 'SANDBOX';
+        accessEl.textContent = `${levelName} ▾`;
+        accessEl.title = 'Эффективный доступ к ПК';
+        accessEl.dataset.level = String(window.__currentAccessLevel ?? 0);
+      }
+    }
     function renderShellStatus(data, tick) {
       const el = document.querySelector('#shell-rail');
       if (!el || !data || data.ok !== true) return;
+      renderLifeRail(data, tick);
       // Autonomous agent messages (heartbeat work) surface once each: the
       // shell dedupes by the broadcast timestamp, never repeating a line.
       const bg = data.background;
@@ -3110,6 +3156,64 @@
       await apiPost('/api/emergency-stop', {});
       refresh();
     });
+    // The life rail's emergency stop mirrors the Access panel action.
+    const railEmergency = document.querySelector('#rail-emergency');
+    if (railEmergency) railEmergency.addEventListener('click', async () => {
+      if (!window.confirm('Аварийная остановка компаньона? Это остановит автономную работу.')) return;
+      await apiPost('/api/emergency-stop', {});
+      if (typeof refresh === 'function') refresh();
+    });
+    // ---- Tasks section: live plans from the JAWL action journal ----
+    const TASK_STATE_LABEL = {completed: '✓', failed: '!', cancelled: '○', error: '!', in_progress: '●', interrupted: '◌', reconciled: '✓'};
+    function renderTaskList(containerId, plans, emptyText) {
+      const el = document.querySelector(containerId);
+      if (!el) return;
+      if (!Array.isArray(plans) || !plans.length) { el.textContent = emptyText; return; }
+      el.replaceChildren();
+      for (const plan of plans.slice(0, 12)) {
+        const row = document.createElement('details');
+        row.className = 'task-row';
+        const planId = String(plan.plan_id || plan.id || 'задача');
+        const title = String(plan.title || plan.goal || planId);
+        const state = String(plan.state || 'unknown');
+        const mark = TASK_STATE_LABEL[state] || '·';
+        const sum = document.createElement('summary');
+        sum.innerHTML = `<span class="task-mark">${mark}</span> <strong></strong> <span class="task-state"></span>`;
+        sum.querySelector('strong').textContent = title;
+        sum.querySelector('.task-state').textContent = state.replace('_', ' ');
+        const body = document.createElement('div');
+        const steps = Array.isArray(plan.steps) ? plan.steps : [];
+        if (steps.length) {
+          const ol = document.createElement('ol');
+          steps.forEach((step, i) => {
+            const li = document.createElement('li');
+            li.textContent = `${i + 1}. ${String(step.title || step.action || step).slice(0, 120)}`;
+            if (step.status) li.textContent += ` — ${step.status}`;
+            ol.append(li);
+          });
+          body.append(ol);
+        } else {
+          body.append(Object.assign(document.createElement('p'), {className: 'meta', textContent: String(plan.result || plan.summary || plan.description || '').slice(0, 200) || 'Нет деталей.'}));
+        }
+        row.append(sum, body);
+        el.append(row);
+      }
+    }
+    async function loadTasks() {
+      if (!Object.keys(sessionHeaders).length) return;
+      try {
+        const active = await (await fetch('/api/jawl/journal?limit=20&state=in_progress', {headers: sessionHeaders})).json();
+        if (active.plans) renderTaskList('#tasks-active', active.plans, 'Сейчас компаньон свободен.');
+        const recent = await (await fetch('/api/jawl/journal?limit=20', {headers: sessionHeaders})).json();
+        const all = Array.isArray(recent.plans) ? recent.plans : [];
+        const done = all.filter(p => !['in_progress'].includes(String(p.state || '')));
+        renderTaskList('#tasks-recent', done, 'Нет завершённых задач.');
+        const awaiting = Array.isArray(active.plans) ? active.plans.filter(p => String(p.state) === 'awaiting') : [];
+        renderTaskList('#tasks-awaiting', awaiting, 'Нет действий, ожидающих решения.');
+      } catch (_) { /* journal is optional here */ }
+    }
+    document.querySelector('[data-tab="tasks"]')?.addEventListener('click', () => void loadTasks());
+    if (window.location.hash.slice(1) === 'tasks') setTimeout(loadTasks, 300);
     document.querySelector('#resume').addEventListener('click', async () => {
       if (!window.confirm('Возобновить работу агента и снять аварийную блокировку?')) return;
       await apiPost('/api/emergency-stop/reset', {});
