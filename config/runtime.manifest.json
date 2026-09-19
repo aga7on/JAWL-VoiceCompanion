@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "created": "2026-09-19",
+  "purpose": "Canonical runtime manifest (ADR-041). All machine-specific paths, ports and profiles live here so the Rust client, Python launcher and PowerShell share one source of truth. Copy to runtime.manifest.local.json and edit for another machine; the default tracks this dev machine.",
+  "repo_root": "G:/AI/JAWL-VoiceCompanion",
+  "profile": "daily",
+  "ports": {
+    "control": 2367,
+    "presentation": 8766,
+    "jawl_console": 8770,
+    "opencode_relay": 8891,
+    "qwen3_vl": 8983,
+    "bonsai_coding": 8986,
+    "asr": 8984,
+    "tera_tts": 9889
+  },
+  "models": {
+    "llama_server_exe": "G:/AI/llamacpp-taardis/build/bin/llama-server.exe",
+    "qwen3_vl_model": "G:/AI/VLM-RealTime-Bench/models/Qwen3-VL-2B-Q4_K_M.gguf",
+    "qwen3_vl_mmproj": "G:/AI/VLM-RealTime-Bench/models/Qwen3-VL-2B-mmproj-F16.gguf",
+    "bonsai_model": "G:/AI/VLM-RealTime-Bench/models/bonsai-ternary/Bonsai-27B-Q1_0.gguf",
+    "bonsai_mmproj": "G:/AI/VLM-RealTime-Bench/models/bonsai-ternary/Bonsai-27B-mmproj-Q8_0.gguf"
+  },
+  "avatar": {
+    "model3_path": "runtime/live2d/hiyori/Hiyori.model3.json",
+    "mic_prefer": "fifine"
+  },
+  "brain": {
+    "provider": "opencode-go",
+    "model": "deepseek-v4-flash",
+    "relay_port": 8891
+  },
+  "profile_script": "scripts/run_integrated_profile.ps1"
+}

@@ -13,6 +13,7 @@ use base64::Engine as _;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Deserialize;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,14 +21,142 @@ use std::time::Duration;
 const COMPANION_URL: &str = "http://127.0.0.1:2367";
 const TARGET_RATE: u32 = 16_000;
 const CHUNK_SECONDS: f32 = 1.0;
-/// Default model: Hiyori (moc3 v3) вЂ” fully supported by the pure-Rust Mocari
-/// runtime including the mouth parameter (ParamMouthOpenY). mao_pro (moc3 v5)
-/// needs Cubism Core blendshapes which Mocari does not apply yet; select it
-/// only via the JAWL_AVATAR_MODEL env override once that lands.
-const MODEL_PATH_DEFAULT: &str = r"G:\AI\JAWL-VoiceCompanion\runtime\live2d\hiyori\Hiyori.model3.json";
+/// Canonical runtime manifest (ADR-041): every machine-specific path, port and
+/// profile lives in config/runtime.manifest.json (with a local override). The
+/// client falls back to the dev-machine defaults below only when the manifest
+/// is missing, so a shipped build never hardcodes another machine's layout.
+const MANIFEST_REL: &str = "config/runtime.manifest.json";
+
+#[derive(Debug, Deserialize)]
+struct RuntimeManifest {
+    #[serde(default)]
+    repo_root: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    ports: ManifestPorts,
+    #[serde(default)]
+    models: ManifestModels,
+    #[serde(default)]
+    avatar: ManifestAvatar,
+    #[serde(default)]
+    profile_script: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ManifestPorts {
+    #[serde(default)] control: Option<u16>,
+    #[serde(default)] presentation: Option<u16>,
+    #[serde(default)] jawl_console: Option<u16>,
+    #[serde(default)] opencode_relay: Option<u16>,
+    #[serde(default)] qwen3_vl: Option<u16>,
+    #[serde(default)] bonsai_coding: Option<u16>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ManifestModels {
+    #[serde(default)] llama_server_exe: Option<String>,
+    #[serde(default)] qwen3_vl_model: Option<String>,
+    #[serde(default)] qwen3_vl_mmproj: Option<String>,
+    #[serde(default)] bonsai_model: Option<String>,
+    #[serde(default)] bonsai_mmproj: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ManifestAvatar {
+    #[serde(default)] model3_path: Option<String>,
+    #[serde(default)] mic_prefer: Option<String>,
+}
+
+/// Runtime configuration resolved from the manifest (or dev defaults).
+struct RuntimeConfig {
+    repo_root: PathBuf,
+    profile: String,
+    control_port: u16,
+    presentation_port: u16,
+    jawl_console_port: u16,
+    relay_port: u16,
+    qwen3_vl_port: u16,
+    bonsai_port: u16,
+    llama_server_exe: PathBuf,
+    qwen3_vl_model: PathBuf,
+    qwen3_vl_mmproj: PathBuf,
+    bonsai_model: PathBuf,
+    bonsai_mmproj: PathBuf,
+    avatar_model3: PathBuf,
+    mic_prefer: String,
+    profile_script: PathBuf,
+}
+
+impl RuntimeConfig {
+    fn load() -> Self {
+        let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        // Manifest lookup: CWD config/runtime.manifest.json, then exe-adjacent.
+        let mut manifest_path = cwd.join(MANIFEST_REL);
+        let mut repo = cwd.clone();
+        if let Some(exe_dir) = &exe_dir {
+            let alt = exe_dir.join(MANIFEST_REL);
+            if !manifest_path.exists() && alt.exists() { manifest_path = alt; }
+        }
+        let m: Option<RuntimeManifest> = std::fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        if let Some(m) = &m {
+            if let Some(root) = &m.repo_root { repo = PathBuf::from(root); }
+        }
+        let d = Self::defaults(&repo);
+        // Overlay manifest fields.
+        let mut out = d;
+        if let Some(m) = m {
+            if let Some(root) = m.repo_root { out.repo_root = PathBuf::from(root); }
+            if let Some(p) = m.profile { out.profile = p; }
+            if let Some(v) = m.ports.control { out.control_port = v; }
+            if let Some(v) = m.ports.presentation { out.presentation_port = v; }
+            if let Some(v) = m.ports.jawl_console { out.jawl_console_port = v; }
+            if let Some(v) = m.ports.opencode_relay { out.relay_port = v; }
+            if let Some(v) = m.ports.qwen3_vl { out.qwen3_vl_port = v; }
+            if let Some(v) = m.ports.bonsai_coding { out.bonsai_port = v; }
+            if let Some(v) = m.models.llama_server_exe { out.llama_server_exe = PathBuf::from(v); }
+            if let Some(v) = m.models.qwen3_vl_model { out.qwen3_vl_model = PathBuf::from(v); }
+            if let Some(v) = m.models.qwen3_vl_mmproj { out.qwen3_vl_mmproj = PathBuf::from(v); }
+            if let Some(v) = m.models.bonsai_model { out.bonsai_model = PathBuf::from(v); }
+            if let Some(v) = m.models.bonsai_mmproj { out.bonsai_mmproj = PathBuf::from(v); }
+            if let Some(v) = m.avatar.model3_path { out.avatar_model3 = out.repo_root.join(v); }
+            if let Some(v) = m.avatar.mic_prefer { out.mic_prefer = v; }
+            if let Some(v) = m.profile_script { out.profile_script = out.repo_root.join(v); }
+        }
+        out
+    }
+
+    /// Dev-machine defaults (kept as fallback; the manifest is authoritative).
+    fn defaults(repo: &PathBuf) -> Self {
+        let root = repo.clone();
+        Self {
+            repo_root: root.clone(),
+            profile: "daily".to_string(),
+            control_port: 2367,
+            presentation_port: 8766,
+            jawl_console_port: 8770,
+            relay_port: 8891,
+            qwen3_vl_port: 8983,
+            bonsai_port: 8986,
+            llama_server_exe: PathBuf::from(r"G:\AI\llamacpp-taardis\build\bin\llama-server.exe"),
+            qwen3_vl_model: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf"),
+            qwen3_vl_mmproj: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf"),
+            bonsai_model: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\bonsai-ternary\Bonsai-27B-Q1_0.gguf"),
+            bonsai_mmproj: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\bonsai-ternary\Bonsai-27B-mmproj-Q8_0.gguf"),
+            avatar_model3: root.join(r"runtime\live2d\hiyori\Hiyori.model3.json"),
+            mic_prefer: "fifine".to_string(),
+            profile_script: root.join(r"scripts\run_integrated_profile.ps1"),
+        }
+    }
+}
 
 fn model_path() -> String {
-    std::env::var("JAWL_AVATAR_MODEL").unwrap_or_else(|_| MODEL_PATH_DEFAULT.to_string())
+    std::env::var("JAWL_AVATAR_MODEL").ok()
+        .or_else(|| Some(RuntimeConfig::load().avatar_model3.to_string_lossy().to_string()))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,16 +204,19 @@ fn run_mic(running: Arc<AtomicBool>) {
     if session.is_some() { println!("[companion] session established"); }
 
     let host = cpal::default_host();
-    // Prefer the owner's real microphone (fifine) over a virtual/headset
-    // default; fall back to the OS default when it's not present.
+    // Prefer the owner's real microphone (manifest mic_prefer) over a
+    // virtual/headset default; fall back to the OS default when absent.
+    let mic_prefer = RuntimeConfig::load().mic_prefer.to_lowercase();
     let device = {
         let mut chosen = host.default_input_device();
-        for d in host.input_devices().into_iter().flatten() {
-            if let Ok(name) = d.name() {
-                if name.to_lowercase().contains("fifine") {
-                    println!("[mic] selected device: {name}");
-                    chosen = Some(d);
-                    break;
+        if !mic_prefer.is_empty() {
+            for d in host.input_devices().into_iter().flatten() {
+                if let Ok(name) = d.name() {
+                    if name.to_lowercase().contains(&mic_prefer) {
+                        println!("[mic] selected device: {name}");
+                        chosen = Some(d);
+                        break;
+                    }
                 }
             }
         }
@@ -420,7 +552,7 @@ fn run_avatar() {
         let expr_idx: usize = args.get(pos + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
         let mouth: f32 = args.get(pos + 2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
         let out = args.get(pos + 3).cloned()
-            .unwrap_or_else(|| r"G:\AI\JAWL-VoiceCompanion\runtime\avatar-render.png".to_string());
+            .unwrap_or_else(|| RuntimeConfig::load().repo_root.join(r"runtime\avatar-render.png").to_string_lossy().to_string());
         // An explicit background after the output path (e.g. "0x00FF00" for an
         // OBS chroma frame test).
         let headless_bg = args.get(pos + 4)
@@ -627,7 +759,8 @@ fn run_all() {
     use std::process::{Child, Command, Stdio};
     use std::net::TcpStream;
 
-    println!("[launcher] starting full stack");
+    let cfg = RuntimeConfig::load();
+    println!("[launcher] repo={} profile={}", cfg.repo_root.display(), cfg.profile);
 
     let port_open = |port: u16| TcpStream::connect(("127.0.0.1", port)).is_ok();
     let spawn_hidden = |exe: &str, args: &[&str]| -> Option<Child> {
@@ -636,56 +769,63 @@ fn run_all() {
 
     let mut children: Vec<Child> = Vec::new();
 
-    // Qwen3-VL screen-watch describer (GPU1) on 8983 РІР‚вЂќ the only always-on
-    // vision model. Bonsai 27B was dropped from the default profile (ADR-040):
-    // it held 13 GB VRAM + 17 GB RAM for ~100 s/screenshot. Heavy analysis is
-    // manual via scripts\run_coding_server.ps1, not part of the stack.
-    if !port_open(8983) {
-        if let Some(c) = spawn_hidden(r"G:\AI\llamacpp-taardis\build\bin\llama-server.exe", &[
-            "--model", r"G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf",
-            "--alias", "qwen3-vl", "--host", "127.0.0.1", "--port", "8983",
+    // Qwen3-VL screen-watch describer on the manifest vision port — the only
+    // always-on vision model. Bonsai 27B was dropped from the default profile
+    // (ADR-040); heavy analysis stays manual via run_coding_server.ps1.
+    let vl_port = cfg.qwen3_vl_port;
+    let vl_exe = cfg.llama_server_exe.to_string_lossy().to_string();
+    let vl_model = cfg.qwen3_vl_model.to_string_lossy().to_string();
+    let vl_mmproj = cfg.qwen3_vl_mmproj.to_string_lossy().to_string();
+    if !port_open(vl_port) {
+        let args = [
+            "--model", &vl_model,
+            "--alias", "qwen3-vl", "--host", "127.0.0.1", "--port", &vl_port.to_string(),
             "--ctx-size", "8192", "--threads", "8", "-ngl", "99",
             "--no-webui", "--reasoning", "off",
-            "--mmproj", r"G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf",
-        ]) { children.push(c); println!("[launcher] qwen3-vl starting (8983)"); }
-    } else { println!("[launcher] qwen3-vl already up (8983)"); }
+            "--mmproj", &vl_mmproj,
+        ];
+        if let Some(c) = spawn_hidden(&vl_exe, &args) { children.push(c); println!("[launcher] qwen3-vl starting ({vl_port})"); }
+    } else { println!("[launcher] qwen3-vl already up ({vl_port})"); }
 
     // Wait for the vision server to accept connections before the profile.
-    for (name, port) in [("qwen3-vl", 8983u16)] {
+    {
         let deadline = std::time::Instant::now() + Duration::from_secs(120);
-        while !port_open(port) && std::time::Instant::now() < deadline {
+        while !port_open(vl_port) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(800));
         }
-        println!("[launcher] {} port {} {}", name, port, if port_open(port) { "up" } else { "TIMEOUT" });
+        println!("[launcher] qwen3-vl port {vl_port} {}", if port_open(vl_port) { "up" } else { "TIMEOUT" });
     }
 
-    // 3) Integrated profile (companion + JAWL + voice + relay)
-    if !port_open(2367) {
+    // Integrated profile (companion + JAWL + voice + relay) from the manifest.
+    if !port_open(cfg.control_port) {
+        let script = cfg.profile_script.to_string_lossy().to_string();
+        let prof_script = script.clone();
+        let current_dir = cfg.repo_root.clone();
         let prof = Command::new("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                r"G:\AI\JAWL-VoiceCompanion\scripts\run_integrated_profile.ps1",
-                "-ProfileName", "daily", "-StartLocalAudio", "-UseVoiceMem",
+                &prof_script,
+                "-ProfileName", &cfg.profile, "-StartLocalAudio", "-UseVoiceMem",
                 "-AsrBackend", "gigaam", "-TtsProvider", "tera", "-EnableProsodyPlanner",
                 "-EnableStreamingAsr", "-UseOpenCodeRelay", "-EnableScreenWatch",
                 "-EnableSensoryWorker", "-AmbientTriageSeconds", "300",
                 "-JawlModelOverride", "deepseek-v4-flash", "-StartupTimeoutSeconds", "420"])
-            .current_dir(r"G:\AI\JAWL-VoiceCompanion")
+            .current_dir(&current_dir)
             .spawn();
         match prof {
             Ok(c) => { children.push(c); println!("[launcher] integrated profile starting"); }
             Err(e) => eprintln!("[launcher] profile spawn failed: {e}"),
         }
-    } else { println!("[launcher] profile already up (2367)"); }
+    } else { println!("[launcher] profile already up ({})", cfg.control_port); }
 
     // Report readiness, then keep the window alive until Ctrl+C.
     let deadline = std::time::Instant::now() + Duration::from_secs(420);
-    while !port_open(2367) && std::time::Instant::now() < deadline {
+    while !port_open(cfg.control_port) && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_secs(2));
     }
-    if port_open(2367) {
-        println!("[launcher] READY РІР‚вЂќ control http://127.0.0.1:2367  avatar http://127.0.0.1:8766/avatar");
+    if port_open(cfg.control_port) {
+        println!("[launcher] READY — control http://127.0.0.1:{control}  avatar http://127.0.0.1:{pres}/avatar", control = cfg.control_port, pres = cfg.presentation_port);
     } else {
-        println!("[launcher] profile did not open 2367 in time; check logs in runtime\\instances\\daily\\logs");
+        println!("[launcher] profile did not open {} in time; check logs", cfg.control_port);
     }
     println!("[launcher] hold this window open to keep the stack alive; Ctrl+C to stop");
 
@@ -713,7 +853,8 @@ fn run_webview() {
     use wry::WebViewBuilder;
 
     // The presentation origin serves /avatar with no control privileges.
-    let url = std::env::args().nth(2).unwrap_or_else(|| "http://127.0.0.1:8766/avatar".to_string());
+    let pres_port = RuntimeConfig::load().presentation_port;
+    let url = std::env::args().nth(2).unwrap_or_else(|| format!("http://127.0.0.1:{pres_port}/avatar"));
     println!("[webview] avatar window -> {url}");
 
     let event_loop = EventLoop::new();
