@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-09-19 - UI поворот: интерфейс жизни с компаньоном (ADR-041)
+
+- E1: 4 раздела (Компаньон/Задачи/Память/Настройки), глобальный life rail
+  (состояние · восприятие · effective access · аварийная остановка), бренд
+  «Компаньон» вместо «Control center».
+- E2: home = сцена+диалог 60/40, убраны stat-grid и dashboard-язык.
+- E3: раздел «Задачи» рендерит live-планы из журнала (действия с ✓/✗),
+  без chain-of-thought.
+- E4: память человекочитаемая («[Факт] subject: predicate — value» +
+  свёрнутые «Подробнее»), журнал автономности перенесён в Задачи. Починен
+  баг: null `#level` обрывал refresh (память не рендерилась).
+- E5: единая вкладка Настройки с подразделами; старые панели
+  voice/perception/access/system/jawl удалены (no duplicate ids в DOM).
+- E6: мобильная bottom navigation (4 колонки, fixed).
+- ADR-041 записан: Product Core поверх engines (цельность ≠ монолитность),
+  этапы Product API → runtime supervisor → selective absorption.
+- Все срезы live-проверены в headless Edge; JS синтаксис и дубли id зелёные.
+
 ## 2026-09-18 - Phase D: native avatar quality pass (D2-D5)
 
 - **D1 finding**: Mocari (pure-Rust Cubism runtime) does not apply moc3 v5

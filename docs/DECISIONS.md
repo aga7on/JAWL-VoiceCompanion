@@ -605,6 +605,42 @@ on the first screen delta with an honest "waking" state, not a masked one.
 Quantization is allowed only through the MULTIMODAL_MODEL_GATE mini-bench
 (IQ2/IQ1 need the F16+imatrix path); the earlier Q1 Bonsai failure stands.
 Target profile: <= 8 GB RAM, ~14 GB VRAM. 20 GB is a ceiling, not the norm.
+## ADR-041 — Product Core поверх engines (цельность, не монолитность)
+
+Status: Accepted
+Date: 2026-09-19
+Owner: владелец (сформулировано в диалоге)
+
+JAWL Companion — ОДНА программа с каноническими сущностями продукта;
+JAWL, VoiceMem, ASR/TTS/VLM и Mocari — реализации (engines), а не
+архитектурные уровни. Историческое происхождение фрагмента кода не имеет
+вечного архитектурного значения.
+
+Канонические сущности: Conversation, Task, Memory, Perception, Presence,
+Character, Capability, Runtime. Остальной код не обращается напрямую к
+адаптерам (JawlWebAdapter, VoiceMemAdapter, провайдерам), а — к сервисам;
+Memory выделяет один `memory.recall(...)` интерфейс, внутренние backends
+(JAWL durable, VoiceMem retrieval, timeline, sensory buffers) выбирает
+подсистема. События нормализуются на входе: один внутренний язык
+(Observation, TurnEvent, ActionEvent, SpeechEvent, ChatEvent, AvatarState),
+VoiceMem/JAWL/TTS не создают «своих» событий.
+
+Физически: одна программа ≠ один процесс. Keep process boundaries ради
+изоляции тяжёлых зависимостей/GPU/надёжности, но они невидимы пользователю
+и управляются runtime supervisor (один launcher, endpoint discovery,
+restart/budgets). Порты — внутренняя деталь. Пользователь видит «её память,
+её разговор, её задачу, её состояние», а не «память JAWL» / «состояние
+Companion» / «сессию ASR».
+
+Этапы (не massive rewrite): (1) Product API — канонические сервисные
+интерфейсы вместо прямых вызовов адаптеров; (2) runtime supervisor —
+один executable управляет всеми workers, без ручных портов и .ps1-цепочек;
+(3) selective absorption — через месяцы смотреть по каждому sidecar: если от
+framework реально остались единицы % функциональности — переносить их в core
+и удалять dependency; если framework делает сложную полезную работу — держать
+как невидимый engine. UI-поворот (4 раздела, отсутствие имён движков в
+интерфейсе) — первый шаг этого пути.
+
 ## ADR-040 — Bonsai removed from the default profile
 
 Status: Accepted
