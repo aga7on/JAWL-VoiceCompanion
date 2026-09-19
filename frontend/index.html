@@ -212,8 +212,12 @@
       .brand-mark { width: 32px; height: 32px; border-radius: 10px; }
       .top-actions { max-width: 42%; font-size: 10px; }
       .status-pill { padding: 5px 8px; font-size: 10px; }
-      .sidebar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; border-radius: 15px; }
-      .nav-item { font-size: 12px; padding: 6px; }
+      /* Mobile: the sidebar becomes a fixed bottom navigation bar. */
+      .layout { margin-top: 8px; margin-bottom: calc(64px + env(safe-area-inset-bottom)); }
+      .sidebar { position: fixed; left: 6px; right: 6px; bottom: 4px; z-index: 40; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; border-radius: 18px; padding: 6px; margin: 0; box-shadow: 0 -4px 24px rgba(32,94,84,.22); }
+      .nav-item { font-size: 12px; padding: 9px 4px; display: flex; flex-direction: column; gap: 3px; }
+      .nav-item .nav-icon { font-size: 16px; }
+      .nav-label, .sidebar-foot { display: none; }
       .page-heading { gap: 8px; align-items: center; margin-bottom: 10px; }
       .page-heading h2 { font-size: 20px; margin: 0; }
       .page-heading .eyebrow, [data-panel="home"] > .page-heading p { display: none; }
