@@ -1,5 +1,109 @@
 # Repository Research
 
+## 2026-09-19 — R2T2 (Confucius4-R2T2): true-streaming ASR кандидат
+
+Запрос владельца: r2t2.ai — тестировать. Модель от NetEase Youdao.
+
+**Что это:** open-source **true streaming ASR** (Real Real-Time Transcription) на
+базе **Qwen3-ASR-1.7B**. Append-only вывод: текст коммитится по мере речи и
+**никогда не перезаписывается** (Longest Stable Prefix) — 200–600 мс latency,
+chunk 80 мс–2 с настраивается. Это ровно закрывает две известные проблемы
+нашего ASR-контура: «фраза отправляется до того, как я её договорил» и «слов
+в транскрипте меньше, чем я сказал» — за счёт инкрементальности и стабильности.
+
+**Code:** Apache 2.0. **Weights:** NetEase Model Use License Agreement
+(ограничения: >100M MAU / >1 млрд ¥ — нужен отдельный license §2.2; §3.4(c) —
+нельзя использовать для улучшения AI-моделей кроме R2T2/non-commercial;
+юрисдикция КНР, zh-версия преобладает §6/§9). Для локального личного
+использования приемлемо; для закрытого коммерческого продукта — юридическая
+зона внимания.
+
+**Backends:** vLLM (рекомендован, требует CUDA+PyTorch матрицу) или
+transformers; есть готовый WebSocket-сервер (`ws_server.py`, порт 8272,
+`/asr_stream_api_v1`: PCM 16k mono int16 → incremental JSON text). Python 3.12.
+
+**Языки:** оптимизирован под Chinese/English; русский — в списке
+«cross-lingual» (retains useful capability) БЕЗ опубликованной оценки.
+Это ключевой риск: наш контур русский, канонический ASR — GigaAM v3
+(crispasr, batch-final), Qwen3-ASR-0.6B — опциональный фолбэк.
+
+**Бенчи** (по их таблицам): R2T2 160 мс ≈ Qwen3-ASR offline 2 с с небольшим
+проигрышем (AMI 9.25→11.37, LS-clean 1.67→2.13, SPGI 2.90→3.00) — отличный
+trade-off за 20× меньшую латентность, но цифр по-русски нет.
+
+**План проверки (gate, без зряшного скачивания 4–8 ГБ):**
+1. RU-фикстура: маленький русский WAV → hosted demo r2t2.youdao.com/demo
+   с русским промптом (бесплатно). Если качество по-русски слабое → REJECT
+   по RU_NATURAL_SPEECH_ASR, как с Qwen3-ASR-0.6B было.
+2. Если RU приемлемо → целевая связка, повторяющая текущий путь:
+   **R2T2 = streaming partials** (инкрементальные коммиты в `/api/ws`),
+   **GigaAM = final** (batch over buffered utterance). Та же архитектура, что
+   уже есть (streaming_asr + giga_final), но streaming-слой с append-only
+   стабильностью вместо rollback-партиалов.
+3. License + RU вывод зафиксировать здесь же.
+
+## 2026-09-19 — R2T2 RU-smoke: заблокирован перегруженным демо
+
+Hosted demo (`r2t2.youdao.com/demo` и HF Space `netease-youdao/confucius4-r2t2-demo`)
+стабильно отдаёт `event: error, {"error": null}` **даже на собственном английском
+семпле** (`librispeech_sample.wav`) — GPU-слот ZeroGPU не выделяется («heavy loads»
+на странице демо). Это не про наш русский WAV, а про недоступность инференса.
+RU-качество R2T2 **НЕ проверено**. Локальная проверка требует vLLM/transformers
+env + 4 ГБ весов (Python 3.12) — по гейту не ставится до RU-smoke. Статус:
+**pending — повторить демо позже / локальный RU-smoke после решения по env.**
+
+## 2026-09-19 — Laya: System-1 decision engine (routing перед LLM)
+
+Запрос владельца: laya.convaiinnovations.com — изучить.
+
+**Что это:** не-авторегрессионная **System-1 decision model** Family от ConvAI
+Innovations (открытая альтернатива закрытому Jev от TypeSafe AI). Один forward
+pass, **никакой text generation** — только вероятности по структурированным
+схемам (нечему галлюцинировать, malformed JSON невозможны). Три примитива:
+`choice` (выбор из критериев, распределение по всем опциям + калиброванная
+уверенность), `score` (ординальная шкала), `noul` (P(true)/P(false)).
+Латентность **32.8 мс/вопрос** на GPU (7.2 мс batched) — 6–8× быстрее Jev,
+0$ inference, Apache-2.0, commercial-use.
+
+**Чекпойнты (HF `convaiinnovations/`):**
+- `laya` — ModernBERT-large 421M, ctx 512, English (triage/guardrails/email);
+- `laya-multilingual` — mmBERT-base 322M, ctx 1024, **100+ языков, русский в
+  списке**, 2.2× быстрее — «use this for anything that is not English»;
+- `laya-typed-decisions` — ModernBERT-large 421M, ctx 1024, agent workflows.
+
+**Router:** авто-выбор чекпойнта по скрипту ввода (ru → multilingual),
+`preload` нескольких — потом только forward passes.
+
+**Кейс для нас:** System-1 слой ДО глубокого LLM — routing темы сообщения
+(задача/вопрос/поручение), фильтр спама/jailbreak, эмоция — за ~30 мс локально,
+с калиброванной уверенностью, без токенов и без жёсткого ожидания LLM.
+Загрузка: `runtime/models/laya-multilingual` (snapshot скачан). Требует
+`pip install laya` + transformers; RU-смок на наших фикстурах — следующий шаг.
+
+## 2026-09-19 — Needle 3: крошечный tool-calling субагент
+
+Запрос владельца: найти и скачать needle 3 — кандидат субагента для связей.
+
+**Cactus-Compute/needle3** (Apache-2.0, 36k downloads): **микро-модель
+function-calling** для on-device/edge (мобилки, роботы, edge). Не генеративный
+чат: выбирает инструменты и заполняет аргументы из фразы, один JSON
+`function_calls` + `reasoning` + калиброванная `confidence`; запрос вне
+покрытия → пустой список (не догадка). Есть structured extraction и embedding.
+Arch: Laddered Simple Attention Network (GQA + Monarch MLP + engram n-gram),
+121M params; `needle3.cact` (2-бит, 33.7 MB) + движок на платформу
+(`windows-x86_64/needle.exe` 1.2 MB) + safetensors 230.8 MB для fine-tune.
+
+**CLI (в README):** `needle --model needle3.cact --tools tools.json --prompt "..."`;
+`--serve` — режим сервера. Confidence позволяет act/confirm/refuse. Fine-tune:
+LoRA + `needle build --layers N` (субсеть 2–20 слоёв, от 29M параметров).
+
+**Кейс для нас:** локальный tool-caller в swarm — выбор native-инструмента IAWL
+по фразе (связка с hostos/native policy), экономия LLM-токенов, офлайн.
+Скачано в `runtime/models/needle3/` (exe, .cact 33.7 MB, header, config,
+tokenizer, LICENSE, README). **RU-качество не заявлено/не проверено** — нужен
+RU-смок; если русский слаб → только английский tool-path или REJECT для
+RU-контура (как с другими EN-only кандидатами).
+
 ## 2026-09-17 — LFM2.5-Audio-1.5B: пригодность для русского голосового дуплекса
 
 Запрос владельца: проверить поддержку русского, наличие русских файнтюнов,
