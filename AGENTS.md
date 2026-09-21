@@ -34,9 +34,11 @@ JAWL: личность, Heartbeat/ReAct, долговременная памят
 - TeraTTSv2 (ru_f1, 9889) — текущий основной синтез; prosody planner (gemma-3-1b,
   8987) опционален и может быть отключён ради меньшей задержки голоса.
   Qwen3-TTS остаётся желаемым исследовательским направлением, но не активным кодом.
-- GigaAM v3 (crispasr, batch final + streaming partials) — канонический ASR;
-  Qwen3-ASR — необязательный фолбэк (не стартует по умолчанию). ASR не описывает
-  музыку/тембр/настроение без отдельно проверенной capability.
+- GigaAM v3 (crispasr, batch final + streaming partials) — **единственный** ASR
+  движок (решение владельца 2026-09-21: фолбэк не нужен). Provider-путь
+  `--asr-url/--asr-model`, бэкенды Qwen3-ASR/whisper и «fallback lane» удалены;
+  буфер реплики (`UtteranceBuffer`) — часть ядра, а не второй движок.
+  ASR не описывает музыку/тембр/настроение без отдельно проверенной capability.
 - Постоянное зрение работает: Bonsai (8986) + screen-watch + PerceptionFusion.
   Bonsai поднимать до профиля (`scripts\run_coding_server.ps1`); тяжёлые
   vision-модели в остальном не менять без решения владельца.

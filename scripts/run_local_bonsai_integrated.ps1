@@ -4,7 +4,6 @@ param(
     [int]$ControlPort = 2467,
     [int]$PresentationPort = 8866,
     [int]$TtsPort = 9989,
-    [int]$AsrPort = 9984,
     [switch]$RunBrowserVoiceE2E
 )
 
@@ -29,7 +28,7 @@ try {
     }
     if (-not $ready) { throw 'Local Bonsai did not become healthy.' }
     $env:LLM_API_URL = 'http://127.0.0.1:8990/v1'
-    $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,'-AsrPort',$AsrPort)
+    $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort)
     if ($RunBrowserVoiceE2E) {
         $voiceWavs = @((Join-Path $repo 'runtime\synthetic-questions\question-01.wav'), (Join-Path $repo 'runtime\synthetic-questions\question-02.wav'), (Join-Path $repo 'runtime\synthetic-questions\question-03.wav'))
         & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\run_integrated_profile.ps1') @integratedArgs -RunBrowserVoiceE2E -BrowserVoiceWav $voiceWavs
@@ -51,7 +50,7 @@ try {
         model = $model
         llm_url = 'http://127.0.0.1:8990/v1'
         ports = [ordered]@{ jawl_console = $JawlConsolePort; control = $ControlPort; presentation = $PresentationPort; llm = 8990; asr = $AsrPort; tts = $TtsPort }
-        components = @('owned-jawl', 'local-qwen3-vl-2b', 'qwen3-asr-0.6b', 'TeraTTSv2', 'voicemem')
+        components = @('owned-jawl', 'local-qwen3-vl-2b', 'gigaam-v3', 'TeraTTSv2', 'voicemem')
         evidence_scope = 'startup-health-shutdown only; no user-turn or browser-ASR acceptance'
     }
     $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $report -Encoding utf8

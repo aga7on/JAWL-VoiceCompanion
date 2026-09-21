@@ -2,9 +2,9 @@
 
 Generates tempo-slow, paused, quiet, noisy, phrase-end and consecutive-phrase
 variants of a source utterance using only the Python stdlib. The produced
-cases.json manifest is consumed by run_asr_profile --expects so the synthetic
-ASR profile can distinguish speech that must be transcribed from tolerated
-no-speech inputs.
+cases.json manifest records the per-case expectation (must_transcribe/min_chars)
+next to each generated WAV, so a live capture over these cases can tell speech
+that must be transcribed from tolerated no-speech inputs.
 """
 
 from __future__ import annotations

@@ -11,7 +11,6 @@
     "opencode_relay": 8891,
     "qwen3_vl": 8983,
     "bonsai_coding": 8986,
-    "asr": 8984,
     "tera_tts": 9889
   },
   "models": {

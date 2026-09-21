@@ -166,7 +166,7 @@ class LanSecurityTests(unittest.TestCase):
             try:
                 with urlopen(Request(base + "/", headers=auth), context=context, timeout=2) as response:
                     self.assertEqual(response.status, 200)
-                    self.assertIn(b"JAWL VoiceCompanion", response.read())
+                    self.assertIn(b"VoiceCompanion", response.read())
 
                 with urlopen(Request(base + "/api/session", headers=auth), context=context, timeout=2) as response:
                     session = json.loads(response.read().decode("utf-8"))

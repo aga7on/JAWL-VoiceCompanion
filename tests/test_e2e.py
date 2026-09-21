@@ -20,7 +20,7 @@ from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
 from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge, AmbientAudioService  # noqa: E402
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler  # noqa: E402
-from jawl_voicecompanion.asr import ExternalASRService, OpenAICompatibleASRClient  # noqa: E402
+from jawl_voicecompanion.asr import UtteranceBuffer  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
@@ -90,39 +90,22 @@ class _TTSHandler(BaseHTTPRequestHandler):
         return
 
 
-class _ASRHandler(BaseHTTPRequestHandler):
-    requests = []
+class _StubGigaamTranscriber:
+    """Stand-in for the canonical GigaAM batch transcriber (``giga_final.py``).
 
-    def do_GET(self):  # noqa: N802 - stdlib handler API
-        if self.path != "/health":
-            self.send_error(404)
-            return
-        body = b'{"status":"ok"}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    GigaAM (crispasr file mode) is the only ASR engine, so the browser voice lane
+    must hand one WAV per finished utterance to it. This stub records the WAV it
+    received instead of spawning crispasr.
+    """
 
-    def do_POST(self):  # noqa: N802 - stdlib handler API
-        if self.path != "/v1/audio/transcriptions":
-            self.send_error(404)
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length)
-        _ASRHandler.requests.append(body)
-        response = json.dumps({
-            "type": "transcript.text.done",
-            "text": "language Russian<asr_text>ASR E2E фраза.</asr_text>",
-        }, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(response)))
-        self.end_headers()
-        self.wfile.write(response)
+    text = "ASR E2E фраза."
 
-    def log_message(self, format, *args):
-        return
+    def __init__(self):
+        self.wavs = []
+
+    def transcribe(self, wav_bytes):
+        self.wavs.append(wav_bytes)
+        return self.text
 
 
 class _JawlWebHandler(BaseHTTPRequestHandler):
@@ -172,6 +155,12 @@ class _JawlControlHandler(BaseHTTPRequestHandler):
     calls = []
 
     def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.path == "/api/agent/status":
+            # The product polls the agent status after a HostOS level change
+            # (stop -> wait -> start). Without this route the wait loop runs its
+            # full 30 s budget and the client's 3 s timeout fires first.
+            self._reply({"ok": True, "running": False})
+            return
         if self.path != "/api/config":
             self.send_error(404)
             return
@@ -1526,10 +1515,7 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual([event["type"] for event in flushed["events"]], ["VOICE_TURN"])
         self.assertEqual(flushed["responses"][0]["text"], "JAWL E2E: аудио")
 
-    def test_external_asr_final_utterance_reaches_voicemem_and_chat(self):
-        provider = ThreadingHTTPServer(("127.0.0.1", 0), _ASRHandler)
-        _ASRHandler.requests = []
-        threading.Thread(target=provider.serve_forever, daemon=True).start()
+    def test_gigaam_final_utterance_reaches_voicemem_and_chat(self):
         policy = HostOSPolicy()
         gateway = TextGateway(policy=policy, responder=self.jawl_adapter, brain_name="e2e_asr")
         executor = HostOSExecutor(
@@ -1540,11 +1526,10 @@ class LocalE2ETests(unittest.TestCase):
             dry_run=False,
         )
         voice_mem = VoiceMemProcessClient(sys.executable, args=("--test-stub",), timeout_seconds=2)
-        asr = ExternalASRService(OpenAICompatibleASRClient(
-            f"http://127.0.0.1:{provider.server_port}/v1",
-            "Qwen3-ASR-0.6B",
-            timeout_seconds=2,
-        ))
+        # GigaAM (crispasr file mode) is the only ASR engine: the voice lane buffers
+        # the browser PCM16 and transcribes it once with the injected transcriber.
+        transcriber = _StubGigaamTranscriber()
+        asr = UtteranceBuffer(transcriber)
         server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
@@ -1573,9 +1558,11 @@ class LocalE2ETests(unittest.TestCase):
         try:
             _, status = self._get_json_from(base, "/api/voice/status", headers)
             self.assertEqual(status["mode"], "external_final_utterance")
-            self.assertEqual(status["asr"]["mode"], "final_utterance")
+            self.assertTrue(status["asr"]["configured"])
+            self.assertEqual(status["asr"]["engine"], "gigaam")
+            self.assertEqual(status["asr"]["mode"], "gigaam_final")
             _, buffered = post("/api/voice/audio", {
-                "session_id": "external-s1",
+                "session_id": "gigaam-s1",
                 "sample_rate": 16000,
                 "channels": 1,
                 "pcm16_base64": base64.b64encode(b"\x01\x00" * 1600).decode("ascii"),
@@ -1583,18 +1570,23 @@ class LocalE2ETests(unittest.TestCase):
             self.assertEqual(buffered["mode"], "external_final_utterance")
             self.assertEqual(buffered["events"], [])
             self.assertEqual(buffered["buffer"]["bytes"], 3200)
+            self.assertEqual(buffered["buffer"]["mode"], "gigaam_final")
+            self.assertEqual(transcriber.wavs, [], "an unfinished utterance is not transcribed")
 
-            _, finished = post("/api/voice/end", {"session_id": "external-s1"})
+            _, finished = post("/api/voice/end", {"session_id": "gigaam-s1"})
             self.assertEqual(finished["transcript"], "ASR E2E фраза.")
             self.assertEqual([event["type"] for event in finished["events"]], ["USER_PARTIAL", "VOICE_TURN"])
             self.assertEqual(finished["responses"][0]["text"], "JAWL E2E: ASR E2E фраза.")
-            self.assertTrue(_ASRHandler.requests)
-            self.assertIn(b"Qwen3-ASR-0.6B", _ASRHandler.requests[0])
+            # The buffered browser PCM actually reached the ASR engine, as one WAV.
+            self.assertEqual(len(transcriber.wavs), 1)
+            with wave.open(io.BytesIO(transcriber.wavs[0]), "rb") as wav_file:
+                self.assertEqual(wav_file.getnchannels(), 1)
+                self.assertEqual(wav_file.getframerate(), 16000)
+                self.assertEqual(wav_file.readframes(wav_file.getnframes()), b"\x01\x00" * 1600)
+            self.assertEqual(asr.state()["active_sessions"], 0)
         finally:
             server.shutdown()
             server.server_close()
-            provider.shutdown()
-            provider.server_close()
 
     @staticmethod
     def _get_json_from(base, path, headers):

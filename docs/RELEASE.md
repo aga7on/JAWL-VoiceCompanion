@@ -111,7 +111,8 @@ TeraTTSv2 — быстрый CPU профиль рядом:
 .\scripts\run_web.ps1 --jawl-web-url http://127.0.0.1:8770 --jawl-hostos-control `
   --voicemem-python 'G:\AI\VoiceMem\.venv\Scripts\python.exe' `
   --voicemem-local-memory --voicemem-warmup text `
-  --asr-url http://127.0.0.1:8984/v1 --asr-model Qwen3-ASR-0.6B `
+  --streaming-asr --streaming-asr-exe 'G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe' `
+  --streaming-asr-model 'G:\AI\VLM-RealTime-Bench\models\gigaam\gigaam-v3-e2e-rnnt-q8_0.gguf' `
   --tts-url http://127.0.0.1:9890 --tts-provider qwen
 ```
 

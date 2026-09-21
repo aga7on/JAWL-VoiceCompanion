@@ -28,7 +28,7 @@ from uuid import uuid4
 from .approvals import ApprovalStore
 from .ambient_audio import AmbientAudioDisabled, AmbientAudioService, PlaybackSuppression
 from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
-from .asr import ASRUnavailable, ExternalASRService
+from .asr import UtteranceBuffer
 from .audit import AuditLog
 from .attention import AttentionPresence
 from .avatar import AvatarAssetStore
@@ -82,15 +82,13 @@ def is_loopback_host(host: str) -> bool:
 
 
 # ASR hallucination on noise/silence must never become a user turn: the model
-# can echo its own transcription prompt, emit single filler characters, switch
-# to a foreign script (throat clearing turns into CJK filler characters) or
-# just stutter one character many times on keyboard noise. These are technical
-# artifacts, not user speech.
-_ASR_PROMPT_ECHO_MARKERS = ("transcribe the audio exactly as spoken", "транскрибируй аудио")
+# can emit single filler characters, switch to a foreign script (keyboard noise
+# turns into CJK filler characters) or just stutter one character many times.
+# These are technical artifacts, not user speech.
 _MIN_MEANINGFUL_TRANSCRIPT_CHARS = 2
 
-# CJK/Hangul ranges: a Russian transcription should never contain these. When
-# Qwen3-ASR receives non-speech noise it often switches languages and emits CJK
+# CJK/Hangul ranges: a Russian transcription should never contain these. When an
+# ASR engine receives non-speech noise it can switch languages and emit CJK
 # filler characters ("嗯嗯嗯"), which is a hard technical-artifact signal.
 _ASR_FOREIGN_SCRIPT_RANGES = (
     (0x2E80, 0x2EFF),  # CJK Radicals Supplement
@@ -122,9 +120,6 @@ def is_meaningful_transcript(text: str) -> bool:
     if len(cleaned) < _MIN_MEANINGFUL_TRANSCRIPT_CHARS:
         return False
     lowered = cleaned.casefold()
-    for marker in _ASR_PROMPT_ECHO_MARKERS:
-        if re.sub(r"[\W_]+", "", marker, flags=re.UNICODE).casefold() in lowered:
-            return False
     if _contains_foreign_script(cleaned):
         # Russian speech never contains CJK/Hangul; this is an ASR language
         # switch on noise (throat clearing, keyboard, silence).
@@ -297,7 +292,7 @@ class CompanionServer(ThreadingHTTPServer):
         ambient_scheduler: AmbientTriageScheduler | None = None,
         jawl_hostos_control: bool = False,
         audit_log: AuditLog | None = None,
-        asr_service: ExternalASRService | None = None,
+        asr_service: UtteranceBuffer | None = None,
         streaming_asr: Any | None = None,
         gigaam_transcriber: Any | None = None,
     helper_urls: dict[str, str] | None = None,
@@ -1099,41 +1094,53 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"configured": False, "status": "not_configured"})
                 return
             try:
+                # Canonical Product API routes carry the service envelope; the
+                # legacy /api/jawl/* aliases keep their original response shape
+                # byte-for-byte, because they are a compatibility contract.
                 if path in ("/api/jawl/status", "/api/runtime/status"):
                     if adapter is None:
                         self._json({"configured": False, "status": "not_configured"})
                         return
-                    self._json({
-                        "ok": True,
-                        "schema_version": 1,
-                        "service": "runtime",
-                        "configured": True,
-                        "status": adapter.status(),
-                    })
+                    status = adapter.status()
+                    if path == "/api/runtime/status":
+                        self._json({
+                            "ok": True,
+                            "schema_version": 1,
+                            "service": "runtime",
+                            "configured": True,
+                            "status": status,
+                        })
+                    else:
+                        self._json({"configured": True, "status": status})
                 elif path in ("/api/jawl/memory", "/api/memory"):
                     if adapter is None:
                         self._json({"configured": False, "status": "not_configured"})
                         return
-                    self._json({**adapter.memory(), "service": "memory"})
+                    payload = adapter.memory()
+                    self._json({**payload, "service": "memory"} if path == "/api/memory" else payload)
                 elif path in ("/api/jawl/persona", "/api/character"):
                     if adapter is None:
                         self._json({"configured": False, "status": "not_configured"})
                         return
-                    self._json({**adapter.persona(), "service": "character"})
+                    payload = adapter.persona()
+                    self._json({**payload, "service": "character"} if path == "/api/character" else payload)
                 elif path in ("/api/jawl/hostos", "/api/capabilities"):
-                    if adapter is None:
+                    if path == "/api/capabilities":
+                        if adapter is None:
+                            self._json({
+                                "service": "capabilities",
+                                "configured": False,
+                                "status": "not_configured",
+                                "control_enabled": self.server.jawl_hostos_control,
+                            })
+                            return
                         self._json({
                             "service": "capabilities",
-                            "configured": False,
-                            "status": "not_configured",
                             "control_enabled": self.server.jawl_hostos_control,
+                            **adapter.hostos(),
                         })
-                        return
-                    self._json({
-                        "service": "capabilities",
-                        "control_enabled": self.server.jawl_hostos_control,
-                        **adapter.hostos(),
-                    })
+                    else:
+                        self._json({**adapter.hostos(), "control_enabled": self.server.jawl_hostos_control})
                 elif path in ("/api/jawl/journal", "/api/tasks"):
                     values = parse_qs(
                         urlsplit(self.path).query, keep_blank_values=True
@@ -1166,7 +1173,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     if adapter is None:
                         self._json({"configured": False, "status": "not_configured"})
                         return
-                    self._json({**adapter.autonomy_journal(limit=limit, state=state), "service": "tasks"})
+                    payload = adapter.autonomy_journal(limit=limit, state=state)
+                    self._json({**payload, "service": "tasks"} if path == "/api/tasks" else payload)
                 else:
                     self._json(adapter.overview())
             except JawlWebUnavailable as exc:
@@ -1344,43 +1352,30 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json(self._feed_voice_chunk(payload))
                 return
             if self.path == "/api/voice/draft":
-                if self.server.asr is None and self.server.streaming_asr is None:
-                    self._json({"ok": False, "draft": "", "error": "ASR is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                if self.server.streaming_asr is None:
+                    # Partials have exactly one owner: the CrispASR streaming
+                    # bridge. Without it there is no draft lane at all - the
+                    # removed provider re-transcription of the buffer was a
+                    # second representation of the same speech.
+                    self._json({"ok": True, "draft": "", "mode": "unavailable"})
                     return
-                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
-                # Streaming lane first: sub-second partials + adaptive endpoint
-                # policy. Falls back to the slower draft re-transcription.
-                if self.server.streaming_asr is not None:
-                    snapshot = self.server.streaming_asr.snapshot()
-                    text = str(snapshot.get("text") or "").strip()
-                    if snapshot.get("active") and text:
-                        if not is_meaningful_transcript(text):
-                            self._json({"ok": True, "draft": "", "mode": "streaming", "hold": False,
-                                        "silence_ms": snapshot.get("silence_ms"), "required_ms": turn_policy.BASE_SILENCE_MS})
-                            return
-                        decision = turn_policy.decide(text, float(snapshot.get("silence_ms") or 0.0))
-                        self._json({
-                            "ok": True, "draft": text, "mode": "streaming",
-                            "hold": bool(decision["hold"]),
-                            "silence_ms": snapshot.get("silence_ms"),
-                            "required_ms": decision["required_ms"],
-                        })
+                # Streaming lane: sub-second partials + adaptive endpoint policy.
+                snapshot = self.server.streaming_asr.snapshot()
+                text = str(snapshot.get("text") or "").strip()
+                if snapshot.get("active") and text:
+                    if not is_meaningful_transcript(text):
+                        self._json({"ok": True, "draft": "", "mode": "streaming", "hold": False,
+                                    "silence_ms": snapshot.get("silence_ms"), "required_ms": turn_policy.BASE_SILENCE_MS})
                         return
-                if self.server.asr is None:
-                    self._json({"ok": True, "draft": "", "mode": "streaming"})
+                    decision = turn_policy.decide(text, float(snapshot.get("silence_ms") or 0.0))
+                    self._json({
+                        "ok": True, "draft": text, "mode": "streaming",
+                        "hold": bool(decision["hold"]),
+                        "silence_ms": snapshot.get("silence_ms"),
+                        "required_ms": decision["required_ms"],
+                    })
                     return
-                try:
-                    draft = self.server.asr.draft(session_id)
-                except Exception as exc:  # noqa: BLE001 - drafts never break capture
-                    self._json({"ok": False, "draft": "", "error": str(exc)[:300]})
-                    return
-                text = str(draft.get("text") or "").strip()
-                if not is_meaningful_transcript(text):
-                    self._json({"ok": True, "draft": "", "mode": "external_final_utterance"})
-                    return
-                decision = turn_policy.decide(text, 0.0)
-                self._json({"ok": True, "draft": text, "mode": "external_final_utterance",
-                            "hold": bool(decision["hold"]), "required_ms": decision["required_ms"]})
+                self._json({"ok": True, "draft": "", "mode": "streaming"})
                 return
             if self.path == "/api/voice/preface":
                 # A short provisional phrase (no LLM) that can be spoken while
@@ -1823,8 +1818,6 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
         except VoiceMemUnavailable as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
-        except ASRUnavailable as exc:
-            self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except AmbientAudioDisabled as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
         except SystemAudioUnavailable as exc:
@@ -2096,39 +2089,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             return {"ok": False, "error": "VoiceMem sidecar is not configured"}
         session_id = str(payload.get("session_id") or self.server.session_token)[:200]
         if self.server.asr is not None:
-            batch_text = ""
-            transcriber = getattr(self.server, "gigaam_transcriber", None)
-            if transcriber is not None:
-                wav_bytes = b""
-                try:
-                    wav_bytes = self.server.asr.to_wav(session_id)
-                except Exception:  # noqa: BLE001 - batch lane is an accelerator
-                    wav_bytes = b""
-                if wav_bytes:
-                    # Free the live buffer before the (possibly slow) batch
-                    # transcription: a resumed (interjecting) utterance keeps
-                    # buffering in the same session and must never be dropped
-                    # by a late discard from this request.
-                    try:
-                        self.server.asr.discard(session_id)
-                    except Exception:
-                        pass
-                    try:
-                        batch_text = str(transcriber.transcribe(wav_bytes) or "").strip()[:12_000]
-                    except Exception:  # noqa: BLE001
-                        batch_text = ""
-            if batch_text and is_meaningful_transcript(batch_text):
-                # GigaAM (Sber) file-mode transcription of the complete
-                # buffered utterance: measured faster and more accurate than
-                # the Qwen fallback; the buffer was already dropped above.
-                transcription = {"status": "transcribed", "text": batch_text}
-                asr_source = "gigaam"
-            else:
-                try:
-                    transcription = self.server.asr.finish(session_id)
-                except Exception as exc:  # noqa: BLE001 - the fallback lane may be offline
-                    return {"ok": False, "error": f"ASR fallback failed: {type(exc).__name__}"}
-                asr_source = "qwen"
+            # GigaAM (crispasr file mode) is the canonical and only ASR engine:
+            # the buffered utterance goes straight to it, and a failure is
+            # reported instead of being masked by a second engine.
+            try:
+                transcription = self.server.asr.finish(session_id)
+            except Exception as exc:  # noqa: BLE001 - bounded failure report
+                return {"ok": False, "error": f"ASR unavailable: {type(exc).__name__}"}
+            asr_source = "gigaam"
+            if transcription.get("status") in {"unavailable", "failed"}:
+                return {
+                    "ok": False,
+                    "error": str(transcription.get("error") or "ASR unavailable")[:300],
+                }
             if self.server.streaming_asr is not None:
                 try:
                     self.server.streaming_asr.reset_utterance()
@@ -2594,7 +2567,7 @@ def create_server(
     resource_governor: ResourceGovernor | None = None,
     jawl_hostos_control: bool = False,
     audit_file: Path | None = None,
-    asr_service: ExternalASRService | None = None,
+    asr_service: UtteranceBuffer | None = None,
     streaming_asr: Any | None = None,
     gigaam_transcriber: Any | None = None,
     helper_urls: dict[str, str] | None = None,

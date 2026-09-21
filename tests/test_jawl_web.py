@@ -133,6 +133,9 @@ class JawlWebTests(unittest.TestCase):
         responses = {
             ("PUT", "/api/config"): {"ok": True, "written": ["config/interfaces.yaml"]},
             ("POST", "/api/agent/stop"): {"ok": True, "forced": False},
+            # The product waits for the old agent to actually stop before it
+            # starts the new level, so the fixture must answer the status poll.
+            ("GET", "/api/agent/status"): {"ok": True, "running": False, "starting": False},
             ("POST", "/api/agent/start"): {"ok": True, "pid": 42},
         }
 
@@ -150,6 +153,7 @@ class JawlWebTests(unittest.TestCase):
         self.assertEqual([item[:2] for item in calls], [
             ("PUT", "/api/config"),
             ("POST", "/api/agent/stop"),
+            ("GET", "/api/agent/status"),
             ("POST", "/api/agent/start"),
         ])
         self.assertEqual(calls[0][2]["values"]["interfaces:host.os.access_level"], 3)

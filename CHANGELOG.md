@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-21 - GigaAM — единственный ASR (ADR-044)
+
+- Удалён OpenAI-совместимый provider-путь: `--asr-url`, `--asr-model`,
+  `--asr-api-key-env`, `--asr-timeout`, `--asr-max-utterance-bytes`,
+  `OpenAICompatibleASRClient`, `ASRUnavailable`/`ASRNoSpeech`.
+- Удалены бэкенды `qwen`/`whisper` в лаунчере (`-AsrBackend`), их серверы
+  (`run_asr_server.ps1`, `asr_whisper_server.py`) и порт 8984 из манифеста.
+- `UtteranceBuffer` вместо сервиса-обёртки: bounded буфер реплики (8 сессий /
+  4 MiB / TTL 120 с) + канонический `CrispASRFileTranscriber`; ошибка
+  транскрайбера сообщается явно (`unavailable`/`failed`), без «фолбэка» на
+  второй движок. `/api/voice/draft` обслуживает только CrispASR streaming bridge.
+- Амбиентный speech-gate (`sensory_worker.py`) переведён с HTTP-endpoint на
+  GigaAM через тот же трансcriber.
+- Удалён фильтр эха промпта (`_ASR_PROMPT_ECHO_MARKERS`) — он существовал
+  только ради удалённого движка.
+- Причина: head-to-head GigaAM 0.58 с против Qwen3-ASR 1.19 с на одном клипе
+  (и точнее русский); Qwen-сервер не стартовал в ежедневном профиле, а его
+  «фолбэк» был фиктивным (обращение к несуществующему порту при сбое GigaAM).
+- Ожидаемая живая проверка голосового контура — на поднятом пользователем
+  стеке (major runtime update).
+
 ## 2026-09-21 - ADR-041 этап 1: Product API-фасады
 
 - Канонические endpoints `/api/memory`, `/api/tasks`, `/api/character`,

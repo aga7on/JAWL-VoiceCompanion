@@ -215,7 +215,7 @@ JAWL — целевой обычный режим; ручное подтверж
 | Роль | Направление | Ограничение текущего состояния |
 |---|---|---|
 | Главная LLM | Big Pickle/OpenCode для тестов; позже иной провайдер, local или QWB-JAWL | Выбор временный; native gateway проверялся через тестовый relay |
-| Русский STT | Qwen3-ASR-0.6B | Реализован final-utterance HTTP, не доказан streaming partial |
+| Русский STT | GigaAM v3 (crispasr, file mode) — единственный движок | Партиалы только через CrispASR streaming bridge; provider/фолбэк удалён (ADR-044) |
 | Основной желаемый TTS | Qwen3-TTS 0.6B, в том числе клон | Base worker есть; CPU медленный, emotion control не подтверждён |
 | Быстрый TTS рядом | TeraTTSv2 | Нынешний CLI default; пригоден для low-latency профиля, без клона |
 | Vision | Qwen3-VL-2B — лидер пользовательского бенчмарка; SmolVLM — быстрый кандидат | Постоянный выбор/подключение отложены пользователем |

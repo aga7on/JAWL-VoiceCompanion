@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
 from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
 from .ambient_triage import OpenAICompatibleTriageProvider
-from .asr import ExternalASRService, OpenAICompatibleASRClient
+from .asr import UtteranceBuffer
 from .avatar import AvatarAssetStore
 from .browser_adapter import BrowserAdapter
 from .companion_runtime import CompanionRuntime
@@ -183,21 +183,9 @@ def build_companion_runtime(
                 voice_mem.close()
                 error(f"VoiceMem {args.voicemem_warmup} warmup failed: {type(exc).__name__}")
 
-    if args.asr_url or args.asr_model:
-        if not args.asr_url or not args.asr_model:
-            error("--asr-url and --asr-model must be provided together")
-        asr_service = ExternalASRService(
-            OpenAICompatibleASRClient(
-                args.asr_url,
-                args.asr_model,
-                api_key=os.environ.get(args.asr_api_key_env, ""),
-                timeout_seconds=args.asr_timeout,
-            ),
-            max_utterance_bytes=args.asr_max_utterance_bytes,
-        )
-    else:
-        asr_service = None
-
+    # GigaAM (crispasr file mode) is the only ASR engine: no provider URL, no
+    # second engine and no fallback lane (owner decision 2026-09-21). The
+    # buffer below holds one utterance; the transcriber owns the text.
     streaming_asr = None
     if getattr(args, "streaming_asr", False):
         if not args.streaming_asr_exe or not args.streaming_asr_model:
@@ -211,12 +199,16 @@ def build_companion_runtime(
         )
 
     gigaam_transcriber = None
-    if getattr(args, "streaming_asr", False) and args.streaming_asr_exe and args.streaming_asr_model:
+    if args.streaming_asr_exe and args.streaming_asr_model:
         from .giga_final import CrispASRFileTranscriber
         gigaam_transcriber = CrispASRFileTranscriber(
             args.streaming_asr_exe,
             args.streaming_asr_model,
         )
+
+    # The utterance buffer exists only when the canonical transcriber is
+    # available; without local audio the VoiceMem streaming path stays in charge.
+    asr_service = UtteranceBuffer(gigaam_transcriber) if gigaam_transcriber is not None else None
 
     # Optional local helpers surfaced in the doctor panel (bounded probes).
     helper_urls: dict[str, str] = {}

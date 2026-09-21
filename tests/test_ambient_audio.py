@@ -13,7 +13,6 @@ from jawl_voicecompanion.ambient_audio import (  # noqa: E402
     PlaybackSuppression,
 )
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
-from jawl_voicecompanion.asr import ASRUnavailable  # noqa: E402
 from jawl_voicecompanion.audio_understanding import AudioDescriptionService  # noqa: E402
 from jawl_voicecompanion.voicemem_client import VoiceMemUnavailable  # noqa: E402
 
@@ -129,7 +128,7 @@ class _SequencedFinalASR:
             self.release.wait(2)
         if self.fail_finishes:
             self.fail_finishes -= 1
-            raise ASRUnavailable("synthetic ASR failure")
+            raise RuntimeError("synthetic ASR failure")
         return {"status": "transcribed", "text": f"ambient segment {len(self.finish_calls)}"}
 
     def discard(self, session_id):

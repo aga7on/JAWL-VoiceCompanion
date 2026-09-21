@@ -1,5 +1,28 @@
 # Состояние разработки
 
+## GigaAM — единственный ASR (ADR-044) — 2026-09-21
+
+Решение владельца: «фолбек не нужен, оставляем для всех asr задач gigaam».
+Срез выполнен в коде: удалены provider-путь (`--asr-url/--asr-model` и
+сопутствующие флаги), `OpenAICompatibleASRClient`, бэкенды `qwen`/`whisper` в
+лаунчере, их серверы (`run_asr_server.ps1`, `asr_whisper_server.py`), порт 8984
+в манифесте и «fallback lane» в финале реплики.
+
+Что встало на место: `UtteranceBuffer` в ядре (bounded PCM16-буфер: 8 сессий /
+4 MiB / TTL 120 с, упаковка WAV) + канонический `CrispASRFileTranscriber`;
+амбиентный speech-gate в `sensory_worker.py` переведён с HTTP-endpoint на тот
+же трансcriber; `/api/voice/draft` обслуживает только CrispASR streaming
+bridge. Ошибка транскрайбера сообщается явно (`unavailable`/`failed`).
+
+Обоснование — измеренное: head-to-head GigaAM 0.58 с против Qwen3-ASR 1.19 с
+на одном клипе 9.6 с (и точнее русский); Qwen-сервер не запускался в
+ежедневном профиле (971 MB и порт — мёртвый груз), а его «фолбэк» обращался к
+несуществующему порту и превращал сбой GigaAM в ошибку хода.
+
+Ограничение: живая проверка голосового контура (capture → GigaAM → JAWL →
+TTS → playback) после среза ещё **не выполнена** — требуется поднятый
+пользователем стек; unit/fake-HTTP прогон см. в отчёте среза.
+
 ## UI-поворот (ADR-041) — 2026-09-19
 
 Переход от control-center к интерфейсу жизни с компаньоном. Зафиксировано
@@ -320,8 +343,8 @@ Companion подготовлен [план U0–U6](UNIFIED_UI_INTEGRATION_PLAN.
 - Мозг: `deepseek-v4-flash` через OpenCode-релей 8891 (`-UseOpenCodeRelay`);
   baseline `config/jawl/settings.yaml` выровнен, `thinking_policy: first_step`.
   Бенч 2026-09-14: p50 2.4 с, JSON-конверт 100%; прочие Zen/GO-модели недоступны.
-- ASR: GigaAM v3 (crispasr batch final, `giga_final.py`); Qwen3-ASR — опциональный
-  фолбэк, по умолчанию не стартует. TTS: TeraTTSv2 (9889); prosody planner (8987)
+- ASR: GigaAM v3 (crispasr batch final, `giga_final.py`) — **единственный**
+  движок (ADR-044); provider-путь и фолбэк удалены. TTS: TeraTTSv2 (9889); prosody planner (8987)
   опционален и может быть выключен ради задержки.
 - Зрение: постоянно — Bonsai (8986) + screen-watch + PerceptionFusion + гейт
   внимания; Bonsai поднимать до профиля.

@@ -93,9 +93,9 @@ def build_doctor_report(
         asr_health = _health(asr)
         asr_status = str(asr_health.get("status", "degraded"))
         checks.append(_check(
-            "asr", asr_status, "External final-utterance ASR" if asr is not None else "External ASR is disabled",
+            "asr", asr_status, "GigaAM final ASR" if asr is not None else "GigaAM ASR is disabled",
             ready=asr is not None and asr_status in {"connected", "online", "ready", "ok"},
-            action="Configure --asr-url and --asr-model for Qwen3-ASR" if asr is None else None,
+            action="Pass --streaming-asr-exe and --streaming-asr-model (GigaAM/crispasr)" if asr is None else None,
         ))
 
     speech = _health(tts)

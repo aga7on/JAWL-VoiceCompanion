@@ -29,7 +29,6 @@ class MeaningfulTranscriptTests(unittest.TestCase):
             "嗯嗯",
             "嗯",
             "嗯哼",
-            "Transcribe the audio exactly as spoken.",
             "啊！",
             "ммм",
             "ааа",
@@ -268,11 +267,8 @@ class WebTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIn(b"AudioWorkletProcessor", response.read())
         vision_script = (Path(__file__).parents[1] / "scripts" / "run_vision_server.ps1").read_bytes()
-        asr_script = (Path(__file__).parents[1] / "scripts" / "run_asr_server.ps1").read_bytes()
         self.assertIn(b"VLM-RealTime-Bench\\runtime\\llama-b10738-cpu", vision_script)
         self.assertIn(b"VLM-RealTime-Bench\\models\\Qwen3-VL-2B", vision_script)
-        self.assertIn(b"VLM-RealTime-Bench\\runtime\\llama-b10738-cpu", asr_script)
-        self.assertIn(b"VLM-RealTime-Bench\\models\\qwen3-asr", asr_script)
 
     def test_doctor_reports_mock_text_mode_without_secrets(self):
         status, doctor = self.get_json("/api/doctor")

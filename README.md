@@ -103,8 +103,12 @@ stop и ROOT lease остаются внутри JAWL; Companion не добав
 
 ## Голос, модели и представление
 
-Qwen3-ASR-0.6B — текущий русский final-utterance профиль; integrated launcher
-выбирает его по умолчанию (`-AsrBackend whisper` оставляет явный fallback).
+**GigaAM v3** (Sber, через `crispasr` в file mode) — единственный ASR-движок:
+и финальный транскрипт реплики, и амбиентный speech-gate идут через него;
+provider-путь `--asr-url/--asr-model` и фолбэк удалены (решение владельца
+2026-09-21). Head-to-head на одном клипе: GigaAM 0.58 с против Qwen3-ASR
+1.19 с, и точнее по русскому. Стриминговые партиалы — только через
+CrispASR streaming bridge.
 Qwen3-TTS 0.6B —
 желаемый основной голосовой движок с клоном; TeraTTSv2 остаётся рядом как
 быстрый CPU fallback. Нынешний CLI default — Tera, Qwen выбирается явно.

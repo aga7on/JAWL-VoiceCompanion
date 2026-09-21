@@ -84,7 +84,7 @@
           "id": "workers",
           "name": "Запуск воркеров",
           "role": "side-effect",
-          "note": "Tera/ASR/планер; здоровые остатки переиспользуются",
+          "note": "Tera и планер; GigaAM-ASR не воркер-сервер: расшифровка идёт на реплику",
           "refs": [
             {
               "file": "scripts/run_integrated_profile.ps1"
@@ -179,7 +179,7 @@
       ],
       "confidence": 0.9,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-09-21T16:53:00Z"
     },
     {
       "id": "f-zombie-hygiene",
@@ -244,7 +244,7 @@
     {
       "id": "f-voice-turn",
       "name": "Голосовой ход",
-      "summary": "Микрофон → партиалы → финальный ASR → ответ голосом",
+      "summary": "Микрофон → партиалы → буфер реплики → GigaAM → ответ голосом",
       "epicId": "voice",
       "triggers": [
         {
@@ -274,6 +274,17 @@
           ]
         },
         {
+          "id": "buffer",
+          "name": "Накапливать PCM",
+          "role": "data-write",
+          "note": "Ограниченный буфер реплики: 8 сессий / 4 МиБ / TTL 120 с, на выходе WAV",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/asr.py"
+            }
+          ]
+        },
+        {
           "id": "endpoint",
           "name": "Решение о конце",
           "role": "compute",
@@ -285,22 +296,29 @@
         },
         {
           "id": "final-asr",
-          "name": "Финальный Qwen3-ASR",
+          "name": "Расшифровать реплику",
           "role": "compute",
           "refs": [
             {
-              "file": "src/jawl_voicecompanion/web.py"
+              "file": "src/jawl_voicecompanion/asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/giga_final.py"
             }
-          ]
+          ],
+          "note": "GigaAM (crispasr, файловый режим) — единственный движок; буфер отдаёт WAV, пустая реплика завершается без хода"
         },
         {
           "id": "asr-fail",
           "name": "Отказ ASR",
           "role": "error",
-          "note": "Ход не уходит в JAWL, UI показывает деградацию",
+          "note": "Нет транскрайбера → unavailable, сбой движка → failed; второго движка нет, ход не уходит в JAWL",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
             }
           ]
         },
@@ -337,6 +355,16 @@
           "kind": "next"
         },
         {
+          "from": "capture",
+          "to": "buffer",
+          "kind": "next"
+        },
+        {
+          "from": "buffer",
+          "to": "final-asr",
+          "kind": "next"
+        },
+        {
           "from": "endpoint",
           "to": "final-asr",
           "kind": "conditional",
@@ -346,7 +374,7 @@
           "from": "final-asr",
           "to": "asr-fail",
           "kind": "error",
-          "condition": "ASR недоступен"
+          "condition": "движок недоступен или расшифровка сорвалась"
         },
         {
           "from": "final-asr",
@@ -359,9 +387,9 @@
           "kind": "async"
         }
       ],
-      "confidence": 0.85,
+      "confidence": 0.9,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-09-21T16:53:00Z"
     },
     {
       "id": "f-streaming-asr",
@@ -399,7 +427,8 @@
             {
               "file": "src/jawl_voicecompanion/web.py"
             }
-          ]
+          ],
+          "note": "Черновик даёт только мост CrispASR; без него режим unavailable"
         }
       ],
       "flow": [
@@ -417,7 +446,7 @@
       ],
       "confidence": 0.8,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-09-21T16:53:00Z"
     },
     {
       "id": "f-endpoint-policy",
@@ -963,7 +992,16 @@
         {
           "id": "speech",
           "name": "Речь → аудио",
-          "role": "transform"
+          "role": "transform",
+          "note": "Silero-гейт и расшифровка GigaAM в самом воркере, без HTTP-ASR",
+          "refs": [
+            {
+              "file": "scripts/sensory_worker.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/sensory_ingest.py"
+            }
+          ]
         },
         {
           "id": "buffer",
@@ -1005,7 +1043,7 @@
       ],
       "confidence": 0.8,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-09-21T16:53:00Z"
     },
     {
       "id": "f-proactive",
@@ -1803,7 +1841,7 @@
       "from": "f-endpoint-policy",
       "to": "f-voice-turn",
       "kind": "flow",
-      "note": "endpoint определяет момент финального ASR"
+      "note": "конец реплики запускает расшифровку GigaAM"
     },
     {
       "from": "f-voice-turn",

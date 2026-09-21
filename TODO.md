@@ -1,5 +1,25 @@
 # TODO — единый агент-компаньон
 
+## GigaAM — единственный ASR (ADR-044) — 2026-09-21
+
+- [x] Удалён provider-путь (`--asr-url/--asr-model/--asr-api-key-env/
+  --asr-timeout/--asr-max-utterance-bytes`), `OpenAICompatibleASRClient`,
+  бэкенды `qwen`/`whisper` в лаунчере, их серверы и порт 8984 из манифеста.
+- [x] `UtteranceBuffer` (буфер реплики в ядре) + `CrispASRFileTranscriber`:
+  финал реплики — GigaAM, ошибка сообщается явно (`unavailable`/`failed`),
+  «фолбэк» на второй движок убран.
+- [x] Амбиентный speech-gate переведён с HTTP-endpoint на тот же transcriber;
+  `/api/voice/draft` обслуживает только CrispASR streaming bridge.
+- [ ] Live-проверка голосового контура после среза (capture → GigaAM → JAWL →
+  TTS → playback) на поднятом пользователем стеке — unit/fake-HTTP её не заменяет.
+- [ ] Вернуть quality-гейт `--expects` для синтетических кейсов: вместе с
+  `run_asr_profile.py` ушла проверка `must_transcribe`/`min_chars`, и
+  `run_synthetic_cases_live.ps1` теперь выходит 0 даже когда харнесс печатает
+  `ERROR: crispasr transcript is empty`. Нужна проверка `cases.json` + лога на
+  стороне PS либо расширение харнесса.
+- [ ] Опционально: освободить 971 MB весов Qwen3-ASR (`G:\AI\VLM-RealTime-Bench\
+  models\qwen3-asr`) — код на них больше не ссылается; удаление файлов за владельцем.
+
 ## Приоритет: Фаза D — нативный аватар (ночь 2026-09-18)
 
 - [x] D2: эмоции прямыми параметрами с фейдом (evidence: pixel-diff happy 597/surprised 832/angry 512)

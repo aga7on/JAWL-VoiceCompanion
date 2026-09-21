@@ -60,28 +60,34 @@ limit with visible drop/backpressure metrics. The software RMS gate must not
 be described as hardware DSP; hardware/driver filtering remains outside this
 contract.
 
-## Optional external final ASR
+## Canonical final ASR (GigaAM only)
 
-An OpenAI-compatible audio provider may be configured with `--asr-url` and
-`--asr-model`. This mode is intended for Qwen3-ASR-0.6B and similar providers
-that expose `/v1/audio/transcriptions` but do not guarantee streaming partial
-results. While a browser microphone is active, `/api/voice/audio` appends
-bounded PCM16 data to one in-memory session and returns `buffered`; it does
-not call VoiceMem or JAWL for every chunk. On `/api/voice/end`, the provider
-receives one transient WAV. The normalized final transcript is immediately
-adapted into a transport-only `VOICE_TURN` for JAWL; the identical text is
-enqueued to bounded serialized VoiceMem enrichment asynchronously. The response
-does not wait for VoiceMem. `memory_sync=queued` is not ingestion/recall proof;
-queue failures, completion and drops must remain observable. Enrichment must
-not produce a duplicate conversational turn. The raw WAV is discarded immediately after the
-provider call, including on failure. The multipart request includes the
-bounded provider prompt `Transcribe the audio exactly as spoken.` so the local
-Qwen profile follows the same instruction as the CPU benchmark.
+GigaAM v3 through the `crispasr` binary in file mode is the **only** ASR engine
+(owner decision 2026-09-21). There is no OpenAI-compatible provider option and no
+fallback lane: `--asr-url`, `--asr-model`, the Qwen3-ASR/whisper backends and
+their servers were removed, because GigaAM won the head-to-head on the same clip
+(0.58 s vs 1.19 s) with more accurate Russian, and the removed fallback pointed
+at a server the daily profile never started.
 
-The external buffer is limited to eight sessions and 4 MiB per utterance, with
-a 120-second idle TTL. Audio format cannot change within a session. Health
-reports the explicit `final_utterance` mode; it must not be presented as
-real-time partial ASR until a provider with a streaming contract is added.
+While a browser microphone is active, `/api/voice/audio` appends bounded PCM16
+data to one in-memory `UtteranceBuffer` session and returns `buffered`; it does
+not call VoiceMem or JAWL for every chunk. On `/api/voice/end`, the buffer is
+handed to the GigaAM batch transcriber exactly once as a transient WAV. The
+normalized final transcript is immediately adapted into a transport-only
+`VOICE_TURN` for JAWL; the identical text is enqueued to bounded serialized
+VoiceMem enrichment asynchronously. The response does not wait for VoiceMem.
+`memory_sync=queued` is not ingestion/recall proof; queue failures, completion and
+drops must remain observable. Enrichment must not produce a duplicate
+conversational turn. The raw WAV is discarded immediately after the
+transcription call, including on failure.
+
+The buffer is limited to eight sessions and 4 MiB per utterance, with a
+120-second idle TTL. Audio format cannot change within a session. A missing
+transcriber is reported as `unavailable` and a transcriber error as `failed`;
+the turn fails explicitly instead of silently borrowing a second engine.
+Partials have exactly one owner — the CrispASR streaming bridge; without it
+`/api/voice/draft` reports mode `unavailable` rather than silently
+re-transcribing the buffer.
 
 For an offline VoiceMem cognitive path, the sidecar accepts
 `--local-memory`. This injects VoiceMem's local E5 classifier and embedder and
@@ -89,9 +95,9 @@ does not make an LLM request; the acoustic recognizer is still determined by
 the configured VoiceMem audio profile. A separate `warmup` request is exposed
 through the process client and selected from the Companion CLI with
 `--voicemem-warmup text|audio`; it returns `VOICE_READY` before capture starts.
-The current bundled sherpa profile is not accepted as a Russian ASR, so
-Russian production capture uses the Qwen3-ASR final-utterance bridge or
-another separately validated Russian provider.
+The current bundled sherpa profile is not accepted as a Russian ASR, so Russian
+production capture uses the GigaAM final-utterance bridge described above, which
+is the single validated Russian provider in this product.
 
 ## Output events
 

@@ -25,7 +25,8 @@ transformers; есть готовый WebSocket-сервер (`ws_server.py`, п
 **Языки:** оптимизирован под Chinese/English; русский — в списке
 «cross-lingual» (retains useful capability) БЕЗ опубликованной оценки.
 Это ключевой риск: наш контур русский, канонический ASR — GigaAM v3
-(crispasr, batch-final), Qwen3-ASR-0.6B — опциональный фолбэк.
+(crispasr, batch-final) и он теперь **единственный** движок (ADR-044:
+provider-путь и фолбэк удалены).
 
 **Бенчи** (по их таблицам): R2T2 160 мс ≈ Qwen3-ASR offline 2 с с небольшим
 проигрышем (AMI 9.25→11.37, LS-clean 1.67→2.13, SPGI 2.90→3.00) — отличный

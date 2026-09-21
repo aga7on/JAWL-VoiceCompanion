@@ -15,8 +15,6 @@ param(
     [switch]$RunBrowserVoiceE2E,
     [switch]$SyncProfile,
     [switch]$AllowBusyStartup,
-    [ValidateSet('gigaam', 'qwen', 'whisper')]
-    [string]$AsrBackend = 'gigaam',
     [string[]]$BrowserVoiceWav = @(),
     [string[]]$BrowserVoiceExpected = @(),
 [int]$TtsPort = 9889,
@@ -39,7 +37,6 @@ param(
 [int]$HostosLevel = -1,
 [int]$AmbientTriageSeconds = 0,
 [string]$JawlEventDir = '',
-[int]$AsrPort = 8984,
 [switch]$UseOpenCodeRelay,
     [ValidateRange(0,3)]
     [int]$NativeAccessLevel = 0,
@@ -74,11 +71,6 @@ $voxcpmModelDir = 'G:\AI\VoxCPM\models\models--openbmb--VoxCPM2\snapshots\32279e
 $ttsWorkerName = if ($TtsProvider -eq 'voxcpm') { 'VoxCPM2' } else { 'TeraTTSv2' }
 $ttsWorkerPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } else { $TtsPort }
 $asrPy = 'G:\AI\JAWL-VoiceCompanion\runtime\vision-venv\Scripts\python.exe'
-$asrServerScript = Join-Path $repo 'scripts\asr_whisper_server.py'
-$whisperModel = (Join-Path $repo 'runtime\models\whisper-turbo')
-$qwenAsrServer = 'G:\AI\VLM-RealTime-Bench\runtime\llama-b10738-cpu\llama-server.exe'
-$qwenAsrModel = 'G:\AI\VLM-RealTime-Bench\models\qwen3-asr\Qwen3-ASR-0.6B-Q8_0.gguf'
-$qwenAsrMmproj = 'G:\AI\VLM-RealTime-Bench\models\qwen3-asr\mmproj-Qwen3-ASR-0.6B-Q8_0.gguf'
 $voicememPy = 'G:\AI\VoiceMem\.venv\Scripts\python.exe'
 
 if (-not (Test-Path -LiteralPath $py)) { throw "Owned runtime Python is missing: $py" }
@@ -268,8 +260,9 @@ if ($StartLocalAudio) {
     # Idempotent audio worker startup: if a healthy worker already owns the
     # port (leftover from a previous run or manual boot), reuse it instead of
     # failing the whole profile. This makes relaunch after a partial stop safe.
-    $asrWorkerName = if ($AsrBackend -eq 'qwen') { 'Qwen3-ASR-0.6B' } else { 'whisper-ASR' }
-    foreach ($audio in @(@{Name=$ttsWorkerName;Port=$ttsWorkerPort}, @{Name=$asrWorkerName;Port=$AsrPort})) {
+    # GigaAM (crispasr file mode) is the only ASR engine and runs as a
+    # per-utterance CLI, so only the TTS worker owns a port here.
+    foreach ($audio in @(@{Name=$ttsWorkerName;Port=$ttsWorkerPort})) {
         $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $audio.Port)
         try { $listener.Start(); $listener.Stop(); $free = $true } catch { $free = $false }
         if (-not $free) { Write-Host ("Reusing already-running {0} on port {1}." -f $audio.Name, $audio.Port) }
@@ -280,7 +273,6 @@ if ($UseVoiceMem -and -not (Test-Path -LiteralPath $voicememPy -PathType Leaf)) 
 $jawl = $null
 $companion = $null
 $tera = $null
-$asr = $null
 $sensory = $null
 $supervisor = $null
 try {
@@ -290,11 +282,6 @@ try {
             $audioResources = @($voxcpmPy, $voxcpmModelDir)
         } else {
             $audioResources = @($teraPy, $teraRelease)
-        }
-        if ($AsrBackend -eq 'qwen') {
-            $audioResources += @($qwenAsrServer, $qwenAsrModel, $qwenAsrMmproj)
-        } elseif ($AsrBackend -eq 'whisper') {
-            $audioResources += @($asrPy, $asrServerScript, $whisperModel)
         }
         if ($EnableStreamingAsr) {
             foreach ($path in @($StreamingAsrExe, $StreamingAsrModel)) {
@@ -308,16 +295,15 @@ try {
         foreach ($path in $audioResources) { if (-not (Test-Path -LiteralPath $path)) { throw "Local audio resource is missing: $path" } }
         # Start only the workers whose ports are actually free; healthy leftover
         # workers are reused so a relaunch does not spawn duplicates.
+        # GigaAM (crispasr file mode) is the only ASR engine and it is a
+        # per-utterance CLI, so there is no ASR server port to manage.
         $ttsAlready = $false
-        $asrAlready = $false
-        $asrWorkerName = if ($AsrBackend -eq 'qwen') { 'Qwen3-ASR-0.6B' } elseif ($AsrBackend -eq 'gigaam') { 'GigaAM-batch' } else { 'whisper-ASR' }
         $audioChecks = @(@{Name=$ttsWorkerName;Port=$ttsWorkerPort})
-        if ($AsrBackend -ne 'gigaam') { $audioChecks += @{Name=$asrWorkerName;Port=$AsrPort} }
         foreach ($audio in $audioChecks) {
             $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $audio.Port)
             try { $probe.Start(); $probe.Stop(); $probeFree = $true } catch { $probeFree = $false }
             if (-not $probeFree) {
-                if ($audio.Name -eq $ttsWorkerName) { $ttsAlready = $true } else { $asrAlready = $true }
+                if ($audio.Name -eq $ttsWorkerName) { $ttsAlready = $true }
             }
         }
         if (-not $ttsAlready) {
@@ -329,31 +315,19 @@ try {
                 $tera = New-RuntimeProcess $teraPy "scripts\teratts_server.py --release-dir `"$teraRelease`" --voice ru_f1 --model distilled --threads 24 --host 127.0.0.1 --port $TtsPort" $repo @{} 'tera-tts.log'
             }
         }
-        if (-not $asrAlready -and $AsrBackend -ne 'gigaam') {
-            if ($AsrBackend -eq 'qwen') {
-                $qwenArgs = "--model `"$qwenAsrModel`" --mmproj `"$qwenAsrMmproj`" --alias Qwen3-ASR-0.6B --host 127.0.0.1 --port $AsrPort --threads 12 --threads-batch 12 --ctx-size 4096 --parallel 1 --gpu-layers 0 --no-mmproj-offload"
-                $asr = New-RuntimeProcess $qwenAsrServer $qwenArgs (Split-Path -Parent $qwenAsrServer) @{} 'qwen-asr.log'
-            } else {
-                $asr = New-RuntimeProcess $asrPy "scripts\asr_whisper_server.py --model `"$whisperModel`" --language ru --threads 12 --beam-size 5 --host 127.0.0.1 --port $AsrPort" $repo @{} 'whisper-asr.log'
-            }
-        }
         $audioDeadline = [DateTime]::UtcNow.AddSeconds(300)
         while ([DateTime]::UtcNow -lt $audioDeadline) {
             if ($tera -and $tera.HasExited) { throw "$ttsWorkerName exited during integrated startup." }
-            if ($asr -and $asr.HasExited) { throw "$asrWorkerName exited during integrated startup." }
             try { $teraHealth = Invoke-RestMethod "http://127.0.0.1:$ttsWorkerPort/health" -TimeoutSec 2 } catch { $teraHealth = $null }
-            try { $asrHealth = Invoke-RestMethod "http://127.0.0.1:$AsrPort/health" -TimeoutSec 2 } catch { $asrHealth = $null }
-            if ($teraHealth.status -eq 'ok' -and ($AsrBackend -eq 'gigaam' -or $asrHealth.status -eq 'ok')) { break }
+            if ($teraHealth.status -eq 'ok') { break }
             Start-Sleep -Seconds 1
         }
         if ($teraHealth.status -ne 'ok') { throw 'Local TTS worker did not become healthy.' }
-        if ($AsrBackend -ne 'gigaam' -and $asrHealth.status -ne 'ok') { throw 'Local ASR worker did not become healthy.' }
+        $audioArgs = " --tts-provider $TtsProvider --tts-url http://127.0.0.1:$ttsWorkerPort"
         if ($EnableSensoryWorker -and $SensoryFile) {
-            $sensoryArgs = "scripts\sensory_worker.py --duration 0 --out `"$SensoryFile`""
+            $sensoryArgs = "scripts\sensory_worker.py --duration 0 --out `"$SensoryFile`" --crispasr-exe `"$StreamingAsrExe`" --gigaam-model `"$StreamingAsrModel`""
             $sensory = New-RuntimeProcess $asrPy $sensoryArgs $repo @{} 'sensory.log'
         }
-        $asrModelName = if ($AsrBackend -eq 'whisper') { 'whisper-turbo' } else { 'Qwen3-ASR-0.6B' }
-        $audioArgs = " --asr-url http://127.0.0.1:$AsrPort/v1 --asr-model $asrModelName --tts-provider $TtsProvider --tts-url http://127.0.0.1:$ttsWorkerPort"
         if ($EnableProsodyPlanner -and $TtsProvider -eq 'tera') {
             $audioArgs += " --prosody-planner --prosody-url $ProsodyUrl --prosody-model $ProsodyModel"
         }
@@ -538,7 +512,7 @@ try {
     if ($EnableSupervisor) {
         try { [IO.File]::WriteAllText($supervisorStopPath, "stop`n", [Text.UTF8Encoding]::new($false)) } catch { }
     }
-    foreach ($process in @($companion, $jawl, $tera, $asr, $sensory, $supervisor)) {
+    foreach ($process in @($companion, $jawl, $tera, $sensory, $supervisor)) {
         if ($process -and -not $process.HasExited) { $process.WaitForExit(25000) | Out-Null }
         if ($process -and -not $process.HasExited) { Stop-OwnedProcessTree $process; $process.WaitForExit(5000) | Out-Null }
         Save-RuntimeLog $process

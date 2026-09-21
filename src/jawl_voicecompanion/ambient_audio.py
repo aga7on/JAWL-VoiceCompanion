@@ -10,7 +10,7 @@ from threading import Event, RLock, Thread, current_thread
 from typing import Any
 
 from .ambient_memory import AmbientMemoryBuffer
-from .asr import ASRUnavailable, ExternalASRService
+from .asr import UtteranceBuffer
 from .audio_understanding import AudioDescriptionService, AudioDescriptionUnavailable
 from .ambient_segments import AmbientSegment, AmbientSegmenter
 from .system_audio import SystemAudioLoopback
@@ -69,7 +69,7 @@ class AmbientAudioASRBridge:
         target_sample_rate: int = 16000,
         max_feed_bytes: int = 48 * 1024,
         playback_suppression: PlaybackSuppression | None = None,
-        final_asr: ExternalASRService | None = None,
+        final_asr: UtteranceBuffer | None = None,
         audio_describer: AudioDescriptionService | None = None,
         max_description_bytes: int = 960000,
         segment_queue_size: int = 32,
@@ -598,8 +598,6 @@ class AmbientAudioASRBridge:
     def _safe_error(exc: Exception) -> str:
         if isinstance(exc, VoiceMemUnavailable):
             return "voicemem_unavailable"
-        if isinstance(exc, ASRUnavailable):
-            return "asr_unavailable"
         if isinstance(exc, AudioDescriptionUnavailable):
             return "audio_description_unavailable"
         return f"{type(exc).__name__}: {str(exc)[:160]}"[:200]

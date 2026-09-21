@@ -812,7 +812,7 @@ fn run_all() {
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 &prof_script,
                 "-ProfileName", &cfg.profile, "-StartLocalAudio", "-UseVoiceMem",
-                "-AsrBackend", "gigaam", "-TtsProvider", "tera", "-EnableProsodyPlanner",
+                "-TtsProvider", "tera", "-EnableProsodyPlanner",
                 "-EnableStreamingAsr", "-UseOpenCodeRelay", "-EnableScreenWatch",
                 "-EnableSensoryWorker", "-AmbientTriageSeconds", "300",
                 "-JawlModelOverride", "deepseek-v4-flash", "-StartupTimeoutSeconds", "420"])

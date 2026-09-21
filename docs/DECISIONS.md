@@ -358,7 +358,7 @@ JAWL's own provider path rather than making the Companion a second brain.
 
 ## ADR-024 - Add Qwen3-ASR as an explicit final-utterance option
 
-Status: Accepted
+Status: **Superseded by ADR-044** (2026-09-21)
 Date: 2026-09-01
 
 The supplied CPU/RAM benchmark selects Qwen3-ASR-0.6B as the current audio
@@ -605,6 +605,44 @@ on the first screen delta with an honest "waking" state, not a masked one.
 Quantization is allowed only through the MULTIMODAL_MODEL_GATE mini-bench
 (IQ2/IQ1 need the F16+imatrix path); the earlier Q1 Bonsai failure stands.
 Target profile: <= 8 GB RAM, ~14 GB VRAM. 20 GB is a ceiling, not the norm.
+## ADR-044 — GigaAM — единственный ASR; provider-путь и фолбэк удалены
+
+Status: Accepted
+Date: 2026-09-21
+Owner: владелец (сформулировано в диалоге: «фолбек не нужен, оставляем для
+всех asr задач gigaam»)
+
+Удалены: OpenAI-совместимый provider-путь (`--asr-url`, `--asr-model`,
+`--asr-api-key-env`, `--asr-timeout`, `--asr-max-utterance-bytes`), класс
+`OpenAICompatibleASRClient` и сервис-обёртка, бэкенды `qwen`/`whisper` в
+лаунчере (`-AsrBackend`), их серверы (`run_asr_server.ps1`,
+`asr_whisper_server.py`) и «fallback lane» в финале реплики.
+
+Причины (evidence, а не вкус):
+1. GigaAM выиграл head-to-head на одном клипе 9.6 с: **0.58 с против 1.19 с**
+   и точнее русский (падежи, пунктуация, кавычки) — CHANGELOG 2026-09-13.
+2. Qwen3-ASR **не запускался** в ежедневном профиле вообще
+   (`if (-not $asrAlready -and $AsrBackend -ne 'gigaam')`), то есть 971 MB
+   (767 MB Q8_0 + 204 MB mmproj) и порт 8984 были мёртвым грузом.
+3. «Фолбэк» был **фиктивным**: `--asr-url` передавался всегда, сервера на
+   8984 не было, и при сбое GigaAM ход завершался ошибкой
+   `ASR fallback failed`. Это не защита, а её имитация.
+4. Provider-путь породил сопутствующий костыль — фильтр эха промпта
+   (`_ASR_PROMPT_ECHO_MARKERS`), который удалён вместе с движком.
+
+Что осталось вместо него: `UtteranceBuffer` в ядре (bounded PCM16-сессии,
+8 сессий / 4 MiB / TTL 120 с, упаковка WAV) + канонический
+`CrispASRFileTranscriber`. Партиалы имеют ровно одного владельца — CrispASR
+streaming bridge; без него `/api/voice/draft` возвращает mode `unavailable`.
+Ошибка транскрайбера сообщается явно (`unavailable`/`failed`), а не
+маскируется вторым движком.
+
+Следствия: минус движок, минус порт, минус 971 MB на диске (файлы моделей
+оставлены владельцу, код на них больше не ссылается), минус ветки в
+лаунчере/докторе, минус один источник расхождения транскриптов.
+Живая проверка голосового контура после среза обязательна (ADR-041/AGENTS:
+major runtime update) и выполняется на поднятом пользователем стеке.
+
 ## ADR-042 — Языковая граница: cognition boundary как разделитель требований
 
 Status: Accepted

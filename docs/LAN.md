@@ -78,7 +78,8 @@ omits provider/worker options and therefore intentionally starts the default
 `phase1_mock_brain` with optional audio services unconfigured. To use the same
 live or local companion profile as on the PC, append the already validated
 options to this command, for example `--jawl-web-url
-http://127.0.0.1:8770`, `--voicemem-python`, `--asr-url` plus `--asr-model`,
+http://127.0.0.1:8770`, `--voicemem-python`, `--streaming-asr-exe` plus
+`--streaming-asr-model` (GigaAM/crispasr),
 and/or `--tts-url` plus its existing worker settings. `run_web.ps1` forwards
 these arguments unchanged; it does not start JAWL or audio workers and does
 not create credentials. Keep JAWL/provider tokens in their existing

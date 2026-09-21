@@ -281,19 +281,6 @@ def main() -> None:
         help="preload VoiceMem models before serving (audio may take longer)",
     )
     parser.add_argument(
-        "--asr-url",
-        default=None,
-        help="optional OpenAI-compatible final-utterance ASR endpoint; requires --asr-model",
-    )
-    parser.add_argument(
-        "--asr-model",
-        default=None,
-        help="ASR model name for --asr-url, for example Qwen3-ASR-0.6B",
-    )
-    parser.add_argument("--asr-api-key-env", default="ASR_API_KEY")
-    parser.add_argument("--asr-timeout", type=float, default=30.0)
-    parser.add_argument("--asr-max-utterance-bytes", type=int, default=4 * 1024 * 1024)
-    parser.add_argument(
         "--streaming-asr",
         action="store_true",
         help="enable the streaming ASR lane (CrispASR) for sub-second drafts and adaptive endpointing",

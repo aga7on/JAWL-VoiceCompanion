@@ -137,7 +137,9 @@ transport-only VOICE_TURN → JAWL. Тот же текст идёт в bounded V
 не дожидаясь её завершения. Очередь — дополнительный контекст; важные обещания
 и факты не должны существовать только в droppable transient задаче.
 
-Qwen3-ASR работает после end-of-utterance. Hands-free endpointing есть как
+GigaAM (crispasr file mode) — единственный ASR и работает после
+end-of-utterance; буфер реплики (`UtteranceBuffer`) живёт в ядре, второй
+движок и provider-фолбэк удалены. Hands-free endpointing есть как
 RMS heuristic, true partial streaming и реальные AEC/barge-in не приняты.
 Нужны измерения всей цепочки: конец речи → endpoint → ASR → LLM → первый
 слышимый звук. Скорость 2–3 слова/с не превращается напрямую в LLM tok/s.
