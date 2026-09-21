@@ -11,6 +11,16 @@
   HF (одиночный curl ~140 KB/s vs параллельный ~500 KB/s); применяется к
   R2T2/Laya/Needle3 весам. `scripts/run_r2t2_ru_smoke.py` — RU-смоук R2T2.
 
+## 2026-09-21 - Исследования: Laya PASS / Needle3 REJECT (RU)
+
+- **Laya-multilingual** (System-1 decision, ммBERT-base 322M): локальный
+  RU-прогон — 4/5 accuracy на русских фикстурах, warm p50 **54 ms на CPU**,
+  без генерации текста. Вердикт PASS как System-1 слой (routing до LLM).
+- **Needle3** (tool-calling 121M): EN безупречен, русский REJECT — движок
+  падает `UnicodeDecodeError` на кириллице и маршрутизирует RU фразы неверно.
+- **R2T2** (streaming ASR): веса качаются (dl_parallel, 4.08 GB);
+  RU-смоук после завершения загрузки.
+
 ## 2026-09-19 - UI поворот: интерфейс жизни с компаньоном (ADR-041)
 
 - E1: 4 раздела (Компаньон/Задачи/Память/Настройки), глобальный life rail
