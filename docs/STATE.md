@@ -40,23 +40,36 @@ Rust-клиента (этап 2 ADR-041 / аудит), затем Product API-ф
 
 ## Исследования System-1 / tool-calling кандидатов — 2026-09-21
 
-Прогнаны локально (веса скачаны параллельным range-загрузчиком):
+Прогнаны локально (веса скачаны параллельным range-загрузчиком), **каждый
+кандидат проверяется отдельно; связка — только после независимых вердиктов**
+(указание владельца):
 
 - **Laya-multilingual (System-1 decision)**: RU работает — 4/5 accuracy на
   русских фикстурах, warm p50 **54 ms на CPU**, без генерации текста.
-  Вердикт PASS как локальный System-1 слой (routing темы до deep LLM);
-  details в docs/RESEARCH.md.
-- **Needle3 (tool-calling 121M)**: EN безупречен (timer_set conf 1.0), но RU
-  **REJECT** — движок падает `UnicodeDecodeError` на кириллице, близкие
-  русские фразы маршрутизируются неверно (всё → send_message); `--serve` на
-  этом билде не применяет `--tools`.
-- **R2T2 (streaming ASR)**: веса ещё качаются (~24% на 2026-09-21 12:30,
-  4.08 GB; ~94 мин осталось при ~550 KB/s). Смоук-скрипт
-  `scripts/run_r2t2_ru_smoke.py` готов и py_compile-чист (передаёт путь к
-  WAV — qwen_asr сам ресемплит до 16k mono).
+  Вердикт PASS по качеству, но **deferred** (ADR-043): в целевой схеме
+  System-1 стоит после cognition boundary, где русский не нужен, а
+  `laya-multilingual` не откалиброван (наш неверный ответ имел confidence
+  0.896). Details в docs/RESEARCH.md.
+- **Needle3 (tool-calling 121M)**: EN безупречен (`timer_set` conf 1.0).
+  RU — REJECT: вызова нет вообще + `UnicodeDecodeError` на кириллице.
+  Роль System-1-решателя по состоянию системы — REJECT на 20 событиях
+  (все документированные входы: `agent.run`/`triggers`/`extract` дают отказ,
+  а при принуждении 0/20 при confidence 0.93 на ошибках). Аудио-входа у
+  Needle **нет** (4 независимых признака). ADR-043 поправлен.
+- **R2T2 (streaming ASR)**: веса скачаны и проверены (4 076 191 640 байт,
+  707 тензоров). RU-качество — **PASS**: на тех же фикстурах не хуже
+  канонического GigaAM (на одной — дословное совпадение), обе модели ломаются
+  на RU+EN code-switching. Но ценность замысла (streaming) **не проверена**:
+  R2T2-стриминг требует vLLM, а vLLM 0.29.0 не имеет Windows-колёс (только
+  manylinux) → нужен WSL2/Linux-воркер либо отказ. На CPU one-shot ~1×
+  реального времени против 0.3–0.5 с у GigaAM batch.
+- Инструменты: `scripts/dl_parallel.py` (починен: части не удаляются до
+  проверки размера — баг затирал уже склеенный префикс, сработал 3×),
+  `scripts/verify_safetensors.py`, `scripts/gigaam_baseline_fixtures.py`,
+  `scripts/needle3_{ru_verdict,system1_probe,framing_probe,extract_probe}.py`.
 
-Следующий шаг после завершения загрузки R2T2: прогон RU-смоука и запись
-вердикта в docs/RESEARCH.md (PASS/REJECT по RU ASR gate).
+Следующий шаг: решение владельца по R2T2 (WSL2/Linux-замер streaming vs отказ)
+— меняет deployment shape, поэтому без согласования не начинается.
 
 ## Goal round 3 — 2026-09-19: окончательный вердикт по D1 (blendshapes v5)
 
