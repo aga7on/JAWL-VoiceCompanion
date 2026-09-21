@@ -108,6 +108,43 @@ class _FakeJawlMemory:
         }
 
 
+class _FakeProductApi:
+    """JAWL adapter stub matching JawlWebAdapter's read-only surface used by
+    the Product API facades (ADR-041): status, memory, persona, hostos,
+    autonomy_journal, overview."""
+
+    def __init__(self):
+        self.calls = []
+
+    def status(self):
+        self.calls.append("status")
+        return "online"
+
+    def memory(self):
+        self.calls.append("memory")
+        return {"configured": True, "status": "ok", "database": {"rows": 7}}
+
+    def persona(self):
+        self.calls.append("persona")
+        return {"configured": True, "status": "ok", "settings": {"name": "Luna"}}
+
+    def hostos(self):
+        self.calls.append("hostos")
+        return {"configured": True, "status": "ok", "access_level": 2, "access_name": "OPERATOR"}
+
+    def autonomy_journal(self, limit=20, state=None):
+        self.calls.append(("journal", limit, state))
+        return {
+            "configured": True,
+            "status": "ok",
+            "plans": [{"plan_id": "p1", "state": state or "completed"}],
+        }
+
+    def overview(self):
+        self.calls.append("overview")
+        return {"configured": True, "status": "ok"}
+
+
 class _UnavailableJawlControl:
     token = "native-token"
 
@@ -173,7 +210,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(health["resources"]["profile"], "standard")
         with urlopen(self.base + "/", timeout=2) as response:
             frontend = response.read()
-            self.assertIn(b"JAWL VoiceCompanion", frontend)
+            self.assertIn(b"VoiceCompanion", frontend)
             self.assertIn(b"ambient-audio-toggle", frontend)
             self.assertIn(b"ambient-memory-enabled", frontend)
             self.assertIn(b"ambient-triage", frontend)
@@ -707,6 +744,77 @@ class WebTests(unittest.TestCase):
             urlopen(request, timeout=2)
         self.assertEqual(context.exception.code, 400)
         context.exception.close()
+
+    def test_product_api_facades_are_session_bound_and_versioned(self):
+        native = _FakeProductApi()
+        self.server.gateway.jawl_web = native
+        # No session -> 403, same as the legacy JAWL inspection routes.
+        for path in ("/api/memory", "/api/tasks", "/api/character",
+                     "/api/runtime/status", "/api/capabilities"):
+            with self.subTest(path=path):
+                try:
+                    urlopen(self.base + path, timeout=2)
+                except HTTPError as error:
+                    with error:
+                        self.assertEqual(error.code, 403)
+                else:
+                    self.fail(f"{path} should return HTTP 403 without a session")
+
+    def test_product_api_facades_expose_service_and_data(self):
+        native = _FakeProductApi()
+        self.server.gateway.jawl_web = native
+        status, body = self.get_json_auth("/api/runtime/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["service"], "runtime")
+        self.assertEqual(body["schema_version"], 1)
+        self.assertEqual(body["status"], "online")
+        self.assertIn("status", native.calls)
+
+        status, memory = self.get_json_auth("/api/memory")
+        self.assertEqual(status, 200)
+        self.assertEqual(memory["service"], "memory")
+        self.assertEqual(memory["database"]["rows"], 7)
+
+        status, character = self.get_json_auth("/api/character")
+        self.assertEqual(status, 200)
+        self.assertEqual(character["service"], "character")
+        self.assertEqual(character["settings"]["name"], "Luna")
+
+        status, tasks = self.get_json_auth("/api/tasks?limit=5&state=completed")
+        self.assertEqual(status, 200)
+        self.assertEqual(tasks["service"], "tasks")
+        self.assertEqual(tasks["plans"][0]["state"], "completed")
+        self.assertEqual(native.calls[-1], ("journal", 5, "completed"))
+
+        status, capabilities = self.get_json_auth("/api/capabilities")
+        self.assertEqual(status, 200)
+        self.assertEqual(capabilities["service"], "capabilities")
+        self.assertEqual(capabilities["access_name"], "OPERATOR")
+
+    def test_product_api_facades_report_not_configured_without_engine(self):
+        # No JAWL adapter: canonical facades stay explicit instead of crashing.
+        self.server.gateway.jawl_web = None
+        for path in ("/api/memory", "/api/tasks", "/api/character", "/api/runtime/status"):
+            with self.subTest(path=path):
+                status, body = self.get_json_auth(path)
+                self.assertEqual(status, 200)
+                self.assertEqual(body["configured"], False)
+                self.assertEqual(body["status"], "not_configured")
+        status, capabilities = self.get_json_auth("/api/capabilities")
+        self.assertEqual(status, 200)
+        self.assertEqual(capabilities["status"], "not_configured")
+
+    def test_legacy_jawl_aliases_keep_their_contract(self):
+        native = _FakeProductApi()
+        self.server.gateway.jawl_web = native
+        # Legacy names must route through the same engine surface.
+        status, body = self.get_json_auth("/api/jawl/persona")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["settings"]["name"], "Luna")
+        status, body = self.get_json_auth("/api/jawl/hostos")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["access_level"], 2)
+        self.assertIn(body["control_enabled"], (True, False))
 
     def test_audit_without_session_is_rejected(self):
         try:

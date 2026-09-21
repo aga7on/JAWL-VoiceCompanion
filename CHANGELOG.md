@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-21 - ADR-041 этап 1: Product API-фасады
+
+- Канонические endpoints `/api/memory`, `/api/tasks`, `/api/character`,
+  `/api/runtime/status`, `/api/capabilities` (session-bound, `service`-поле,
+  явный `not_configured` без движка); легаси `/api/jawl/*` остались алиасами.
+- Тесты: 5 новых в `tests/test_web.py` (контракт фасадов, 403 без сессии,
+  not_configured, легаси-алиасы); suite 71/71 OK.
+- `scripts/dl_parallel.py` — возобновляемый параллельный range-загрузчик для
+  HF (одиночный curl ~140 KB/s vs параллельный ~500 KB/s); применяется к
+  R2T2/Laya/Needle3 весам. `scripts/run_r2t2_ru_smoke.py` — RU-смоук R2T2.
+
 ## 2026-09-19 - UI поворот: интерфейс жизни с компаньоном (ADR-041)
 
 - E1: 4 раздела (Компаньон/Задачи/Память/Настройки), глобальный life rail

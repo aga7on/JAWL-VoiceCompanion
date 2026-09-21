@@ -26,6 +26,18 @@ ADR-041: Product Core поверх engines — одна программа с к
 Осталось (следующие шаги): runtime supervisor + manifest вместо хардкод-путей
 Rust-клиента (этап 2 ADR-041 / аудит), затем Product API-фасады (этап 1).
 
+## ADR-041 этап 1: Product API-фасады — 2026-09-21
+
+Канонические сервисные endpoints в `web.py` (UI и внутренний код обращаются к
+ним; JAWL/VoiceMem остаются движками за ними):
+
+- `/api/memory`, `/api/tasks`, `/api/character`, `/api/runtime/status`,
+  `/api/capabilities` — единый контракт: session-bound, `service`-поле,
+  `configured/status` явные при отсутствии движка (`not_configured`).
+- Легаси `/api/jawl/*` сохранены как алиасы (совместимость).
+- Проверено: `tests/test_web.py` — 71/71 OK (новые 5 тестов фасадов +
+  session-bound 403 + not_configured без движка + легаси-контракт).
+
 ## Goal round 3 — 2026-09-19: окончательный вердикт по D1 (blendshapes v5)
 
 Все доступные пути к pure-Rust blendshapes исчерпаны и задокументированы:

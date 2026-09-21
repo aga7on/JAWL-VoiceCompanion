@@ -1081,6 +1081,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json(config)
             return
         if path in {
+            # Product API facade (ADR-041): canonical service endpoints. UI and
+            # internal code call these; JAWL/VoiceMem stay engines behind them.
+            "/api/memory", "/api/tasks", "/api/character", "/api/runtime/status",
+            "/api/capabilities",
+            # Legacy engine-specific aliases (kept for compatibility).
             "/api/jawl/status", "/api/jawl/overview", "/api/jawl/memory",
             "/api/jawl/persona", "/api/jawl/hostos", "/api/jawl/journal",
         }:
@@ -1090,19 +1095,46 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
                 return
             adapter = self.server.gateway.jawl_web
-            if adapter is None:
+            if adapter is None and path.startswith("/api/jawl/"):
                 self._json({"configured": False, "status": "not_configured"})
                 return
             try:
-                if path == "/api/jawl/status":
-                    self._json({"configured": True, "status": adapter.status()})
-                elif path == "/api/jawl/memory":
-                    self._json(adapter.memory())
-                elif path == "/api/jawl/persona":
-                    self._json(adapter.persona())
-                elif path == "/api/jawl/hostos":
-                    self._json({**adapter.hostos(), "control_enabled": self.server.jawl_hostos_control})
-                elif path == "/api/jawl/journal":
+                if path in ("/api/jawl/status", "/api/runtime/status"):
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    self._json({
+                        "ok": True,
+                        "schema_version": 1,
+                        "service": "runtime",
+                        "configured": True,
+                        "status": adapter.status(),
+                    })
+                elif path in ("/api/jawl/memory", "/api/memory"):
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    self._json({**adapter.memory(), "service": "memory"})
+                elif path in ("/api/jawl/persona", "/api/character"):
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    self._json({**adapter.persona(), "service": "character"})
+                elif path in ("/api/jawl/hostos", "/api/capabilities"):
+                    if adapter is None:
+                        self._json({
+                            "service": "capabilities",
+                            "configured": False,
+                            "status": "not_configured",
+                            "control_enabled": self.server.jawl_hostos_control,
+                        })
+                        return
+                    self._json({
+                        "service": "capabilities",
+                        "control_enabled": self.server.jawl_hostos_control,
+                        **adapter.hostos(),
+                    })
+                elif path in ("/api/jawl/journal", "/api/tasks"):
                     values = parse_qs(
                         urlsplit(self.path).query, keep_blank_values=True
                     )
@@ -1131,7 +1163,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                             status=HTTPStatus.BAD_REQUEST,
                         )
                         return
-                    self._json(adapter.autonomy_journal(limit=limit, state=state))
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    self._json({**adapter.autonomy_journal(limit=limit, state=state), "service": "tasks"})
                 else:
                     self._json(adapter.overview())
             except JawlWebUnavailable as exc:
