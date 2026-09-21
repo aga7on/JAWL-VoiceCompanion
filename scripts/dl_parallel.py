@@ -57,21 +57,27 @@ def main() -> int:
             if not fut.result():
                 print(f"chunk failed: {futs[fut]}", file=sys.stderr)
 
-    # concatenate in order
+    # concatenate in order; keep parts until the whole file is verified so a
+    # single failed chunk never forces re-downloading the concatenated prefix.
+    missing = [s for s, _ in ranges if not os.path.exists(f"{out}.part.{s}")]
+    if missing:
+        print(f"missing parts: {len(missing)} (first {missing[0]}) - rerun to resume", file=sys.stderr)
+        return 2
     with open(out, "wb") as fh:
-        for s, e in ranges:
-            part = f"{out}.part.{s}"
-            if not os.path.exists(part):
-                print(f"missing part {s}", file=sys.stderr)
-                return 2
-            with open(part, "rb") as p:
-                fh.write(p.read())
-            os.remove(part)
+        for s, _ in ranges:
+            with open(f"{out}.part.{s}", "rb") as p:
+                while True:
+                    block = p.read(8 * 1024 * 1024)
+                    if not block:
+                        break
+                    fh.write(block)
     got = os.path.getsize(out)
     print(f"done: {got/1e6:.1f} MB (expected {total/1e6:.1f})")
     if got != total:
-        print("SIZE MISMATCH — rerun to resume", file=sys.stderr)
+        print("SIZE MISMATCH — rerun to resume (parts kept)", file=sys.stderr)
         return 3
+    for s, _ in ranges:
+        os.remove(f"{out}.part.{s}")
     return 0
 
 
