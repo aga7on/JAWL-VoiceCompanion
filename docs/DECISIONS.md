@@ -605,6 +605,77 @@ on the first screen delta with an honest "waking" state, not a masked one.
 Quantization is allowed only through the MULTIMODAL_MODEL_GATE mini-bench
 (IQ2/IQ1 need the F16+imatrix path); the earlier Q1 Bonsai failure stands.
 Target profile: <= 8 GB RAM, ~14 GB VRAM. 20 GB is a ceiling, not the norm.
+## ADR-042 — Языковая граница: cognition boundary как разделитель требований
+
+Status: Accepted
+Date: 2026-09-21
+Owner: владелец (сформулировано в диалоге)
+
+Правило: **модели до cognition boundary обязаны понимать язык пользователя;
+модели после — работают с каноническим структурированным состоянием.**
+Внутренний язык Companion — не английский и не русский, а типизированные
+JSON/events (`{type, action, target, scope, confidence}`), а не проза:
+
+- до JAWL: ASR (русский **обязателен**), fast reflex/intent (русский
+  обязателен, если путь обходит основной мозг);
+- после JAWL: tool retrieval, policy/posture classifiers, memory promotion,
+  resource governor — язык не важен, допустимы monolingual модели;
+- запрещено прогонять каждый запрос через большой LLM ради перевода: тогда
+  маленькая модель не экономит, а добавляет стоимость поверх уже
+  отработавшей большой.
+
+Следствие: не нужно искать русскоязычную версию каждой малой модели —
+русский нужен на human-facing границе, внутри системы — один строгий
+canonical machine language.
+
+## ADR-043 — Placement System-1 и судьба Laya (deferred)
+
+Status: Accepted
+Date: 2026-09-21
+Owner: владелец (сформулировано в диалоге)
+
+Целевая схема: `deterministic reflexes (STOP/CANCEL/MUTE, DND, barge-in,
+HostOS policy, memory write) → System-1 (дешёвое понимание/routing/extraction)
+→ JAWL (System 2: persona, goals, memory, policy, tools)`. R2T2 — восприятие
+речи на входе этой схемы.
+
+- System-1 кандидат — **Needle 3** (in-process native, без нового порта и
+  сервиса); он же кандидат на tool *retrieval* (top-N кандидатов в JAWL
+  ReAct), но **никогда** не прямой исполнитель privileged/HostOS действий:
+  иначе появляется второй tool authority.
+- **Laya сейчас не интегрируется.** 600+ MB и ещё один dependency/ownership
+  boundary должны быть оправданы benchmark'ом, а не архитектурной идеей.
+  Условие появления: Needle не справляется на нашем датасете — тогда Laya
+  как источник калиброванных распределений рядом, для сравнения.
+- Замер Laya: `laya-multilingual` поставляется **без финальной калибровки**
+  (README прямо предупреждает об overconfidence; temperature fitting на своём
+  held-out обязателен). Наш RU-прогон это подтверждает: неверный ответ
+  «billing» при confidence `0.896` — порог `if p > 0.8 → interrupt` небезопасен.
+- Критерий допуска любого System-1 кандидата — не accuracy, а **false wake**
+  (заговорил зря), **false memory promotion** (мусор в память), **missed
+  important**, p95 latency, CPU/RAM и соответствие confidence реальной ошибке
+  на нашем датасете событий Companion.
+
+### Поправка 2026-09-21: критерий применён, и Needle его не прошёл
+
+Прогнали критерий на 20 событиях Companion (канонические ключи/enums,
+английский — то есть **не** языковая проблема): все документированные входы
+дают отказ или неверный ответ с высокой уверенностью — `agent.run` (сырое
+состояние / инструкция / проза) 0 вызовов, `triggers` = 0/20 полных при
+`false_memory_promotion=10` и confidence 0.93 на ошибках, `needle.extract`
+= 20/20 `None`. Детали — `docs/RESEARCH.md`.
+
+Следствия:
+- тезис «Needle заменяет Laya» **не подтверждён**; Needle — tool-caller и
+  кандидат на tool-*retrieval*, а не решатель по состоянию системы;
+- Laya остаётся **единственным** кандидатом на калиброванные распределения
+  решений, но интегрируется только после сравнения на нашем датасете
+  (требование к калибровке сохраняется: overconfidence подтверждён);
+- пока же attention/triage остаются на детерминированных правилах — это
+  честный статус-кво, а не временный костыль;
+- **порядок тестов**: R2T2 и Needle3 проверяются по отдельности, связка —
+  только после независимых вердиктов (прямое указание владельца).
+
 ## ADR-041 — Product Core поверх engines (цельность, не монолитность)
 
 Status: Accepted
