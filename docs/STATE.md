@@ -38,6 +38,26 @@ Rust-клиента (этап 2 ADR-041 / аудит), затем Product API-ф
 - Проверено: `tests/test_web.py` — 71/71 OK (новые 5 тестов фасадов +
   session-bound 403 + not_configured без движка + легаси-контракт).
 
+## Исследования System-1 / tool-calling кандидатов — 2026-09-21
+
+Прогнаны локально (веса скачаны параллельным range-загрузчиком):
+
+- **Laya-multilingual (System-1 decision)**: RU работает — 4/5 accuracy на
+  русских фикстурах, warm p50 **54 ms на CPU**, без генерации текста.
+  Вердикт PASS как локальный System-1 слой (routing темы до deep LLM);
+  details в docs/RESEARCH.md.
+- **Needle3 (tool-calling 121M)**: EN безупречен (timer_set conf 1.0), но RU
+  **REJECT** — движок падает `UnicodeDecodeError` на кириллице, близкие
+  русские фразы маршрутизируются неверно (всё → send_message); `--serve` на
+  этом билде не применяет `--tools`.
+- **R2T2 (streaming ASR)**: веса ещё качаются (~24% на 2026-09-21 12:30,
+  4.08 GB; ~94 мин осталось при ~550 KB/s). Смоук-скрипт
+  `scripts/run_r2t2_ru_smoke.py` готов и py_compile-чист (передаёт путь к
+  WAV — qwen_asr сам ресемплит до 16k mono).
+
+Следующий шаг после завершения загрузки R2T2: прогон RU-смоука и запись
+вердикта в docs/RESEARCH.md (PASS/REJECT по RU ASR gate).
+
 ## Goal round 3 — 2026-09-19: окончательный вердикт по D1 (blendshapes v5)
 
 Все доступные пути к pure-Rust blendshapes исчерпаны и задокументированы:
