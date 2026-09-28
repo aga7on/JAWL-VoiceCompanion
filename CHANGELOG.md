@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-09-21 — измеренная скорость контура (SLO)
+
+Замеры на реальных процессах (Companion + GigaAM + VoiceMem + TeraTTS), не на
+моках; новые инструменты: `scripts/asr_latency_adr044.py`,
+`scripts/asr_cold_start_probe.py`, `scripts/audio_pipeline_full_profile.py`,
+`scripts/first_audio_adr044.py`.
+
+| Звено | Измерено | Бюджет |
+|---|---|---|
+| Финал реплики GigaAM, cold | **0.333 с** | 6 с (ход) |
+| Финал реплики GigaAM, warm p50 / p95 | **0.303 / 0.310 с** | 6 с |
+| Холодный старт моста CrispASR после простоя | **0.052 с** | 6 с |
+| Приём чанка `/api/voice/audio`, p50 | **0.018 с** | — |
+| First-audio (конец реплики → первый звук) | **1.31 с** | 10 с |
+| Полный конвейер (ASR → ответ → TTS) | **4.35 с** | — |
+
+ASR занимает ~5 % бюджета хода; узких мест, требующих правки кода, не найдено.
+В полном конвейере `asr_upload` 2.835 с — артефакт теста (141 последовательный
+POST по 20 мс), реальная задержка распознавания — `final_response` 0.297 с;
+TTS синтезирует 14.5 с речи за 1.202 с (RTF ≈ 0.08). Отчёты в `runtime/`:
+`asr-latency-adr044.json`, `audio-pipeline-full-adr044.json`,
+`first-audio-adr044.json`.
+
 ## 2026-09-21 — живой прогон ADR-044 + починка гейта
 
 - **Живой прогон продуктового ASR-пути** (`scripts/live_asr_slice_verify.py`):
