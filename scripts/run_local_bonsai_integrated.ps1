@@ -5,23 +5,21 @@ param(
     [int]$PresentationPort = 8866,
     [int]$TtsPort = 9989,
     [switch]$RunBrowserVoiceE2E,
-    # The default brain is the 27B GSQ model: the 2B big-pickle cannot emit
-    # JAWL's strict tool JSON (every ReAct step failed with "Invalid JSON"
-    # while the pipeline itself was fast). With response_format=json_object
-    # the 27B passed 3/3 tool-JSON probes at 60-66 tok/s (see
-    # runtime/brain-27b-tooljson-probe.json).
-    [string]$Model = 'G:\AI\VLM-RealTime-Bench\models\gsq-rco\Qwen3.8-27B-GSQ-RCO-IQ2_S.gguf',
-    [string]$ModelAlias = 'local-27b'
+    # The default brain is Bonsai-2 27B Hikari (abliterated, owner-selected):
+    # it replaces both the 2B big-pickle (which cannot emit JAWL's strict tool
+    # JSON) and the old Bonsai-27B-Q1_0. Wired through the runtime manifest's
+    # bonsai_model entry.
+    [string]$Model = 'G:\AI\models\Ternary-Bonsai-2-27B-Abliterated-Hikari\Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf',
+    [string]$ModelAlias = 'local-bonsai2'
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-# GPU-accelerated brain: the manifest's canonical llama-server
-# (G:/AI/llamacpp-taardis, CUDA build - both RTX 5080s visible) replaces the
-# CPU-only VLM-RealTime-Bench build, which cost ~33 s per ReAct step and made
-# the interactive SLO unreachable. The model fits wholly on GPU 1 (GPU 0
-# stays with vision/screen-watch).
-$server = 'G:\AI\llamacpp-taardis\build\bin\llama-server.exe'
+# GPU-accelerated brain. Bonsai-2 Hikari uses the PQ2_0 ternary quant, which
+# only the prism build can load (taardis rejects it: "invalid ggml type 142");
+# prism build-fa verified loading this exact model (see runtime logs). Model
+# sits wholly on GPU 1 (GPU 0 stays with vision/screen-watch).
+$server = 'G:\AI\llamacpp-prism\build-fa\bin\llama-server.exe'
 $model = $Model
 $report = Join-Path $repo 'runtime\local-bonsai-integrated-profile.json'
 $startedAt = [DateTime]::UtcNow

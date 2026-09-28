@@ -174,8 +174,8 @@ fn check_companion() -> Result<(), String> {
     Ok(())
 }
 
-fn open_session() -> Result<CompanionSession, String> {
-    let resp = ureq::get(&format!("{COMPANION_URL}/api/session"))
+fn open_session_at(base: &str) -> Result<CompanionSession, String> {
+    let resp = ureq::get(&format!("{base}/api/session"))
         .timeout(Duration::from_secs(5)).call()
         .map_err(|e| format!("session handshake failed: {e}"))?;
     let cookie = resp.header("set-cookie")
@@ -183,6 +183,10 @@ fn open_session() -> Result<CompanionSession, String> {
     let body: Session = serde_json::from_str(&resp.into_string().map_err(|e| e.to_string())?)
         .map_err(|e| format!("bad session json: {e}"))?;
     Ok(CompanionSession { cookie, csrf: body.csrf_token })
+}
+
+fn open_session() -> Result<CompanionSession, String> {
+    open_session_at(COMPANION_URL)
 }
 
 fn to_s16le_16k(samples: &[f32], src_rate: u32) -> Vec<u8> {
@@ -197,10 +201,27 @@ fn to_s16le_16k(samples: &[f32], src_rate: u32) -> Vec<u8> {
     out
 }
 
+fn companion_base_url() -> String {
+    // The control port is manifest-owned (ADR-041); a profile started with a
+    // different port must not leave the mic lane talking to a dead endpoint.
+    // --port N (any argument position) overrides it for disposable profiles.
+    let arg_port = std::env::args().position(|a| a == "--port")
+        .and_then(|pos| std::env::args().nth(pos + 1))
+        .and_then(|v| v.parse::<u16>().ok());
+    let port = arg_port.unwrap_or_else(|| RuntimeConfig::load().control_port);
+    format!("http://127.0.0.1:{port}")
+}
+
 fn run_mic(running: Arc<AtomicBool>) {
     println!("[mode] mic -> companion stream");
-    if let Err(e) = check_companion() { eprintln!("[companion] {e}"); }
-    let session = open_session().ok();
+    let base = companion_base_url();
+    println!("[companion] base url: {base}");
+    let resp: Result<Health, _> = ureq::get(&format!("{base}/api/health"))
+        .timeout(Duration::from_secs(5)).call()
+        .map_err(|e| format!("companion unreachable: {e}"))
+        .and_then(|r| r.into_json().map_err(|e| format!("bad health json: {e}")));
+    match resp { Ok(h) => println!("[companion] status={} mode={}", h.status, h.mode), Err(e) => eprintln!("[companion] {e}") }
+    let session = open_session_at(&base).ok();
     if session.is_some() { println!("[companion] session established"); }
 
     let host = cpal::default_host();
@@ -239,16 +260,59 @@ fn run_mic(running: Arc<AtomicBool>) {
     }, |e| eprintln!("[mic] stream error: {e}"), None).expect("input stream");
     stream.play().expect("play");
 
+    // End-of-utterance: when the mic stays quiet for SILENCE_SECONDS after
+    // speech, the utterance is complete. The companion transcribes the buffer
+    // (GigaAM) and answers; the native client owns the whole voice turn, which
+    // is the ADR-036 audio-owner contract (the browser lane no longer owns
+    // the microphone).
+    const SILENCE_SECONDS: usize = 2;
+    const SPEECH_PEAK: f32 = 0.02;
+    let mut saw_speech = false;
+    let mut silent_chunks: usize = 0;
     while running.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis((CHUNK_SECONDS * 1000.0) as u64));
         let raw: Vec<f32> = { let mut g = buf.lock().unwrap(); g.drain(..).collect() };
         if raw.len() < (src_rate as f32 * 0.2) as usize { continue; }
         let peak = raw.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        if peak >= SPEECH_PEAK {
+            saw_speech = true;
+            silent_chunks = 0;
+        } else if saw_speech {
+            silent_chunks += 1;
+        }
+        if saw_speech && silent_chunks >= SILENCE_SECONDS {
+            // Finalize the utterance before continuing capture: the server
+            // transcribes this session's buffer and returns the reply.
+            saw_speech = false;
+            silent_chunks = 0;
+            println!("[voice] silence after speech -> finishing utterance");
+            if let Some(s) = &session {
+                let mut req = ureq::post(&format!("{base}/api/voice/end"))
+                    .set("Content-Type", "application/json")
+                    .set("Cookie", &s.cookie)
+                    .set("X-Companion-CSRF", &s.csrf)
+                    .timeout(Duration::from_secs(180));
+                let payload = serde_json::json!({ "session_id": "rust-client" });
+                match req.send_string(&payload.to_string()) {
+                    Ok(r) => {
+                        let status = r.status();
+                        match r.into_string() {
+                            Ok(body) => print_voice_final(status, &body),
+                            Err(e) => eprintln!("[voice] read reply failed: {e}"),
+                        }
+                    }
+                    Err(e) => eprintln!("[voice] end failed: {e}"),
+                }
+            } else {
+                eprintln!("[voice] no companion session; cannot finish utterance");
+            }
+            continue;
+        }
         let pcm = to_s16le_16k(&raw, src_rate);
         if pcm.is_empty() { continue; }
         let b64 = base64::engine::general_purpose::STANDARD.encode(&pcm);
         let payload = serde_json::json!({ "pcm16_base64": b64, "sample_rate": TARGET_RATE, "channels": 1, "session_id": "rust-client" });
-        let mut req = ureq::post(&format!("{COMPANION_URL}/api/voice/audio")).set("Content-Type", "application/json").timeout(Duration::from_secs(10));
+        let mut req = ureq::post(&format!("{base}/api/voice/audio")).set("Content-Type", "application/json").timeout(Duration::from_secs(10));
         if let Some(s) = &session { req = req.set("Cookie", &s.cookie).set("X-Companion-CSRF", &s.csrf); }
         match req.send_string(&payload.to_string()) {
             Ok(r) => println!("[stream] {} B (peak {:.3}) -> {}", pcm.len(), peak, r.status()),
@@ -257,6 +321,23 @@ fn run_mic(running: Arc<AtomicBool>) {
     }
     drop(stream);
     println!("[mic] stopped");
+}
+
+/// Print the finalized voice turn: transcript plus the companion's reply.
+fn print_voice_final(status: u16, body: &str) {
+    let parsed: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(_) => { println!("[voice] final -> {status} (non-json body)"); return; }
+    };
+    let transcript = parsed.get("transcript").and_then(|t| t.as_str()).unwrap_or("");
+    let ok = parsed.get("ok").and_then(|o| o.as_bool());
+    println!("[voice] final -> {status} ok={:?} transcript={:?}", ok, transcript);
+    if let Some(responses) = parsed.get("responses").and_then(|r| r.as_array()) {
+        for response in responses {
+            let text = response.get("text").and_then(|t| t.as_str()).unwrap_or("");
+            if !text.is_empty() { println!("[companion] {text}"); }
+        }
+    }
 }
 
 /// Software texture-mapped triangle rasterizer for the Live2D mesh.
