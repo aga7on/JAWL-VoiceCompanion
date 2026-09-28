@@ -4,7 +4,14 @@ param(
     [int]$ControlPort = 2467,
     [int]$PresentationPort = 8866,
     [int]$TtsPort = 9989,
-    [switch]$RunBrowserVoiceE2E
+    [switch]$RunBrowserVoiceE2E,
+    # The default brain is the 27B GSQ model: the 2B big-pickle cannot emit
+    # JAWL's strict tool JSON (every ReAct step failed with "Invalid JSON"
+    # while the pipeline itself was fast). With response_format=json_object
+    # the 27B passed 3/3 tool-JSON probes at 60-66 tok/s (see
+    # runtime/brain-27b-tooljson-probe.json).
+    [string]$Model = 'G:\AI\VLM-RealTime-Bench\models\gsq-rco\Qwen3.8-27B-GSQ-RCO-IQ2_S.gguf',
+    [string]$ModelAlias = 'local-27b'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,10 +19,10 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 # GPU-accelerated brain: the manifest's canonical llama-server
 # (G:/AI/llamacpp-taardis, CUDA build - both RTX 5080s visible) replaces the
 # CPU-only VLM-RealTime-Bench build, which cost ~33 s per ReAct step and made
-# the interactive SLO unreachable. The 2B model fits wholly on GPU 1 (GPU 0
+# the interactive SLO unreachable. The model fits wholly on GPU 1 (GPU 0
 # stays with vision/screen-watch).
 $server = 'G:\AI\llamacpp-taardis\build\bin\llama-server.exe'
-$model = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf'
+$model = $Model
 $report = Join-Path $repo 'runtime\local-bonsai-integrated-profile.json'
 $startedAt = [DateTime]::UtcNow
 $integratedExitCode = $null
@@ -23,7 +30,7 @@ $status = 'failed'
 foreach ($path in @($server, $model)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Local Bonsai resource is missing: $path" } }
 $out = Join-Path $repo 'runtime\local-bonsai-llm.log'
 $err = Join-Path $repo 'runtime\local-bonsai-llm.err'
-$llm = Start-Process -FilePath $server -WorkingDirectory (Split-Path -Parent $server) -ArgumentList @('--model',$model,'--alias','big-pickle','--host','127.0.0.1','--port','8990','--threads','12','--ctx-size','16384','--parallel','1','--gpu-layers','99','--device','CUDA1') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+$llm = Start-Process -FilePath $server -WorkingDirectory (Split-Path -Parent $server) -ArgumentList @('--model',$model,'--alias',$ModelAlias,'--host','127.0.0.1','--port','8990','--threads','12','--ctx-size','16384','--parallel','1','--gpu-layers','99','--device','CUDA1') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
 try {
     $ready = $false
     for ($i = 0; $i -lt 180; $i++) {
@@ -33,6 +40,9 @@ try {
     }
     if (-not $ready) { throw 'Local Bonsai did not become healthy.' }
     $env:LLM_API_URL = 'http://127.0.0.1:8990/v1'
+    # Point JAWL's main_model at the local 27B alias so the ReAct engine
+    # addresses the model the worker actually serves.
+    $env:JAWL_MODEL_OVERRIDE = $ModelAlias
     $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,
         # The local big-pickle LLM runs on CPU and needs ~33 s per ReAct step,
         # so the first heartbeat cycle can exceed the default 180 s budget.

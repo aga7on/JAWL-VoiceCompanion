@@ -2044,7 +2044,13 @@
     async function startMicrophone() {
       if (!window.isSecureContext) throw new Error('Для микрофона на планшете откройте панель по HTTPS с доверенным сертификатом.');
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Браузер не поддерживает микрофон');
-      const audio = {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false};
+      // AEC stays on for barge-in (the companion speaks through the speakers
+      // while the mic listens). Noise suppression is deliberately OFF: the
+      // browser's WebRTC denoiser distorts speech for an ASR model trained on
+      // clean audio (it clipped ~35% of the synthetic E2E fixture's tail and
+      // the final transcript came back empty), while the app already has its
+      // own RMS gate plus is_meaningful_transcript filtering on the server.
+      const audio = {channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: false};
       if (micDevice?.value) audio.deviceId = {exact: micDevice.value};
       const stream = await navigator.mediaDevices.getUserMedia({audio});
       // Chromium hides real device labels until the site has microphone

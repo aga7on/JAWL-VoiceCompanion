@@ -30,14 +30,17 @@
   `first-audio-adr044.json`.
 - [x] Fault-injection ADR-044: сломанный crispasr → `ok:false` с явной
   `GigaAMBatchError`, транскрипт не выдуман (`runtime/asr-fault-injection-adr044.json`).
-- [x] Живой стек с настоящим мозгом (без моков, автономно): llama-server → JAWL
-  → Companion (GigaAM+VoiceMem+TeraTTS) → Edge/getUserMedia. Голос проходит
-  насквозь; LLM ускорена **75×** (CPU-сборка → CUDA `llamacpp-taardis`, GPU1,
-  75.9 ток/с). Честная граница: 2B big-pickle не тянет tool-JSON JAWL —
-  browser voice E2E ждёт ответ, которого 2B-модель не может дать валидно.
-  Нормальный мозг = deepseek-v4-flash через релей (стек владельца) или большая
-  локальная модель. Правки: `run_local_bonsai_integrated.ps1` (600 c,
-  AllowBusyStartup, дефолтные WAV).
+- [x] Живой стек с настоящим мозгом (без моков, автономно): llama-server 27B
+  (GSQ RCO, GPU1) → JAWL → Companion → Edge/getUserMedia. Голос проходит
+  насквозь; LLM **3/3 валидных tool-JSON** (60-66 ток/с, 1.6-2.7 с/ход).
+- [x] Найдено и исправлено реальное улучшение: WebRTC `noiseSuppression`
+  искажал речь для GigaAM — выключен (AEC оставлен для barge-in).
+- [ ] **Граница браузерного voice-E2E (fake-capture)**: Chromium-эмуляция
+  микрафона обрывает файл при EOF (~1.8 с из 2.76-с фикстуры, хвост фразы
+  теряется) и вносит AEC-эхо; GigaAM честно возвращает пусто. Нужны либо
+  перегенерированные фикстуры (речь ≥4 с, завершённые фразы), либо реальный
+  микрофон владельца. Продуктовый HTTP-контур — зелёный (3/3, first-audio
+  1.31 с).
 - [ ] Живой ход голоса с мозгом deepseek-v4-flash — нужен поднятый
   пользователем релей/ключи (блокер до утра).
 - [ ] Микрофонная акустика/AEC — физическое устройство (блокер до утра).
