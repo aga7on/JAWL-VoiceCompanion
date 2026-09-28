@@ -64,15 +64,22 @@ def main() -> int:
         box.send_keys("/help")
         driver.find_element(By.ID, "send").click()
         wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "#messages .message")) >= 1)
-        box.send_keys("/tab voice")
-        driver.find_element(By.ID, "send").click()
-        wait.until(lambda d: d.find_element(By.CSS_SELECTOR, '[data-panel="voice"]').is_displayed())
-        driver.find_element(By.CSS_SELECTOR, '[data-tab="home"]').click()
+        # The UI turn (E1-E6) replaced the old voice/perception/access/system
+        # tabs with four life sections and moved the microphone card into
+        # Settings -> Voice. Drive the current shell, not the retired one.
+        driver.find_element(By.CSS_SELECTOR, '[data-tab="settings"]').click()
+        wait.until(lambda d: d.find_element(By.CSS_SELECTOR, '[data-panel="settings"]').is_displayed())
+        voice_tab = driver.find_elements(By.CSS_SELECTOR, '[data-settings-sub="voice"]')
+        if voice_tab:
+            voice_tab[0].click()
+        wait.until(lambda d: d.find_element(By.ID, "mic-gate").is_displayed())
         report["checks"].append("local_slash_commands")
         gate = driver.find_element(By.ID, "mic-gate")
         driver.execute_script("arguments[0].value='0.075'; arguments[0].dispatchEvent(new Event('input', {bubbles:true})); arguments[0].dispatchEvent(new Event('change', {bubbles:true}));", gate)
         wait.until(lambda d: d.execute_script("return localStorage.getItem('jawl-mic-gate')") == "0.075")
         report["checks"].append("gate_persisted")
+        driver.find_element(By.CSS_SELECTOR, '[data-tab="home"]').click()
+        wait.until(lambda d: d.find_element(By.CSS_SELECTOR, '[data-panel="home"]').is_displayed())
         box = driver.find_element(By.ID, "input")
         box.send_keys("Проверь связь")
         driver.find_element(By.ID, "send").click()
@@ -106,7 +113,7 @@ def main() -> int:
                 "width": width, "height": height, "deviceScaleFactor": 1,
                 "mobile": width < 700,
             })
-            for tab in ["home", "voice", "perception", "memory", "access", "system"]:
+            for tab in ["home", "tasks", "memory", "settings"]:
                 driver.find_element(By.CSS_SELECTOR, f'[data-tab="{tab}"]').click()
                 wait.until(lambda d: d.find_element(By.CSS_SELECTOR, f'[data-panel="{tab}"]').is_displayed())
                 dimensions = driver.execute_script("return {width: innerWidth, content: document.documentElement.scrollWidth}")
