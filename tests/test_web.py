@@ -1177,7 +1177,10 @@ class AgentLogTests(unittest.TestCase):
             log = log_dir / "main.log"
             log.write_text(
                 "\n".join(f"line-{index}" for index in range(1, 21))
-                + "\nAuthorization: Bearer sk-abcdef1234567890abcdef\n",
+                # Deliberately fake credential: this fixture proves the log-tail
+                # endpoint redacts secrets.
+                + "\nAuthorization: Bearer sk-abcdef1234567890abcdef\n"  # secret-scan: allow
+                ,
                 encoding="utf-8",
             )
             self._server(log_dir=log_dir)

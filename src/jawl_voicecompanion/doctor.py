@@ -86,7 +86,7 @@ def build_doctor_report(
     if gigaam_transcriber is not None:
         checks.append(_check(
             "asr", "gigaam",
-            "Sber GigaAM batch final (crispasr); Qwen3-ASR is an optional fallback",
+            "Sber GigaAM (crispasr) is the only ASR engine; there is no provider fallback",
             ready=True,
         ))
     else:

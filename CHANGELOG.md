@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-21 — живой прогон ADR-044 + починка гейта
+
+- **Живой прогон продуктового ASR-пути** (`scripts/live_asr_slice_verify.py`):
+  реальный Companion + GigaAM + VoiceMem sidecar, настоящие WAV через боевые
+  эндпоинты. `/api/voice/audio` 200 с монотонно растущим `buffered`,
+  `/api/voice/end` 0.296/0.338/0.258 с, **3/3** осмысленных русских
+  транскрипта, draft mode `streaming`, doctor `asr: gigaam`.
+  Отчёт: `runtime/live-asr-slice-adr044.json`.
+- Найден и исправлен дефект, который виден только живьём: `doctor.py` всё ещё
+  рекламировал «Qwen3-ASR is an optional fallback» — строка пережила срез
+  (правились только соседние ветки).
+- **Гейт `run_full_gate.ps1` был красно-недостижим** на шаге secret-scan:
+  сканировались gitignored-дампы (40-МБ `codex-thread-*.json` в корне) и
+  намеренно поддельный ключ в фикстуре теста redaction логов.
+  `release_secret_scan.py` теперь пропускает gitignored-пути (такой файл не
+  попадает в релиз) и понимает явную директиву `secret-scan: allow` для
+  тестовых фикстур. Тесты сканера 6/6, на репо `pass: true`.
+- Освобождено **84 GB** на G: (было 0 свободно) по явному согласию владельца:
+  `runtime/instances` старше 15.09 (124 каталога), research-модели
+  (crane/vlm/minicpm/r2t2) и мёртвые веса ASR (qwen3-asr, whisper-turbo).
+- Известный пробел: `scripts/run_browser_interaction_e2e.py` устарел после
+  UI-поворота (ждёт удалённый `#chat`, старые вкладки и видимый `#mic-gate`) —
+  к ASR отношения не имеет, зафиксирован в TODO.
+
 ## 2026-09-21 - GigaAM — единственный ASR (ADR-044)
 
 - Удалён OpenAI-совместимый provider-путь: `--asr-url`, `--asr-model`,

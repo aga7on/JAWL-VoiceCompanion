@@ -10,8 +10,18 @@
   «фолбэк» на второй движок убран.
 - [x] Амбиентный speech-gate переведён с HTTP-endpoint на тот же transcriber;
   `/api/voice/draft` обслуживает только CrispASR streaming bridge.
-- [ ] Live-проверка голосового контура после среза (capture → GigaAM → JAWL →
-  TTS → playback) на поднятом пользователем стеке — unit/fake-HTTP её не заменяет.
+- [x] Живой прогон продуктового ASR-пути (`scripts/live_asr_slice_verify.py`):
+  реальный Companion + GigaAM-транскрайбер + VoiceMem sidecar, настоящие WAV
+  через боевые эндпоинты → `/api/voice/audio` 200 с растущим `buffered`,
+  `/api/voice/end` 0.296/0.338/0.258 с, **3/3** осмысленных русских
+  транскрипта, draft mode `streaming`, doctor `asr: gigaam ready: true`
+  (`runtime/live-asr-slice-adr044.json`). Этим же прогоном найден и исправлен
+  дефект: `doctor.py` всё ещё писал «Qwen3-ASR is an optional fallback».
+- [ ] Browser E2E после ADR-044 (страница/микрофон/аватар/JAWL-мозг) — нужен
+  стек, поднятый пользователем. `scripts/run_browser_interaction_e2e.py`
+  **устарел** и падает не из-за ASR: он ждёт `#chat` (элемент удалён в
+  UI-повороте), вкладки `data-tab="voice"` и видимый `#mic-gate` (сейчас
+  скрыт). Нужно привести селекторы/шаги к текущему UI (E1–E6).
 - [ ] Вернуть quality-гейт `--expects` для синтетических кейсов: вместе с
   `run_asr_profile.py` ушла проверка `must_transcribe`/`min_chars`, и
   `run_synthetic_cases_live.ps1` теперь выходит 0 даже когда харнесс печатает
