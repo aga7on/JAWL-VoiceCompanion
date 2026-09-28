@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-21 — восстановлен quality-гейт синтетических ASR-кейсов
+
+- `gigaam_baseline_fixtures.py` получил режим `--expects <cases.json>`:
+  каждый кейс с `must_transcribe` обязан выдать ≥ `min_chars` символов, иначе
+  выход ≠ 0; шумовые кейсы с пустым транскриптом — корректны
+  (`ok_tolerated_error`), файл без ожидания в манифесте — fail-closed.
+  Плюс `--json-report` для evidence.
+- `run_synthetic_cases_live.ps1`: генератор кейсов вызывается с `-X utf8`
+  (PS 5.1 ломал кириллицу), ASR-шаг гоняет харнесс с `--expects`.
+- **Найден и исправлен скрытый баг кодировки**: `Invoke-WebRequest` в PS 5.1
+  отправлял JSON с русским текстом как ANSI → TeraTTS синтезировал мусорную
+  11.7-с utterance вместо 2.4-с, GigaAM возвращал пустой транскрипт, а прогон
+  **выходил с кодом 0** (тихий провал качества). Теперь тело посылается
+  UTF-8-байтами с `charset=utf-8`.
+- Живой прогон: **гейт PASS, 12/12 кейсов** (tempo_slow, паузы, шум SNR 0/10,
+  quiet, faint, consecutive_two — все распознаны; noise_only корректно пуст).
+  `run_synthetic_questions_live.ps1` — 3/3 вопроса распознаны дословно.
+  Отчёты: `runtime/synthetic-cases/asr-gate.json`, `asr.log`.
+
 ## 2026-09-21 — измеренная скорость контура (SLO)
 
 Замеры на реальных процессах (Companion + GigaAM + VoiceMem + TeraTTS), не на

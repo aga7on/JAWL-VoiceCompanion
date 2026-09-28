@@ -33,11 +33,14 @@
 - [ ] Реальный JAWL-мозг (LLM TTFT) в живом голосовом контуре — нужен
   поднятый пользователем стек и ключи (блокер до утра).
 - [ ] Микрофонная акустика/AEC — физическое устройство (блокер до утра).
-- [ ] Вернуть quality-гейт `--expects` для синтетических кейсов: вместе с
-  `run_asr_profile.py` ушла проверка `must_transcribe`/`min_chars`, и
-  `run_synthetic_cases_live.ps1` теперь выходит 0 даже когда харнесс печатает
-  `ERROR: crispasr transcript is empty`. Нужна проверка `cases.json` + лога на
-  стороне PS либо расширение харнесса.
+- [x] Вернуть quality-гейт `--expects` для синтетических кейсов: харнесс
+  `gigaam_baseline_fixtures.py` теперь принимает `--expects cases.json`
+  (`must_transcribe`/`min_chars`, fail-closed на кейс без ожидания) +
+  `--json-report`. Живой прогон `run_synthetic_cases_live.ps1`: **гейт PASS,
+  12/12** (шум/паузы/тихая/замедление/подряд — распознаны; noise_only —
+  корректно пуст), `runtime/synthetic-cases/asr-gate.json`. Заодно найден и
+  исправлен скрытый баг: PS 5.1 отправлял русский JSON телом в ANSI → TeraTTS
+  синтезировал мусор, GigaAM отдавал пусто, а прогон молча выходил 0.
 - [ ] Опционально: освободить 971 MB весов Qwen3-ASR (`G:\AI\VLM-RealTime-Bench\
   models\qwen3-asr`) — код на них больше не ссылается; удаление файлов за владельцем.
 

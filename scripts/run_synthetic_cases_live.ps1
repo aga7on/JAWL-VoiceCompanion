@@ -28,8 +28,12 @@ try {
         for ($i=0; $i -lt 90; $i++) { try { $h=Invoke-RestMethod 'http://127.0.0.1:9889/health' -TimeoutSec 2; if($h.status -eq 'ok'){$ready=$true;break} } catch{}; if($tera.HasExited){throw "Tera exited: $($tera.ExitCode)"}; Start-Sleep 1 }
         if(-not $ready){throw 'Tera did not become ready'}
         $sourceWavPath = Join-Path $runDir 'source.wav'
-        $payload = @{text=$sourceText;voice='ru_f1';speed=1.0} | ConvertTo-Json -Compress
-        Invoke-WebRequest -Uri 'http://127.0.0.1:9889/tts' -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 120 -OutFile $sourceWavPath
+        $payload = @{text=$sourceText;voice='ru_f1';speed=1.0}
+        # Windows PowerShell 5.1 sends string bodies as ANSI unless the bytes
+        # are passed explicitly: without this the TTS synthesizes a mojibake
+        # utterance whose duration balloons and GigaAM yields an empty transcript.
+        $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress))
+        Invoke-WebRequest -Uri 'http://127.0.0.1:9889/tts' -Method Post -ContentType 'application/json; charset=utf-8' -Body $payloadBytes -TimeoutSec 120 -OutFile $sourceWavPath
     } else {
         $sourceWavPath = (Resolve-Path $SourceWav).Path
         if(-not (Test-Path -LiteralPath $sourceWavPath -PathType Leaf)){throw "Source WAV missing: $sourceWavPath"}
@@ -37,12 +41,17 @@ try {
 } finally { if($null -ne $tera -and -not $tera.HasExited){Stop-Process -Id $tera.Id -Force -ErrorAction SilentlyContinue;$tera.WaitForExit(5000)|Out-Null} }
 
 $casesDir = Join-Path $runDir 'cases'
-& python (Join-Path $repo 'scripts\make_synthetic_audio_cases.py') --wav $sourceWavPath --out $casesDir --seed 7
+& python -X utf8 (Join-Path $repo 'scripts\make_synthetic_audio_cases.py') --wav $sourceWavPath --out $casesDir --seed 7
 if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
 
+$casesManifest = Join-Path $casesDir 'cases.json'
+if(-not (Test-Path -LiteralPath $casesManifest -PathType Leaf)){ throw "cases.json manifest missing: $casesManifest" }
 $wav=@(Get-ChildItem $casesDir -Filter '*.wav' -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 $asrLog = Join-Path $runDir 'asr.log'
-$asrOutput = & python -X utf8 (Join-Path $repo 'scripts\gigaam_baseline_fixtures.py') @wav
+$asrReport = Join-Path $runDir 'asr-gate.json'
+# --expects turns the harness into the quality gate: every case marked
+# must_transcribe must yield min_chars characters, otherwise the run fails.
+$asrOutput = & python -X utf8 (Join-Path $repo 'scripts\gigaam_baseline_fixtures.py') --expects $casesManifest --json-report $asrReport @wav
 $asrCode = $LASTEXITCODE
 $asrOutput | Set-Content -LiteralPath $asrLog -Encoding UTF8
 if($asrCode -ne 0){exit $asrCode}
