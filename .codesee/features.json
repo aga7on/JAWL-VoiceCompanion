@@ -2,7 +2,7 @@
   "version": "0",
   "manifest": {
     "repo": "JAWL-VoiceCompanion",
-    "generated_at": "2026-09-12T18:30:00Z",
+    "generated_at": "2026-09-29T22:30:00Z",
     "generator": "ai@opencode",
     "lang": "ru"
   },
@@ -1821,6 +1821,456 @@
       "confidence": 0.85,
       "provenance": "ai",
       "updated_at": "2026-09-13T01:20:00Z"
+    },
+    {
+      "id": "f-runtime-supervisor",
+      "name": "Супервизор воркеров",
+      "summary": "Продукт владеет стартом, здоровьем и разбором воркеров",
+      "epicId": "ops",
+      "triggers": [
+        {
+          "kind": "startup",
+          "detail": "RuntimeSupervisor из пакета продукта (ADR-041 этап 2, срез 1)"
+        },
+        {
+          "kind": "cli",
+          "detail": "python scripts/supervisor_live_adr041.py — живой прогон стека"
+        }
+      ],
+      "steps": [
+        {
+          "id": "specs",
+          "name": "Описать воркеров",
+          "role": "input",
+          "note": "WorkerSpec: команда, проба здоровья, бюджет перезапусков, порядок старта",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                26,
+                39
+              ]
+            },
+            {
+              "file": "src/jawl_voicecompanion/__init__.py",
+              "lines": [
+                37,
+                37
+              ]
+            }
+          ]
+        },
+        {
+          "id": "spawn",
+          "name": "Запустить по порядку",
+          "role": "side-effect",
+          "note": "воркеры стартуют в порядке зависимостей, каждый — реальный процесс",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                79,
+                91
+              ]
+            }
+          ]
+        },
+        {
+          "id": "health",
+          "name": "Дождаться живости",
+          "role": "validation",
+          "note": "реальная проба до дедлайна; без пробы достаточно живого процесса после паузы",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                154,
+                177
+              ]
+            }
+          ]
+        },
+        {
+          "id": "crash",
+          "name": "Заметить вылет",
+          "role": "error",
+          "note": "воркер, завершившийся при старте, — вылет с кодом, а не таймаут пробы",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                160,
+                164
+              ]
+            },
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                173,
+                176
+              ]
+            }
+          ]
+        },
+        {
+          "id": "retry",
+          "name": "Перезапустить в бюджете",
+          "role": "other",
+          "note": "сбойный воркер перезапускается, пока не исчерпан личный бюджет",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                94,
+                104
+              ]
+            },
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                122,
+                150
+              ]
+            }
+          ]
+        },
+        {
+          "id": "exhausted",
+          "name": "Исчерпать бюджет",
+          "role": "error",
+          "note": "весь старт провален: полуживых стеков не остаётся",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                100,
+                102
+              ]
+            }
+          ]
+        },
+        {
+          "id": "teardown",
+          "name": "Разобрать стек",
+          "role": "side-effect",
+          "note": "остановка в обратном порядке; только процессы, начатые самим супервизором",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                106,
+                110
+              ]
+            },
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                179,
+                192
+              ]
+            }
+          ]
+        },
+        {
+          "id": "report",
+          "name": "Собрать отчёт",
+          "role": "output",
+          "note": "pid, живость, число перезапусков и последняя ошибка по каждому воркеру",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                51,
+                57
+              ]
+            },
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py",
+              "lines": [
+                200,
+                211
+              ]
+            }
+          ]
+        },
+        {
+          "id": "verify",
+          "name": "Проверить на живом стеке",
+          "role": "validation",
+          "note": "7 тестов на реальных процессах и HTTP-пробах + живой прогон Hikari-мозга и TeraTTS",
+          "refs": [
+            {
+              "file": "tests/test_supervisor.py",
+              "lines": [
+                58,
+                189
+              ]
+            },
+            {
+              "file": "scripts/supervisor_live_adr041.py",
+              "lines": [
+                36,
+                117
+              ]
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "specs",
+          "to": "spawn",
+          "kind": "next"
+        },
+        {
+          "from": "spawn",
+          "to": "health",
+          "kind": "next"
+        },
+        {
+          "from": "health",
+          "to": "crash",
+          "kind": "error",
+          "condition": "воркер завершился при старте"
+        },
+        {
+          "from": "health",
+          "to": "retry",
+          "kind": "error",
+          "condition": "проба не стала зелёной"
+        },
+        {
+          "from": "retry",
+          "to": "health",
+          "kind": "loop",
+          "condition": "бюджет перезапусков не исчерпан"
+        },
+        {
+          "from": "retry",
+          "to": "exhausted",
+          "kind": "error",
+          "condition": "бюджет перезапусков исчерпан"
+        },
+        {
+          "from": "exhausted",
+          "to": "teardown",
+          "kind": "error",
+          "condition": "fail-closed: остановить всё запущенное"
+        },
+        {
+          "from": "health",
+          "to": "report",
+          "kind": "next"
+        },
+        {
+          "from": "report",
+          "to": "teardown",
+          "kind": "next"
+        },
+        {
+          "from": "verify",
+          "to": "spawn",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-09-29T22:30:00Z"
+    },
+    {
+      "id": "f-native-voice-lane",
+      "name": "Нативный голосовой ход",
+      "summary": "Rust-клиент сам завершает реплику и печатает ответ",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "rust-client --mic — микрофоном владеет нативный клиент"
+        }
+      ],
+      "steps": [
+        {
+          "id": "base",
+          "name": "Найти пульт",
+          "role": "input",
+          "note": "порт из манифеста рантайма; --port N перекрывает для одноразовых профилей",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                204,
+                213
+              ]
+            }
+          ]
+        },
+        {
+          "id": "session",
+          "name": "Открыть сессию",
+          "role": "auth",
+          "note": "проверка здоровья компаньона и cookie+CSRF сессия",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                219,
+                225
+              ]
+            }
+          ]
+        },
+        {
+          "id": "mic",
+          "name": "Взять микрофон",
+          "role": "input",
+          "note": "предпочитаемый микрофон из манифеста, микс в моно 16 кГц",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                227,
+                260
+              ]
+            }
+          ]
+        },
+        {
+          "id": "stream",
+          "name": "Слать чанки",
+          "role": "side-effect",
+          "note": "PCM уходит в голосовой буфер компаньона",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                311,
+                320
+              ]
+            }
+          ]
+        },
+        {
+          "id": "silence",
+          "name": "Поймать тишину",
+          "role": "compute",
+          "note": "2 с тишины после речи — конец реплики",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                263,
+                283
+              ]
+            }
+          ]
+        },
+        {
+          "id": "finish",
+          "name": "Завершить реплику",
+          "role": "side-effect",
+          "note": "ход финализируется на сервере: буфер расшифровывается и приходит ответ",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                284,
+                310
+              ]
+            }
+          ]
+        },
+        {
+          "id": "print",
+          "name": "Напечатать ответ",
+          "role": "output",
+          "note": "транскрипт и реплика компаньона в консоль",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                326,
+                341
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fail",
+          "name": "Отказ хода",
+          "role": "error",
+          "note": "компаньон недоступен или сессии нет — реплика не завершается",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                219,
+                223
+              ]
+            },
+            {
+              "file": "rust-client/src/main.rs",
+              "lines": [
+                306,
+                308
+              ]
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "base",
+          "to": "session",
+          "kind": "next"
+        },
+        {
+          "from": "session",
+          "to": "mic",
+          "kind": "next"
+        },
+        {
+          "from": "mic",
+          "to": "stream",
+          "kind": "next"
+        },
+        {
+          "from": "stream",
+          "to": "silence",
+          "kind": "loop",
+          "condition": "чанки идут, пока речь не стихла"
+        },
+        {
+          "from": "silence",
+          "to": "finish",
+          "kind": "conditional",
+          "condition": "пауза после речи"
+        },
+        {
+          "from": "finish",
+          "to": "print",
+          "kind": "next"
+        },
+        {
+          "from": "session",
+          "to": "fail",
+          "kind": "error",
+          "condition": "компаньон недоступен"
+        },
+        {
+          "from": "finish",
+          "to": "fail",
+          "kind": "error",
+          "condition": "нет сессии или сервер отказал"
+        },
+        {
+          "from": "print",
+          "to": "stream",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-09-29T22:30:00Z"
     }
   ],
   "cross_feature": [
@@ -1909,6 +2359,18 @@
       "to": "f-voice-turn",
       "kind": "depends_on",
       "note": "WS-транспорт несёт голосовые чанки и финализацию"
+    },
+    {
+      "from": "f-native-voice-lane",
+      "to": "f-voice-turn",
+      "kind": "depends_on",
+      "note": "нативный клиент питает тот же голосовой контур /api/voice"
+    },
+    {
+      "from": "f-runtime-supervisor",
+      "to": "f-prosody",
+      "kind": "triggers",
+      "note": "живая проверка ADR-041 поднимает TeraTTS-воркер под супервизором"
     }
   ],
   "epic_flow": [
