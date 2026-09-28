@@ -17,11 +17,22 @@
   транскрипта, draft mode `streaming`, doctor `asr: gigaam ready: true`
   (`runtime/live-asr-slice-adr044.json`). Этим же прогоном найден и исправлен
   дефект: `doctor.py` всё ещё писал «Qwen3-ASR is an optional fallback».
-- [ ] Browser E2E после ADR-044 (страница/микрофон/аватар/JAWL-мозг) — нужен
-  стек, поднятый пользователем. `scripts/run_browser_interaction_e2e.py`
-  **устарел** и падает не из-за ASR: он ждёт `#chat` (элемент удалён в
-  UI-повороте), вкладки `data-tab="voice"` и видимый `#mic-gate` (сейчас
-  скрыт). Нужно привести селекторы/шаги к текущему UI (E1–E6).
+- [x] Browser interaction E2E приведён к текущему UI (`#messages`, вкладки
+  home/tasks/memory/settings, mic-gate через Настройки → «Голос и
+  восприятие»): status **passed**, 6 проверок, 6 вьюпортов без overflow,
+  7 скриншотов (`runtime/browser-evidence/interaction/`). Полный гейт
+  `run_full_gate.ps1` — **exit 0, 11/11 шагов PASS**.
+- [x] Замеры скорости контура (реальные процессы, не моки): финал GigaAM
+  cold 0.333 с / warm p50 0.303 с; холодный старт моста 0.052 с; first-audio
+  **1.31 с** при бюджете 10 с; полный конвейер 4.35 с. Узких мест в коде не
+  найдено (ASR ≈ 5 % бюджета хода). Отчёты в `runtime/`:
+  `asr-latency-adr044.json`, `audio-pipeline-full-adr044.json`,
+  `first-audio-adr044.json`.
+- [x] Fault-injection ADR-044: сломанный crispasr → `ok:false` с явной
+  `GigaAMBatchError`, транскрипт не выдуман (`runtime/asr-fault-injection-adr044.json`).
+- [ ] Реальный JAWL-мозг (LLM TTFT) в живом голосовом контуре — нужен
+  поднятый пользователем стек и ключи (блокер до утра).
+- [ ] Микрофонная акустика/AEC — физическое устройство (блокер до утра).
 - [ ] Вернуть quality-гейт `--expects` для синтетических кейсов: вместе с
   `run_asr_profile.py` ушла проверка `must_transcribe`/`min_chars`, и
   `run_synthetic_cases_live.ps1` теперь выходит 0 даже когда харнесс печатает
