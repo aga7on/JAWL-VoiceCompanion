@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-09-28 — живой стек с настоящим мозгом; LLM ускорена в 75×
+
+- Полный стек без моков (llama-server big-pickle → JAWL → Companion GigaAM +
+  VoiceMem + TeraTTS → реальный Edge с getUserMedia) поднимается и пропускает
+  голос насквозь: 8 чанков `/api/voice/audio` → 200, `/api/voice/end` → 200 за
+  0.2 с, транскрипт получен (`runtime/live-brain-gpu-20260929.txt`,
+  `runtime/browser-voice-e2e.json`).
+- **Узкое место найдено и устранено**: локальный мозг работал на CPU-only
+  сборке llama-server (33 с/ReAct-шаг — SLO недостижим). Воркер переведён на
+  CUDA-сборку из манифеста (`G:/AI/llamacpp-taardis`), 2B-модель целиком на
+  GPU1: замер **75.9 ток/с**, ход за 0.18 с (**~75×**). GPU0 остаётся зрению.
+- `run_local_bonsai_integrated.ps1`: старт 600 с + `-AllowBusyStartup`
+  (CPU-агент легитимно «думает» при открытом порте), дефолтные
+  voice-фикстуры задаёт сам лаунчер — передача массива WAV через
+  `powershell -File` сворачивала его в строку и ломала параметр.
+- Честная граница: browser voice E2E падает на `wait_voice_message` **не из-за
+  скорости**, а из-за 2B-модели: строгий tool-JSON JAWL-протокола ей не по
+  силам («Tool protocol error: Invalid JSON» в каждом ReAct-шаге). Контур
+  проходим инфраструктурно; качественный мозг — deepseek-v4-flash через
+  релей владельца или большая локальная модель.
+
 ## 2026-09-21 — восстановлен quality-гейт синтетических ASR-кейсов
 
 - `gigaam_baseline_fixtures.py` получил режим `--expects <cases.json>`:

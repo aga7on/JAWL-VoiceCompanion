@@ -30,8 +30,16 @@
   `first-audio-adr044.json`.
 - [x] Fault-injection ADR-044: сломанный crispasr → `ok:false` с явной
   `GigaAMBatchError`, транскрипт не выдуман (`runtime/asr-fault-injection-adr044.json`).
-- [ ] Реальный JAWL-мозг (LLM TTFT) в живом голосовом контуре — нужен
-  поднятый пользователем стек и ключи (блокер до утра).
+- [x] Живой стек с настоящим мозгом (без моков, автономно): llama-server → JAWL
+  → Companion (GigaAM+VoiceMem+TeraTTS) → Edge/getUserMedia. Голос проходит
+  насквозь; LLM ускорена **75×** (CPU-сборка → CUDA `llamacpp-taardis`, GPU1,
+  75.9 ток/с). Честная граница: 2B big-pickle не тянет tool-JSON JAWL —
+  browser voice E2E ждёт ответ, которого 2B-модель не может дать валидно.
+  Нормальный мозг = deepseek-v4-flash через релей (стек владельца) или большая
+  локальная модель. Правки: `run_local_bonsai_integrated.ps1` (600 c,
+  AllowBusyStartup, дефолтные WAV).
+- [ ] Живой ход голоса с мозгом deepseek-v4-flash — нужен поднятый
+  пользователем релей/ключи (блокер до утра).
 - [ ] Микрофонная акустика/AEC — физическое устройство (блокер до утра).
 - [x] Вернуть quality-гейт `--expects` для синтетических кейсов: харнесс
   `gigaam_baseline_fixtures.py` теперь принимает `--expects cases.json`

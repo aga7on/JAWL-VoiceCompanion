@@ -9,7 +9,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$server = 'G:\AI\VLM-RealTime-Bench\runtime\llama-b10738-cpu\llama-server.exe'
+# GPU-accelerated brain: the manifest's canonical llama-server
+# (G:/AI/llamacpp-taardis, CUDA build - both RTX 5080s visible) replaces the
+# CPU-only VLM-RealTime-Bench build, which cost ~33 s per ReAct step and made
+# the interactive SLO unreachable. The 2B model fits wholly on GPU 1 (GPU 0
+# stays with vision/screen-watch).
+$server = 'G:\AI\llamacpp-taardis\build\bin\llama-server.exe'
 $model = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf'
 $report = Join-Path $repo 'runtime\local-bonsai-integrated-profile.json'
 $startedAt = [DateTime]::UtcNow
@@ -18,7 +23,7 @@ $status = 'failed'
 foreach ($path in @($server, $model)) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Local Bonsai resource is missing: $path" } }
 $out = Join-Path $repo 'runtime\local-bonsai-llm.log'
 $err = Join-Path $repo 'runtime\local-bonsai-llm.err'
-$llm = Start-Process -FilePath $server -WorkingDirectory (Split-Path -Parent $server) -ArgumentList @('--model',$model,'--alias','big-pickle','--host','127.0.0.1','--port','8990','--threads','12','--ctx-size','16384','--parallel','1','--gpu-layers','0') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+$llm = Start-Process -FilePath $server -WorkingDirectory (Split-Path -Parent $server) -ArgumentList @('--model',$model,'--alias','big-pickle','--host','127.0.0.1','--port','8990','--threads','12','--ctx-size','16384','--parallel','1','--gpu-layers','99','--device','CUDA1') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
 try {
     $ready = $false
     for ($i = 0; $i -lt 180; $i++) {
@@ -28,10 +33,20 @@ try {
     }
     if (-not $ready) { throw 'Local Bonsai did not become healthy.' }
     $env:LLM_API_URL = 'http://127.0.0.1:8990/v1'
-    $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort)
+    $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,
+        # The local big-pickle LLM runs on CPU and needs ~33 s per ReAct step,
+        # so the first heartbeat cycle can exceed the default 180 s budget.
+        '-StartupTimeoutSeconds', 600,
+        # With a CPU brain the agent is legitimately "still thinking" when the
+        # console port is already serving; treat that as ready instead of
+        # tearing the stack down after a fixed wait.
+        '-AllowBusyStartup')
     if ($RunBrowserVoiceE2E) {
-        $voiceWavs = @((Join-Path $repo 'runtime\synthetic-questions\question-01.wav'), (Join-Path $repo 'runtime\synthetic-questions\question-02.wav'), (Join-Path $repo 'runtime\synthetic-questions\question-03.wav'))
-        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\run_integrated_profile.ps1') @integratedArgs -RunBrowserVoiceE2E -BrowserVoiceWav $voiceWavs
+        # The integrated launcher fills its own canonical three-question WAV set
+        # and semantic expectations when -BrowserVoiceWav is omitted; passing an
+        # array through a powershell -File call collapses it into one string and
+        # breaks parameter binding.
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\run_integrated_profile.ps1') @integratedArgs -RunBrowserVoiceE2E
     } else {
         & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'scripts\run_integrated_profile.ps1') @integratedArgs
     }
