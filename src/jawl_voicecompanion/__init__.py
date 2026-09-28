@@ -34,6 +34,7 @@ from .ambient_triage import (
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioDisabled, AmbientAudioService, PlaybackSuppression
 from .resources import ResourceGovernor
 from .asr import UtteranceBuffer
+from .supervisor import RuntimeSupervisor, WorkerSpec
 from .audio_understanding import (
     AUDIO_DESCRIPTION_SCHEMA,
     AUDIO_KINDS,
@@ -101,6 +102,8 @@ __all__ = [
     "PlaybackSuppression",
     "ResourceGovernor",
     "UtteranceBuffer",
+    "RuntimeSupervisor",
+    "WorkerSpec",
     "AUDIO_DESCRIPTION_SCHEMA",
     "AUDIO_KINDS",
     "AudioDescription",

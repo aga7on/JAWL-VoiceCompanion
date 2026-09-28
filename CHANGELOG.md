@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-09-29 — Runtime supervisor: ADR-041 этап 2, срез 1
+
+- `src/jawl_voicecompanion/supervisor.py`: `RuntimeSupervisor`/`WorkerSpec` —
+  владение жизненным циклом воркеров переезжает в продукт. Порядок старта,
+  health-пробы, рестарты в пределах бюджета (fail-closed — полуживых стеков
+  нет), teardown в обратном порядке только своих процессов.
+- Тесты на **реальных подпроцессах** (не моки жизненного цикла): 7/7 OK.
+- Живая верификация против настоящего стека
+  (`scripts/supervisor_live_adr041.py`): Hikari-мозг (llama-server, GPU1) +
+  TeraTTS стартуют супервизором за 12 с, LLM-ход 0.64 с, рестарт TTS с новым
+  pid за 8.2 с, чистый teardown — **passed**
+  (`runtime/supervisor-live-20260929.json`).
+- Экспорт в пакете; полный гейт зелёный.
+
 ## 2026-09-29 — Hikari-мозг и нативный audio-owner
 
 - **Мозг (выбор владельца)**: Bonsai-2 27B Hikari (abliterated, PQ2_0)
