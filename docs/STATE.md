@@ -1,5 +1,26 @@
 # Состояние разработки
 
+## Мозг до старта профиля: supervised-holder — 2026-09-29 (раунд 6)
+
+Живой проверкой найден и закрыт chicken-and-egg in-process-супервизии:
+`--supervise-workers` поднимает мозг вместе с Companion-входом, но JAWL-агент
+стартует **раньше** и первым heartbeat бьёт в ещё не готовый endpoint
+(наблюдено: `Step 1 → transport failed` на +2.5 с, пока 6.7 ГБ грузились на
+GPU1; при этом обёртка выходила 0 — «startup-shutdown passed» без живого хода).
+
+Решение: отдельный держатель `scripts/hold_supervised_brain.py` — поднимает
+brain через `RuntimeSupervisor` (Job Object KILL_ON_JOB_CLOSE) и печатает
+`READY` после health; обёртка `run_local_bonsai_integrated.ps1` ждёт READY,
+только потом запускает профиль; teardown глушит держатель и проверяет порты.
+
+Проверено живым прогоном (`runtime/local-bonsai-supervised-r2-20260929.txt`):
+brain healthy **до** профиля; **живой ход JAWL ↔ Hikari** — `Output tokens:
+130 → Concluding cycle`, ни одного transport failed; все порты свободны
+после остановки, `brain_leaked: false`, exit 0. Полный гейт — exit 0.
+
+Открытое: держатель — одноразовый паттерн обёртки; полная миграция лаунчера
+на «один вход» (JAWL-консоль как supervised-воркер) — следующий срез этапа 2.
+
 ## Один исполняемый вход: --supervise-workers — 2026-09-29 (раунд 5)
 
 `python -m jawl_voicecompanion --supervise-workers` (ADR-041 этап 2, срез 2):

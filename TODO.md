@@ -1,5 +1,54 @@
 # TODO — единый агент-компаньон
 
+## Ночь 2026-09-28→29 (goal-раунды 1–6; источник истины по текущему стеку)
+
+- [x] **Гейт зелёный и стабилен**: `run_full_gate.ps1` exit 0, 11/11 шагов
+  (проверено 3 раза за ночь; один флейк e2e — параллельные процессы стека,
+  чистый прогон зелёный; `runtime/gate-r4.txt`, `runtime/gate-r5.txt`).
+- [x] **Мозг = Bonsai-2 27B Hikari** (выбор владельца): PQ2_0 грузится
+  только `llamacpp-prism\build-fa` (taardis: «invalid ggml type 142»),
+  GPU1 8.5 ГБ; с `response_format: json_object` (JAWL-клиент шлёт его по
+  умолчанию) — **3/3 tool-JSON, 72–80 ток/с, ход 1.3–2.8 с** из бюджета 6 с
+  (`runtime/brain-bonsai2-hikari-smoke.json`). 2B big-pickle и 27B GSQ
+  сняты; манифест `bonsai_model` → Hikari.
+- [x] **Нативный exe — audio owner** (решение владельца: браузерный
+  микрофон уходит): `rust-client --mic` завершает реплику (тишина 2 с →
+  `/api/voice/end` → транскрипт+ответ), порт из манифеста + `--port N`.
+  Живо: сессия, Fifine 48 кГц→16 кГц, все чанки 200, gate тишины работает.
+  Браузерный fake-capture снят с приёмки (артефакты EOF/эхо — граница
+  инструмента, зафиксировано в STATE).
+- [x] **RuntimeSupervisor (ADR-041 этап 2, срез 1)**: жизненный цикл
+  воркеров в продукте — порядок старта, health-пробы, рестарты в бюджете,
+  fail-closed teardown. Тесты 8/8 на реальных подпроцессах; живой прогон
+  (Hikari+TeraTTS): старт 12 с, LLM-ход 0.64 с, рестарт TTS 8.2 с
+  (`runtime/supervisor-live-20260929.json`).
+- [x] **Один исполняемый вход** `--supervise-workers` (срез 2): Companion
+  сам владеет воркерами; провал за бюджетом = exit 2. Найден и починен
+  живой проверкой дефект-сироты (terminate на Windows не исполняет finally;
+  Job Object KILL_ON_JOB_CLOSE; первый имплемент тихо не работал — pid ≠
+  HANDLE, QueryInformationJobObject показал 0 процессов; фикс через
+  OpenProcess). Живо: **passed**, LLM-ход 0.54 с, порты свободны после
+  смерти родителя (`runtime/supervised-entry-live-20260929.json`).
+- [x] **Мозг до старта профиля (supervised-holder, раунд 6)**: найден и
+  закрыт chicken-and-egg in-process-варианта — JAWL-агент стартует раньше
+  Companion и первым heartbeat бьёт в неготовый мозг (`Step 1 → transport
+  failed` на +2.5 с). Фикс: `scripts/hold_supervised_brain.py` (держатель
+  через RuntimeSupervisor + Job Object, печатает READY по health) —
+  обёртка ждёт READY, потом профиль. Живо: **живой ход JAWL ↔ Hikari**
+  (`Output tokens: 130 → Concluding`, transport failed: 0), teardown
+  чистый, exit 0. Полный гейт — exit 0 (`runtime/gate-r6.txt`).
+- [x] CodeSee-синк после кода супервизора/нативной полосы (валидатор
+  exit 0; фичи f-runtime-supervisor, f-native-voice-lane).
+- [ ] **За владельцем (блокеры)**: (а) сказать в микрофон при поднятом
+  exe-клиенте — закрывающий шаг живого хода; (б) живой ход с
+  deepseek-v4-flash через релей (ключи/стек владельца); (в) пуш ~24
+  коммитов впереди origin/main.
+- [ ] Этап 2 продолжение: полная миграция `run_integrated_profile.ps1`
+  (JAWL-консоль как supervised-воркер с heartbeat-пробой); на сегодня
+  держатель покрывает brain-воркер обёртки, TTS остаётся за лаунчером.
+- [ ] Опционально: освободить 971 MB весов Qwen3-ASR (код не ссылается;
+  удаление за владельцем).
+
 ## GigaAM — единственный ASR (ADR-044) — 2026-09-21
 
 - [x] Удалён provider-путь (`--asr-url/--asr-model/--asr-api-key-env/

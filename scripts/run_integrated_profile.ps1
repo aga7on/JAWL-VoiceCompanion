@@ -47,7 +47,8 @@ param(
     [string]$JawlModelOverride = '',
     [string]$JawlTemperatureOverride = '',
     [switch]$NoLive2D,
-    [switch]$EnableSupervisor
+    [switch]$EnableSupervisor,
+    [switch]$SuperviseBrainWorker
 )
 
 $ErrorActionPreference = 'Stop'
@@ -426,6 +427,15 @@ try {
         $companionArgs += " --live2d-assets `"$(Join-Path $repo 'runtime\live2d')`" --live2d-model `"mao_pro/mao_pro.model3.json`" --live2d-runtime `"live2d-runtime.js`""
     }
     if ($UseVoiceMem) { $companionArgs += " --voicemem-python `"$voicememPy`" --voicemem-local-memory --voicemem-warmup text --voicemem-timeout 120" }
+    if ($SuperviseBrainWorker) {
+        # One executable entry (ADR-041 stage 2): the Companion process owns
+        # the local brain worker via RuntimeSupervisor (health, bounded
+        # restarts, fail-closed, Job Object KILL_ON_JOB_CLOSE). The wrapper
+        # sets LLM_API_URL and JAWL_MODEL_OVERRIDE; the worker command and
+        # model paths come from the entry's CLI defaults (manifest wiring).
+        $companionArgs += " --supervise-workers"
+        Write-Host 'Brain worker ownership: companion entry (supervised).'
+    }
     if ($SensoryFile) {
         $companionArgs += " --ambient-memory --sensory-file `"$SensoryFile`""
         if ($AmbientTriageSeconds -gt 0) { $companionArgs += " --ambient-triage-interval $AmbientTriageSeconds" }
