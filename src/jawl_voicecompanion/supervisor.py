@@ -23,6 +23,106 @@ from typing import Callable
 HealthProbe = Callable[[], bool]
 
 
+def _windows_job_object() -> "object | None":
+    """A Job Object that kills children when the parent dies.
+
+    On Windows, terminating the parent process does not run its `finally`
+    blocks, so a `finally: supervisor.stop()` cannot fire: workers would
+    survive as orphans and hold their ports (observed live: the supervised
+    entry's llama-server and TTS kept listening after the parent was killed).
+    Assigning every worker to a job with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    makes the OS itself reap the children the moment the parent's handle
+    closes - crash, kill, exit, anything.
+    """
+    import sys
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    from ctypes import wintypes as _wt
+    kernel32.CreateJobObjectW.restype = _wt.HANDLE
+    kernel32.CreateJobObjectW.argtypes = [_wt.LPVOID, _wt.LPCWSTR]
+    kernel32.SetInformationJobObject.restype = _wt.BOOL
+    kernel32.CloseHandle.argtypes = [_wt.HANDLE]
+    handle = kernel32.CreateJobObjectW(None, None)
+    if not handle:
+        return None
+
+    ULONG_PTR = ctypes.c_size_t
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_ulonglong) for name in
+                    ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                     "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ULONG_PTR),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class JOBOBJECT_EXTENDED_LIMIT(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+    JobObjectExtendedLimitInformation = 9
+    info = JOBOBJECT_EXTENDED_LIMIT()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    size = ctypes.sizeof(JOBOBJECT_EXTENDED_LIMIT)
+    ok = kernel32.SetInformationJobObject(
+        handle, JobObjectExtendedLimitInformation, ctypes.byref(info), size)
+    if not ok:
+        kernel32.CloseHandle(handle)
+        return None
+    return handle
+
+
+def _assign_to_job(handle: object, process: subprocess.Popen) -> None:
+    """Put a worker inside the supervisor's job object.
+
+    AssignProcessToJobObject needs a real process HANDLE with
+    PROCESS_SET_QUOTA|PROCESS_TERMINATE access - passing the bare pid (an
+    int) silently fails, which is exactly how the orphan-workers bug slipped
+    through: the job existed, the OS just never knew the worker was in it.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    PROCESS_SET_QUOTA = 0x0100
+    PROCESS_TERMINATE = 0x0001
+    process_handle = kernel32.OpenProcess(
+        PROCESS_SET_QUOTA | PROCESS_TERMINATE, False, process.pid)
+    if not process_handle:
+        return
+    try:
+        kernel32.AssignProcessToJobObject(handle, process_handle)
+    finally:
+        kernel32.CloseHandle(process_handle)
+
+
 @dataclass
 class WorkerSpec:
     """One managed process: command, health probe and restart budget."""
@@ -66,6 +166,9 @@ class RuntimeSupervisor:
             raise ValueError("worker names must be unique")
         self._states: dict[str, WorkerState] = {spec.name: WorkerState() for spec in self._specs}
         self._clock = clock
+        # Windows: a job object so workers die with this process (see
+        # _windows_job_object). Handle closes on GC/exit -> children reaped.
+        self._job = _windows_job_object()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -88,6 +191,8 @@ class RuntimeSupervisor:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
+                    if self._job is not None:
+                        _assign_to_job(self._job, state.process)
                     state.started_at = self._clock()
                 except OSError as exc:
                     state.last_error = f"spawn failed: {type(exc).__name__}"

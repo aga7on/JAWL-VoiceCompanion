@@ -364,6 +364,47 @@ def main() -> None:
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
     parser.add_argument("--host-root", type=Path, action="append", default=[])
     parser.add_argument("--allowed-executable", action="append", default=[])
+    parser.add_argument(
+        "--supervise-workers",
+        action="store_true",
+        help=(
+            "ADR-041 stage 2: start the configured local workers (brain LLM, TTS) "
+            "through the product RuntimeSupervisor before serving and stop them on "
+            "exit; a worker that exhausts its restart budget fails startup"
+        ),
+    )
+    parser.add_argument(
+        "--supervised-llm-command",
+        default="G:\\AI\\llamacpp-prism\\build-fa\\bin\\llama-server.exe",
+        help="executable for the supervised local brain worker",
+    )
+    parser.add_argument(
+        "--supervised-llm-model",
+        default="G:\\AI\\models\\Ternary-Bonsai-2-27B-Abliterated-Hikari\\Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf",
+        help="GGUF model for the supervised local brain worker",
+    )
+    parser.add_argument(
+        "--supervised-llm-port",
+        type=int,
+        default=8990,
+        help="loopback port for the supervised local brain worker",
+    )
+    parser.add_argument(
+        "--supervised-tts-command",
+        default="G:\\AI\\tts_env\\Scripts\\python.exe",
+        help="executable for the supervised TTS worker",
+    )
+    parser.add_argument(
+        "--supervised-tts-release",
+        default="G:\\AI\\tts_models\\TeraSpace__TeraTTSv2",
+        help="TeraTTS release directory for the supervised TTS worker",
+    )
+    parser.add_argument(
+        "--supervised-tts-port",
+        type=int,
+        default=9889,
+        help="loopback port for the supervised TTS worker",
+    )
     args = parser.parse_args()
     if args.lan_public_host and not args.lan:
         parser.error("--lan-public-host requires --lan")
@@ -383,6 +424,20 @@ def main() -> None:
         lan_access_token=lan_access_token,
         error=parser.error,
     )
+    # ADR-041 stage 2: when asked, this process also owns the local workers.
+    # They start before the server accepts traffic and stop when it exits.
+    supervisor_runtime = _build_worker_supervisor(args) if args.supervise_workers else None
+    if supervisor_runtime is not None:
+        report = supervisor_runtime.start()
+        if not report.ok:
+            runtime.close()
+            print("supervised workers failed to become healthy:", file=sys.stderr)
+            for name, summary in report.workers.items():
+                print(f"  {name}: {summary}", file=sys.stderr)
+            raise SystemExit(2)
+        print("supervised workers healthy:")
+        for name, summary in report.workers.items():
+            print(f"  {name}: pid={summary['pid']}")
     try:
         server = runtime.control
         display_host = args.lan_public_host or args.host
@@ -397,6 +452,70 @@ def main() -> None:
         pass
     finally:
         runtime.close()
+        if supervisor_runtime is not None:
+            supervisor_runtime.stop()
+            print("supervised workers stopped")
+
+
+def _build_worker_supervisor(args) -> "RuntimeSupervisor | None":  # noqa: ANN001
+    """Specs for the local workers this process should own (stage 2 slice).
+
+    The manifest stays the source of truth for ports; the worker executables
+    come from CLI defaults that match this dev machine's layout and can be
+    overridden. Workers without a runnable executable are skipped (the server
+    still serves; its own doctor reports what is missing) rather than failing
+    the whole profile.
+    """
+    import json
+    from pathlib import Path
+
+    from .supervisor import RuntimeSupervisor, WorkerSpec
+
+    manifest_path = Path(__file__).resolve().parents[2] / "config" / "runtime.manifest.json"
+    ports = {}
+    try:
+        ports = json.loads(manifest_path.read_text(encoding="utf-8")).get("ports", {})
+    except (OSError, ValueError):
+        pass
+    repo = Path(__file__).resolve().parents[2]
+
+    def probe(port: int):
+        def check() -> bool:
+            import urllib.request
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+                return response.status == 200
+        return check
+
+    specs = []
+    llm_port = args.supervised_llm_port or ports.get("brain_port", 8990)
+    if Path(args.supervised_llm_command).exists() and Path(args.supervised_llm_model).exists():
+        specs.append(WorkerSpec(
+            name="brain",
+            command=[args.supervised_llm_command, "--model", args.supervised_llm_model,
+                     "--alias", "local-brain", "--host", "127.0.0.1", "--port", str(llm_port),
+                     "--threads", "12", "--ctx-size", "16384", "--parallel", "1",
+                     "--gpu-layers", "99", "--device", "CUDA1"],
+            probe=probe(llm_port),
+            startup_timeout_seconds=240.0,
+            max_restarts=1,
+            order=0,
+        ))
+    tts_port = args.supervised_tts_port or ports.get("tera_tts", 9889)
+    if Path(args.supervised_tts_command).exists() and Path(args.supervised_tts_release).exists():
+        specs.append(WorkerSpec(
+            name="tts",
+            command=[args.supervised_tts_command, "scripts/teratts_server.py",
+                     "--release-dir", args.supervised_tts_release, "--voice", "ru_f1",
+                     "--model", "distilled", "--threads", "24",
+                     "--host", "127.0.0.1", "--port", str(tts_port)],
+            probe=probe(tts_port),
+            startup_timeout_seconds=240.0,
+            max_restarts=1,
+            order=1,
+        ))
+    if not specs:
+        return None
+    return RuntimeSupervisor(specs)
 
 
 if __name__ == "__main__":

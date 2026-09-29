@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-09-29 — Один исполняемый вход: --supervise-workers (этап 2, срез 2)
+
+- `python -m jawl_voicecompanion --supervise-workers`: процесс сам владеет
+  локальными воркерами (Hikari-мозг + TeraTTS) — поднимает их через
+  `RuntimeSupervisor` до приёма трафика, гасит при выходе; провал за бюджетом
+  = отказ запуска (exit 2). Порты берутся из манифеста, пути воркеров —
+  CLI-дефолты этого стенда с override.
+- **Дефект-сироты воркеров найден живой проверкой и починен**: terminate()
+  родителя на Windows не исполняет `finally` → воркеры держали порты.
+  Лечение — Job Object `KILL_ON_JOB_CLOSE`. Первая версия тихо не работала
+  (`AssignProcessToJobObject` получал pid вместо HANDLE); корень найден
+  изолированной диагностикой (`QueryInformationJobObject`: 0 процессов в
+  job), фикс — настоящий handle через `OpenProcess`.
+- Живая верификация одного входа (`scripts/supervised_entry_live.py`):
+  **passed** — control готов, brain+TTS healthy, LLM-ход 0.54 с, после
+  смерти родителя порты 8990/9889 свободны.
+- Тесты супервизора: 8/8 OK, добавлен Windows-инвариант «родителя убили →
+  воркеры погашены ОС».
+
 ## 2026-09-29 — Runtime supervisor: ADR-041 этап 2, срез 1
 
 - `src/jawl_voicecompanion/supervisor.py`: `RuntimeSupervisor`/`WorkerSpec` —

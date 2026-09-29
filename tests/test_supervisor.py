@@ -7,6 +7,8 @@ exits. This is the ADR-041 stage 2 slice.
 
 from __future__ import annotations
 
+import json
+import os
 import socket
 import subprocess
 import sys
@@ -178,6 +180,55 @@ class RuntimeSupervisorTests(unittest.TestCase):
         spec = WorkerSpec(name="a", command=[PYTHON, "-c", "pass"], probe=None)
         with self.assertRaises(ValueError):
             RuntimeSupervisor([spec, spec])
+
+    def test_killing_the_parent_reaps_workers_on_windows(self):
+        """Windows contract: TerminateProcess skips the parent's `finally`.
+
+        Without the job object the workers survive as orphans (observed live:
+        llama-server and TTS kept their ports after the parent was killed).
+        The job with KILL_ON_JOB_CLOSE makes the OS itself reap them.
+        """
+        import sys as _sys
+        if _sys.platform != "win32":
+            self.skipTest("windows-only job-object contract")
+        # Child program: start a worker via the supervisor, report readiness,
+        # then wait forever; the test kills the child (the worker's parent).
+        parent_program = (
+            "import json, sys, time\n"
+            "sys.path.insert(0, r'" + str(Path(__file__).resolve().parents[1] / "src") + "')\n"
+            "from jawl_voicecompanion.supervisor import RuntimeSupervisor, WorkerSpec\n"
+            "spec = WorkerSpec(name='w', command=[sys.executable, '-c', 'import time; time.sleep(120)'], probe=None)\n"
+            "sup = RuntimeSupervisor([spec])\n"
+            "report = sup.start()\n"
+            "print(json.dumps({'pid': report.workers['w']['pid'], 'ok': report.ok}), flush=True)\n"
+            "time.sleep(120)\n"
+        )
+        parent = subprocess.Popen(
+            [PYTHON, "-u", "-c", parent_program],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        try:
+            line = parent.stdout.readline().strip()
+            info = json.loads(line)
+            self.assertTrue(info["ok"])
+            worker_pid = info["pid"]
+        finally:
+            parent.kill()
+            parent.wait(timeout=10)
+        # The OS must reap the worker shortly after the parent's job handle
+        # is gone. Poll for a bounded time instead of asserting instantly.
+        deadline = time.time() + 15
+        alive = True
+        while time.time() < deadline:
+            try:
+                # os.kill with signal 0 raises if the process is gone.
+                os.kill(worker_pid, 0)
+            except (ProcessLookupError, PermissionError, OSError):
+                alive = False
+                break
+            time.sleep(0.3)
+        self.assertFalse(alive, "worker survived its parent being killed")
 
     def test_unknown_worker_restart_raises(self):
         supervisor = RuntimeSupervisor([])
