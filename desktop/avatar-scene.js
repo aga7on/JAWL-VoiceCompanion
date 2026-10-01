@@ -284,6 +284,24 @@ window.addEventListener('message', (event) => {
   if (data.type === 'swap') window.__jawlAvatar.swapModel(data.url);
 });
 
+// Desktop bridge: the avatar preload re-dispatches panel events (relayed by
+// the main process) as DOM CustomEvents. Payloads are the panel's avatar
+// channel events: {type:'avatar.emotion', expression} and
+// {type:'avatar.audio', amplitude, speaking} (lip sync from the TTS RMS).
+window.addEventListener('jawl-avatar-event', (event) => {
+  const data = event.detail;
+  if (!data || typeof data !== 'object') return;
+  window.__jawlBridgeEvents = (window.__jawlBridgeEvents || 0) + 1;
+  if (data.type === 'avatar.emotion' && data.expression) {
+    window.__jawlAvatar.setEmotion(data.expression);
+  }
+  if (data.type === 'avatar.audio') {
+    // speaking=false resets the mouth; amplitude drives it while speaking.
+    const level = data.speaking ? Number(data.amplitude) || 0 : 0;
+    window.__jawlAvatar.setLipLevel(level * 1.6);
+  }
+});
+
 resize();
 tick();
 loadModel(DEFAULT_MODEL).then((vrm) => { state.vrm = vrm; });

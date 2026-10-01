@@ -20,6 +20,10 @@ const http = require('http');
 const MANIFEST = path.join(__dirname, '..', 'config', 'runtime.manifest.json');
 
 function controlPort() {
+  // Disposable profiles raise the stack on other ports; the smoke tests set
+  // this env to point the panel window at them.
+  const envPort = Number(process.env.JAWL_DESKTOP_CONTROL_PORT);
+  if (Number.isInteger(envPort) && envPort > 0) return envPort;
   try {
     const manifest = JSON.parse(require('fs').readFileSync(MANIFEST, 'utf-8'));
     return manifest.ports.control || 2367;
@@ -34,6 +38,24 @@ const PANEL_URL = `http://127.0.0.1:${PORT}/`;
 let panelWindow = null;
 let avatarWindow = null;
 
+// ---------------------------------------------------------------------------
+// Emotion/lip relay: the panel (http origin) publishes avatar events over a
+// BroadcastChannel, but the avatar window is file:// - different origin, so
+// the channel never crosses. The main process bridges the two: preload in
+// the avatar window asks the panel window to join the channel and forward
+// every event to the main process, which delivers it to the avatar.
+// Message stays one-directional (panel -> avatar): the avatar window keeps
+// zero privileges.
+// ---------------------------------------------------------------------------
+
+const { ipcMain } = require('electron');
+
+ipcMain.on('jawl-avatar-event', (_event, payload) => {
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send('jawl-avatar-event', payload);
+  }
+});
+
 function createAvatarWindow() {
   avatarWindow = new BrowserWindow({
     width: 480,
@@ -47,6 +69,8 @@ function createAvatarWindow() {
       nodeIntegration: false,
       // The scene is local content; no remote code runs in this window.
       sandbox: true,
+      // Receives the avatar events relayed from the panel window.
+      preload: path.join(__dirname, 'avatar-preload.js'),
     },
   });
   avatarWindow.loadFile(path.join(__dirname, 'avatar.html'));
@@ -68,6 +92,10 @@ function createPanelWindow() {
       // like in the browser, but without fake-capture or autoplay policies
       // fighting us - we set the flags in app.commandLine below.
       sandbox: true,
+      // Our relay pump: forwards the panel's avatar BroadcastChannel events
+      // to the main process so the file:// avatar window can follow the
+      // conversation (origins differ; the channel cannot cross alone).
+      preload: path.join(__dirname, 'panel-preload.js'),
     },
   });
   panelWindow.loadURL(PANEL_URL);
