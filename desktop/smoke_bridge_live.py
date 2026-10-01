@@ -157,14 +157,21 @@ def main() -> int:
         if not checks["windows_found"]:
             raise RuntimeError("electron windows not found")
 
-        # Wait for the panel to actually load the companion origin.
-        deadline = time.time() + 30
+        # Wait for the panel to actually load the companion origin. The
+        # window retries internally until the control server answers, so the
+        # origin can be 'null' (about:blank / data:) for a while.
+        deadline = time.time() + 90
+        origin = None
         while time.time() < deadline:
-            origin = panel.evaluate("location.origin")
-            if str(origin).startswith("http"):
+            try:
+                origin = panel.evaluate("location.origin")
+            except Exception:
+                origin = None
+            if origin and str(origin).startswith("http"):
                 break
-            time.sleep(1)
-        report["panel_origin"] = panel.evaluate("location.origin")
+            time.sleep(2)
+        report["panel_origin"] = origin
+        checks["panel_loaded"] = bool(origin and str(origin).startswith("http"))
 
         # Wait for the JAWL agent: a chat turn before the console is up ends
         # with an honest 'JAWL недоступен' error envelope (observed in the
@@ -191,14 +198,15 @@ def main() -> int:
         checks["jawl_ready"] = jawl_ok
         report["jawl_wait_seconds"] = round(300 - (deadline - time.time()))
 
-        # 3. A real chat turn through the panel's own transport.
+        # 3. A real chat turn through the panel's own transport. The fetch is
+        # server-driven (JAWL ReAct + brain): give it a long budget.
         session = panel.evaluate("""
             (async () => {
               const response = await fetch('/api/session', {credentials: 'include'});
               const data = await response.json();
               return JSON.stringify({csrf: data.csrf_token});
             })()
-        """)
+        """, timeout=30)
         csrf = json.loads(session)["csrf"]
         report["panel_session"] = bool(csrf)
         send = panel.evaluate("""
@@ -212,14 +220,31 @@ def main() -> int:
               const body = await response.text();
               return JSON.stringify({status: response.status, body: body.slice(0, 300)});
             })()
-        """ % json.dumps(csrf), timeout=240)
+        """ % json.dumps(csrf), timeout=300)
         report["chat_send"] = json.loads(send) if send else None
+        # Drive the panel's own UI path too: renderMiniAvatar is what emits
+        # avatar.emotion into the channel; a fetch alone only returns JSON.
+        # The panel polls /api/state; force a refresh and let the pollers
+        # pick the turn's envelope up.
+        time.sleep(10)
 
-        # 4. Did the avatar window react?
-        time.sleep(8)
-        bridge_events = avatar.evaluate("window.__jawlBridgeEvents || 0")
-        emotion_state = avatar.evaluate("window.__jawlEmotion || 'none'")
-        status_text = avatar.evaluate("document.getElementById('status')?.textContent || ''")
+        # 4. Did the avatar window react? The panel's state poller
+        # (renderMiniAvatar) picks up the turn's envelope and publishes
+        # avatar.emotion; the avatar's bridge counter must grow.
+        deadline = time.time() + 45
+        bridge_events = 0
+        emotion_state = "none"
+        status_text = ""
+        while time.time() < deadline:
+            try:
+                bridge_events = avatar.evaluate("window.__jawlBridgeEvents || 0") or 0
+                emotion_state = avatar.evaluate("window.__jawlEmotion || 'none'") or "none"
+                status_text = avatar.evaluate("document.getElementById('status')?.textContent || ''") or ""
+            except Exception:
+                pass
+            if bridge_events > 1 and emotion_state not in {"none"}:
+                break
+            time.sleep(3)
         # The envelope's real emotion (not the error path) means the whole
         # loop: text -> JAWL -> envelope emotion -> 3D expression.
         report["bridge_events"] = bridge_events

@@ -901,26 +901,46 @@ fn run_all() {
         println!("[launcher] qwen3-vl port {vl_port} {}", if port_open(vl_port) { "up" } else { "TIMEOUT" });
     }
 
-    // Integrated profile (companion + JAWL + voice + relay) from the manifest.
+    // Integrated profile (companion + JAWL + voice + brain) from the manifest.
+    // With use_relay=false the local brain (Hikari) must be RAISED with the
+    // stack: the bare launcher fails closed without a provider key, so the
+    // wrapper script is used - it holds the brain worker and sets the env.
     if !port_open(cfg.control_port) {
-        let script = cfg.profile_script.to_string_lossy().to_string();
-        let prof_script = script.clone();
         let current_dir = cfg.repo_root.clone();
         let brain_model = cfg.brain_model.clone();
         let use_relay = cfg.brain_use_relay;
+        let script = if use_relay {
+            cfg.profile_script.to_string_lossy().to_string()
+        } else {
+            // The wrapper: brain holder + provider env + the same profile.
+            cfg.repo_root.join(r"scripts\run_local_bonsai_integrated.ps1").to_string_lossy().to_string()
+        };
+        let prof_script = script.clone();
+        let mut args: Vec<String> = vec![
+            "-NoProfile".into(), "-ExecutionPolicy".into(), "Bypass".into(),
+            "-File".into(), prof_script,
+            "-ProfileName".into(), cfg.profile.clone(),
+            "-UseVoiceMem".into(),
+            "-TtsProvider".into(), "tera".into(),
+            "-JawlModelOverride".into(), brain_model,
+            "-StartupTimeoutSeconds".into(), "420".into(),
+        ];
+        if use_relay {
+            // Relay profile: the full sensory/vision stack belongs to it.
+            args.extend(["-StartLocalAudio".into(), "-EnableProsodyPlanner".into(),
+                         "-EnableStreamingAsr".into(), "-EnableScreenWatch".into(),
+                         "-EnableSensoryWorker".into(), "-AmbientTriageSeconds".into(), "300".into(),
+                         "-UseOpenCodeRelay".into()]);
+        } else {
+            // Local brain wrapper owns its audio args (-StartLocalAudio).
+            args.push("-StartLocalAudio".into());
+        }
         let prof = Command::new("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                &prof_script,
-                "-ProfileName", &cfg.profile, "-StartLocalAudio", "-UseVoiceMem",
-                "-TtsProvider", "tera", "-EnableProsodyPlanner",
-                "-EnableStreamingAsr", "-EnableScreenWatch",
-                "-EnableSensoryWorker", "-AmbientTriageSeconds", "300",
-                "-JawlModelOverride", &brain_model, "-StartupTimeoutSeconds", "420"])
-            .args(if use_relay { vec!["-UseOpenCodeRelay"] } else { vec![] })
+            .args(&args)
             .current_dir(&current_dir)
             .spawn();
         match prof {
-            Ok(c) => { children.push(c); println!("[launcher] integrated profile starting"); }
+            Ok(c) => { children.push(c); println!("[launcher] integrated profile starting (brain: {})", if use_relay { "relay" } else { "local-hikari" }); }
             Err(e) => eprintln!("[launcher] profile spawn failed: {e}"),
         }
     } else { println!("[launcher] profile already up ({})", cfg.control_port); }

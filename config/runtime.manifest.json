@@ -25,15 +25,15 @@
     "mic_prefer": "fifine"
   },
   "brain": {
-    "provider": "opencode-go",
-    "model": "deepseek-v4-flash",
-    "relay_port": 8891,
-    "use_relay": true,
-    "local_dev_override": {
-      "note": "Explicit dev/CI mode only (no schedule, no day/night split: one canonical brain, honest degradation when the relay is down). The local Hikari brain is a staging surrogate for autonomous test runs where the owner's relay is not up; it is never a silent substitute.",
-      "model": "local-bonsai2",
-      "llm_url": "http://127.0.0.1:8990/v1",
-      "raised_by": "scripts/run_local_bonsai_integrated.ps1"
+    "provider": "local-hikari",
+    "model": "local-bonsai2",
+    "llm_url": "http://127.0.0.1:8990/v1",
+    "use_relay": false,
+    "raised_by": "scripts/run_local_bonsai_integrated.ps1",
+    "relay_override": {
+      "note": "Owner decision 2026-09-29: Hikari (local, GPU 1, supervised holder) is the primary brain. deepseek-v4-flash through the opencode relay is the explicit opt-in (-UseOpenCodeRelay) for when a stronger provider is wanted. One brain at a time, no schedule-driven switching: the running brain is whichever the profile raised.",
+      "model": "deepseek-v4-flash",
+      "relay_port": 8891
     }
   },
   "profile_script": "scripts/run_integrated_profile.ps1"
