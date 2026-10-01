@@ -485,6 +485,18 @@
         // avatar window (see publishAvatarEmotion).
         publishAvatarEmotion({avatar, emotion});
       };
+      // ADR-045: inside the Electron desktop shell the real 3D avatar is a
+      // separate window; the staged CSS puppet would misrepresent it (a
+      // "2D companion" that no longer exists). Replace the card's copy with
+      // a live pointer to the 3D window instead.
+      if (window.__jawlDesktop?.isDesktop) {
+        const cardHead = document.querySelector('.companion-card .card-head p');
+        if (cardHead) cardHead.textContent = '3D VRM-аватар · окно оболочки';
+        const badge = document.querySelector('#mini-avatar .mini-badge');
+        if (badge) badge.textContent = '3D · ОКНО ОБОЛОЧКИ';
+        const motionLine = document.querySelector('#mini-motion');
+        if (motionLine) motionLine.textContent = 'аватар · отдельное окно Electron';
+      }
     })();
   </script>
   <script>

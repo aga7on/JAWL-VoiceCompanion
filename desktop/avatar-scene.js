@@ -95,6 +95,7 @@ async function loadModel(url) {
   VRMUtils.removeUnnecessaryJoints(gltf.scene);
   VRMUtils.combineSkeletons?.(gltf.scene);
   scene.add(vrm.scene);
+  applyRestPose(vrm);
   try {
     frameCamera(vrm);
     window.__jawlHeadProbe = probeHead(vrm);
@@ -104,6 +105,26 @@ async function loadModel(url) {
   }
   setStatus(`Аватар: готов (${listExpressions(vrm).length} выражений)`);
   return vrm;
+}
+
+// Rest pose: VRM's normalized rig T-poses unless the model ships an idle
+// pose. The constraint sample does not, so we bend the arms down
+// ourselves. VRMA/mixamo animations can still take over later: this runs
+// once at load, before any animation node exists.
+function applyRestPose(vrm) {
+  const humanoid = vrm?.humanoid;
+  if (!humanoid) return;
+  // Arms down along the body, slightly outward, elbows soft.
+  const leftArm = humanoid.getNormalizedBoneNode('leftUpperArm');
+  const rightArm = humanoid.getNormalizedBoneNode('rightUpperArm');
+  const leftFore = humanoid.getNormalizedBoneNode('leftLowerArm');
+  const rightFore = humanoid.getNormalizedBoneNode('rightLowerArm');
+  if (leftArm) leftArm.rotation.z = -1.05;
+  if (rightArm) rightArm.rotation.z = 1.05;
+  if (leftFore) leftFore.rotation.z = -0.25;
+  if (rightFore) rightFore.rotation.z = 0.25;
+  vrm.update(0.0);
+  window.__jawlRestPose = true;
 }
 
 // Auto-framing: measure the model's real bounding box and place the camera
