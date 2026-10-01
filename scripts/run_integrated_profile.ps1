@@ -25,7 +25,7 @@ param(
 [switch]$EnableProsodyPlanner,
 [switch]$EnableStreamingAsr,
 [string]$StreamingAsrExe = 'G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe',
-[string]$StreamingAsrModel = 'G:\AI\VLM-RealTime-Bench\models\gigaam\gigaam-v3-e2e-rnnt-q8_0.gguf',
+[string]$StreamingAsrModel = 'G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf',
 [string]$ProsodyModel = 'gemma-3-1b-it',
 [string]$ProsodyUrl = 'http://127.0.0.1:8987/v1',
 [string]$SensoryFile = '',

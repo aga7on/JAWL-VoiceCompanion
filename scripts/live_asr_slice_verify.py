@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
 CRISPASR = Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
-GIGAAM = Path(r"G:\AI\VLM-RealTime-Bench\models\gigaam\gigaam-v3-e2e-rnnt-q8_0.gguf")
+GIGAAM = Path(r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf")
 VOICEMEM_PY = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 RESULT = ROOT / "runtime" / "live-asr-slice-adr044.json"
 

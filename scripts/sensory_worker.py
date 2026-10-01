@@ -317,7 +317,7 @@ def main() -> None:
     parser.add_argument("--speech-cadence", type=float, default=5.0)
     parser.add_argument("--crispasr-exe", default=r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe",
                         help="GigaAM (crispasr) executable used for ambient speech")
-    parser.add_argument("--gigaam-model", default=r"G:\AI\VLM-RealTime-Bench\models\gigaam\gigaam-v3-e2e-rnnt-q8_0.gguf",
+    parser.add_argument("--gigaam-model", default=r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf",
                         help="GigaAM GGUF model used for ambient speech")
     args = parser.parse_args()
 

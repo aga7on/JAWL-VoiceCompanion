@@ -17,7 +17,7 @@ ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
 sys.path.insert(0, str(ROOT / "src"))
 
 CRISPASR = r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe"
-GIGAAM = r"G:\AI\VLM-RealTime-Bench\models\gigaam\gigaam-v3-e2e-rnnt-q8_0.gguf"
+GIGAAM = r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf"
 
 
 def spawn_once() -> float:

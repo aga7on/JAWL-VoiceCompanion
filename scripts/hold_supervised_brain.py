@@ -39,7 +39,14 @@ def main() -> int:
     parser.add_argument("--model", default=r"G:\AI\models\Ternary-Bonsai-2-27B-Abliterated-Hikari\Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf")
     parser.add_argument("--alias", default="local-bonsai2")
     parser.add_argument("--threads", type=int, default=12)
-    parser.add_argument("--ctx-size", type=int, default=16384)
+    # 64k context (owner decision 2026-10-01): 16k was cramped for the JAWL
+    # ReAct envelope (~10-12k prompt + history); the model ran out of room
+    # for a well-formed tool-JSON answer.
+    parser.add_argument("--ctx-size", type=int, default=65536)
+    # Output cap per completion: overlong "thinking" (observed 3370-token
+    # rambling that broke tool-JSON) is cut before it derails the cycle.
+    # The reasoning economy is ~40 words per step anyway (ZZ_COMPANION_DELIVERY).
+    parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--gpu-layers", default="99")
     parser.add_argument("--device", default="CUDA1")
     parser.add_argument("--seconds", type=float, default=0.0, help="0 = hold until terminated")

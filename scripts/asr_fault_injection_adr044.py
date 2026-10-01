@@ -25,7 +25,7 @@ ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
 WAV = ROOT / "runtime" / "voice-native-ru-clean-20260906.wav"
 VOICEMEM_PY = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 BOGUS_EXE = r"G:\AI\crispasr\does-not-exist\crispasr.exe"
-REAL_MODEL = r"G:\AI\VLM-RealTime-Bench\models\gigaam\gigaam-v3-e2e-rnnt-q8_0.gguf"
+REAL_MODEL = r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf"
 REPORT = ROOT / "runtime" / "asr-fault-injection-adr044.json"
 
 

@@ -57,6 +57,10 @@ try {
     # Point JAWL's main_model at the local Hikari alias so the ReAct engine
     # addresses the model the worker actually serves.
     $env:JAWL_MODEL_OVERRIDE = $ModelAlias
+    # Owner decision 2026-10-01: cap the model's output (the "thinking") at
+    # 2048 tokens. Overlong ReAct rambling (observed 3370 tokens) broke the
+    # tool-JSON format; the delivery prompt wants ~40 words of inner text.
+    $env:LLM_MAX_OUTPUT_TOKENS = '2048'
     $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,
         # The brain worker loads 6.7 GB onto GPU 1; the first heartbeat cycle
         # can exceed the default 180 s budget.

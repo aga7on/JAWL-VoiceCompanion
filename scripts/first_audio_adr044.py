@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
 CRISPASR = r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe"
-GIGAAM = r"G:\AI\VLM-RealTime-Bench\models\gigaam\gigaam-v3-e2e-rnnt-q8_0.gguf"
+GIGAAM = r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf"
 VOICEMEM_PY = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 TERA_PY = r"G:\AI\tts_env\Scripts\python.exe"
 TERA_RELEASE = r"G:\AI\tts_models\TeraSpace__TeraTTSv2"
