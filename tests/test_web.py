@@ -261,8 +261,13 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"/api/hostos/approvals/", frontend)
             self.assertIn(b"/execute", frontend)
             self.assertIn("Выполнить предложение".encode("utf-8"), frontend)
-        with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
-            self.assertIn(b"JAWL Avatar", response.read())
+        # ADR-045: /avatar is removed (the 3D VRM avatar lives in the
+        # Electron shell); it must 404 now.
+        try:
+            with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
+                self.fail("expected 404 for the removed /avatar page")
+        except HTTPError as exc:
+            self.assertEqual(exc.code, 404)
         with urlopen(self.base + "/mic-processor.js", timeout=2) as response:
             self.assertEqual(response.status, 200)
             self.assertIn(b"AudioWorkletProcessor", response.read())
@@ -906,8 +911,11 @@ class PresentationWebTests(unittest.TestCase):
             self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
     def test_presentation_origin_serves_avatar_but_cannot_mutate_control(self):
-        with urlopen(self.base + "/avatar", timeout=2) as response:
-            self.assertIn(b"JAWL Avatar", response.read())
+        # ADR-045: the presentation surface is a placeholder (the 3D VRM
+        # avatar lives in the Electron shell); the read-only boundary is what
+        # still must hold.
+        with urlopen(self.base + "/", timeout=2) as response:
+            self.assertIn(b"presentation", response.read())
         request = Request(
             self.base + "/api/presentation/state",
             data=b"{}",
@@ -940,10 +948,10 @@ class PresentationWebTests(unittest.TestCase):
             state = json.loads(response.read().decode("utf-8"))
         self.assertEqual(state["schema_version"], 1)
         with urlopen(
-            self.base + "/avatar?token=presentation-test-token",
+            self.base + "/?token=presentation-test-token",
             timeout=2,
         ) as response:
-            self.assertIn(b"JAWL Avatar", response.read())
+            self.assertIn(b"presentation", response.read())
 
     def test_http_servers_reject_non_loopback_binds(self):
         with self.assertRaises(ValueError):

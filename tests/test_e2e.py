@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
-from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
+from jawl_voicecompanion.composition import build_companion_runtime  # noqa: E402
 from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge, AmbientAudioService  # noqa: E402
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler  # noqa: E402
 from jawl_voicecompanion.asr import UtteranceBuffer  # noqa: E402
@@ -724,20 +724,7 @@ class LocalE2ETests(unittest.TestCase):
             self.ambient_bridge,
             capture=SystemAudioLoopback(self.ambient_bridge.consume, backend=_AmbientBackend()),
         )
-        self.avatar_root = Path(self.temp.name) / "live2d"
         self.jawl_event_dir = Path(self.temp.name) / "jawl-events"
-        self.avatar_root.mkdir()
-        self.avatar_model = (
-            '{"FileReferences":{"Moc":"companion.moc3",'
-            '"Textures":["textures/body.png"],"Motions":{"Idle":[]}}}'
-        )
-        (self.avatar_root / "model3.json").write_text(self.avatar_model, encoding="utf-8")
-        (self.avatar_root / "companion.moc3").write_bytes(b"moc")
-        (self.avatar_root / "textures").mkdir()
-        (self.avatar_root / "textures" / "body.png").write_bytes(b"png")
-        (self.avatar_root / "live2d-runtime.js").write_text(
-            "window.Live2DCompanionRuntime = {create: async () => ({})};", encoding="utf-8"
-        )
         self.server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
@@ -748,7 +735,6 @@ class LocalE2ETests(unittest.TestCase):
             screen_watch_interval=2,
             voice_mem=self.voice_mem,
             tts_service=self.tts,
-            avatar_assets=AvatarAssetStore(self.avatar_root),
             jawl_event_dir=self.jawl_event_dir,
             ambient_memory=self.ambient_memory,
             ambient_audio=self.ambient_audio,
@@ -927,22 +913,15 @@ class LocalE2ETests(unittest.TestCase):
             self.assertIn(b"createMediaElementSource", frontend)
             self.assertIn(b"hands-free", frontend)
             self.assertIn(b"finishVoiceUtterance", frontend)
-        with urlopen(self.base + "/avatar", timeout=3) as response:
-            avatar_html = response.read()
-            self.assertIn(b"JAWL Avatar", avatar_html)
-            self.assertIn(b'id="mouth"', avatar_html)
-            self.assertIn(b"2D FALLBACK", avatar_html)
-            self.assertIn(b"BroadcastChannel", avatar_html)
-            self.assertIn(b"setLipSync", avatar_html)
+        # ADR-045: the Live2D /avatar page and /avatar-assets store are
+        # removed (the 3D VRM avatar lives in the Electron shell).
+        with self.assertRaises(HTTPError) as context:
+            urlopen(self.base + "/avatar", timeout=3)
+        self.assertEqual(context.exception.code, 404)
+        context.exception.close()
         _, avatar_config = self.get_json("/api/avatar/config")
-        self.assertTrue(avatar_config["enabled"])
-        self.assertTrue(avatar_config["ready"])
-        self.assertEqual(avatar_config["validation"]["missing"], [])
-        self.assertTrue(avatar_config["capabilities"]["lip_sync"])
-        self.assertEqual(avatar_config["capabilities"]["motion_groups"], ["Idle"])
-        self.assertEqual(avatar_config["capabilities"]["fallback_expressions"][0], "neutral")
-        with urlopen(self.base + "/avatar-assets/model3.json", timeout=3) as response:
-            self.assertEqual(response.read().decode("utf-8"), self.avatar_model)
+        self.assertFalse(avatar_config["enabled"])
+        self.assertEqual(avatar_config.get("deprecated"), "live2d")
 
         status, chat = self.post_json("/api/chat", {"text": "проверка e2e"})
         self.assertEqual(status, 200)

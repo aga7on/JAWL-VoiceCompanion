@@ -6,8 +6,10 @@
 //! Modes (pick one):
 //!   --mic     own the microphone and stream 16 kHz mono s16le into the
 //!             companion's /api/voice/audio (proven in Phase B).
-//!   --avatar  open a winit window and render the Live2D model (moc3) with the
-//!             pure-Rust Mocari runtime (no proprietary Cubism SDK).
+//!   --webview open the OBS presentation window.
+//!   --all     launch the whole supervised stack and hold it.
+//! (ADR-045: the Live2D --avatar mode and the Mocari runtime are removed;
+//! the 3D VRM avatar lives in the Electron desktop shell, desktop/.)
 
 use base64::Engine as _;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -38,7 +40,7 @@ struct RuntimeManifest {
     #[serde(default)]
     models: ManifestModels,
     #[serde(default)]
-    avatar: ManifestAvatar,
+    mic: ManifestMic,
     #[serde(default)]
     brain: ManifestBrain,
     #[serde(default)]
@@ -64,6 +66,13 @@ struct ManifestModels {
     #[serde(default)] bonsai_mmproj: Option<String>,
 }
 
+/// The manifest's avatar.model3_path entry is obsolete (ADR-045); only
+/// mic_prefer survives, moved under "mic".
+#[derive(Debug, Default, Deserialize)]
+struct ManifestMic {
+    #[serde(default)] prefer: Option<String>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct ManifestBrain {
     #[serde(default)] model: Option<String>,
@@ -71,11 +80,6 @@ struct ManifestBrain {
     #[serde(default)] use_relay: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct ManifestAvatar {
-    #[serde(default)] model3_path: Option<String>,
-    #[serde(default)] mic_prefer: Option<String>,
-}
 
 /// Runtime configuration resolved from the manifest (or dev defaults).
 struct RuntimeConfig {
@@ -92,7 +96,6 @@ struct RuntimeConfig {
     qwen3_vl_mmproj: PathBuf,
     bonsai_model: PathBuf,
     bonsai_mmproj: PathBuf,
-    avatar_model3: PathBuf,
     mic_prefer: String,
     brain_model: String,
     brain_use_relay: bool,
@@ -133,8 +136,7 @@ impl RuntimeConfig {
             if let Some(v) = m.models.qwen3_vl_mmproj { out.qwen3_vl_mmproj = PathBuf::from(v); }
             if let Some(v) = m.models.bonsai_model { out.bonsai_model = PathBuf::from(v); }
             if let Some(v) = m.models.bonsai_mmproj { out.bonsai_mmproj = PathBuf::from(v); }
-            if let Some(v) = m.avatar.model3_path { out.avatar_model3 = out.repo_root.join(v); }
-            if let Some(v) = m.avatar.mic_prefer { out.mic_prefer = v; }
+            if let Some(v) = m.mic.prefer { out.mic_prefer = v; }
             if let Some(v) = m.brain.model { out.brain_model = v; }
             if let Some(v) = m.brain.use_relay { out.brain_use_relay = v; }
             if let Some(v) = m.profile_script { out.profile_script = out.repo_root.join(v); }
@@ -159,7 +161,6 @@ impl RuntimeConfig {
             qwen3_vl_mmproj: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf"),
             bonsai_model: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\bonsai-ternary\Bonsai-27B-Q1_0.gguf"),
             bonsai_mmproj: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\bonsai-ternary\Bonsai-27B-mmproj-Q8_0.gguf"),
-            avatar_model3: root.join(r"runtime\live2d\hiyori\Hiyori.model3.json"),
             mic_prefer: "fifine".to_string(),
             // Default brain: the local Hikari stack (owner decision
             // 2026-09-29). The relay profile stays opt-in via the manifest.
@@ -168,12 +169,6 @@ impl RuntimeConfig {
             profile_script: root.join(r"scripts\run_integrated_profile.ps1"),
         }
     }
-}
-
-fn model_path() -> String {
-    std::env::var("JAWL_AVATAR_MODEL").ok()
-        .or_else(|| Some(RuntimeConfig::load().avatar_model3.to_string_lossy().to_string()))
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Deserialize)]
@@ -357,497 +352,6 @@ fn print_voice_final(status: u16, body: &str) {
     }
 }
 
-/// Software texture-mapped triangle rasterizer for the Live2D mesh.
-/// Draws each drawable mesh's triangles with its texture, honoring opacity.
-fn rasterize_with_bg(
-    model: &mocari::assets::RuntimeModel,
-    frame: &mut [u32],
-    width: usize,
-    height: usize,
-    bg_color: u32,
-) {
-    for px in frame.iter_mut() {
-        *px = bg_color;
-    }
-    let canvas = model.runtime().canvas();
-    let _ = canvas; // canvas units are pixels; vertices are normalized model units.
-    // Vertices are in normalized model space (roughly xРІв‚¬в‚¬[-0.6,0.6],
-    // yРІв‚¬в‚¬[-2.0,1.0] for this model). Fit that bbox into the window.
-    let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for m in model.runtime().meshes() {
-        for v in m.vertices() {
-            let p = v.position();
-            minx = minx.min(p[0]); miny = miny.min(p[1]);
-            maxx = maxx.max(p[0]); maxy = maxy.max(p[1]);
-        }
-    }
-    let span_x = (maxx - minx).max(1e-3);
-    let span_y = (maxy - miny).max(1e-3);
-    let scale = (width as f32 * 0.8 / span_x).min(height as f32 * 0.8 / span_y);
-    let cx = (minx + maxx) / 2.0;
-    let cy = (miny + maxy) / 2.0;
-    let ox = width as f32 / 2.0;
-    let oy = height as f32 / 2.0;
-    let to_px = |p: [f32; 2]| -> (f32, f32) { (ox + (p[0] - cx) * scale, oy - (p[1] - cy) * scale) };
-
-    let mut meshes: Vec<&mocari::moc3::Moc3DrawableMesh> = model.runtime().meshes().iter().collect();
-    meshes.sort_by_key(|m| m.render_order());
-    for mesh in meshes {
-        let opacity = mesh.opacity();
-        if opacity <= 0.0 {
-            continue;
-        }
-        let tex = model.textures().get(mesh.texture_index().max(0) as usize);
-        let verts = mesh.vertices();
-        let idx = mesh.indices();
-        for tri in idx.chunks_exact(3) {
-            let (a, b, c) = (verts[tri[0] as usize], verts[tri[1] as usize], verts[tri[2] as usize]);
-            let (pa, pb, pc) = (to_px(a.position()), to_px(b.position()), to_px(c.position()));
-            raster_tri(frame, width, height, pa, pb, pc, a.uv(), b.uv(), c.uv(), tex, opacity);
-        }
-    }
-}
-
-/// Default raster: mint-tinted panel background.
-fn rasterize(model: &mocari::assets::RuntimeModel, frame: &mut [u32], width: usize, height: usize) {
-    rasterize_with_bg(model, frame, width, height, 0x00_1a2b26);
-}
-
-/// D5 OBS mode background: pure chroma green, keyed out in OBS.
-pub const OBS_CHROMA_BG: u32 = 0x00_ff00;
-
-fn raster_tri(
-    frame: &mut [u32],
-    width: usize,
-    height: usize,
-    pa: (f32, f32),
-    pb: (f32, f32),
-    pc: (f32, f32),
-    ua: [f32; 2],
-    ub: [f32; 2],
-    uc: [f32; 2],
-    tex: Option<&mocari::assets::DecodedTexture>,
-    opacity: f32,
-) {
-    let min_x = pa.0.min(pb.0).min(pc.0).floor().max(0.0) as i32;
-    let max_x = pa.0.max(pb.0).max(pc.0).ceil().min(width as f32) as i32;
-    let min_y = pa.1.min(pb.1).min(pc.1).floor().max(0.0) as i32;
-    let max_y = pa.1.max(pb.1).max(pc.1).ceil().min(height as f32) as i32;
-    let area = (pb.0 - pa.0) * (pc.1 - pa.1) - (pc.0 - pa.0) * (pb.1 - pa.1);
-    if area.abs() < 1e-6 {
-        return;
-    }
-    for y in min_y..max_y {
-        for x in min_x..max_x {
-            let px = x as f32 + 0.5;
-            let py = y as f32 + 0.5;
-            let w0 = ((pb.0 - pa.0) * (py - pa.1) - (pb.1 - pa.1) * (px - pa.0)) / area;
-            let w1 = ((pc.0 - pb.0) * (py - pb.1) - (pc.1 - pb.1) * (px - pb.0)) / area;
-            let w2 = 1.0 - w0 - w1;
-            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
-                continue;
-            }
-            // barycentric uv
-            let u = w0 * uc[0] + w1 * ua[0] + w2 * ub[0];
-            let v = w0 * uc[1] + w1 * ua[1] + w2 * ub[1];
-            let (mut r, mut g, mut b, mut a) = (200u32, 220u32, 210u32, 255u32);
-            if let Some(t) = tex {
-                let (tw, th) = (t.width().max(1) as usize, t.height().max(1) as usize);
-                let tx = (u.clamp(0.0, 1.0) * (tw - 1) as f32) as usize;
-                let ty = (v.clamp(0.0, 1.0) * (th - 1) as f32) as usize;
-                let rgba = t.rgba();
-                let i = (ty * tw + tx) * 4;
-                if i + 3 < rgba.len() {
-                    r = rgba[i] as u32;
-                    g = rgba[i + 1] as u32;
-                    b = rgba[i + 2] as u32;
-                    a = rgba[i + 3] as u32;
-                }
-            }
-            let alpha = (a as f32 / 255.0) * opacity;
-            if alpha <= 0.01 {
-                continue;
-            }
-            let di = y as usize * width + x as usize;
-            let dst = frame[di];
-            let (dr, dg, db) = ((dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff);
-            let (or_, og, ob) = (
-                (r as f32 * alpha + dr as f32 * (1.0 - alpha)) as u32,
-                (g as f32 * alpha + dg as f32 * (1.0 - alpha)) as u32,
-                (b as f32 * alpha + db as f32 * (1.0 - alpha)) as u32,
-            );
-            frame[di] = (or_ << 16) | (og << 8) | ob;
-        }
-    }
-}
-
-/// Canonical emotion slots shared by the expression files and direct params.
-fn emotion_name(idx: usize) -> &'static str {
-    match idx {
-        1 => "happy",
-        2 => "attentive",
-        3 => "sad",
-        4 => "angry",
-        5 => "surprised",
-        6 => "concerned",
-        7 => "confused",
-        _ => "neutral",
-    }
-}
-
-fn emotion_index(name: &str) -> usize {
-    match name {
-        "happy" | "joy" => 1,
-        "attentive" => 2,
-        "sad" => 3,
-        "angry" => 4,
-        "surprised" => 5,
-        "concerned" => 6,
-        "confused" => 7,
-        _ => 0,
-    }
-}
-
-/// D2: drive the face by direct parameters (proven to deform meshes in Mocari
-/// for standard Cubism params: eyes/brows/cheek) instead of expression files.
-/// Values are 0..1 normalized targets; callers fade toward them per frame.
-fn apply_emotion_params(rt: &mut mocari::runtime::ModelRuntime, name: &str) {
-    let set = |rt: &mut mocari::runtime::ModelRuntime, id: &str, v: f32| {
-        rt.set_parameter_normalized(id, v);
-    };
-    match name {
-        "happy" => {
-            set(rt, "ParamEyeLSmile", 1.0); set(rt, "ParamEyeRSmile", 1.0);
-            set(rt, "ParamBrowLY", 0.65); set(rt, "ParamBrowRY", 0.65);
-            set(rt, "ParamCheek", 0.8);
-        }
-        "sad" => {
-            set(rt, "ParamEyeLSmile", 0.0); set(rt, "ParamEyeRSmile", 0.0);
-            set(rt, "ParamBrowLY", 0.25); set(rt, "ParamBrowRY", 0.25);
-            set(rt, "ParamBrowLAngle", 0.25); set(rt, "ParamBrowRAngle", 0.25);
-            set(rt, "ParamCheek", 0.0);
-        }
-        "angry" => {
-            set(rt, "ParamBrowLY", 0.2); set(rt, "ParamBrowRY", 0.2);
-            set(rt, "ParamBrowLAngle", 0.1); set(rt, "ParamBrowRAngle", 0.9);
-            set(rt, "ParamBrowLForm", 0.15); set(rt, "ParamBrowRForm", 0.15);
-            set(rt, "ParamCheek", 0.4);
-        }
-        "surprised" => {
-            set(rt, "ParamEyeLOpen", 1.2); set(rt, "ParamEyeROpen", 1.2);
-            set(rt, "ParamBrowLY", 0.95); set(rt, "ParamBrowRY", 0.95);
-            set(rt, "ParamCheek", 0.3);
-        }
-        "concerned" => {
-            set(rt, "ParamBrowLY", 0.4); set(rt, "ParamBrowRY", 0.4);
-            set(rt, "ParamBrowLAngle", 0.35); set(rt, "ParamBrowRAngle", 0.65);
-            set(rt, "ParamCheek", 0.1);
-        }
-        "confused" => {
-            set(rt, "ParamBrowLY", 0.6); set(rt, "ParamBrowRY", 0.35);
-            set(rt, "ParamBrowLAngle", 0.3); set(rt, "ParamBrowRAngle", 0.7);
-            set(rt, "ParamEyeBallX", 0.35);
-        }
-        "attentive" => {
-            set(rt, "ParamEyeLOpen", 1.1); set(rt, "ParamEyeROpen", 1.1);
-            set(rt, "ParamBrowLY", 0.55); set(rt, "ParamBrowRY", 0.55);
-        }
-        _ => {} // neutral keeps defaults
-    }
-}
-
-/// Current emotion parameter targets (same map as apply_emotion_params) as a
-/// list of (id, normalized target) so the render loop can fade smoothly.
-fn emotion_targets(name: &str) -> Vec<(&'static str, f32)> {
-    match name {
-        "happy" => vec![("ParamEyeLSmile",1.0),("ParamEyeRSmile",1.0),("ParamBrowLY",0.65),("ParamBrowRY",0.65),("ParamCheek",0.8)],
-        "sad" => vec![("ParamEyeLSmile",0.0),("ParamEyeRSmile",0.0),("ParamBrowLY",0.25),("ParamBrowRY",0.25),("ParamBrowLAngle",0.25),("ParamBrowRAngle",0.25),("ParamCheek",0.0)],
-        "angry" => vec![("ParamBrowLY",0.2),("ParamBrowRY",0.2),("ParamBrowLAngle",0.1),("ParamBrowRAngle",0.9),("ParamBrowLForm",0.15),("ParamBrowRForm",0.15),("ParamCheek",0.4)],
-        "surprised" => vec![("ParamEyeLOpen",1.2),("ParamEyeROpen",1.2),("ParamBrowLY",0.95),("ParamBrowRY",0.95),("ParamCheek",0.3)],
-        "concerned" => vec![("ParamBrowLY",0.4),("ParamBrowRY",0.4),("ParamBrowLAngle",0.35),("ParamBrowRAngle",0.65),("ParamCheek",0.1)],
-        "confused" => vec![("ParamBrowLY",0.6),("ParamBrowRY",0.35),("ParamBrowLAngle",0.3),("ParamBrowRAngle",0.7),("ParamEyeBallX",0.35)],
-        "attentive" => vec![("ParamEyeLOpen",1.1),("ParamEyeROpen",1.1),("ParamBrowLY",0.55),("ParamBrowRY",0.55)],
-        _ => vec![],
-    }
-}
-
-fn run_avatar() {
-    println!("[mode] avatar window (Mocari Live2D, software raster)");
-    let model_path = model_path();
-    let mut model = match mocari::assets::load_model_runtime(&model_path) {
-        Ok(m) => m,
-        Err(e) => { eprintln!("[avatar] failed to load {model_path}: {e}"); return; }
-    };
-    // The mouth parameter name differs per model: Hiyori/most v3 models use
-    // ParamMouthOpenY; mao_pro (v5) uses ParamA. Pick whichever exists.
-    let mouth_param = ["ParamMouthOpenY", "ParamA"]
-        .iter()
-        .find(|p| model.runtime().parameter_index(p).is_some())
-        .unwrap_or(&"ParamMouthOpenY");
-    println!("[avatar] mouth parameter: {mouth_param}");
-    println!("[avatar] model loaded: {} drawables, {} textures",
-        model.runtime().meshes().len(), model.textures().len());
-
-    // D3 self-test (no GUI, no stack): tick the idle motion + physics + pose
-    // over N frames and prove vertices actually move frame-to-frame. Numeric
-    // evidence for the animation pipeline without a window or the companion.
-    if std::env::args().any(|a| a == "--selftest") {
-        let model_dir = std::path::Path::new(&model_path).parent().unwrap().to_path_buf();
-        let model3: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&model_path).unwrap_or_default()).unwrap_or(serde_json::Value::Null);
-        let idle = model3.pointer("/FileReferences/Motions/Idle/0/File")
-            .and_then(|v| v.as_str())
-            .and_then(|rel| mocari::motion::load_motion(model_dir.join(rel)).ok());
-        let mut motion_player = idle.map(|m| mocari::motion::MotionPlayer::with_looping(m, true));
-        println!("[selftest] idle motion loaded: {}", motion_player.is_some());
-
-        // Baseline mesh snapshot.
-        model.runtime_mut().update_meshes();
-        let snap = |m: &mocari::assets::RuntimeModel| -> Vec<[f32; 2]> {
-            m.runtime().meshes().iter()
-                .flat_map(|mm| mm.vertices().iter().map(|v| v.position()))
-                .collect()
-        };
-        let base = snap(&model);
-        let mut moved_frames = 0usize;
-        let mut max_delta = 0.0f32;
-        let dt = 1.0 / 30.0;
-        for frame in 0..90 {
-            if let Some(mp) = &mut motion_player {
-                mp.tick(dt);
-                mp.apply(model.runtime_mut());
-            } else {
-                // No motion file: procedural idle so the test still exercises
-                // the per-frame pipeline.
-                let t = frame as f32 * dt;
-                model.runtime_mut().set_parameter_normalized("ParamAngleX", 0.5 + 0.3 * (t * 2.0).sin());
-                model.runtime_mut().set_parameter_normalized("ParamBreath", 0.5 + 0.4 * (t * 1.5).sin());
-            }
-            model.runtime_mut().apply_parameter_overrides();
-            model.runtime_mut().apply_physics(dt);
-            model.runtime_mut().apply_pose(dt);
-            model.runtime_mut().update_meshes();
-            let cur = snap(&model);
-            let mut frame_delta = 0.0f32;
-            for (a, b) in cur.iter().zip(base.iter()) {
-                let d = (a[0] - b[0]).abs().max((a[1] - b[1]).abs());
-                if d > frame_delta { frame_delta = d; }
-            }
-            if frame_delta > 1e-4 { moved_frames += 1; }
-            if frame_delta > max_delta { max_delta = frame_delta; }
-        }
-        println!("[selftest] frames with movement: {moved_frames}/90, max vertex delta: {max_delta:.4} model-units");
-        // A live idle animation must move most frames and visibly (>=0.005 units).
-        let pass = moved_frames >= 45 && max_delta >= 0.005;
-        println!("[selftest] D3 motion+physics+pose: {}", if pass { "PASS" } else { "FAIL" });
-        return;
-    }
-
-    // Headless render proof: rasterize frames for automated VL testing.
-    // Usage: --headless [expression_index] [mouth_open_0..1] [out_path]
-    if let Some(pos) = std::env::args().position(|a| a == "--headless") {
-        let args: Vec<String> = std::env::args().collect();
-        let expr_idx: usize = args.get(pos + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
-        let mouth: f32 = args.get(pos + 2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
-        let out = args.get(pos + 3).cloned()
-            .unwrap_or_else(|| RuntimeConfig::load().repo_root.join(r"runtime\avatar-render.png").to_string_lossy().to_string());
-        // An explicit background after the output path (e.g. "0x00FF00" for an
-        // OBS chroma frame test).
-        let headless_bg = args.get(pos + 4)
-            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16).ok())
-            .unwrap_or(0x00_1a2b26u32);
-        let (w, h) = (480usize, 640usize);
-
-        // Apply the requested expression (mao_pro style files, if present),
-        // then the mouth parameter (model-specific name).
-        let model_dir = std::path::Path::new(&model_path).parent().unwrap().to_path_buf();
-        let mut mgr = mocari::expression::ExpressionManager::new();
-        let p = model_dir.join("expressions").join(format!("exp_{:02}.exp3.json", expr_idx + 1));
-        if let Ok(e) = mocari::expression::load_expression(&p) {
-            mgr.play(e);
-            // Drive the fade to full weight.
-            for _ in 0..60 { mgr.tick(0.05); }
-            mgr.apply(model.runtime_mut());
-            println!("[avatar] expression exp_{:02} applied", expr_idx + 1);
-        } else {
-            // No expression files (Hiyori): drive emotion parameters directly.
-            apply_emotion_params(model.runtime_mut(), emotion_name(expr_idx));
-            println!("[avatar] direct params for emotion '{:?}' applied", emotion_name(expr_idx));
-        }
-        model.runtime_mut().set_parameter_normalized(mouth_param, mouth);
-        model.runtime_mut().apply_parameter_overrides();
-        model.runtime_mut().update_meshes();
-        let mut frame = vec![0u32; w * h];
-        rasterize_with_bg(&model, &mut frame, w, h, headless_bg);
-        let drawn = frame.iter().filter(|&&p| p != headless_bg).count();
-        let mut rgba = Vec::with_capacity(w * h * 4);
-        for &p in &frame {
-            rgba.push(((p >> 16) & 0xff) as u8);
-            rgba.push(((p >> 8) & 0xff) as u8);
-            rgba.push((p & 0xff) as u8);
-            rgba.push(255u8);
-        }
-        match image::save_buffer(std::path::Path::new(&out), &rgba, w as u32, h as u32, image::ColorType::Rgba8) {
-            Ok(()) => println!("[avatar] frame saved: {out} (expr={expr_idx}, mouth={mouth}, {drawn} px drawn)"),
-            Err(e) => eprintln!("[avatar] save failed: {e}"),
-        }
-        return;
-    }
-
-    // D5 OBS mode: `--obs` swaps the mint panel background for pure chroma
-    // green (#00FF00) that OBS keys out with the color-key filter. The window
-    // is already frameless-capable via --webview; for the software raster the
-    // chroma background is the simplest reliable OBS source.
-    let obs_mode = std::env::args().any(|a| a == "--obs");
-    let bg_color = if obs_mode { OBS_CHROMA_BG } else { 0x00_1a2b26 };
-    if obs_mode { println!("[avatar] OBS chroma-key background (#00FF00)"); }
-
-    let event_loop = winit::event_loop::EventLoop::new().expect("event loop");
-    let attrs = winit::window::Window::default_attributes()
-        .with_title("JAWL Companion")
-        .with_inner_size(winit::dpi::LogicalSize::new(480u32, 640u32));
-    let window = std::sync::Arc::new(event_loop.create_window(attrs).expect("window"));
-    let context = softbuffer::Context::new(window.clone()).expect("softbuffer context");
-    let mut surface = softbuffer::Surface::new(&context, window.clone()).expect("softbuffer surface");
-    println!("[avatar] window open (close to exit)");
-
-    let start = std::time::Instant::now();
-    // Load the model's expression files (exp_01..08) once; an ExpressionManager
-    // blends the active one each frame.
-    let model_dir = std::path::Path::new(&model_path).parent().unwrap().to_path_buf();
-    let mut expressions: Vec<mocari::json::Expression3> = Vec::new();
-    for i in 1..=8 {
-        let p = model_dir.join("expressions").join(format!("exp_{i:02}.exp3.json"));
-        if let Ok(e) = mocari::expression::load_expression(&p) { expressions.push(e); }
-    }
-    println!("[avatar] {} expression files loaded", expressions.len());
-    let use_expr_files = !expressions.is_empty();
-    let mut expr_manager = mocari::expression::ExpressionManager::new();
-    let mut current_expr: usize = 0;
-
-    // D3: idle motion from the model's "Idle" group (first file), looping.
-    let idle_motion = {
-        let model3: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&model_path).unwrap_or_default()).unwrap_or(serde_json::Value::Null);
-        model3.pointer("/FileReferences/Motions/Idle/0/File")
-            .and_then(|v| v.as_str())
-            .and_then(|rel| mocari::motion::load_motion(model_dir.join(rel)).ok())
-    };
-    let mut motion_player = idle_motion.map(|m| mocari::motion::MotionPlayer::with_looping(m, true));
-    if motion_player.is_some() { println!("[avatar] idle motion loaded (looping)"); }
-
-    let mut last_frame = std::time::Instant::now();
-    // D2: per-parameter emotion fade state (current normalized values).
-    let mut face_current: Vec<(String, f32)> = Vec::new();
-    let mut last_emotion = String::new();
-    // Poll the companion's live state for lip-sync (avatar_audio: speaking +
-    // amplitude) and the last turn's emotion (to drive the expression later).
-    // Runs in a background thread so the render loop never blocks on I/O.
-    // The companion exposes this on GET /api/state (session-gated).
-    let lip = Arc::new(Mutex::new((false, 0.0f32))); // (speaking, amplitude)
-    let emotion = Arc::new(Mutex::new(String::new())); // last turn emotion id
-    {
-        let lip = lip.clone();
-        let emotion = emotion.clone();
-        std::thread::spawn(move || {
-            // Establish a session once; the state endpoint needs it.
-            let session = open_session().ok();
-            loop {
-                let mut req = ureq::get(&format!("{COMPANION_URL}/api/state"));
-                if let Some(s) = &session {
-                    req = req.set("Cookie", &s.cookie).set("X-Companion-CSRF", &s.csrf);
-                }
-                if let Ok(resp) = req.call() {
-                    if let Ok(v) = resp.into_json::<serde_json::Value>() {
-                        let aa = v.get("avatar_audio");
-                        let speaking = aa.and_then(|a| a.get("speaking")).and_then(|x| x.as_bool()).unwrap_or(false);
-                        let amp = aa.and_then(|a| a.get("amplitude")).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
-                        if let Ok(mut g) = lip.lock() { *g = (speaking, amp); }
-                        if let Some(e) = v.pointer("/last_turn/response/emotion/id").and_then(|x| x.as_str()) {
-                            if let Ok(mut g) = emotion.lock() { *g = e.to_string(); }
-                        }
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(120));
-            }
-        });
-    }
-    let _ = event_loop.run(move |event, elwt| {
-        use winit::event::{Event, WindowEvent};
-        match event {
-            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => elwt.exit(),
-            Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                let size = window.inner_size();
-                let (w, h) = (size.width.max(1) as usize, size.height.max(1) as usize);
-                let t = start.elapsed().as_secs_f32();
-                let dt = last_frame.elapsed().as_secs_f32().min(0.1);
-                last_frame = std::time::Instant::now();
-
-                // D3: idle motion first (it writes body/head params), then we
-                // overlay face + mouth so lip-sync always wins over the motion.
-                if let Some(mp) = &mut motion_player {
-                    mp.tick(dt);
-                    mp.apply(model.runtime_mut());
-                } else {
-                    // No motion file: gentle procedural sway/breath.
-                    model.runtime_mut().set_parameter_normalized("ParamAngleX", 0.5 + 0.15 * (t * 0.6).sin());
-                    model.runtime_mut().set_parameter_normalized("ParamAngleY", 0.5 + 0.1 * (t * 0.4).cos());
-                    model.runtime_mut().set_parameter_normalized("ParamBreath", 0.5 + 0.4 * (t * 0.8).sin());
-                }
-
-                // D2: emotion -> direct parameter fade (~250 ms).
-                let emo = emotion.lock().map(|g| g.clone()).unwrap_or_default();
-                if emo != last_emotion { last_emotion = emo.clone(); }
-                let targets = emotion_targets(&emo);
-                // Seed current values for any new target keys.
-                for (id, _) in &targets {
-                    if !face_current.iter().any(|(k, _)| k == id) {
-                        face_current.push((id.to_string(), 0.5));
-                    }
-                }
-                let fade = (dt / 0.25).min(1.0);
-                for (id, cur) in face_current.iter_mut() {
-                    let target = targets.iter().find(|(k, _)| *k == id.as_str()).map(|(_, v)| *v);
-                    if let Some(tv) = target {
-                        *cur += (tv - *cur) * fade;
-                        model.runtime_mut().set_parameter_normalized(id, *cur);
-                    }
-                }
-                // Expression files (mao_pro) still play via the manager on top.
-                if use_expr_files {
-                    let expr_idx = emotion_index(&emo);
-                    if expr_idx != current_expr && expr_idx < expressions.len() {
-                        expr_manager.play(expressions[expr_idx].clone());
-                        current_expr = expr_idx;
-                    }
-                    expr_manager.tick(dt);
-                    expr_manager.apply(model.runtime_mut());
-                }
-
-                // Lip-sync: speaking -> live amplitude; idle -> soft breath.
-                let (speaking, amp) = lip.lock().map(|g| *g).unwrap_or((false, 0.0));
-                let mouth = if speaking { amp.clamp(0.05, 1.0) } else { 0.05 * (t * 1.2).sin().abs() };
-                model.runtime_mut().set_parameter_normalized(mouth_param, mouth);
-
-                model.runtime_mut().apply_parameter_overrides();
-                // D3: physics + pose after parameters, before mesh rebuild.
-                model.runtime_mut().apply_physics(dt);
-                model.runtime_mut().apply_pose(dt);
-                model.runtime_mut().update_meshes();
-                surface.resize(std::num::NonZeroU32::new(w as u32).unwrap(), std::num::NonZeroU32::new(h as u32).unwrap()).unwrap();
-                let mut buf = surface.buffer_mut().unwrap();
-                rasterize_with_bg(&model, &mut buf, w, h, bg_color);
-                buf.present().unwrap();
-                window.request_redraw();
-            }
-            _ => {}
-        }
-        // Drive a continuous redraw for the idle animation.
-        window.request_redraw();
-    });
-}
-
-/// Launch the whole companion stack as owned child processes and keep this
 /// window alive (so the user sees status and nothing silently closes).
 ///
 /// Order matters: model servers first (they load slowly), then the integrated
@@ -969,11 +473,10 @@ fn run_all() {
     }
 }
 
-/// Production avatar window: WebView2 hosting the existing /avatar page.
-/// Cubism Core renders the model at full quality (mouth, physics, emotions,
-/// lip-sync) вЂ” the exact pipeline already accepted in the browser, now owned
-/// by a native window (frameless, transparent, always-on-top) for the desktop
-/// and OBS. Mocari remains available as a pure-native fallback (--avatar).
+/// OBS presentation window: WebView2 hosting the presentation origin's
+/// placeholder page (ADR-045: the 3D avatar itself lives in the Electron
+/// desktop shell; this window remains for OBS workflows that want a
+/// frameless, transparent, always-on-top surface).
 fn run_webview() {
     use tao::event::{Event, WindowEvent};
     use tao::event_loop::EventLoop;
@@ -982,8 +485,8 @@ fn run_webview() {
 
     // The presentation origin serves /avatar with no control privileges.
     let pres_port = RuntimeConfig::load().presentation_port;
-    let url = std::env::args().nth(2).unwrap_or_else(|| format!("http://127.0.0.1:{pres_port}/avatar"));
-    println!("[webview] avatar window -> {url}");
+    let url = std::env::args().nth(2).unwrap_or_else(|| format!("http://127.0.0.1:{pres_port}/"));
+    println!("[webview] OBS presentation window -> {url}");
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -1018,7 +521,6 @@ fn main() {
     let r2 = running.clone();
     let _ = ctrlc::set_handler(move || r2.store(false, Ordering::SeqCst));
     match mode.as_str() {
-        "--avatar" => run_avatar(),
         "--webview" => run_webview(),
         "--all" => run_all(),
         _ => run_mic(running),

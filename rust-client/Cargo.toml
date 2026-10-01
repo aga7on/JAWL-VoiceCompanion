@@ -2,7 +2,7 @@
 name = "jawl-companion-client"
 version = "0.1.0"
 edition = "2021"
-description = "Native Rust client: owns audio devices, hosts Live2D avatar + window + OBS"
+description = "Native Rust client: stack launcher, mic owner (phase B), OBS presentation window"
 
 [dependencies]
 # Minimal, well-maintained building blocks only.
@@ -10,17 +10,11 @@ cpal = "0.15"           # cross-platform audio capture/playback (WASAPI on Windo
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }   # tiny blocking HTTP client
-winit = "0.30"          # windowing for the character window (matches mocari)
 ctrlc = "3"             # clean shutdown on Ctrl+C
 base64 = "0.22"
-mocari = "0.4"          # pure-Rust Live2D/Cubism runtime (meshes, expressions, motions)
-# CPU 2D raster path (no GPU/wgpu): avoids wgpu-hal D3D12 build issues on Windows
-softbuffer = "0.4"
-tiny-skia = "0.11"
-pollster = "0.4"
-image = "0.25"
-# Production avatar window: WebView2 (ships with Windows) hosting the existing
-# /avatar presentation page вЂ” full Cubism Core quality (mouth/physics/expressions).
+# OBS presentation window: WebView2 (ships with Windows) hosting the
+# presentation origin. ADR-045: the 3D VRM avatar lives in the Electron
+# desktop shell (desktop/); Mocari/Live2D is removed.
 tao = "0.35"
 wry = "0.50"
 windows = { version = "0.48", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

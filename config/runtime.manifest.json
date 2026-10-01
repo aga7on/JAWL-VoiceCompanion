@@ -20,9 +20,8 @@
     "bonsai_model": "G:/AI/models/Ternary-Bonsai-2-27B-Abliterated-Hikari/Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf",
     "bonsai_mmproj": "G:/AI/VLM-RealTime-Bench/models/bonsai-ternary/Bonsai-27B-mmproj-Q8_0.gguf"
   },
-  "avatar": {
-    "model3_path": "runtime/live2d/hiyori/Hiyori.model3.json",
-    "mic_prefer": "fifine"
+  "mic": {
+    "prefer": "fifine"
   },
   "brain": {
     "provider": "local-hikari",

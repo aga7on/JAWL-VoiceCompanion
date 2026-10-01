@@ -31,7 +31,6 @@ from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
 from .asr import UtteranceBuffer
 from .audit import AuditLog
 from .attention import AttentionPresence
-from .avatar import AvatarAssetStore
 from .doctor import build_doctor_report
 from .event_log import log_event
 from .gateway import TextGateway
@@ -284,7 +283,6 @@ class CompanionServer(ThreadingHTTPServer):
         screen_watcher: ScreenDeltaWatcher | None = None,
         voice_mem: VoiceMemProcessClient | None = None,
         tts_service: TTSService | None = None,
-        avatar_assets: AvatarAssetStore | None = None,
         attention: AttentionPresence | None = None,
         ambient_memory: AmbientMemoryBuffer | None = None,
         sensory_ingestor: Any | None = None,
@@ -328,7 +326,6 @@ class CompanionServer(ThreadingHTTPServer):
         self.voice_mem = voice_mem
         self.voice_mem_async = VoiceMemAsyncIngest(voice_mem) if voice_mem is not None else None
         self.tts = tts_service
-        self.avatar_assets = avatar_assets
         self.attention = attention or AttentionPresence()
         # Episodic timeline (ADR-038): the single shared TimeService. It owns
         # "now / recently / long ago" for Heartbeat, memory, attention and the
@@ -842,7 +839,6 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 voice_mem=self.server.voice_mem,
                 asr=self.server.asr,
                 tts=self.server.tts,
-                avatar_assets=self.server.avatar_assets,
                 ambient_memory=self.server.ambient_memory,
                 ambient_audio=self.server.ambient_audio,
                 resource_governor=self.server.resources,
@@ -1069,11 +1065,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json(self.server.tts.health())
             return
         if path == "/api/avatar/config":
-            config = self.server.avatar_assets.config() if self.server.avatar_assets else {
-                "enabled": False, "runtime_url": None, "model_url": None, "adapter": None,
-            }
-            config["presentation_url"] = self.server.presentation_url
-            self._json(config)
+            # ADR-045: the Live2D asset store is removed; the 3D VRM avatar
+            # lives in the Electron shell. Keep the endpoint for the panel's
+            # OBS card with a deprecation payload.
+            self._json({
+                "enabled": False,
+                "deprecated": "live2d",
+                "note": "3D VRM avatar lives in the desktop shell (desktop/)",
+                "presentation_url": self.server.presentation_url,
+            })
             return
         if path in {
             # Product API facade (ADR-041): canonical service endpoints. UI and
@@ -1180,25 +1180,6 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             except JawlWebUnavailable as exc:
                 self._json({"configured": True, "status": "offline", "error": str(exc)})
             return
-        asset_prefix = "/avatar-assets/"
-        if self.server.legacy_presentation and path.startswith(asset_prefix) and self.server.avatar_assets is not None:
-            asset = self.server.avatar_assets.resolve_public(path[len(asset_prefix):])
-            if asset is None:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            try:
-                body = asset.read_bytes()
-            except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            self.send_response(HTTPStatus.OK)
-            _security_headers(self)
-            self.send_header("Content-Type", self.server.avatar_assets.content_type(asset))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
         if path == "/api/hostos/approvals":
             try:
                 self._require_browser_session()
@@ -1224,12 +1205,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path in ("/", "/index.html", "/avatar", "/avatar.html"):
-            if path in ("/avatar", "/avatar.html") and not self.server.legacy_presentation:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            filename = "avatar.html" if path in ("/avatar", "/avatar.html") else "index.html"
-            index_path = self.server.frontend_dir / filename
+        if path in ("/", "/index.html"):
+            # ADR-045: the Live2D /avatar page is removed (the 3D VRM avatar
+            # lives in the Electron shell); the presentation server keeps the
+            # OBS surface only.
+            index_path = self.server.frontend_dir / "index.html"
             try:
                 body = index_path.read_bytes()
             except OSError:
@@ -2394,7 +2374,6 @@ class CompanionPresentationServer(ThreadingHTTPServer):
     ):
         self.companion = companion
         self.frontend_dir = companion.frontend_dir
-        self.avatar_assets = companion.avatar_assets
         self.tls_enabled = tls_context is not None
         self.url_scheme = "https" if self.tls_enabled else "http"
         self.remote_access = not is_loopback_host(server_address[0])
@@ -2433,11 +2412,12 @@ class CompanionPresentationRequestHandler(BaseHTTPRequestHandler):
             self._json(self.server.companion.presentation_state())
             return
         if path == "/api/presentation/config":
-            config = self.server.avatar_assets.config() if self.server.avatar_assets else {
+            # ADR-045: the Live2D asset store is removed; the presentation
+            # server keeps the OBS surface contract only.
+            self._json({
                 "enabled": False,
-                "runtime_url": None,
-                "model_url": None,
-                "adapter": None,
+                "deprecated": "live2d",
+                "note": "3D VRM avatar lives in the desktop shell (desktop/)",
                 "capabilities": {
                     "expressions": 0,
                     "motion_groups": [],
@@ -2450,35 +2430,16 @@ class CompanionPresentationRequestHandler(BaseHTTPRequestHandler):
                         "happy", "sad", "angry", "surprised",
                     ],
                 },
-            }
-            self._json(config)
+            })
             return
-        asset_prefix = "/avatar-assets/"
-        if path.startswith(asset_prefix) and self.server.avatar_assets is not None:
-            asset = self.server.avatar_assets.resolve_public(path[len(asset_prefix):])
-            if asset is None:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            try:
-                body = asset.read_bytes()
-            except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            self.send_response(HTTPStatus.OK)
-            _security_headers(self, presentation=True)
-            self.send_header("Content-Type", self.server.avatar_assets.content_type(asset))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if path in {"/", "/avatar", "/avatar.html"}:
-            index_path = self.server.frontend_dir / "avatar.html"
-            try:
-                body = index_path.read_bytes()
-            except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND, "frontend is not installed")
-                return
+        if path == "/":
+            # ADR-045: the presentation surface serves a minimal placeholder
+            # (OBS consumers should use the Electron avatar window).
+            body = ("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\">"
+                    "<title>JAWL Companion — presentation</title>"
+                    "<body style=\"background:#001a2b26;color:#9fe8d4;font-family:sans-serif\">"
+                    "<p>3D-аватар живёт в окне десктоп-оболочки (desktop/). "
+                    "Live2D-презентация удалена (ADR-045).</p></body></html>").encode("utf-8")
             self.send_response(HTTPStatus.OK)
             _security_headers(self, presentation=True)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2557,7 +2518,6 @@ def create_server(
     screen_watch_interval: float = 10.0,
     voice_mem: VoiceMemProcessClient | None = None,
     tts_service: TTSService | None = None,
-    avatar_assets: AvatarAssetStore | None = None,
     jawl_event_dir: Path | None = None,
     attention: AttentionPresence | None = None,
     activity_provider: Callable[[], dict[str, Any]] | None = None,
@@ -2663,7 +2623,6 @@ def create_server(
         watcher,
         voice_mem,
         tts_service,
-        avatar_assets,
         active_attention,
         ambient_memory=ambient_memory,
         sensory_ingestor=sensory_ingestor,

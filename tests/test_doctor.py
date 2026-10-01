@@ -26,7 +26,7 @@ class _Provider:
 
 
 class DoctorTests(unittest.TestCase):
-    def _report(self, gateway, *, live=False, configured=False, avatar=False):
+    def _report(self, gateway, *, live=False, configured=False):
         return build_doctor_report(
             gateway=gateway,
             hostos=SimpleNamespace(dry_run=not live),
@@ -35,7 +35,6 @@ class DoctorTests(unittest.TestCase):
             }),
             voice_mem=_Provider("ready") if configured else None,
             tts=_Provider("ok") if configured else None,
-            avatar_assets=SimpleNamespace(config=lambda: {"ready": avatar}) if avatar else None,
             resource_governor=SimpleNamespace(state=lambda: {"profile": "standard", "gaming_mode": False}),
         )
 
@@ -50,7 +49,7 @@ class DoctorTests(unittest.TestCase):
     def test_configuration_does_not_prove_vision_or_missing_asr_ready(self):
         report = self._report(
             TextGateway(responder=_Responder("connected"), brain_name="jawl_web_chat"),
-            live=True, configured=True, avatar=True,
+            live=True, configured=True,
         )
         self.assertEqual(report["status"], "degraded")
         checks = {item["id"]: item for item in report["checks"]}

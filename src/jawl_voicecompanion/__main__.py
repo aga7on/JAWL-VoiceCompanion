@@ -345,9 +345,6 @@ def main() -> None:
         help="planner model name on the prosody provider",
     )
     parser.add_argument("--prosody-timeout", type=float, default=6.0)
-    parser.add_argument("--live2d-assets", type=Path, default=None)
-    parser.add_argument("--live2d-model", default="model3.json")
-    parser.add_argument("--live2d-runtime", default="live2d-runtime.js")
     parser.add_argument(
         "--audit-file",
         type=Path,

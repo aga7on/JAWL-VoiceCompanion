@@ -423,9 +423,9 @@ try {
     if ($env:JAWL_CONFIG_DIR) { $companionArgs += " --jawl-config-dir `"$env:JAWL_CONFIG_DIR`"" }
     if ($env:JAWL_ENV_FILE) { $companionArgs += " --jawl-env-file `"$env:JAWL_ENV_FILE`"" }
     if ($env:JAWL_LOG_DIR) { $companionArgs += " --jawl-log-dir `"$env:JAWL_LOG_DIR`"" }
-    if (-not $NoLive2D) {
-        $companionArgs += " --live2d-assets `"$(Join-Path $repo 'runtime\live2d')`" --live2d-model `"mao_pro/mao_pro.model3.json`" --live2d-runtime `"live2d-runtime.js`""
-    }
+    # ADR-045: Live2D assets are removed; the 3D VRM avatar lives in the
+    # Electron desktop shell. $NoLive2D stays accepted as a no-op for older
+    # command lines.
     if ($UseVoiceMem) { $companionArgs += " --voicemem-python `"$voicememPy`" --voicemem-local-memory --voicemem-warmup text --voicemem-timeout 120" }
     if ($SuperviseBrainWorker) {
         # One executable entry (ADR-041 stage 2): the Companion process owns

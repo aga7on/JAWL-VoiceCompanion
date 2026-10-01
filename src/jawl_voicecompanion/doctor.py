@@ -50,7 +50,6 @@ def build_doctor_report(
     voice_mem: Any | None = None,
     asr: Any | None = None,
     tts: Any | None = None,
-    avatar_assets: Any | None = None,
     ambient_memory: Any | None = None,
     ambient_audio: Any | None = None,
     resource_governor: Any | None = None,
@@ -115,13 +114,11 @@ def build_doctor_report(
         action="Validate the selected Vision profile" if vision_configured else "Vision selection is deferred; text/voice can work without it",
     ))
 
-    avatar = avatar_assets.config() if avatar_assets is not None else {"ready": False}
-    avatar_ready = bool(avatar.get("ready"))
     checks.append(_check(
-        "avatar", "ready" if avatar_ready else "fallback",
-        "Live2D bundle" if avatar_ready else "Reactive transparent 2D fallback avatar",
-        ready=avatar_ready,
-        action="Supply a validated user-owned Live2D model/runtime bundle" if not avatar_ready else None,
+        "avatar", "desktop",
+        "3D VRM avatar lives in the Electron desktop shell (ADR-045); "
+        "the envelope emotion and avatar.audio lip-sync channel are the contract",
+        ready=True,
     ))
 
     dry_run = bool(getattr(hostos, "dry_run", True))

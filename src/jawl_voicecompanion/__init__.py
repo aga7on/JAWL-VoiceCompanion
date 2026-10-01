@@ -6,7 +6,6 @@ from .hostos_policy import HostOSPolicy
 from .hostos_tools import HostOSExecutor, ToolSpec
 from .browser_adapter import BrowserAdapter
 from .approvals import ApprovalStore
-from .avatar import AvatarAssetStore
 from .models import AccessLevel, RiskClass, ToolRequest
 from .arbiter import TurnArbiter, TurnPriority
 from .screen_adapter import ScreenCaptureAdapter
@@ -58,7 +57,7 @@ __all__ = [
     "HostOSExecutor",
     "BrowserAdapter",
     "ApprovalStore",
-    "AvatarAssetStore",
+    "ApprovalStore",
     "RiskClass",
     "TextGateway",
     "validate_response_envelope",

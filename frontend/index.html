@@ -285,7 +285,7 @@
             <article class="glass-card companion-card">
               <div class="card-head"><div><h3>Мой компаньон</h3><p>2D-персонаж · локальная презентация</p></div><span class="tag" id="mini-emotion">neutral</span></div>
               <div class="stage" aria-label="Предпросмотр 2D-компаньона">
-                <iframe id="stage-avatar" hidden title="Живой 2D-персонаж" allow="autoplay"></iframe>
+                <!-- ADR-045: the 3D VRM avatar lives in the Electron desktop window. -->
                 <div class="mini-avatar" id="mini-avatar"><div class="mini-head"><span class="mini-eye left"></span><span class="mini-eye right"></span><span class="mini-mouth"></span></div><div class="mini-body"></div><span class="mini-badge">2D COMPANION</span></div>
                 <div class="stage-info"><span id="mini-state">idle</span><span id="mini-motion">motion · idle</span></div>
               </div>
@@ -3292,22 +3292,12 @@
       refresh();
     });
     const obsUrl = document.querySelector('#obs-url');
-    obsUrl.value = `${window.location.origin}/avatar`;
+    // ADR-045: the 3D VRM avatar lives in the Electron desktop window; the
+    // browser panel keeps the mini avatar and the OBS presentation URL.
+    obsUrl.value = `${window.location.origin}/`;
     fetch('/api/avatar/config', {cache: 'no-store'}).then(response => response.json()).then(config => {
       if (config.presentation_url) obsUrl.value = config.presentation_url;
-      // The real Live2D character lives on the presentation server (the OBS
-      // source). Embed it on the main stage; the embedded page keeps its own
-      // fallback, and the CSS mini-avatar covers profiles without a
-      // presentation server.
-      if (!config.presentation_url) return;
-      const frame = document.querySelector('#stage-avatar');
-      const fallback = document.querySelector('#mini-avatar');
-      frame.src = config.presentation_url;
-      frame.addEventListener('load', () => {
-        frame.hidden = false;
-        fallback.style.display = 'none';
-      });
-    }).catch(() => { /* same-origin fallback remains visible */ });
+    }).catch(() => { /* the default presentation URL remains */ });
     document.querySelector('#copy-obs-url').addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(obsUrl.value);

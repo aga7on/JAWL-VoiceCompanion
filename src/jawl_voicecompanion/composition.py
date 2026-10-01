@@ -17,7 +17,6 @@ from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
 from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
 from .ambient_triage import OpenAICompatibleTriageProvider
 from .asr import UtteranceBuffer
-from .avatar import AvatarAssetStore
 from .browser_adapter import BrowserAdapter
 from .companion_runtime import CompanionRuntime
 from .prosody_planner import ProsodyPlanner
@@ -286,16 +285,9 @@ def build_companion_runtime(
     else:
         tts_service = None
 
-    avatar_assets = None
-    if args.live2d_assets:
-        try:
-            avatar_assets = AvatarAssetStore(
-                args.live2d_assets,
-                model=args.live2d_model,
-                runtime=args.live2d_runtime,
-            )
-        except ValueError as exc:
-            error(str(exc))
+    # ADR-045: the Live2D presentation surface is removed; the 3D VRM avatar
+    # lives in the Electron desktop shell (desktop/). The envelope emotion and
+    # avatar.audio lip-sync channel remain the product contract.
 
     config_hub = None
     if args.jawl_config_dir:
@@ -319,7 +311,6 @@ def build_companion_runtime(
         screen_watch_interval=args.screen_watch_interval,
         voice_mem=voice_mem,
         tts_service=tts_service,
-        avatar_assets=avatar_assets,
         jawl_event_dir=args.jawl_event_dir,
         ambient_memory=ambient_memory,
         sensory_ingestor=sensory_ingestor,
