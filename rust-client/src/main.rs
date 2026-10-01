@@ -40,6 +40,8 @@ struct RuntimeManifest {
     #[serde(default)]
     avatar: ManifestAvatar,
     #[serde(default)]
+    brain: ManifestBrain,
+    #[serde(default)]
     profile_script: Option<String>,
 }
 
@@ -60,6 +62,13 @@ struct ManifestModels {
     #[serde(default)] qwen3_vl_mmproj: Option<String>,
     #[serde(default)] bonsai_model: Option<String>,
     #[serde(default)] bonsai_mmproj: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ManifestBrain {
+    #[serde(default)] model: Option<String>,
+    #[serde(default)] provider: Option<String>,
+    #[serde(default)] use_relay: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -85,6 +94,8 @@ struct RuntimeConfig {
     bonsai_mmproj: PathBuf,
     avatar_model3: PathBuf,
     mic_prefer: String,
+    brain_model: String,
+    brain_use_relay: bool,
     profile_script: PathBuf,
 }
 
@@ -124,6 +135,8 @@ impl RuntimeConfig {
             if let Some(v) = m.models.bonsai_mmproj { out.bonsai_mmproj = PathBuf::from(v); }
             if let Some(v) = m.avatar.model3_path { out.avatar_model3 = out.repo_root.join(v); }
             if let Some(v) = m.avatar.mic_prefer { out.mic_prefer = v; }
+            if let Some(v) = m.brain.model { out.brain_model = v; }
+            if let Some(v) = m.brain.use_relay { out.brain_use_relay = v; }
             if let Some(v) = m.profile_script { out.profile_script = out.repo_root.join(v); }
         }
         out
@@ -148,6 +161,10 @@ impl RuntimeConfig {
             bonsai_mmproj: PathBuf::from(r"G:\AI\VLM-RealTime-Bench\models\bonsai-ternary\Bonsai-27B-mmproj-Q8_0.gguf"),
             avatar_model3: root.join(r"runtime\live2d\hiyori\Hiyori.model3.json"),
             mic_prefer: "fifine".to_string(),
+            // Default brain: the local Hikari stack (owner decision
+            // 2026-09-29). The relay profile stays opt-in via the manifest.
+            brain_model: "local-bonsai2".to_string(),
+            brain_use_relay: false,
             profile_script: root.join(r"scripts\run_integrated_profile.ps1"),
         }
     }
@@ -889,14 +906,17 @@ fn run_all() {
         let script = cfg.profile_script.to_string_lossy().to_string();
         let prof_script = script.clone();
         let current_dir = cfg.repo_root.clone();
+        let brain_model = cfg.brain_model.clone();
+        let use_relay = cfg.brain_use_relay;
         let prof = Command::new("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 &prof_script,
                 "-ProfileName", &cfg.profile, "-StartLocalAudio", "-UseVoiceMem",
                 "-TtsProvider", "tera", "-EnableProsodyPlanner",
-                "-EnableStreamingAsr", "-UseOpenCodeRelay", "-EnableScreenWatch",
+                "-EnableStreamingAsr", "-EnableScreenWatch",
                 "-EnableSensoryWorker", "-AmbientTriageSeconds", "300",
-                "-JawlModelOverride", "deepseek-v4-flash", "-StartupTimeoutSeconds", "420"])
+                "-JawlModelOverride", &brain_model, "-StartupTimeoutSeconds", "420"])
+            .args(if use_relay { vec!["-UseOpenCodeRelay"] } else { vec![] })
             .current_dir(&current_dir)
             .spawn();
         match prof {

@@ -27,7 +27,14 @@
   "brain": {
     "provider": "opencode-go",
     "model": "deepseek-v4-flash",
-    "relay_port": 8891
+    "relay_port": 8891,
+    "use_relay": true,
+    "local_dev_override": {
+      "note": "Explicit dev/CI mode only (no schedule, no day/night split: one canonical brain, honest degradation when the relay is down). The local Hikari brain is a staging surrogate for autonomous test runs where the owner's relay is not up; it is never a silent substitute.",
+      "model": "local-bonsai2",
+      "llm_url": "http://127.0.0.1:8990/v1",
+      "raised_by": "scripts/run_local_bonsai_integrated.ps1"
+    }
   },
   "profile_script": "scripts/run_integrated_profile.ps1"
 }
