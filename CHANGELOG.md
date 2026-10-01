@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-10-01 — Electron + 3D VRM-аватар (ADR-045, срезы 1–5)
+
+- **Electron-оболочка** (`desktop/`): два окна — 3D-сцена (three.js +
+  three-vrm) и существующая панель Companion (http-origin, без переписывания
+  UI). Кросс-доменный мост: панель → BroadcastChannel → panel-preload IPC →
+  main-реле → avatar-preload → DOM CustomEvent.
+- **VRM-аватар**: blendshape-пресеты (happy/angry/sad/relaxed/surprised),
+  липсинк от RMS, idle (моргание/дыхание), автокадрирование по bbox,
+  диагностика через window-пробы.
+- **Эмоции-мост закрыт живьём**: ход через UI панели → JAWL ReAct (мозг
+  Hikari) → конверт (emotion attentive) → VRM-выражение (relaxed), 605
+  событий моста за прогон включая аудио-поток TTS для губ. Строгий
+  инвариант в smoke: эмоция конверта == выражение сцены.
+- **Мозг Hikari стабилизирован**: контекст 64k (16k душно для ~10–12k
+  ReAct-промпта), лимит выхода 2048, температура 0.3 — ходы «JAWL
+  completed without a safe user-facing response» ушли.
+- **OmniVoice TTS-воркер** (срез 8): k2-fsa/OmniVoice на GPU1 рядом с
+  мозгом (RTF ~0.1 замер живьём, дословная RU-транскрипция через GigaAM),
+  контракт теры (/health + /tts WAV), peak-нормализация 0.9 (сырой выход
+  клиппировал ~1% сэмплов и ASR читал его как шум). Лаунчер:
+  `-TtsProvider omnivoice -OmniVoicePort 9890`.
+- **Live2D удалён полностью** (срез 7): AvatarAssetStore, /avatar-страницы,
+  /avatar-assets, ассеты hiyori/mao_pro (14.5 МБ), --avatar-режим rust-exe
+  и весь Mocari-растеризатор (~500 строк, −5 зависимостей: mocari, winit,
+  softbuffer, tiny-skia, pollster, image). exe — лаунчер + микрофон + OBS.
+  Контракт сохранён: /api/avatar/audio (липсинк-канал 3D) и эмоции конверта.
+- **GigaAM в проекте**: веса в runtime/models/asr/ (gitignored), все ссылки
+  на внешний каталог заменены — чистка машины больше не ломает канонический
+  ASR.
+
+
+
 ## 2026-09-29 — Один исполняемый вход: --supervise-workers (этап 2, срез 2)
 
 - `python -m jawl_voicecompanion --supervise-workers`: процесс сам владеет

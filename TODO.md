@@ -112,9 +112,10 @@
   anti-repeat исключение для прямых запросов (config/jawl синхронизирован).
   Тесты 11/11 terminal, 78/78 web. Live-проверка после рестарта стека.
 - [x] D5: OBS chroma-key `--obs` (evidence: 87% keyable фон в headless-кадре)
-- [ ] D1-остаток: blendshapes moc3 v5 в Mocari (вендоринг + патч keyform/mesh
-  пути), чтобы mao_pro снова стал основной моделью. Обход: дефолт Hiyori (v3),
-  `JAWL_AVATAR_MODEL` переопределяет; WebView2-окно как fallback полного качества.
+- [x] D1-остаток: закрыт ADR-045 — Live2D/Mocari удалены целиком; аватар —
+  3D VRM в Electron-оболочке (`desktop/`, three-vrm), moc3 v5 blendshape-
+  вопрос больше не существует. Evidence: коммиты cb5f5cc, 186528d;
+  гейт 11/11; живой мост эмоций passed (`runtime/desktop-bridge-live.json`).
 
 ## Приоритет: Phase A — coherence E2E и episodic timeline — 2026-09-17
 
@@ -243,7 +244,8 @@
     (пустое поле не стирает секрет, замена работает).
   - [ ] U4 остаток: lifecycle/HostOS/DB-wipe отдельными блоками (уровни и
     emergency уже есть во вкладке Доступ; wipe требует отдельного решения).
-- [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
+- [ ] U5: связанный chat/voice/goal/memory/аватар сценарий; один audio owner.
+  (Live2D → 3D VRM-аватар в Electron, ADR-045: эмоции-мост закрыт живьём.)
   - [x] Срез 1 (2026-09-15): фон-уведомления — терминальный гейт ловит legacy
     broadcast'ы автономных циклов (окно 20), shell/status отдаёт
     background{count,last_text,last_ts}, рейл показывает каждую новую

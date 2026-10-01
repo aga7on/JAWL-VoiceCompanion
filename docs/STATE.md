@@ -2053,3 +2053,31 @@ harness now treats provider-reported `failed` as terminal and explicitly
 requires direct Goal Protocol v2 `state=done` for this disposable task. The
 native GoalSkills implementation remains canonical and unchanged. A fresh
 two-cycle run is required before unattended heartbeat can be called accepted.
+
+### ADR-045: Electron + 3D VRM-аватар — 2026-10-01
+
+Статус: срезы 1–5 и 7–8 закрыты; цель владельца выполнена в инженерной части.
+
+- **Живой цикл доказан** (`runtime/desktop-bridge-live.json`, статус passed):
+  ход через UI панели → JAWL/Hikari → конверт (attentive) → VRM-выражение
+  (relaxed); 605 событий моста, включая аудио-поток для липсинка. Инвариант
+  строгий: эмоция конверта == выражение сцены.
+- **Electron-оболочка** (`desktop/`): окно 3D-сцены + окно панели (существующий
+  UI), кросс-доменный мост через IPC-реле, CDP-диагностика, гигиена процессов.
+- **Hikari-мозг стабилен**: 64k контекст, 2048 лимит выхода, t=0.3.
+- **Live2D удалён целиком** (коммит 186528d): −1 движок, −5 зависимостей
+  rust-клиента, −14.5 МБ ассетов. Контракты сохранены: /api/avatar/audio
+  (липсинк), эмоции конверта, OBS-поверхность.
+- **OmniVoice TTS** (коммит dee7659): воркер на GPU1 рядом с мозгом, RTF ~0.1,
+  RU дословно по GigaAM; `-TtsProvider omnivoice`. TeraTTS остаётся дефолтом.
+- **GigaAM веса в проекте**: runtime/models/asr/ — чистка внешних каталогов
+  больше не ломает ASR.
+
+Ограничения/блокеры (не имитировать):
+- Пуш ~33 коммитов и живой голосовой ход с микрофоном владельца — решения
+  владельца.
+- VRM-модель пока constraint-sample (плоские волосы) — замена на полноценную
+  VTuber-модель это отдельный выбор владельца.
+- Рантайм-кастомизация внешности агентом (bounded-интерфейс) — не реализована;
+  свап моделей в сцене есть, командная поверхность для агента — следующий шаг.
+- CodeSee-синк ADR-045 — pending.

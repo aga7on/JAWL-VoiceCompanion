@@ -55,6 +55,11 @@
       "summary": "Уровни доступа, согласования, аудит, экстренный стоп",
       "order": 3,
       "importance": "normal"
+    },
+    {
+      "id": "presence",
+      "name": "Присутствие и аватар",
+      "summary": "3D VRM-аватар в Electron-оболочке: лицо компаньона, эмоции и голос"
     }
   ],
   "features": [
@@ -2271,6 +2276,298 @@
       "confidence": 0.9,
       "provenance": "ai",
       "updated_at": "2026-09-29T22:30:00Z"
+    },
+    {
+      "id": "f-desktop-avatar",
+      "name": "3D VRM-аватар в Electron",
+      "summary": "Окно 3D-сцены (three.js + three-vrm) рядом с окном панели; эмоции хода меняют выражение лица, озвучка двигает губы",
+      "epicId": "presence",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "desktop/main.js — Electron-оболочка с двумя окнами (сцена + панель)"
+        }
+      ],
+      "steps": [
+        {
+          "id": "launch",
+          "name": "Открыть оболочку",
+          "role": "input",
+          "note": "main.js поднимает окно сцены (file://) и окно панели (http-origin компаньона); порт панели — из манифеста или env",
+          "refs": [
+            {
+              "file": "desktop/main.js",
+              "lines": [
+                1,
+                60
+              ]
+            }
+          ]
+        },
+        {
+          "id": "load",
+          "name": "Загрузить модель VRM",
+          "role": "compute",
+          "note": "three-vrm сцена: пресеты happy/angry/sad/relaxed/surprised, моргание, дыхание, автокадрирование по bbox",
+          "refs": [
+            {
+              "file": "desktop/avatar-scene.js",
+              "lines": [
+                1,
+                80
+              ]
+            }
+          ]
+        },
+        {
+          "id": "bridge",
+          "name": "Переслать события моста",
+          "role": "side-effect",
+          "note": "BroadcastChannel панели → panel-preload IPC → main-реле → avatar-preload → DOM CustomEvent (изолированные миры делят DOM)",
+          "refs": [
+            {
+              "file": "desktop/panel-preload.js",
+              "lines": [
+                1,
+                30
+              ]
+            },
+            {
+              "file": "desktop/main.js",
+              "lines": [
+                60,
+                110
+              ]
+            },
+            {
+              "file": "desktop/avatar-preload.js",
+              "lines": [
+                1,
+                25
+              ]
+            }
+          ]
+        },
+        {
+          "id": "emotion",
+          "name": "Показать эмоцию хода",
+          "role": "output",
+          "note": "панель публикует эмоцию конверта (publishAvatarEmotion) на каждом завершённом ходе; сцена маппит в VRM-пресет (attentive→relaxed и др.)",
+          "refs": [
+            {
+              "file": "frontend/index.html",
+              "lines": [
+                1836,
+                1870
+              ]
+            },
+            {
+              "file": "desktop/avatar-scene.js",
+              "lines": [
+                1,
+                30
+              ]
+            }
+          ]
+        },
+        {
+          "id": "lips",
+          "name": "Двигать губы",
+          "role": "compute",
+          "note": "RMS амплитуда /api/avatar/audio → blendshape 'aa'; канал общий для теры и омнивойса",
+          "refs": [
+            {
+              "file": "frontend/index.html",
+              "lines": [
+                1233,
+                1260
+              ]
+            },
+            {
+              "file": "desktop/avatar-scene.js",
+              "lines": [
+                80,
+                120
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fail",
+          "name": "Молчание моста",
+          "role": "error",
+          "note": "панель не открыта или канал недоступен — сцена остаётся в idle, ошибки глушатся",
+          "refs": [
+            {
+              "file": "frontend/index.html",
+              "lines": [
+                1866,
+                1870
+              ]
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "launch",
+          "to": "load",
+          "kind": "next"
+        },
+        {
+          "from": "load",
+          "to": "bridge",
+          "kind": "next"
+        },
+        {
+          "from": "bridge",
+          "to": "emotion",
+          "kind": "async",
+          "condition": "ход завершён — пришёл envelope"
+        },
+        {
+          "from": "bridge",
+          "to": "lips",
+          "kind": "async",
+          "condition": "идёт озвучка — аудио-события"
+        },
+        {
+          "from": "emotion",
+          "to": "bridge",
+          "kind": "loop",
+          "condition": "следующий ход"
+        },
+        {
+          "from": "bridge",
+          "to": "fail",
+          "kind": "error",
+          "condition": "окно сцены закрыто"
+        }
+      ],
+      "cross_feature": [
+        {
+          "featureId": "f-voice-turn",
+          "note": "голосовой ход озвучивается TTS и двигает губы аватара"
+        },
+        {
+          "featureId": "f-control-api",
+          "note": "панель в окне Electron — тот же контрольный origin"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-10-01T20:30:00Z"
+    },
+    {
+      "id": "f-omnivoice-tts",
+      "name": "OmniVoice-синтез речи",
+      "summary": "k2-fsa/OmniVoice на GPU1 рядом с мозгом: RU-реалтайм (RTF ~0.1), третий TTS-провайдер",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "-TtsProvider omnivoice -OmniVoicePort 9890 поднимает воркер в лаунчере"
+        }
+      ],
+      "steps": [
+        {
+          "id": "raise",
+          "name": "Поднять воркер",
+          "role": "input",
+          "note": "лаунчер стартует omnivoice_server.py на cuda:1, ждёт /health (переиспользует живой остаток)",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1",
+              "lines": [
+                318,
+                326
+              ]
+            }
+          ]
+        },
+        {
+          "id": "synthesize",
+          "name": "Синтезировать фразу",
+          "role": "compute",
+          "note": "POST /tts: генерация с опорным сэмплом, peak-нормализация 0.9 (сырой выход клиппирует ~1% сэмплов), WAV 24к mono s16",
+          "refs": [
+            {
+              "file": "scripts/omnivoice_server.py",
+              "lines": [
+                60,
+                100
+              ]
+            }
+          ]
+        },
+        {
+          "id": "deliver",
+          "name": "Отдать WAV панели",
+          "role": "output",
+          "note": "контракт теры: тот же TeraTTSHttpClient в composition; X-Gen-Seconds — латентность",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/composition.py",
+              "lines": [
+                270,
+                280
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fail",
+          "name": "Отказ синтеза",
+          "role": "error",
+          "note": "воркер гасит модель/путь не найдены — /health не станет ok, лаунчер падает явно (fail-closed)",
+          "refs": [
+            {
+              "file": "scripts/omnivoice_server.py",
+              "lines": [
+                150,
+                160
+              ]
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "raise",
+          "to": "synthesize",
+          "kind": "next"
+        },
+        {
+          "from": "synthesize",
+          "to": "deliver",
+          "kind": "next"
+        },
+        {
+          "from": "deliver",
+          "to": "synthesize",
+          "kind": "loop",
+          "condition": "новая фраза хода"
+        },
+        {
+          "from": "raise",
+          "to": "fail",
+          "kind": "error",
+          "condition": "модель или референс отсутствуют"
+        }
+      ],
+      "cross_feature": [
+        {
+          "featureId": "f-voice-turn",
+          "note": "голосовой ход может звучать Омнивойсом вместо теры"
+        },
+        {
+          "featureId": "f-desktop-avatar",
+          "note": "аудио-поток двигает губы 3D-аватара"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-10-01T20:30:00Z"
     }
   ],
   "cross_feature": [
