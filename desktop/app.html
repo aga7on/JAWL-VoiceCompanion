@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>JAWL Companion</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/app/node_modules/three/build/three.module.js",
+    "three/addons/": "/app/node_modules/three/examples/jsm/",
+    "@pixiv/three-vrm": "/app/node_modules/@pixiv/three-vrm/lib/three-vrm.module.min.js"
+  }
+}
+</script>
+<style>
+  :root {
+    --bg: #0a1520;
+    --bg-2: #0e1c2a;
+    --card: #12222f;
+    --line: #1e3a4d;
+    --text: #d7f0e9;
+    --muted: #7ba8a0;
+    --accent: #4fd1a5;
+    --accent-2: #2c8179;
+    --danger: #e0705f;
+    --radius: 10px;
+    --rail: 52px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    overflow: hidden;
+    border-radius: 12px;
+  }
+
+  /* ---- left icon rail ---- */
+  nav.rail {
+    width: var(--rail);
+    background: rgba(8, 18, 28, .9);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  nav.rail button {
+    width: 38px; height: 38px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 17px;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: background .15s, color .15s;
+  }
+  nav.rail button:hover { background: rgba(79, 209, 165, .12); color: var(--text); }
+  nav.rail button.active { background: var(--accent-2); color: #eafff8; }
+  nav.rail .spacer { flex: 1; }
+  .settings-list { max-height: 420px; overflow-y: auto; }
+  /* V.E.G.A.-style fields: label+desc left, typed control right */
+  .field { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(30,58,77,.5); }
+  .field:last-child { border-bottom: 0; }
+  .field .fl { flex: 1; min-width: 0; }
+  .field .fn { font-size: 13px; color: var(--text); }
+  .field .fd { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .field .fc { display: inline-flex; align-items: center; gap: 6px; }
+  .field .unit { font-size: 10px; color: var(--muted); }
+  .field input[type=number], .field input[type=text] {
+    width: 90px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 12px;
+  }
+  .field input[type=range] {
+    width: 110px; accent-color: var(--accent);
+  }
+  .field input[type=text].wide { width: 170px; }
+  .field select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px; max-width: 180px;
+  }
+  /* toggle switch (V.E.G.A. .sw) */
+  .sw {
+    position: relative; width: 34px; height: 18px; flex: none;
+    background: #1d3346; border: 1px solid var(--line);
+    border-radius: 999px; cursor: pointer; transition: background .15s;
+  }
+  .sw::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--muted); transition: left .15s, background .15s;
+  }
+  .sw[aria-checked="true"] { background: rgba(79,209,165,.18); border-color: rgba(79,209,165,.4); }
+  .sw[aria-checked="true"]::after { left: 17px; background: var(--accent); }
+
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  header.top {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line);
+    -webkit-app-region: drag;
+  }
+  header.top .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  header.top .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  header.top .dot.err { background: var(--danger); }
+  header.top .title { font-weight: 600; letter-spacing: .04em; font-size: 13px; }
+  header.top .status { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+  /* ---- split: stage (3D) + side panel ---- */
+  .split { flex: 1; display: flex; min-height: 0; }
+
+  .stage-wrap {
+    flex: 1.25;
+    min-width: 0;
+    position: relative;
+    background: radial-gradient(ellipse at 50% 30%, #1032447a, #0a1520 70%);
+  }
+  #avatar-canvas { width: 100%; height: 100%; display: block; }
+  #avatar-status {
+    position: absolute; left: 10px; top: 8px;
+    font-size: 11px; color: var(--muted);
+    background: rgba(10,21,32,.6); padding: 2px 8px; border-radius: 6px;
+  }
+  #avatar-caption {
+    position: absolute; left: 12px; right: 12px; bottom: 10px;
+    color: var(--text); font-size: 13px;
+    text-shadow: 0 1px 4px #000a;
+    min-height: 18px;
+    opacity: .95;
+    transition: opacity .4s;
+  }
+  #avatar-caption.dim { opacity: 0; }
+
+  .side {
+    width: 340px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg-2);
+  }
+  .side .section { flex: 1; overflow-y: auto; padding: 12px; display: none; }
+  .side .section.active { display: block; }
+
+  /* ---- chat ---- */
+  #chat-log {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    padding-right: 4px;
+    flex: 1;
+    min-height: 0;
+  }
+  .msg { max-width: 88%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; font-size: 13px; }
+  .msg.user { align-self: flex-end; background: var(--accent-2); color: #eafff8; }
+  .msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--line); }
+  .msg.system { align-self: center; color: var(--muted); font-size: 11px; background: none; }
+  .composer { display: flex; gap: 8px; padding: 10px 0 0; }
+  .composer textarea {
+    flex: 1; resize: none; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    font: inherit; min-height: 42px; max-height: 110px;
+  }
+  .composer button, .btn {
+    background: var(--accent-2); color: #eafff8; border: 0; border-radius: 8px;
+    padding: 8px 14px; font: inherit; cursor: pointer;
+  }
+  .composer button:disabled { opacity: .4; cursor: default; }
+  .btn.secondary { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 10px; font-size: 12px; }
+  .btn.danger { background: transparent; border: 1px solid rgba(224,112,95,.4); color: var(--danger); }
+
+  /* ---- cards/rows ---- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .card h3 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+  .card p.note { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(30,58,77,.5); }
+  .row:last-child { border-bottom: 0; }
+  .row .label { flex: 1; font-size: 13px; }
+  .row .value { color: var(--muted); font-size: 11px; text-align: right; }
+  select, input[type=text] {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px;
+  }
+  .model-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .model-tile {
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+    text-align: center; cursor: pointer; background: var(--bg);
+  }
+  .model-tile:hover { border-color: var(--accent-2); }
+  .model-tile.worn { border-color: var(--accent); background: rgba(79,209,165,.08); }
+  .model-tile .nm { font-size: 10px; margin-top: 4px; word-break: break-all; }
+  .model-tile .sz { font-size: 9px; color: var(--muted); }
+  audio { width: 100%; margin-top: 8px; height: 32px; }
+  .log {
+    font-family: Consolas, monospace; font-size: 11px; color: var(--muted);
+    max-height: 200px; overflow-y: auto; background: var(--bg);
+    border-radius: 6px; padding: 8px; white-space: pre-wrap;
+  }
+
+  /* thinking indicator */
+  #thinking {
+    position: absolute; right: 12px; top: 8px;
+    font-size: 11px; color: var(--accent);
+    display: none;
+  }
+  #thinking.on { display: block; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+
+  /* chat mic state */
+  #mic-state {
+    font-size: 11px; color: var(--muted); padding: 4px 0 0; text-align: center;
+    min-height: 16px;
+  }
+</style>
+</head>
+<body>
+  <nav class="rail">
+    <button data-tab="chat" class="active" title="Чат">💬</button>
+    <button data-tab="avatar" title="Аватар">🎭</button>
+    <button data-tab="voice" title="Голос">🎙</button>
+    <button data-tab="memory" title="Память">🧠</button>
+    <button data-tab="settings" title="Настройки">🛠</button>
+    <button data-tab="system" title="Система">⚙</button>
+  </nav>
+
+  <main>
+    <header class="top">
+      <span class="dot" id="conn-dot"></span>
+      <span class="title">JAWL Companion</span>
+      <span class="status" id="conn-status">подключение…</span>
+    </header>
+
+    <div class="split">
+      <!-- 3D персонаж, всегда на виду -->
+      <div class="stage-wrap">
+        <canvas id="avatar-canvas"></canvas>
+        <span id="avatar-status">Аватар: загрузка…</span>
+        <span id="thinking">думаю…</span>
+        <div id="avatar-caption"></div>
+      </div>
+
+      <!-- боковая панель функций -->
+      <div class="side">
+        <section class="section active" data-section="chat">
+          <div id="chat-log"><div class="msg system">Компаньон на связи — напиши или включи микрофон 🎙</div></div>
+          <div class="composer">
+            <textarea id="chat-input" rows="1" placeholder="Напиши компаньону…"></textarea>
+            <button id="chat-send" title="Отправить">➤</button>
+            <button id="chat-mic" title="Микрофон: вкл/выкл">🎙</button>
+          </div>
+          <div id="mic-state">Микрофон выключен.</div>
+        </section>
+
+        <section class="section" data-section="avatar">
+          <div class="card">
+            <h3>Гардероб (VRM)</h3>
+            <div class="model-grid" id="wardrobe-grid">…</div>
+            <p class="note">Свап — только модели из гардероба (bounded). Агент тоже может менять облик в разговоре.</p>
+          </div>
+          <div class="card">
+            <h3>Выражение</h3>
+            <div class="row"><span class="label">Текущее</span><span class="value" id="avatar-current">neutral</span></div>
+            <div class="row"><span class="label">Тест</span>
+              <button class="btn secondary" data-emotion="happy">😊</button>
+              <button class="btn secondary" data-emotion="sad">😢</button>
+              <button class="btn secondary" data-emotion="surprised">😮</button>
+              <button class="btn secondary" data-emotion="relaxed">😌</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" data-section="voice">
+          <div class="card">
+            <h3>Синтез речи</h3>
+            <div class="row"><span class="label">Провайдер</span><span class="value" id="tts-provider">—</span></div>
+            <div class="row"><span class="label">Статус</span><span class="value" id="tts-status">—</span></div>
+            <div class="row"><span class="label">Превью</span><input type="text" id="tts-preview-text" value="Привет! Это превью голоса." style="flex:2"><button class="btn secondary" id="tts-preview">▶</button></div>
+            <audio id="tts-audio" controls></audio>
+          </div>
+          <div class="card">
+            <h3>Голос компаньона</h3>
+            <div class="row"><span class="label">Референс</span><span class="value">Александра</span></div>
+            <p class="note">Клон-голос OmniVoice: 8 с чистого монолога.</p>
+          </div>
+          <div class="card">
+            <h3>Микрофон</h3>
+            <div class="row"><span class="label">ASR</span><span class="value" id="asr-status">—</span></div>
+            <p class="note">GigaAM — единственный ASR. Гейт AudioWorklet сохранён.</p>
+          </div>
+        </section>
+
+        <section class="section" data-section="memory">
+          <div class="card">
+            <h3>Журнал ходов</h3>
+            <div class="log" id="journal-log">…</div>
+          </div>
+          <div class="card">
+            <h3>Память JAWL</h3>
+            <div class="log" id="memory-log">…</div>
+          </div>
+        </section>
+
+        <section class="section" data-section="system">
+          <div class="card">
+            <h3>Сервисы</h3>
+            <div class="row"><span class="label">Мозг (Hikari)</span><span class="value" id="svc-brain">—</span></div>
+            <div class="row"><span class="label">Панель</span><span class="value" id="svc-panel">—</span></div>
+            <div class="row"><span class="label">TTS</span><span class="value" id="svc-tts">—</span></div>
+            <div class="row"><span class="label">JAWL-агент</span><span class="value" id="svc-jawl">—</span></div>
+            <p class="note">Процессы и порты скрыты: всё работает в этом окне.</p>
+          </div>
+          <div class="card">
+            <h3>Диагностика (doctor)</h3>
+            <div class="log" id="doctor-log">…</div>
+          </div>
+          <div class="card">
+            <h3>Агент JAWL</h3>
+            <div class="row"><span class="label">Перезапуск</span><button class="btn secondary" id="jawl-restart">перезапустить</button></div>
+            <div class="row"><span class="label">Логи</span><button class="btn secondary" id="jawl-logs">открыть хвост</button></div>
+            <div class="log" id="jawl-log" hidden></div>
+          </div>
+          <div class="card">
+            <h3>Безопасность</h3>
+            <div class="row"><span class="label">HostOS уровень</span><span class="value" id="hostos-level">—</span></div>
+            <div class="row"><span class="label">Аварийный стоп</span><button class="btn danger" id="emergency-stop">СТОП</button></div>
+            <p class="note">Full Access подтверждается через approvals, как в панели.</p>
+          </div>
+        </section>
+
+        <section class="section" data-section="settings">
+          <div class="card">
+            <h3>Настройки JAWL (config hub)</h3>
+            <input type="text" id="settings-search" placeholder="поиск по ключам…" style="width:100%; margin-bottom:8px">
+            <div id="settings-list" class="settings-list">…</div>
+            <p class="note">Правки идут через config-hub с ревизиями: JAWL перечитывает настройки без перезапуска. Секреты замаскированы.</p>
+          </div>
+          <div class="card">
+            <h3>Активность</h3>
+            <div class="row"><span class="label">Proactive-канал</span><span class="value" id="proactive-state">—</span></div>
+            <div class="row"><span class="label">Ambient-память</span><span class="value" id="ambient-state">—</span></div>
+            <div class="row"><span class="label">Quiet hours</span><span class="value" id="quiet-state">—</span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+  <script src="app-settings.js"></script>
+  <script type="module" src="app-scene.js"></script>
+</body>
+</html>

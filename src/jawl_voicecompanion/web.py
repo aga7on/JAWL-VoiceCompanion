@@ -264,7 +264,11 @@ def _security_headers(handler: BaseHTTPRequestHandler, *, presentation: bool = F
     handler.send_header("Content-Security-Policy", (
         "default-src 'self'; object-src 'none'; base-uri 'none'; "
         "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
+        # blob: in connect-src is required by GLTFLoader: embedded VRM
+        # textures are extracted to blob: URLs and re-fetched. Without it the
+        # model renders as an untextured white mannequin.
+        "img-src 'self' data: blob:; media-src 'self' blob:; "
+        "connect-src 'self' blob:; "
         "frame-src http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:*; "
         "frame-ancestors 'none'"
     ))
@@ -330,11 +334,12 @@ class CompanionServer(ThreadingHTTPServer):
         self.attention = attention or AttentionPresence()
         # ADR-045 appearance surface: the bounded wardrobe directory the agent
         # can swap VRM models from. Defaults to the project's
-        # runtime/vrm-models/; nothing outside it is ever listed or served.
+        # runtime/vrm-models/ (repo root = three levels up from this file);
+        # nothing outside it is ever listed or served.
         self.avatar_wardrobe_dir = (
             Path(avatar_wardrobe_dir).resolve()
             if avatar_wardrobe_dir
-            else (Path(__file__).resolve().parent.parent / "runtime" / "vrm-models")
+            else (Path(__file__).resolve().parent.parent.parent / "runtime" / "vrm-models")
         )
         # Episodic timeline (ADR-038): the single shared TimeService. It owns
         # "now / recently / long ago" for Heartbeat, memory, attention and the
@@ -350,6 +355,11 @@ class CompanionServer(ThreadingHTTPServer):
         self.ambient_audio = ambient_audio
         self.ambient_scheduler = ambient_scheduler
         self.resources = resource_governor or ResourceGovernor()
+        # ADR-046 single-window app: the compact Electron app (chat + 3D
+        # character + settings) is served from the repo's desktop/ dir.
+        self.desktop_dir = (
+            Path(frontend_dir).resolve().parent / "desktop"
+        )
         if self.tts is not None:
             self.tts.set_governor(self.resources)
         if self.ambient_scheduler is not None:
@@ -1127,6 +1137,39 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._json(self.server.avatar_wardrobe())
             return
+        if path.startswith("/api/avatar/model/"):
+            # ADR-046 single-window app: serve a wardrobe .vrm file so the
+            # embedded scene (same origin) can load models without a
+            # file:// detour. Session-gated, wardrobe-bounded, size-capped.
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            name = path[len("/api/avatar/model/"):]
+            if not re.fullmatch(r"[A-Za-z0-9_-]+\.vrm", name):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            candidate = (self.server.avatar_wardrobe_dir / name).resolve()
+            if self.server.avatar_wardrobe_dir not in candidate.parents or not candidate.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            try:
+                if candidate.stat().st_size > CompanionServer.AVATAR_WARDROBE_MAX_BYTES:
+                    self.send_error(HTTPStatus.FORBIDDEN, "model too large")
+                    return
+                body = candidate.read_bytes()
+            except OSError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_response(HTTPStatus.OK)
+            _security_headers(self)
+            self.send_header("Content-Type", "model/gltf-binary")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path in {
             # Product API facade (ADR-041): canonical service endpoints. UI and
             # internal code call these; JAWL/VoiceMem stay engines behind them.
@@ -1252,6 +1295,60 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             _security_headers(self)
             self.send_header("Content-Type", "text/javascript; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        # ADR-046: the single compact desktop app (chat + 3D character +
+        # all settings in one window). Served from the pinned desktop/
+        # directory; app.html is the entry, app.js/app-scene.js its modules.
+        # The scene loads three.js through its own import map from
+        # node_modules under desktop/ (read-only assets, no uploads).
+        APP_FILES = {
+            "/app": ("app.html", "text/html; charset=utf-8"),
+            "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+            "/app-settings.js": ("app-settings.js", "text/javascript; charset=utf-8"),
+            "/app-scene.js": ("app-scene.js", "text/javascript; charset=utf-8"),
+        }
+        if path in APP_FILES or path.startswith("/app/node_modules/") or path.startswith("/app/runtime/"):
+            name, content_type = APP_FILES.get(path, (None, None))
+            if name is None:
+                # module assets (three.js etc.) - resolve inside the app dirs.
+                # ES modules REQUIRE a JS MIME type: the browser rejects
+                # application/octet-stream with "Failed to fetch dynamically
+                # imported module".
+                relative = path[len("/app/"):]
+                allowed_roots = (self.server.desktop_dir, self.server.desktop_dir.parent)
+                candidate = None
+                for root in allowed_roots:
+                    probe = (root / relative).resolve()
+                    if root in probe.parents and probe.is_file() and probe.suffix.lower() in {".js", ".json", ".wasm", ".vrm"}:
+                        candidate = probe
+                        break
+                if candidate is None:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                suffix_types = {
+                    ".js": "text/javascript; charset=utf-8",
+                    ".json": "application/json; charset=utf-8",
+                    ".wasm": "application/wasm",
+                    # GLTFLoader sniffs the container; octet-stream avoids the
+                    # blob-texture path that model/gltf-binary triggered.
+                    ".vrm": "application/octet-stream",
+                }
+                content_type = suffix_types.get(candidate.suffix.lower(), "application/octet-stream")
+                body = candidate.read_bytes()
+            else:
+                app_path = self.server.desktop_dir / name
+                try:
+                    body = app_path.read_bytes()
+                except OSError:
+                    self.send_error(HTTPStatus.NOT_FOUND, "desktop app is not installed")
+                    return
+            self.send_response(HTTPStatus.OK)
+            _security_headers(self)
+            self.send_header("Content-Type", content_type or "application/octet-stream")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()

@@ -1,9 +1,23 @@
-param(
+﻿param(
     [int]$RunSeconds = 60,
     [int]$JawlConsolePort = 8870,
     [int]$ControlPort = 2467,
     [int]$PresentationPort = 8866,
     [int]$TtsPort = 9989,
+    # TTS lane: 'tera' (default), 'omnivoice' (RU realtime, GPU 1 next to the
+    # brain) or 'voxcpm'. Passed through to the integrated profile.
+    [ValidateSet('tera', 'omnivoice', 'voxcpm')]
+    [string]$TtsProvider = 'tera',
+    # ADR-044: GigaAM (crispasr) is the ONLY ASR engine; the voice lane is
+    # intentionally fail-closed without it. On by default; -NoStreamingAsr
+    # opts out for text-only sessions.
+    [switch]$NoStreamingAsr,
+    # The OmniVoice reference sample: the voice the companion speaks with
+    # (voice cloning). A clean single-speaker 8 s segment + its GigaAM
+    # transcript; a dialogue reference (two voices, "—" turns) leaked
+    # "шоколада" artifacts into the synthesized speech.
+    [string]$OmniVoiceRefWav = 'G:\AI\JAWL-VoiceCompanion\runtime\models\asr\voice_ref_aleksandra.wav',
+    [string]$OmniVoiceRefText = 'Сначала подготовься. Покажи, чего ты стоишь. В таком виде у тебя нет шансов против демонов. Неплохо. Но прекрасный принц.',
     [switch]$RunBrowserVoiceE2E,
     # The default brain is Bonsai-2 27B Hikari (abliterated, owner-selected):
     # it replaces both the 2B big-pickle (which cannot emit JAWL's strict tool
@@ -66,7 +80,7 @@ try {
     # succeeded, the next one emitted Invalid JSON). 0.3 trades creativity
     # the brain does not need for deterministic envelopes.
     $env:JAWL_TEMPERATURE_OVERRIDE = '0.3'
-    $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,
+    $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,'-TtsProvider',$TtsProvider,
         # The brain worker loads 6.7 GB onto GPU 1; the first heartbeat cycle
         # can exceed the default 180 s budget.
         '-StartupTimeoutSeconds', 600,
@@ -74,6 +88,15 @@ try {
         # already serving; treat that as ready instead of tearing the stack
         # down after a fixed wait.
         '-AllowBusyStartup')
+    if ($TtsProvider -eq 'omnivoice') {
+        if (-not (Test-Path -LiteralPath $OmniVoiceRefWav -PathType Leaf)) { throw "OmniVoice reference wav is missing: $OmniVoiceRefWav" }
+        $integratedArgs += @('-OmniVoiceRefWav', $OmniVoiceRefWav, '-OmniVoiceRefText', $OmniVoiceRefText)
+    }
+    if (-not $NoStreamingAsr) {
+        # ADR-044: GigaAM is the only ASR; the voice lane is fail-closed
+        # without it. The integrated profile validates the exe+model paths.
+        $integratedArgs += '-EnableStreamingAsr'
+    }
     if ($RunBrowserVoiceE2E) {
         # The integrated launcher fills its own canonical three-question WAV set
         # and semantic expectations when -BrowserVoiceWav is omitted; passing an

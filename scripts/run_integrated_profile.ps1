@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$JawlConsolePort = 8770,
     [int]$ControlPort = 2367,
     [int]$PresentationPort = 8766,
@@ -23,6 +23,8 @@ param(
 [int]$VoxCPMPort = 9891,
 [int]$OmniVoicePort = 9890,
 [string]$VoxCPMReferenceWav = '',
+[string]$OmniVoiceRefWav = 'G:\AI\JAWL-VoiceCompanion\runtime\models\asr\voice_ref_aleksandra.wav',
+[string]$OmniVoiceRefText = 'Сначала подготовься. Покажи, чего ты стоишь. В таком виде у тебя нет шансов против демонов. Неплохо. Но прекрасный принц.',
 [switch]$EnableProsodyPlanner,
 [switch]$EnableStreamingAsr,
 [string]$StreamingAsrExe = 'G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe',
@@ -289,6 +291,7 @@ try {
             # measured on GPU 1 next to the Hikari brain). The reference
             # sample fixes the voice; text is the only per-request input.
             $audioResources = @($omniPy, $omniModelDir, (Join-Path $repo 'scripts\omnivoice_server.py'))
+            if ($OmniVoiceRefWav) { $audioResources += $OmniVoiceRefWav }
         } else {
             $audioResources = @($teraPy, $teraRelease)
         }
@@ -322,8 +325,12 @@ try {
                 $tera = New-RuntimeProcess $voxcpmPy $voxArgs $repo @{CUDA_VISIBLE_DEVICES = '1'} 'voxcpm-tts.log'
             } elseif ($TtsProvider -eq 'omnivoice') {
                 # The worker pins itself to cuda:1 (the free lane next to the
-                # Hikari brain, live-verified 13.9/16 GB coexistence).
-                $tera = New-RuntimeProcess $omniPy "scripts\omnivoice_server.py --host 127.0.0.1 --port $OmniVoicePort --device cuda:1" $repo @{} 'omnivoice-tts.log'
+                # Hikari brain, live-verified 13.9/16 GB coexistence). The
+                # reference sample fixes the voice (owner-selected); text is
+                # the only per-request input.
+                $omniArgs = "scripts\omnivoice_server.py --host 127.0.0.1 --port $OmniVoicePort --device cuda:1 --ref-audio `"$OmniVoiceRefWav`""
+                if ($OmniVoiceRefText) { $omniArgs += " --ref-text `"$OmniVoiceRefText`"" }
+                $tera = New-RuntimeProcess $omniPy $omniArgs $repo @{} 'omnivoice-tts.log'
             } else {
                 $tera = New-RuntimeProcess $teraPy "scripts\teratts_server.py --release-dir `"$teraRelease`" --voice ru_f1 --model distilled --threads 24 --host 127.0.0.1 --port $TtsPort" $repo @{} 'tera-tts.log'
             }
