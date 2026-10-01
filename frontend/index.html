@@ -481,6 +481,18 @@
         if (motionBox) motionBox.textContent = `motion · ${String(avatar.motion || 'idle')}`;
         const sidebar = document.querySelector('#sidebar-state');
         if (sidebar) sidebar.textContent = String(avatar.state || 'готов к диалогу');
+        // ADR-045 emotion bridge: forward the turn's expression to the 3D
+        // avatar window over the existing avatar BroadcastChannel. The
+        // Electron avatar scene subscribes to the same channel; the old
+        // Live2D presentation ignored unknown event types, so nothing else
+        // changes.
+        try { avatarAudioChannel?.postMessage({
+          schema_version: 1,
+          type: 'avatar.emotion',
+          expression: safe,
+          state: String(avatar.state || 'idle').toLowerCase(),
+          timestamp_ms: Date.now()
+        }); } catch (_) { /* the 3D window may not be open */ }
       };
     })();
   </script>

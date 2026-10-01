@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>JAWL Companion — аватар</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #001a2b26; }
+  #scene { width: 100%; height: 100%; display: block; }
+  #status {
+    position: absolute; left: 8px; top: 8px; font: 12px/1.4 system-ui, sans-serif;
+    color: #9fe8d4; background: rgba(0, 26, 43, 0.55); border-radius: 6px;
+    padding: 6px 10px; user-select: none; max-width: 90%;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="status">Аватар: загрузка…</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./node_modules/three/build/three.module.js",
+    "three/addons/": "./node_modules/three/examples/jsm/",
+    "@pixiv/three-vrm": "./node_modules/@pixiv/three-vrm/lib/three-vrm.module.js"
+  }
+}
+</script>
+<script type="module" src="avatar-scene.js"></script>
+</body>
+</html>
