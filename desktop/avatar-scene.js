@@ -197,6 +197,12 @@ const EMOTION_PRESETS = {
   neutral: null,
   surprised: 'surprised',
   error: 'sad',
+  // JAWL's conversational envelope emotions mapped to the closest VRM preset.
+  attentive: 'relaxed',
+  concerned: 'sad',
+  confused: 'surprised',
+  excited: 'happy',
+  thinking: 'relaxed',
 };
 
 function setEmotion(emotionId) {

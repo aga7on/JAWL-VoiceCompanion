@@ -61,6 +61,11 @@ try {
     # 2048 tokens. Overlong ReAct rambling (observed 3370 tokens) broke the
     # tool-JSON format; the delivery prompt wants ~40 words of inner text.
     $env:LLM_MAX_OUTPUT_TOKENS = '2048'
+    # Low temperature for strict tool-JSON adherence: at 1.0 the model's
+    # format compliance on the 10k ReAct context is stochastic (a turn
+    # succeeded, the next one emitted Invalid JSON). 0.3 trades creativity
+    # the brain does not need for deterministic envelopes.
+    $env:JAWL_TEMPERATURE_OVERRIDE = '0.3'
     $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,
         # The brain worker loads 6.7 GB onto GPU 1; the first heartbeat cycle
         # can exceed the default 180 s budget.

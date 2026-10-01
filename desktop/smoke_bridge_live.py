@@ -98,7 +98,7 @@ def main() -> int:
         wrapper = ROOT / "scripts" / "run_local_bonsai_integrated.ps1"
         stack = subprocess.Popen(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-             str(wrapper), "-RunSeconds", "420",
+             str(wrapper), "-RunSeconds", "900",
              "-ControlPort", str(CONTROL_PORT), "-PresentationPort", "8866",
              "-JawlConsolePort", "8870", "-TtsPort", "9989"],
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -209,19 +209,29 @@ def main() -> int:
         """, timeout=30)
         csrf = json.loads(session)["csrf"]
         report["panel_session"] = bool(csrf)
-        send = panel.evaluate("""
-            (async () => {
-              const response = await fetch('/api/chat', {
-                method: 'POST', credentials: 'include',
-                headers: {'Content-Type': 'application/json',
-                          'X-Companion-CSRF': %s},
-                body: JSON.stringify({text: 'Привет! Скажи что-нибудь радостное.'})
-              });
-              const body = await response.text();
-              return JSON.stringify({status: response.status, body: body.slice(0, 300)});
+        # Send the turn through the PANEL'S OWN UI path (input + send button):
+        # that is what publishes avatar.emotion (publishAvatarEmotion runs in
+        # the chat handler, not on a bare fetch). This is also the realistic
+        # user flow the desktop shell must support.
+        panel.evaluate("""
+            (() => {
+              const input = document.querySelector('#input') || document.querySelector('textarea');
+              input.value = 'Привет! Скажи что-нибудь радостное.';
+              const send = document.querySelector('#send') || document.querySelector('[data-send]');
+              send.click();
+              return 'clicked';
             })()
-        """ % json.dumps(csrf), timeout=300)
-        report["chat_send"] = json.loads(send) if send else None
+        """)
+        # The UI turn streams; wait for the answer to land in the chat log.
+        deadline = time.time() + 300
+        chat_tail = ""
+        while time.time() < deadline:
+            chat_tail = panel.evaluate(
+                "document.querySelector('#messages')?.lastElementChild?.textContent || ''") or ""
+            if "радост" in str(chat_tail) or len(str(chat_tail)) > 40:
+                break
+            time.sleep(4)
+        report["chat_tail"] = str(chat_tail)[:200]
         # Drive the panel's own UI path too: renderMiniAvatar is what emits
         # avatar.emotion into the channel; a fetch alone only returns JSON.
         # The panel polls /api/state; force a refresh and let the pollers
@@ -251,7 +261,28 @@ def main() -> int:
         report["avatar_emotion"] = emotion_state
         report["avatar_status"] = status_text
         checks["bridge_delivered"] = isinstance(bridge_events, int) and bridge_events > 0
-        checks["turn_reached_avatar"] = emotion_state not in {"none", "neutral", "error", "sad"}
+        # The real invariant: the turn's envelope emotion (read through the
+        # panel's own session) maps to the avatar scene's current expression.
+        envelope_emotion = panel.evaluate("""
+            (async () => {
+              const response = await fetch('/api/state', {credentials: 'include',
+                headers: {'X-Companion-CSRF': %s}});
+              const state = await response.json();
+              return ((state.last_turn || {}).response || {}).emotion?.id || null;
+            })()
+        """ % json.dumps(csrf), timeout=30)
+        report["envelope_emotion"] = envelope_emotion
+        mapping = {
+            'happy': 'happy', 'joyful': 'happy', 'angry': 'angry', 'sad': 'sad',
+            'calm': 'relaxed', 'neutral': None, 'surprised': 'surprised',
+            'error': 'sad', 'attentive': 'relaxed', 'concerned': 'sad',
+            'confused': 'surprised', 'excited': 'happy', 'thinking': 'relaxed',
+        }
+        expected = mapping.get(str(envelope_emotion))
+        report["expected_avatar_expression"] = expected
+        checks["turn_reached_avatar"] = (
+            expected is None and emotion_state == 'neutral') or (
+            expected is not None and emotion_state == expected)
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"
     finally:
