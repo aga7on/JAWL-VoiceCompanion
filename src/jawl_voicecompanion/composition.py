@@ -272,6 +272,7 @@ def build_companion_runtime(
             "tera": TeraTTSHttpClient,
             "qwen": Qwen3TTSHttpClient,
             "voxcpm": VoxCPMHttpClient,
+            "omnivoice": TeraTTSHttpClient,  # ADR-045: same /health + /tts WAV contract
         }[args.tts_provider]
         tts_service = TTSService(tts_client(args.tts_url, timeout_seconds=args.tts_timeout))
         if getattr(args, "prosody_planner", False) and args.tts_provider == "tera":

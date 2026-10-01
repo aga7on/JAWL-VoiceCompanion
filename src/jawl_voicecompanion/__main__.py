@@ -324,7 +324,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--tts-provider",
-        choices=("tera", "qwen", "voxcpm"),
+        choices=("tera", "qwen", "voxcpm", "omnivoice"),
         default="tera",
         help="explicit worker contract behind --tts-url (default: tera)",
     )

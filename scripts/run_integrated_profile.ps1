@@ -18,9 +18,10 @@ param(
     [string[]]$BrowserVoiceWav = @(),
     [string[]]$BrowserVoiceExpected = @(),
 [int]$TtsPort = 9889,
-[ValidateSet('tera', 'voxcpm')]
+[ValidateSet('tera', 'voxcpm', 'omnivoice')]
 [string]$TtsProvider = 'tera',
 [int]$VoxCPMPort = 9891,
+[int]$OmniVoicePort = 9890,
 [string]$VoxCPMReferenceWav = '',
 [switch]$EnableProsodyPlanner,
 [switch]$EnableStreamingAsr,
@@ -69,8 +70,10 @@ $teraPy = 'G:\AI\tts_env\Scripts\python.exe'
 $teraRelease = 'G:\AI\tts_models\TeraSpace__TeraTTSv2'
 $voxcpmPy = 'G:\AI\VoxCPM\.venv\Scripts\python.exe'
 $voxcpmModelDir = 'G:\AI\VoxCPM\models\models--openbmb--VoxCPM2\snapshots\32279effe8c19989596f05d353d1447f51d9e915'
-$ttsWorkerName = if ($TtsProvider -eq 'voxcpm') { 'VoxCPM2' } else { 'TeraTTSv2' }
-$ttsWorkerPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } else { $TtsPort }
+$omniPy = 'G:\AI\OmniVoice\venv\Scripts\python.exe'
+$omniModelDir = 'G:\AI\OmniVoice\models\k2-fsa-OmniVoice'
+$ttsWorkerName = if ($TtsProvider -eq 'voxcpm') { 'VoxCPM2' } elseif ($TtsProvider -eq 'omnivoice') { 'OmniVoice' } else { 'TeraTTSv2' }
+$ttsWorkerPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } elseif ($TtsProvider -eq 'omnivoice') { $OmniVoicePort } else { $TtsPort }
 $asrPy = 'G:\AI\JAWL-VoiceCompanion\runtime\vision-venv\Scripts\python.exe'
 $voicememPy = 'G:\AI\VoiceMem\.venv\Scripts\python.exe'
 
@@ -281,6 +284,11 @@ try {
     if ($StartLocalAudio) {
         if ($TtsProvider -eq 'voxcpm') {
             $audioResources = @($voxcpmPy, $voxcpmModelDir)
+        } elseif ($TtsProvider -eq 'omnivoice') {
+            # ADR-045 voice lane: k2-fsa OmniVoice (RU realtime, RTF ~0.1
+            # measured on GPU 1 next to the Hikari brain). The reference
+            # sample fixes the voice; text is the only per-request input.
+            $audioResources = @($omniPy, $omniModelDir, (Join-Path $repo 'scripts\omnivoice_server.py'))
         } else {
             $audioResources = @($teraPy, $teraRelease)
         }
@@ -312,6 +320,10 @@ try {
                 $voxArgs = "scripts\voxcpm_server.py --device cuda:0 --port $VoxCPMPort --threads 24 --inference-timesteps 10"
                 if ($VoxCPMReferenceWav) { $voxArgs += " --reference-wav `"$VoxCPMReferenceWav`"" }
                 $tera = New-RuntimeProcess $voxcpmPy $voxArgs $repo @{CUDA_VISIBLE_DEVICES = '1'} 'voxcpm-tts.log'
+            } elseif ($TtsProvider -eq 'omnivoice') {
+                # The worker pins itself to cuda:1 (the free lane next to the
+                # Hikari brain, live-verified 13.9/16 GB coexistence).
+                $tera = New-RuntimeProcess $omniPy "scripts\omnivoice_server.py --host 127.0.0.1 --port $OmniVoicePort --device cuda:1" $repo @{} 'omnivoice-tts.log'
             } else {
                 $tera = New-RuntimeProcess $teraPy "scripts\teratts_server.py --release-dir `"$teraRelease`" --voice ru_f1 --model distilled --threads 24 --host 127.0.0.1 --port $TtsPort" $repo @{} 'tera-tts.log'
             }
