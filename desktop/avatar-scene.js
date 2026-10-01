@@ -173,7 +173,12 @@ async function swapModel(url) {
   } catch (error) {
     setStatus(`Аватар: ошибка загрузки ${url}: ${error}`);
     state.vrm = previous;
+    // The caller must be able to tell a failed swap from a completed one;
+    // without this a stale model silently "becomes" the requested one.
+    window.__jawlSwapError = String(error);
+    return null;
   }
+  window.__jawlSwapError = null;
   return state.vrm;
 }
 
@@ -272,10 +277,42 @@ window.addEventListener('resize', resize);
 // window events; ADR-045 keeps the avatar window unprivileged local content.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Wardrobe (ADR-045 appearance surface, bounded): the agent may only wear a
+// .vrm file that exists in the project's wardrobe directory. The bridge
+// carries an opaque model id (never a path); the panel has already checked
+// the id against /api/avatar/wardrobe, and this side resolves it again.
+// ---------------------------------------------------------------------------
+
+const WARDROBE_ROOT = '../runtime/vrm-models';
+
+async function wear(model) {
+  const name = String(model || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!name) {
+    setStatus('Аватар: имя модели пустое — свап отклонён');
+    window.__jawlWornModel = null;
+    return null;
+  }
+  const url = `${WARDROBE_ROOT}/${name}.vrm`;
+  setStatus(`Аватар: смена облика на ${name}…`);
+  const vrm = await swapModel(url);
+  if (!vrm) {
+    // The wardrobe rejected it: unknown id, unreadable file, traversal
+    // residue - the previous avatar stays on stage.
+    setStatus(`Аватар: модель ${name} не в гардеробе — облик не изменён`);
+    window.__jawlWornModel = null;
+    return null;
+  }
+  window.__jawlWornModel = name;
+  setStatus(`Аватар: ${name} (${listExpressions(vrm).length} выражений)`);
+  return vrm;
+}
+
 window.__jawlAvatar = {
   setEmotion,
   setLipLevel,
   swapModel,
+  wear,
   listExpressions: () => listExpressions(state.vrm),
   setLookTarget(x, y, z) {
     state.lookTarget.set(Number(x) || 0, Number(y) || 1.35, Number(z) || 4);
@@ -287,7 +324,7 @@ window.addEventListener('message', (event) => {
   if (!data || typeof data !== 'object' || data.channel !== 'jawl-avatar') return;
   if (data.type === 'emotion') window.__jawlAvatar.setEmotion(data.emotion);
   if (data.type === 'lip') window.__jawlAvatar.setLipLevel(data.level);
-  if (data.type === 'swap') window.__jawlAvatar.swapModel(data.url);
+  if (data.type === 'swap') window.__jawlAvatar.wear(data.model || data.url);
 });
 
 // Desktop bridge: the avatar preload re-dispatches panel events (relayed by
@@ -305,6 +342,9 @@ window.addEventListener('jawl-avatar-event', (event) => {
     // speaking=false resets the mouth; amplitude drives it while speaking.
     const level = data.speaking ? Number(data.amplitude) || 0 : 0;
     window.__jawlAvatar.setLipLevel(level * 1.6);
+  }
+  if (data.type === 'avatar.swap') {
+    window.__jawlAvatar.wear(data.model);
   }
 });
 

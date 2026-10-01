@@ -1851,6 +1851,31 @@
         timestamp_ms: Date.now()
       }); } catch (_) { /* the 3D window may not be open */ }
     }
+    // ADR-045 appearance surface (bounded): swap the 3D avatar's VRM model.
+    // Only file names listed by /api/avatar/wardrobe are ever sent; the scene
+    // resolves them against its own wardrobe root, so no path crosses the
+    // bridge — just an opaque model id.
+    async function swapAvatarModel(model) {
+      const name = String(model || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      if (!name) return {ok: false, error: 'model name required'};
+      try {
+        const response = await fetch('/api/avatar/wardrobe', {headers: sessionHeaders, cache: 'no-store'});
+        if (!response.ok) return {ok: false, error: `wardrobe unavailable (${response.status})`};
+        const wardrobe = await response.json();
+        const known = (wardrobe.models || []).some(item => item.model === name);
+        if (!known) return {ok: false, error: 'model is not in the wardrobe'};
+        avatarAudioChannel?.postMessage({
+          schema_version: 1,
+          type: 'avatar.swap',
+          model: name,
+          timestamp_ms: Date.now()
+        });
+        return {ok: true, model: name};
+      } catch (error) {
+        return {ok: false, error: String(error.message || error)};
+      }
+    }
+    window.swapAvatarModel = swapAvatarModel;
     function shouldVoice(envelope) {
       if (!envelope) return false;
       if (envelope.speak === false) return false;

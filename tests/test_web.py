@@ -189,6 +189,23 @@ class WebTests(unittest.TestCase):
         with urlopen(request, timeout=2) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def test_avatar_wardrobe_is_bounded_and_session_gated(self):
+        # ADR-045 appearance surface: only .vrm files from the wardrobe dir,
+        # session-gated, no arbitrary paths in the payload.
+        request = Request(self.base + "/api/avatar/wardrobe")
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+        status, wardrobe = self.get_json_auth("/api/avatar/wardrobe")
+        self.assertEqual(status, 200)
+        self.assertEqual(wardrobe["schema_version"], 1)
+        self.assertIn("runtime/vrm-models", wardrobe["root"])
+        for item in wardrobe["models"]:
+            self.assertNotIn("/", item["model"])
+            self.assertNotIn("\\", item["model"])
+            self.assertLessEqual(item["size_bytes"], 200 * 1024 * 1024)
+
     def post_json(self, path, payload):
         request = Request(
             self.base + path,

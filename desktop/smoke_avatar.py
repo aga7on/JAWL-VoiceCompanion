@@ -150,6 +150,25 @@ def main() -> int:
             checks["model_swap_no_leak"] = (
                 isinstance(before, int) and isinstance(after, int) and after <= before + 1)
 
+            # ADR-045 wardrobe surface: wear() must resolve the bounded model
+            # id (not a path), reject an unknown id, and report the worn model.
+            worn = cdp.evaluate(
+                "window.__jawlAvatar.wear('VRM1_Constraint_Twist_Sample').then(() => window.__jawlWornModel)")
+            time.sleep(1)
+            worn_now = cdp.evaluate("window.__jawlWornModel || null")
+            rejected = cdp.evaluate(
+                "window.__jawlAvatar.wear('../../secrets/boom').then(() => window.__jawlWornModel)")
+            time.sleep(1)
+            rejected_state = cdp.evaluate(
+                "window.__jawlWornModel === null || window.__jawlWornModel === undefined")
+            report["wardrobe"] = {
+                "wear_returns": worn,
+                "worn_model": worn_now,
+                "traversal_rejected": rejected_state,
+            }
+            checks["wardrobe_wear_bounded"] = (
+                worn_now == "VRM1_Constraint_Twist_Sample" and bool(rejected_state))
+
             # Visual evidence: capture the rendered avatar window through CDP
             # (Page.captureScreenshot) for the vision check.
             try:

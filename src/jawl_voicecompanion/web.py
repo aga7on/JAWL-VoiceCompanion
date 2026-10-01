@@ -284,6 +284,7 @@ class CompanionServer(ThreadingHTTPServer):
         voice_mem: VoiceMemProcessClient | None = None,
         tts_service: TTSService | None = None,
         attention: AttentionPresence | None = None,
+        avatar_wardrobe_dir: Path | None = None,
         ambient_memory: AmbientMemoryBuffer | None = None,
         sensory_ingestor: Any | None = None,
         ambient_audio: AmbientAudioService | None = None,
@@ -327,6 +328,14 @@ class CompanionServer(ThreadingHTTPServer):
         self.voice_mem_async = VoiceMemAsyncIngest(voice_mem) if voice_mem is not None else None
         self.tts = tts_service
         self.attention = attention or AttentionPresence()
+        # ADR-045 appearance surface: the bounded wardrobe directory the agent
+        # can swap VRM models from. Defaults to the project's
+        # runtime/vrm-models/; nothing outside it is ever listed or served.
+        self.avatar_wardrobe_dir = (
+            Path(avatar_wardrobe_dir).resolve()
+            if avatar_wardrobe_dir
+            else (Path(__file__).resolve().parent.parent / "runtime" / "vrm-models")
+        )
         # Episodic timeline (ADR-038): the single shared TimeService. It owns
         # "now / recently / long ago" for Heartbeat, memory, attention and the
         # avatar. Bounded, one owner, no reasoning — it records episodes and
@@ -522,6 +531,38 @@ class CompanionServer(ThreadingHTTPServer):
             snapshot["amplitude"] = 0.0
             snapshot["speaking"] = False
         return snapshot
+
+    # ADR-045 appearance surface: bounded, read-only, wardrobe-only.
+    AVATAR_WARDROBE_MAX_MODELS = 64
+    AVATAR_WARDROBE_MAX_BYTES = 200 * 1024 * 1024
+
+    def avatar_wardrobe(self) -> dict[str, Any]:
+        """List the VRM models the agent may wear (bounded, no arbitrary paths)."""
+        models: list[dict[str, Any]] = []
+        root = self.avatar_wardrobe_dir
+        if root.is_dir():
+            for entry in sorted(root.iterdir()):
+                if not entry.is_file() or entry.suffix.lower() != ".vrm":
+                    continue
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    continue
+                if size > self.AVATAR_WARDROBE_MAX_BYTES:
+                    continue
+                models.append({
+                    "model": entry.stem,
+                    "file": entry.name,
+                    "size_bytes": size,
+                })
+                if len(models) >= self.AVATAR_WARDROBE_MAX_MODELS:
+                    break
+        return {
+            "schema_version": 1,
+            "root": "runtime/vrm-models",
+            "count": len(models),
+            "models": models,
+        }
 
     _SCREEN_QUERY = re.compile(
         r"(экран|скрин|монитор|что\s+(сейчас\s+)?(происходит|видно)|опиши\s+(что|экран|кадр))",
@@ -1074,6 +1115,17 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 "note": "3D VRM avatar lives in the desktop shell (desktop/)",
                 "presentation_url": self.server.presentation_url,
             })
+            return
+        if path == "/api/avatar/wardrobe":
+            # ADR-045 appearance surface (bounded): the VRM models the agent
+            # may swap into, served from the project's wardrobe directory.
+            # No arbitrary paths, no uploads; the list is what exists on disk.
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            self._json(self.server.avatar_wardrobe())
             return
         if path in {
             # Product API facade (ADR-041): canonical service endpoints. UI and
