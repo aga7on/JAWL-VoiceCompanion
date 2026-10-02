@@ -87,7 +87,11 @@ function flattenHub(values, prefix = '') {
 function renderSettings(filter) {
   const list = document.querySelector('#settings-list');
   if (!list || !configHub) return;
-  const flat = flattenHub(configHub.values || configHub.sections || {});
+  // config-hub returns FLAT dotted keys ('settings:llm.temperature') —
+  // flattenHub is only for nested payloads; use whichever shape arrived.
+  const values = configHub.values || configHub.sections || {};
+  const isFlat = Object.keys(values).some(k => k.includes(':'));
+  const flat = isFlat ? Object.entries(values) : flattenHub(values);
   const entries = flat.filter(([key]) =>
     !filter || key.toLowerCase().includes(filter.toLowerCase()));
   list.replaceChildren();
@@ -216,9 +220,30 @@ async function saveSettings() {
       body: JSON.stringify({values, expected_revision: configHub.revision}),
     });
     const d = await r.json();
-    if (d.ok) { settingsDirty.clear(); loadSettings(); }
-    else alert('Не сохранено: ' + (d.error || 'конфликт ревизий'));
+    if (!d.ok) { alert('Не сохранено: ' + (d.error || 'конфликт ревизий')); return; }
+    settingsDirty.clear();
+    // JAWL reads settings.yaml at startup: apply means save + agent restart.
+    // The hub itself reports restart_required; honor it automatically so the
+    // UI never shows stale "not applied" values.
+    if (d.restart_required) {
+      setStatusLine('настройки сохранены — перезапускаю JAWL…');
+      try {
+        await fetch('/api/jawl/restart', {
+          method: 'POST', credentials: 'include', headers: API.headers(), body: '{}'});
+        setStatusLine('JAWL перезапускается с новыми настройками…');
+      } catch (e) {
+        setStatusLine('сохранено, но перезапуск не удался: ' + e.message);
+      }
+    } else {
+      setStatusLine('настройки сохранены');
+    }
+    loadSettings();
   } catch (e) { alert('Ошибка сохранения: ' + e.message); }
+}
+
+function setStatusLine(text) {
+  const el = document.querySelector('#conn-status');
+  if (el) el.textContent = text;
 }
 
 document.querySelector('#settings-search')?.addEventListener('input', (e) => {

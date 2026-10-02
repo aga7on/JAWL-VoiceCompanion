@@ -303,8 +303,12 @@
           </div>
           <div class="card">
             <h3>Микрофон</h3>
+            <div class="row"><span class="label">Устройство</span>
+              <select id="mic-select" style="max-width:190px"><option value="">по умолчанию</option></select>
+            </div>
+            <div class="row"><span class="label">Активен сейчас</span><span class="value" id="mic-device">—</span></div>
             <div class="row"><span class="label">ASR</span><span class="value" id="asr-status">—</span></div>
-            <p class="note">GigaAM — единственный ASR. Гейт AudioWorklet сохранён.</p>
+            <p class="note">GigaAM — единственный ASR. Гейт AudioWorklet сохранён. Выбор запоминается между запусками.</p>
           </div>
         </section>
 

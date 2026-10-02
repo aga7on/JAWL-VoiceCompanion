@@ -62,6 +62,32 @@ function startRefresh() {
 async function refreshAll() {
   refreshStatuses();
   refreshJournal();
+  refreshMemory();
+}
+
+async function refreshMemory() {
+  const el = document.querySelector('#memory-log');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/jawl/memory', {credentials: 'include', headers: API.headers()});
+    if (!r.ok) { el.textContent = 'память JAWL недоступна (агент не поднят?)'; return; }
+    const d = await r.json();
+    if (d.status === 'unavailable' || d.configured === false) {
+      el.textContent = 'память JAWL не сконфигурирована в этом контуре';
+      return;
+    }
+    const lines = [];
+    const facts = d.facts || d.memories || d.items || [];
+    if (Array.isArray(facts)) {
+      for (const fact of facts.slice(0, 14)) {
+        const text = typeof fact === 'string' ? fact : (fact.content || fact.text || fact.summary || JSON.stringify(fact));
+        const when = fact.updated_at || fact.timestamp || '';
+        lines.push(`${when ? String(when).slice(0, 16) + ' ' : ''}${String(text).slice(0, 100)}`);
+      }
+    }
+    el.textContent = lines.length ? lines.join('\n')
+      : 'записей пока нет — JAWL пополняет память из разговоров и heartbeat';
+  } catch { el.textContent = 'память JAWL недоступна'; }
 }
 
 async function refreshStatuses() {
@@ -290,11 +316,58 @@ function pcm16Base64(samples) {
 
 chatMic.addEventListener('click', () => { state.micActive ? stopMic() : startMic(); });
 
+// ---------------------------------------------------------------------------
+// microphone device selection: enumerated labels need one permission grant,
+// so we enumerate on first mic use and also on boot when already granted.
+// ---------------------------------------------------------------------------
+
+const micSelect = document.querySelector('#mic-select');
+
+function preferredMicId() {
+  return localStorage.getItem('jawl.app.micDeviceId') || '';
+}
+function setPreferredMicId(id) {
+  localStorage.setItem('jawl.app.micDeviceId', id || '');
+}
+
+async function refreshMicDevices() {
+  if (!micSelect || !navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter(d => d.kind === 'audioinput');
+    // labels are empty until permission is granted at least once
+    micSelect.replaceChildren();
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = inputs.some(d => d.label) ? 'по умолчанию' : 'по умолчанию (метки появятся после первого включения)';
+    micSelect.appendChild(def);
+    for (const device of inputs) {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = device.label || `устройство ${device.deviceId.slice(0, 6)}`;
+      micSelect.appendChild(option);
+    }
+    const wanted = preferredMicId();
+    if (wanted && inputs.some(d => d.deviceId === wanted)) micSelect.value = wanted;
+  } catch { /* enumeration optional */ }
+}
+
+micSelect?.addEventListener('change', () => setPreferredMicId(micSelect.value));
+navigator.mediaDevices?.addEventListener?.('devicechange', refreshMicDevices);
+
 async function startMic() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true},
-    });
+    const wanted = preferredMicId();
+    const constraints = {
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        ...(wanted ? {deviceId: {exact: wanted}} : {}),
+      },
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
     const context = new AudioContext();
     await context.audioWorklet.addModule('/mic-processor.js');
     const source = context.createMediaStreamSource(stream);
@@ -306,6 +379,8 @@ async function startMic() {
 
     const track = stream.getAudioTracks()[0];
     setVal('mic-device', track?.label || '—');
+    // labels are visible now: refresh the picker with real names
+    refreshMicDevices();
 
     state.voiceSessionId = `app-mic-${Date.now()}`;
     state.voiceCorrelationId = `turn-voice-${Date.now()}`;
@@ -496,4 +571,5 @@ document.querySelector('#emergency-stop')?.addEventListener('click', async () =>
 boot();
 startRefresh();
 loadWardrobe();
+refreshMicDevices();
 if (typeof loadSettings === 'function') loadSettings();

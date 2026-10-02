@@ -1,4 +1,4 @@
-﻿param(
+param(
     [int]$RunSeconds = 60,
     [int]$JawlConsolePort = 8870,
     [int]$ControlPort = 2467,
@@ -80,6 +80,12 @@ try {
     # succeeded, the next one emitted Invalid JSON). 0.3 trades creativity
     # the brain does not need for deterministic envelopes.
     $env:JAWL_TEMPERATURE_OVERRIDE = '0.3'
+    # The overrides above were only ever *validated* by prepare_daily_profile
+    # (and ignored when the instance file matched the repo baseline), so the
+    # brain silently ran at temperature 1.0. Write them into the instance
+    # settings.yaml now - the single writer, before the profile starts.
+    & python -X utf8 (Join-Path $repo 'scripts\apply_llm_overrides.py') --profile daily | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "LLM overrides were not applied to the profile settings." }
     $integratedArgs = @('-StartLocalAudio','-UseVoiceMem','-RunSeconds',$RunSeconds,'-JawlConsolePort',$JawlConsolePort,'-ControlPort',$ControlPort,'-PresentationPort',$PresentationPort,'-TtsPort',$TtsPort,'-TtsProvider',$TtsProvider,
         # The brain worker loads 6.7 GB onto GPU 1; the first heartbeat cycle
         # can exceed the default 180 s budget.
