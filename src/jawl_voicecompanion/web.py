@@ -41,12 +41,16 @@ from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
 from .resources import ResourceGovernor
 from .tts import TTSService, TTSUnavailable, TTSCancelled
+from .speech_requests import validate_speech_request_id
 from . import turn_policy
 from .vision import JawlNativeVisionExecutor, VisionLookService
 from .voicemem_client import VoiceMemAsyncIngest, VoiceMemProcessClient, VoiceMemUnavailable
 from .ws_server import WebSocketConnection, WebSocketError, is_websocket_upgrade, send_handshake_response
 from .system_audio import SystemAudioUnavailable
 from .stream_chat import StreamChatIngestor
+from .voice_capture import (
+    CaptureLeaseError, VoiceCaptureLease, VoiceCaptureSettings, capture_config_error, read_config_hub_settings,
+)
 
 
 MAX_BODY_BYTES = 64 * 1024
@@ -368,6 +372,7 @@ class CompanionServer(ThreadingHTTPServer):
         if self.ambient_audio is not None:
             self.ambient_audio.bridge.set_playback_suppression(self.playback_suppression)
         self.asr = asr_service
+        self.voice_capture = VoiceCaptureLease()
         self.streaming_asr = streaming_asr
         self.gigaam_transcriber = gigaam_transcriber
         self._asr_prefetch_sessions: deque[str] = deque(maxlen=16)
@@ -879,6 +884,29 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             health["resources"] = self.server.resources.state()
             self._json(health)
             return
+        if path == "/api/voice/capture":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            hub = self.server.config_hub
+            if hub is None:
+                self._json({"ok": False, "error": "config hub is unavailable", "settings_writable": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                config = hub.read_voice_capture()
+                settings = VoiceCaptureSettings.from_mapping(config["settings"])
+                self.server.voice_capture.set_settings(settings)
+                self._json({
+                    **self.server.voice_capture.state(),
+                    "settings": settings.as_settings_dict(),
+                    "revision": config["revision"],
+                    "settings_writable": True,
+                })
+            except Exception as exc:  # noqa: BLE001 - expose invalid/unavailable config to the UI
+                self._json({"ok": False, "error": capture_config_error(exc), "settings_writable": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if path == "/api/resources":
             self._json(self.server.resources.state())
             return
@@ -1310,6 +1338,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             "/app.js": ("app.js", "text/javascript; charset=utf-8"),
             "/app-settings.js": ("app-settings.js", "text/javascript; charset=utf-8"),
             "/app-scene.js": ("app-scene.js", "text/javascript; charset=utf-8"),
+            "/avatar-motion.js": ("avatar-motion.js", "text/javascript; charset=utf-8"),
+            "/avatar-physics.js": ("avatar-physics.js", "text/javascript; charset=utf-8"),
+            "/speech-stream.js": ("speech-stream.js", "text/javascript; charset=utf-8"),
+            "/voice-input.js": ("voice-input.js", "text/javascript; charset=utf-8"),
+            "/voice-draft.js": ("voice-draft.js", "text/javascript; charset=utf-8"),
         }
         if path in APP_FILES or path.startswith("/app/node_modules/") or path.startswith("/app/runtime/"):
             name, content_type = APP_FILES.get(path, (None, None))
@@ -1318,12 +1351,21 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 # ES modules REQUIRE a JS MIME type: the browser rejects
                 # application/octet-stream with "Failed to fetch dynamically
                 # imported module".
-                relative = path[len("/app/"):]
-                allowed_roots = (self.server.desktop_dir, self.server.desktop_dir.parent)
+                if path.startswith("/app/node_modules/"):
+                    relative = path[len("/app/node_modules/"):]
+                    allowed_roots = ((self.server.desktop_dir / "node_modules").resolve(),)
+                    allowed_suffixes = {".js", ".json", ".wasm"}
+                elif path.startswith("/app/runtime/vrm-models/"):
+                    relative = path[len("/app/runtime/vrm-models/"):]
+                    allowed_roots = ((self.server.desktop_dir.parent / "runtime" / "vrm-models").resolve(),)
+                    allowed_suffixes = {".vrm"}
+                else:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
                 candidate = None
                 for root in allowed_roots:
                     probe = (root / relative).resolve()
-                    if root in probe.parents and probe.is_file() and probe.suffix.lower() in {".js", ".json", ".wasm", ".vrm"}:
+                    if root in probe.parents and probe.is_file() and probe.suffix.lower() in allowed_suffixes:
                         candidate = probe
                         break
                 if candidate is None:
@@ -1414,6 +1456,66 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     float(amplitude), speaking, timestamp_ms,
                 )})
                 return
+            if self.path == "/api/voice/capture":
+                action = payload.get("action")
+                if action == "configure":
+                    if set(payload) - {"action", "settings", "expected_revision"}:
+                        raise ValueError("unknown voice capture request keys")
+                    hub = self.server.config_hub
+                    if hub is None:
+                        self._json({"ok": False, "error": "config hub is unavailable", "settings_writable": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                        return
+                    expected_revision = payload.get("expected_revision")
+                    if not isinstance(expected_revision, str) or not expected_revision:
+                        raise ValueError("expected_revision must be a non-empty string")
+                    try:
+                        current_state = hub.read_voice_capture()
+                        current_settings = VoiceCaptureSettings.from_mapping(current_state["settings"])
+                    except Exception as exc:  # noqa: BLE001 - bad persisted config and I/O failures are visible
+                        self._json({"ok": False, "error": capture_config_error(exc), "settings_writable": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        return
+                    requested = VoiceCaptureSettings.from_request(payload.get("settings"), current_settings)
+                    try:
+                        saved = hub.write_voice_capture(requested.as_settings_dict(), expected_revision)
+                    except Exception as exc:  # noqa: BLE001 - bad persisted config and I/O failures are visible
+                        self._json({"ok": False, "error": capture_config_error(exc), "settings_writable": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        return
+                    if saved.get("status") == "conflict":
+                        self._json({"ok": False, **saved, "settings_writable": True}, status=HTTPStatus.CONFLICT)
+                        return
+                    self.server.voice_capture.set_settings(requested)
+                    self._json({
+                        "ok": True,
+                        "settings": requested.as_settings_dict(),
+                        "revision": saved["revision"],
+                        "settings_writable": True,
+                        "restart_required": False,
+                        "restart_policy": "next_capture",
+                    })
+                    return
+                owner, capture_id = payload.get("owner"), payload.get("capture_id")
+                operations = {
+                    "acquire": self.server.voice_capture.acquire,
+                    "renew": self.server.voice_capture.renew,
+                    "release": self.server.voice_capture.release,
+                }
+                if action not in operations:
+                    raise ValueError("action must be acquire, renew, release or configure")
+                if action == "acquire" and self.server.config_hub is not None:
+                    try:
+                        self.server.voice_capture.set_settings(read_config_hub_settings(self.server.config_hub))
+                    except Exception as exc:  # noqa: BLE001 - persisted config errors must be visible
+                        self._json({"ok": False, "error": capture_config_error(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        return
+                result = operations[action](owner, capture_id)
+                if action == "release":
+                    scope_id = self._voice_asr_scope({"capture_id": capture_id})
+                    if self.server.asr is not None:
+                        result["asr"] = self.server.asr.discard_scope(scope_id)
+                    if self.server.streaming_asr is not None:
+                        result["streaming_asr"] = self.server.streaming_asr.discard_scope(scope_id)
+                self._json(result)
+                return
             if self.path == "/api/chat":
                 if self.server.timeline is not None:
                     self.server.timeline.record("conversation", "user_chat", str(payload.get("text") or "")[:120])
@@ -1481,6 +1583,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json(self._feed_voice_chunk(payload))
                 return
             if self.path == "/api/voice/draft":
+                capture_cancel = self.server.voice_capture.authorize_stream(payload)
                 if self.server.streaming_asr is None:
                     # Partials have exactly one owner: the CrispASR streaming
                     # bridge. Without it there is no draft lane at all - the
@@ -1489,7 +1592,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "draft": "", "mode": "unavailable"})
                     return
                 # Streaming lane: sub-second partials + adaptive endpoint policy.
-                snapshot = self.server.streaming_asr.snapshot()
+                scope_id = self._voice_asr_scope(payload)
+                session_id = self._voice_asr_session(payload)
+                snapshot = self.server.streaming_asr.snapshot(scope_id=scope_id, session_id=session_id)
+                if capture_cancel is not None and capture_cancel.is_set():
+                    self._json({"ok": True, "draft": "", "mode": "streaming", "status": "cancelled"})
+                    return
                 text = str(snapshot.get("text") or "").strip()
                 if snapshot.get("active") and text:
                     if not is_meaningful_transcript(text):
@@ -1510,12 +1618,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 # A short provisional phrase (no LLM) that can be spoken while
                 # the JAWL turn is still thinking; the authoritative answer
                 # follows it. Explicit screen questions only, best-effort.
+                capture_cancel = self.server.voice_capture.authorize_stream(payload)
                 snapshot: dict[str, Any] = {}
                 if self.server.streaming_asr is not None:
                     try:
-                        snapshot = self.server.streaming_asr.snapshot()
+                        snapshot = self.server.streaming_asr.snapshot(
+                            scope_id=self._voice_asr_scope(payload),
+                            session_id=self._voice_asr_session(payload),
+                        )
                     except Exception:  # noqa: BLE001 - the preface is optional
                         snapshot = {}
+                if capture_cancel is not None and capture_cancel.is_set():
+                    self._json({"ok": True, "text": "", "status": "cancelled"})
+                    return
                 partial = ""
                 silence_ms: float | None = None
                 if isinstance(snapshot, dict) and snapshot.get("active"):
@@ -1525,6 +1640,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     except (TypeError, ValueError):
                         silence_ms = None
                 text = self.server.voice_preface(partial, silence_ms=silence_ms)
+                if capture_cancel is not None and capture_cancel.is_set():
+                    self._json({"ok": True, "text": "", "status": "cancelled"})
+                    return
                 if text:
                     log_event("voice_preface", text=text, partial=partial[:160])
                 self._json({"ok": True, "text": text})
@@ -1563,7 +1681,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 if emotion is not None and not isinstance(emotion, dict):
                     raise ValueError("emotion must be an object or null")
                 audio = self.server.tts.synthesize(
-                    text, voice=voice, speed=float(speed), emotion=emotion
+                    text, voice=voice, speed=float(speed), emotion=emotion,
+                    **self._speech_request_kwargs(payload),
                 )
                 self._audio(audio)
                 return
@@ -1581,11 +1700,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("speed must be a number")
                 if emotion is not None and not isinstance(emotion, dict):
                     raise ValueError("emotion must be an object or null")
-                self._stream_tts(text, voice=voice, speed=float(speed), emotion=emotion)
+                self._stream_tts(text, voice=voice, speed=float(speed), emotion=emotion,
+                                 **self._speech_request_kwargs(payload))
                 return
             if self.path == "/api/tts/cancel":
+                request_kwargs = self._speech_request_kwargs(payload)
                 if self.server.tts is not None:
-                    self.server.tts.cancel()
+                    self.server.tts.cancel(**request_kwargs)
                 self._json({"ok": True, "status": "cancelled"})
                 return
             if self.path == "/api/hostos/execute":
@@ -1945,6 +2066,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+        except CaptureLeaseError as exc:
+            result: dict[str, Any] = {"ok": False, "error": exc.code}
+            if exc.owner is not None:
+                result["owner"] = exc.owner
+            self._json(result, status=HTTPStatus.CONFLICT)
         except VoiceMemUnavailable as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except AmbientAudioDisabled as exc:
@@ -1986,6 +2112,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         if length < 0 or length > MAX_BODY_BYTES:
             raise ValueError("request body is too large")
         raw = self.rfile.read(length)
+        self._request_body_consumed = True
         decoded = json.loads(raw.decode("utf-8")) if raw else {}
         if not isinstance(decoded, dict):
             raise ValueError("JSON body must be an object")
@@ -2039,6 +2166,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         except ValueError:
             length = 0
         body = self.rfile.read(length) if length > 0 else None
+        self._request_body_consumed = True
         headers = {"Host": urlsplit(adapter.base_url).netloc}
         if adapter.token:
             headers["X-Console-Token"] = adapter.token
@@ -2164,9 +2292,14 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             send({"type": "voice_final", **self._finish_voice_turn(payload)})
             return
         if action == "voice_reset":
+            capture_cancel = self.server.voice_capture.authorize_stream(payload)
             if self.server.streaming_asr is not None:
                 try:
-                    self.server.streaming_asr.reset_utterance()
+                    if capture_cancel is None or not capture_cancel.is_set():
+                        self.server.streaming_asr.reset_utterance(
+                            scope_id=self._voice_asr_scope(payload),
+                            session_id=self._voice_asr_session(payload),
+                        )
                 except Exception:
                     pass
             send({"type": "voice_reset_ack"})
@@ -2175,6 +2308,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
 
     def _feed_voice_chunk(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Shared voice-chunk ingestion for /api/voice/audio and the WS transport."""
+        capture_cancel = self.server.voice_capture.authorize_stream(payload)
         if self.server.voice_mem is None:
             return {"ok": False, "error": "VoiceMem sidecar is not configured"}
         encoded = payload.get("pcm16_base64", "")
@@ -2191,19 +2325,23 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         if isinstance(channels, bool) or not isinstance(channels, int):
             raise ValueError("channels must be an integer")
         session_id = str(payload.get("session_id") or self.server.session_token)[:200]
-        self.server.prefetch_asr_model(session_id)
-        if self.server.streaming_asr is not None:
-            try:
-                self.server.streaming_asr.feed(pcm16, sample_rate=sample_rate, channels=channels)
-            except Exception:
-                pass  # the streaming lane is an accelerator, never a blocker
+        scope_id = self._voice_asr_scope(payload)
         if self.server.asr is not None:
             buffered = self.server.asr.feed_audio(
-                pcm16, sample_rate=sample_rate, channels=channels, session_id=session_id
+                pcm16, sample_rate=sample_rate, channels=channels, session_id=session_id,
+                scope_id=scope_id, cancel_event=capture_cancel,
+            )
+            self.server.prefetch_asr_model(session_id)
+            self._feed_streaming_asr(
+                pcm16, sample_rate, channels, scope_id, session_id, capture_cancel,
             )
             return {"ok": True, "mode": "external_final_utterance", "events": [], "responses": [], "buffer": buffered}
         events = self.server.voice_mem.feed_audio(
             pcm16, sample_rate=sample_rate, session_id=session_id
+        )
+        self.server.prefetch_asr_model(session_id)
+        self._feed_streaming_asr(
+            pcm16, sample_rate, channels, scope_id, session_id, capture_cancel,
         )
         responses = self._voice_turn_responses(events, session_id)
         return {
@@ -2214,6 +2352,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
 
     def _finish_voice_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Shared utterance finalization for /api/voice/end and the WS transport."""
+        capture_cancel = self.server.voice_capture.authorize_stream(payload)
         if self.server.voice_mem is None:
             return {"ok": False, "error": "VoiceMem sidecar is not configured"}
         session_id = str(payload.get("session_id") or self.server.session_token)[:200]
@@ -2222,18 +2361,26 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             # the buffered utterance goes straight to it, and a failure is
             # reported instead of being masked by a second engine.
             try:
-                transcription = self.server.asr.finish(session_id)
+                transcription = self.server.asr.finish(session_id, scope_id=self._voice_asr_scope(payload))
             except Exception as exc:  # noqa: BLE001 - bounded failure report
                 return {"ok": False, "error": f"ASR unavailable: {type(exc).__name__}"}
             asr_source = "gigaam"
+            if transcription.get("status") == "cancelled" or (capture_cancel is not None and capture_cancel.is_set()):
+                return {
+                    "ok": True, "status": "cancelled", "mode": "external_final_utterance",
+                    "transcript": "", "events": [], "responses": [],
+                }
             if transcription.get("status") in {"unavailable", "failed"}:
                 return {
                     "ok": False,
                     "error": str(transcription.get("error") or "ASR unavailable")[:300],
                 }
-            if self.server.streaming_asr is not None:
+            if self.server.streaming_asr is not None and (capture_cancel is None or not capture_cancel.is_set()):
                 try:
-                    self.server.streaming_asr.reset_utterance()
+                    self.server.streaming_asr.reset_utterance(
+                        scope_id=self._voice_asr_scope(payload),
+                        session_id=self._voice_asr_session(payload),
+                    )
                 except Exception:
                     pass
             if transcription["status"] in {"empty", "no_speech"}:
@@ -2275,6 +2422,28 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             "events": events,
             "responses": responses,
         }
+
+    @staticmethod
+    def _voice_asr_scope(payload: dict[str, Any]) -> str:
+        capture_id = payload.get("capture_id")
+        return f"capture:{capture_id}" if capture_id is not None else "voice:legacy"
+
+    def _voice_asr_session(self, payload: dict[str, Any]) -> str:
+        return str(payload.get("session_id") or self.server.session_token)[:200]
+
+    def _feed_streaming_asr(
+        self, pcm16: bytes, sample_rate: int, channels: int,
+        scope_id: str, session_id: str, cancel_event: Any,
+    ) -> None:
+        if self.server.streaming_asr is None or (cancel_event is not None and cancel_event.is_set()):
+            return
+        try:
+            self.server.streaming_asr.feed(
+                pcm16, sample_rate=sample_rate, channels=channels,
+                scope_id=scope_id, session_id=session_id, cancel_event=cancel_event,
+            )
+        except Exception:
+            pass  # streaming ASR accelerates the canonical accepted PCM lane
 
     def _require_browser_session(self) -> None:
         presented_session = self.headers.get("X-Companion-Session")
@@ -2325,6 +2494,36 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _discard_rejected_body(self) -> None:
+        """Drain only small rejected requests, with a total time/byte bound.
+
+        Closing a Windows socket with unread POST bytes can reset the peer
+        before it receives our 403. Never parse or execute rejected content.
+        """
+        if self.command not in {"POST", "PUT", "PATCH", "DELETE"} or getattr(self, "_request_body_consumed", False):
+            return
+        self.close_connection = True
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return
+        if not 0 < length <= MAX_BODY_BYTES or self.headers.get("Transfer-Encoding"):
+            return
+        timeout = self.connection.gettimeout()
+        deadline = time.monotonic() + 0.2
+        try:
+            while length and (remaining := deadline - time.monotonic()) > 0:
+                self.connection.settimeout(remaining)
+                chunk = self.rfile.read1(min(length, 8192))
+                if not chunk:
+                    break
+                length -= len(chunk)
+            self._request_body_consumed = length == 0
+        except OSError:
+            pass
+        finally:
+            self.connection.settimeout(timeout)
+
     def _json(
         self,
         payload: dict[str, Any],
@@ -2332,6 +2531,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         *,
         set_session_cookie: bool = False,
     ) -> None:
+        if status >= HTTPStatus.BAD_REQUEST:
+            self._discard_rejected_body()
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         _security_headers(self)
@@ -2356,6 +2557,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @staticmethod
+    def _speech_request_kwargs(payload: dict[str, Any]) -> dict[str, str]:
+        # An explicit null/empty/invalid ID must fail, not become global Stop.
+        if "request_id" not in payload:
+            return {}
+        return {"request_id": validate_speech_request_id(payload["request_id"])}
+
     def _stream_tts(
         self,
         text: str,
@@ -2363,6 +2571,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         voice: str | None,
         speed: float,
         emotion: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> None:
         """Send sentence WAVs as newline-delimited JSON without buffering the reply."""
         self.send_response(HTTPStatus.OK)
@@ -2374,7 +2583,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         stream = self.server.tts.stream(
-            text, voice=voice, speed=speed, emotion=emotion
+            text, voice=voice, speed=speed, emotion=emotion,
+            **({"request_id": request_id} if request_id is not None else {}),
         )
         try:
             count = 0

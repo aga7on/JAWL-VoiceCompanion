@@ -8,6 +8,7 @@ stub transcriber objects, so no crispasr process, model file or socket is needed
 
 import io
 import sys
+import threading
 import unittest
 import wave
 from pathlib import Path
@@ -28,7 +29,7 @@ class _StubTranscriber:
         self.text = text
         self.wavs = []
 
-    def transcribe(self, wav_bytes):
+    def transcribe(self, wav_bytes, *, cancel_event=None):
         self.wavs.append(wav_bytes)
         return self.text
 
@@ -38,7 +39,7 @@ class _RaisingTranscriber:
         self.error = error or RuntimeError("crispasr exited with code 1")
         self.calls = 0
 
-    def transcribe(self, wav_bytes):
+    def transcribe(self, wav_bytes, *, cancel_event=None):
         self.calls += 1
         raise self.error
 
@@ -346,6 +347,130 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(health["status"], "not_configured")
         self.assertEqual(health["engine"], "gigaam")
         self.assertEqual(health["active_sessions"], 0)
+
+
+class CancellationTests(unittest.TestCase):
+    def start_finish(self, buffer, session="s", *, scope=""):
+        results = []
+        buffer.feed_audio(_pcm(32), sample_rate=16000, channels=1, session_id=session, scope_id=scope)
+        thread = threading.Thread(target=lambda: results.append(buffer.finish(session, scope_id=scope)))
+        thread.start()
+        self.addCleanup(thread.join, 2)
+        self.addCleanup(buffer.close)
+        return thread, results
+
+    def test_discard_cancels_active_utterance_and_suppresses_late_result(self):
+        entered, release = threading.Event(), threading.Event()
+
+        class SlowTranscriber:
+            def transcribe(self, wav_bytes, *, cancel_event):
+                entered.set()
+                release.wait(2)  # deliberately does not cooperate
+                return "late transcript must never become a turn"
+
+        buffer = UtteranceBuffer(SlowTranscriber())
+        thread, results = self.start_finish(buffer)
+        self.assertTrue(entered.wait(1))
+        self.assertEqual(buffer.state()["inflight_transcriptions"], 1)
+        self.assertEqual(buffer.discard("s")["status"], "cancelled")
+        release.set()
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results[0]["status"], "cancelled")
+        self.assertEqual(results[0]["text"], "")
+        self.assertEqual(buffer.state()["inflight_transcriptions"], 0)
+
+    def test_scopes_isolate_identical_session_ids(self):
+        buffer = UtteranceBuffer(_StubTranscriber())
+        for scope in ("mic-A", "mic-B", ""):
+            buffer.feed_audio(_pcm(32), sample_rate=16000, channels=1, session_id="same", scope_id=scope)
+        self.assertEqual(buffer.discard_scope("mic-A")["discarded_sessions"], 1)
+        self.assertEqual(buffer.finish("same", scope_id="mic-A")["status"], "empty")
+        self.assertEqual(buffer.finish("same", scope_id="mic-B")["status"], "transcribed")
+        self.assertEqual(buffer.finish("same")["status"], "transcribed")
+
+    def test_scope_cancel_does_not_cancel_another_active_transcription(self):
+        entered = [threading.Event(), threading.Event()]
+        release = threading.Event()
+        tokens = []
+
+        class SlowTranscriber:
+            def transcribe(self, wav_bytes, *, cancel_event):
+                index = len(tokens)
+                tokens.append(cancel_event)
+                entered[index].set()
+                release.wait(2)
+                return "accepted only for the other owner"
+
+        buffer = UtteranceBuffer(SlowTranscriber())
+        first, first_results = self.start_finish(buffer, scope="mic-A")
+        self.assertTrue(entered[0].wait(1))
+        second, second_results = self.start_finish(buffer, scope="mic-B")
+        self.assertTrue(entered[1].wait(1))
+        self.assertEqual(buffer.discard_scope("mic-A")["cancelled_transcriptions"], 1)
+        self.assertTrue(tokens[0].is_set())
+        self.assertFalse(tokens[1].is_set())
+        release.set()
+        first.join(2)
+        second.join(2)
+        self.assertEqual(first_results[0]["status"], "cancelled")
+        self.assertEqual(second_results[0]["status"], "transcribed")
+
+    def test_close_cancels_active_work_and_rejects_late_feed(self):
+        entered = threading.Event()
+
+        class CooperativeTranscriber:
+            def transcribe(self, wav_bytes, *, cancel_event):
+                entered.set()
+                for _ in range(400):
+                    if cancel_event.is_set():
+                        break
+                    threading.Event().wait(0.005)
+                raise RuntimeError("cancelled")
+
+        buffer = UtteranceBuffer(CooperativeTranscriber())
+        thread, results = self.start_finish(buffer)
+        self.assertTrue(entered.wait(1))
+        buffer.close()
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results[0]["status"], "cancelled")
+        with self.assertRaisesRegex(ValueError, "closed"):
+            buffer.feed_audio(_pcm(8), sample_rate=16000, channels=1, session_id="late")
+
+    def test_active_sessions_count_towards_limit_and_cannot_be_replaced(self):
+        entered, release = threading.Event(), threading.Event()
+
+        class SlowTranscriber:
+            def transcribe(self, wav_bytes, *, cancel_event):
+                entered.set()
+                release.wait(2)
+                return "done"
+
+        buffer = UtteranceBuffer(SlowTranscriber())
+        thread, _ = self.start_finish(buffer)
+        self.assertTrue(entered.wait(1))
+        try:
+            with self.assertRaisesRegex(ValueError, "still processing"):
+                buffer.feed_audio(_pcm(8), sample_rate=16000, channels=1, session_id="s")
+            for index in range(7):
+                buffer.feed_audio(_pcm(8), sample_rate=16000, channels=1, session_id=f"queued-{index}")
+            with self.assertRaisesRegex(ValueError, "session limit"):
+                buffer.feed_audio(_pcm(8), sample_rate=16000, channels=1, session_id="overflow")
+        finally:
+            release.set()
+            thread.join(2)
+
+    def test_capture_parent_cancels_buffer_before_transcription_and_late_feed(self):
+        transcriber = _StubTranscriber()
+        buffer = UtteranceBuffer(transcriber)
+        capture_cancel = threading.Event()
+        buffer.feed_audio(_pcm(32), sample_rate=16000, channels=1, session_id="s", cancel_event=capture_cancel)
+        capture_cancel.set()
+        self.assertEqual(buffer.finish("s")["status"], "cancelled")
+        self.assertEqual(transcriber.wavs, [])
+        with self.assertRaisesRegex(ValueError, "cancelled"):
+            buffer.feed_audio(_pcm(32), sample_rate=16000, channels=1, session_id="late", cancel_event=capture_cancel)
 
 
 if __name__ == "__main__":

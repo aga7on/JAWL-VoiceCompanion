@@ -11,10 +11,14 @@
     "opencode_relay": 8891,
     "qwen3_vl": 8983,
     "bonsai_coding": 8986,
-    "tera_tts": 9889
+    "tera_tts": 9889,
+    "brain_port": 8990
   },
   "models": {
     "llama_server_exe": "G:/AI/llamacpp-taardis/build/bin/llama-server.exe",
+    "brain_server_exe": "G:/AI/llamacpp-prism/build-fa/bin/llama-server.exe",
+    "tera_python": "G:/AI/tts_env/Scripts/python.exe",
+    "tera_release": "G:/AI/tts_models/TeraSpace__TeraTTSv2",
     "qwen3_vl_model": "G:/AI/VLM-RealTime-Bench/models/Qwen3-VL-2B-Q4_K_M.gguf",
     "qwen3_vl_mmproj": "G:/AI/VLM-RealTime-Bench/models/Qwen3-VL-2B-mmproj-F16.gguf",
     "bonsai_model": "G:/AI/models/Ternary-Bonsai-2-27B-Abliterated-Hikari/Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf",
@@ -27,6 +31,11 @@
     "provider": "local-hikari",
     "model": "local-bonsai2",
     "llm_url": "http://127.0.0.1:8990/v1",
+    "context_size": 65536,
+    "max_output_tokens": 2048,
+    "threads": 12,
+    "gpu_layers": 99,
+    "device": "CUDA1",
     "use_relay": false,
     "raised_by": "scripts/run_local_bonsai_integrated.ps1",
     "relay_override": {
@@ -34,6 +43,15 @@
       "model": "deepseek-v4-flash",
       "relay_port": 8891
     }
+  },
+  "vision": {
+    "url": "http://127.0.0.1:8986/v1",
+    "model": "bonsai",
+    "auto_start": false
+  },
+  "launch": {
+    "run_seconds": 0,
+    "tts_provider": "omnivoice"
   },
   "profile_script": "scripts/run_integrated_profile.ps1"
 }

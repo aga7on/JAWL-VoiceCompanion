@@ -40,6 +40,20 @@ from .windows_ui import WindowsUIAutomationAdapter
 ErrorFn = Callable[[str], NoReturn]
 
 
+def _voicemem_sidecar_args(args: Any) -> tuple[str, ...]:
+    """Build VoiceMem CLI arguments without inheriting a profile's storage root."""
+    result = [
+        "--mode", args.voicemem_mode,
+        "--audio-sample-rate", str(args.voicemem_audio_rate),
+    ]
+    memory_root = getattr(args, "voicemem_memory_root", None)
+    if memory_root is not None:
+        result.extend(("--memory-root", str(memory_root)))
+    if args.voicemem_local_memory:
+        result.append("--local-memory")
+    return tuple(result)
+
+
 def build_companion_runtime(
     args: Any,
     *,
@@ -156,12 +170,7 @@ def build_companion_runtime(
     if args.screen_watch and not (args.hostos_live and args.screen_enabled and vision_describer):
         error("--screen-watch requires --hostos-live, --screen-enabled, --vision-url and --vision-model")
 
-    voicemem_args = [
-        "--mode", args.voicemem_mode,
-        "--audio-sample-rate", str(args.voicemem_audio_rate),
-    ]
-    if args.voicemem_local_memory:
-        voicemem_args.append("--local-memory")
+    voicemem_args = _voicemem_sidecar_args(args)
     voice_mem = (
         VoiceMemProcessClient(
             args.voicemem_python,

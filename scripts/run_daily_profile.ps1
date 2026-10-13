@@ -37,7 +37,7 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 # Provider URL is non-secret. The key must already exist in the environment as
 # LLM_API_KEY_*. This script never stores, prints, or handles credentials.
 if (-not $env:LLM_API_URL) { $env:LLM_API_URL = 'https://opencode.ai/zen/v1' }
-$args = @('-m', 'src.web.server', '--host', '127.0.0.1', '--port', "$ConsolePort", '--keep-agent')
+$args = @('-B', (Join-Path $repo 'scripts\run_owned_jawl_console.py'), '--host', '127.0.0.1', '--port', "$ConsolePort", '--keep-agent')
 if ($NoBrowser) { $args += '--no-browser' }
 Push-Location $env:JAWL_INSTANCE_HOME
 try { & $venvPython @args } finally { Pop-Location }

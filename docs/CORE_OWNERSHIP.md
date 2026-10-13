@@ -1,10 +1,25 @@
 # Core ownership map
 
-Status: static code map, 2026-09-05. `Observed` means present in the current
-dirty checkouts; `Proposed` means the boundary to approve. This is deliberately
-bounded: it is not a full dependency audit and no runtime was started.
+Status: code map refreshed 2026-10-12. The original10Oct audit was read-only;
+fresh isolated transport/console probes are in STATE, not whole-core acceptance.
+`Observed` means present in
+inspected source; `Proposed` means target boundary, not accepted behavior. See
+[README.md](README.md), [STATE.md](STATE.md), and [TODO.md](../TODO.md).
 
 ## Boundary in one view
+
+Owned console entry verifies the pinned source and installs an explicit HTTP
+admission middleware after native auth, inside that same console process.
+It owns bounded ID tombstones/dedup and transport cleanup only; ChatBridge,
+Heartbeat, persona, memory, tasks and tools remain native JAWL-owned. No protected
+source files are patched. Process-local/TTL state is not durable task storage or
+exactly-once authority. See [contract](contracts/jawl.md) and [release](RELEASE.md).
+
+Default turn/cancel POST sockets and their absolute-deadline watchdogs are owned
+by the Companion HTTP adapter (`http_lifecycle.py`). Cancellation cannot close a
+replacement call's socket. The producer retains admission through cleanup;
+opaque injected openers are not forcibly reaped. Local socket EOF is not proof
+that the native goal was deleted or model compute was released.
 
 ```text
 sensor/model output -> Companion normalization -> JAWL decision/authority
@@ -19,12 +34,12 @@ sensor/model output -> Companion normalization -> JAWL decision/authority
 | State | `src/l0_state/agent/state.py` holds ReAct metadata, `current_goal`, short-term state and heartbeat settings; `src/utils/event/bus.py:EventBus` is shared through `src/system/container.py`. | `TextGateway.state()`, `TurnArbiter.state()`, `AttentionPresence.state()`, `CompanionServer` composition, and in-memory turn/ambient projections. | `VoiceMem` session/stream state; `utils/common/session_tracker.py:SessionTracker` persists turn/session references. | JAWL owns durable persona, facts, tasks and decision state. Companion owns only bounded transport/UI/sensor projections. VoiceMem state is sidecar-local and never a second persona DB. |
 | Heartbeat / wake | `src/l3_agent/heartbeat.py:Heartbeat` schedules ReAct and consumes EventBus events; `src/l3_agent/react/loop.py:ReactLoop` executes the cycle. | `src/jawl_voicecompanion/attention.py:AttentionPresence` scores/queues local events; `__main__.py` starts ambient schedulers. | No platform wake owner; VoiceMem stream/perception workers process supplied input. | One JAWL wake/decision loop. Companion attention may rank observations or emit a bounded `SPEAK_INTENT`; it must not invoke a second ReAct loop. Disable independent VoiceMem/Companion proactive reply paths. |
 | Attention / context | `src/l3_agent/context/builder.py` and `context/registry.py` assemble bounded prompt context from state, tasks and RAG; Heartbeat decides whether to wake. | `AttentionPresence.consume()`, `intents()`, quiet-hours configuration and `ResourceGovernor` are local admission/resource controls. | `utils/fusion/reply_memory.py:build_reply_memory()` and `rightbrain/brain.py:RightBrain.search()` rank/retrieve VoiceMem context. | JAWL owns priority among user turn, task and background work. Companion supplies timestamped, attributed observations; VoiceMem recall is optional evidence, not authority or instruction. |
-| Turns / cancellation | `src/l3_agent/companion_gateway.py` is the native Companion gateway; `Heartbeat`/`ReactLoop` bind and cancel the native turn. | `jawl_web.py:JawlWebChatAdapter._respond_native()`, `_post_native()`, `_post_native_cancel()`, `_wait_for_native()`; `gateway.py:TextGateway.handle_text()`/`stream_text()` and `arbiter.py:TurnArbiter.begin/complete/cancel`. | `core.py:VoiceMem.stream()` handles stream input; it is not eligible to create a JAWL user turn except through the sidecar contract. | One correlated `turn_id`/event sequence reaches JAWL. A new conversational turn may cancel stale speech, but never cancels an unrelated durable task. Bridge mode must not fall back to `TextGateway`’s local mock responder. |
-| Memory ingest | Native `src/l1_databases/sql/management/structured_memory.py:SQLStructuredMemory` exposes `read_active`, `remember`, `revise_memory`, `forget_memory`, `archive_memory` through `src/system/operator_control.py` `memory.*` actions. JAWL also owns Tasks, Notes, Personality Traits, Mental States, Drives, Hypotheses, Ticks/Timelines and Daily Journal; JAWL RAG is under `src/l3_agent/context/rag/`. | `voicemem_client.py:VoiceMemAsyncIngest.enqueue_partial()` queues identical text; `ambient_memory.py:AmbientMemoryBuffer` stores bounded observations/ambient episodes; `web.py` promotes an episode via `JawlWebAdapter.remember_memory()`. | `core.py:VoiceMem.ingest()`; `utils/common/voice_input.py:ingest_voice_input()`; `leftbrain/memory_repository.py:LeftBrainMemoryRepository.append_extracted()`; `rightbrain/brain.py:RightBrain.write()` can write heartnotes/response experience; audio modules retain emotion, speaker, scene, place, routine and music observations. | VoiceMem may transcribe, attribute and return recall/evidence candidates. Only JAWL may turn a candidate into canonical fact, preference, trait, task or journal memory. `ambient episode` is a transient candidate and must not be presented as the complete JAWL episodic memory. Promotion/consolidation carries provenance and source event IDs. |
+| Turns / cancellation | `src/l3_agent/companion_gateway.py` is the native Companion gateway; `Heartbeat`/`ReactLoop` bind and cancel the native turn. | `jawl_web.py:JawlWebChatAdapter._respond_native()`, `_post_native()`, `_post_native_cancel()`, `_wait_for_native()`; `gateway.py:TextGateway.handle_text()`/`stream_text()` and `arbiter.py:TurnArbiter.begin/complete/cancel`. | `core.py:VoiceMem.stream()` handles stream input; it is not eligible to create a JAWL user turn except through the sidecar contract. | Preserve correlation and task state when speech/turn transport is cancelled. A new conversational turn may cancel stale speech, but does not imply durable task execution or provider work was cancelled. Bridge mode must not fall back to `TextGateway`’s local mock responder. |
+| Memory ingest | Native `src/l1_databases/sql/management/structured_memory.py:SQLStructuredMemory` exposes `read_active`, `remember`, `revise_memory`, `forget_memory`, `archive_memory` through `src/system/operator_control.py` `memory.*` actions. JAWL also owns Tasks, Notes, Personality Traits, Mental States, Drives, Hypotheses, Ticks/Timelines and Daily Journal; JAWL RAG is under `src/l3_agent/context/rag/`. | `voicemem_client.py:VoiceMemAsyncIngest.enqueue_partial()` queues identical text; `ambient_memory.py:AmbientMemoryBuffer` stores bounded observations/ambient episodes; `web.py` exposes manual promotion through `JawlWebAdapter.remember_memory()`. | `core.py:VoiceMem.ingest()` and VoiceMem's independent memory/affect subsystems. | T1/T2 are process-local; manual promotion into JAWL is implemented. Durable automatic consolidation is OPEN. VoiceMem evidence is not canonical memory. ASR is speech transcription, not audio captioning or a validated affect reader. |
 | Consolidation / recall | `src/l3_agent/subconscious/` contains consolidation/forgetting prompts and poller/orchestrator; `context/rag/` supplies JAWL retrieval. Actual end-to-end consolidation from Companion is not proven by this read. | `AmbientTriageScheduler` and local `AmbientMemoryBuffer.triage()` are bounded triage, not canonical consolidation. | `leftbrain/memory_repository.py:search/search_combined()`, `rightbrain/brain.py:RightBrain.search/write()`, `utils/fusion/reply_memory.py` and `cognitive_graph/store.py` form an independent memory/graph path. | Keep one durable memory authority. In the approved profile, disable VoiceMem durable promotion/`reply()` and use it for observations/optional recall only; route accepted revisions, contradiction handling, retention and erasure through JAWL. |
 | Tool authority | Native HostOS/Terminal/Debug/MCP/browser registry and policy: `src/l2_interfaces/host/os/decorators.py:require_access`, `host/os/client.py:HostOSClient`, `src/l3_agent/skills/registry.py`, and `src/system/operator_control.py`. | `hostos_policy.py:HostOSPolicy.authorize()` and `hostos_tools.py` provide a local compatibility executor/catalog; `jawl_web.py` proxies native policy/skills. | No tool authority. Audio/perception code must not execute tools. | JAWL is the only side-effect authority, including level 0–3, unattended lease, approvals, audit, MCP and browser. In bridge mode local `HostOSPolicy`/executor is not a fallback. Model fields never set access level. |
 | Tasks / commitments | `src/l3_agent/goals/ledger.py:TaskLedger`, `TaskLedgerPatch`, `apply_ledger_patch`; `goals/manager.py`; SQL task management under `src/l1_databases/sql/management/tasks/`. | UI/HTTP may display or submit a task request, but `web.py` must not own a durable task ledger. `TurnArbiter` owns response priority only. | No task authority; VoiceMem may provide context about a spoken request. | A task is created, checkpointed, resumed, reconciled and completed by JAWL. Interruption cancels speech/turn transport, not the task. Uncertain external effects require verification, not replay. |
-| Expression | Native gateway/response contract carries the selected response state; JAWL chooses the semantic response. | `gateway.py:TextGateway._build_envelope()` validates/creates local fallback emotion/avatar; `web.py` projects `presentation_state()`; `avatar.py:AvatarAssetStore`; `frontend/avatar.html:acceptAudioEvent()` and expression fallback render it. | `VoiceMem` affect fields are acoustic observations (`affect`, speaker metadata), not a command to change persona. | One JAWL-selected expression/response state is projected to text, TTS and both avatar surfaces. Companion may degrade unsupported expressions to neutral and publish playback amplitude, but must not invent a competing mood. |
+| Expression | Native gateway/response contract carries selected response state; JAWL chooses semantic response. | `gateway.py:TextGateway._build_envelope()` validates/creates local fallback emotion/avatar; Electron desktop scene projects expression and speech amplitude to VRM. | VoiceMem affect fields, where present, are observations, not a command to change persona. | One response state is projected to text, TTS and the current Electron VRM surface. Amplitude-driven mouth movement is not phoneme lip sync or evidence of ASR affect capability. |
 | Lifecycle / recovery | `src/system/orchestrator.py` orders system start/stop; `src/l3_agent/hooks/lifecycle.py:LifecycleHooks`; `src/instances/supervisor.py` handles instance supervision; native autonomy is `host/os/autonomy.py:validate_root_autonomy_lease`. | `__main__.py` composes `CompanionServer`; `VoiceMemProcessClient.close/abort`, `AmbientTriageScheduler.start`, and presentation server lifecycle manage adapters. | `services/voicemem_sidecar.py:VoiceMemSidecar` isolates per-session streams and reports degraded state; `VoiceMemProcessClient` owns child-process transport. | JAWL owns agent/task/autonomy lifecycle. Companion owns adapter lifecycle and reports health; it must not restart or mutate protected JAWL implicitly. Recovery resumes from native checkpoints and verifies prior effects. |
 
 ## Concrete overlaps to resolve
@@ -46,9 +61,10 @@ sensor/model output -> Companion normalization -> JAWL decision/authority
    Proposed: local executor remains only for explicit standalone/mock; native
    rejection is visible and terminal in bridge mode.
 5. **Ambient promotion overlap (observed):** `AmbientMemoryBuffer` owns a
-   transient episode and `web.py` can write it to JAWL. Proposed: preserve
-   provenance/source/time/confidence and make automatic consolidation a JAWL
-   operation; never convert ambient audio into `USER_FINAL` or a tool request.
+   transient episode and the manual route can write a confirmed candidate to
+   JAWL. Durable automatic consolidation remains OPEN. Preserve provenance,
+   source, time and confidence; never convert ambient audio into `USER_FINAL`
+   or a tool request.
 
 ## Minimum protected JAWL addition set
 
@@ -110,5 +126,8 @@ Acceptance evidence must record: profile/run ID, pinned version or dirty-diff
 identifier, input, expected/observed result, pass/fail/skip and exit code. The
 current audit’s unit/fake HTTP/static evidence does not prove live readiness,
 physical audio, real provider behavior, visual/OBS acceptance, eight-hour
-autonomy, or exactly-once external side effects. `run_target_jawl_smoke.ps1`
-remains excluded by instruction, and this document does not change runtime.
+autonomy, or exactly-once external side effects. BrowserAdapter `open_url`
+opens an HTTP(S) URL through the system browser; UIA delegation is not a full
+CDP session. Attachment backend presence does not establish desktop UX.
+`run_target_jawl_smoke.ps1` remains excluded by instruction, and this document
+does not change runtime.

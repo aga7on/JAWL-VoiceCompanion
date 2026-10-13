@@ -2,6 +2,8 @@ import json
 import sys
 import threading
 import unittest
+from unittest.mock import patch
+from urllib.error import URLError
 from queue import Empty, Queue
 from pathlib import Path
 
@@ -39,7 +41,8 @@ class _SseResponse:
         self.close()
         return False
 
-    def readline(self):
+    def readline(self, limit=-1):
+        del limit
         while not self.closed.is_set():
             try:
                 return self.lines.get(timeout=0.05)
@@ -53,10 +56,10 @@ class _SseResponse:
 
 
 class _BrokenOnCloseSseResponse(_SseResponse):
-    def readline(self):
+    def readline(self, limit=-1):
         if self.closed.is_set():
             raise AttributeError("closed response has no underlying stream")
-        return super().readline()
+        return super().readline(limit)
 
 
 class _EofSseResponse(_SseResponse):
@@ -68,7 +71,8 @@ class _EofSseResponse(_SseResponse):
         for line in lines:
             self.lines.put(line)
 
-    def readline(self):
+    def readline(self, limit=-1):
+        del limit
         try:
             return self.lines.get_nowait()
         except Empty:
@@ -167,6 +171,38 @@ class JawlWebTests(unittest.TestCase):
         tokened = JawlWebAdapter("http://127.0.0.1:8770", token="secret")
         with self.assertRaises(ValueError):
             tokened.set_hostos_level(True)
+
+    def test_hostos_never_starts_before_confirmed_stop(self):
+        calls = []
+
+        def opener(request, timeout):
+            path = request.full_url.removeprefix('http://127.0.0.1:8770')
+            calls.append((request.method, path))
+            if path.endswith('/status'):
+                return _Response({'running': True})
+            return _Response({'ok': True})
+
+        adapter = JawlWebAdapter('http://127.0.0.1:8770', token='fixture', opener=opener)
+        with patch('jawl_voicecompanion.jawl_web.time.sleep'), self.assertRaisesRegex(JawlWebUnavailable, 'stop was not confirmed'):
+            adapter.set_hostos_level(1)
+        self.assertNotIn(('POST', '/api/agent/start'), calls)
+
+    def test_hostos_unknown_start_outcome_is_not_replayed(self):
+        calls = []
+
+        def opener(request, timeout):
+            path = request.full_url.removeprefix('http://127.0.0.1:8770')
+            calls.append((request.method, path))
+            if path.endswith('/start'):
+                raise URLError('lost response')
+            if path.endswith('/status'):
+                return _Response({'running': False})
+            return _Response({'ok': True})
+
+        adapter = JawlWebAdapter('http://127.0.0.1:8770', token='fixture', opener=opener)
+        with self.assertRaisesRegex(JawlWebUnavailable, 'start was not confirmed'):
+            adapter.set_hostos_level(1)
+        self.assertEqual(calls.count(('POST', '/api/agent/start')), 1)
 
     def test_structured_memory_uses_native_jawl_routes(self):
         calls = []

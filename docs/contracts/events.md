@@ -6,6 +6,12 @@ request/session IDs, while native JAWL SSE uses turn_id/event_seq. Adapters
 preserve correlation across them; see [voice](voice.md) and [JAWL](jawl.md).
 Binary media is not part of durable domain events.
 
+Optional emotion/affect fields require a separately supported and accepted
+producer capability. GigaAM v3 supplies ASR text only; it does not make ASR an
+affect classifier or audio captioner. See the documentation map at
+[README.md](../README.md), evidence/limits in [STATE.md](../STATE.md), and the
+only current work queue in [TODO.md](../../TODO.md).
+
 ```json
 {
   "schema_version": 1,
@@ -65,11 +71,12 @@ The user speaks while output is active.
 
 ### `VOICE_TURN`
 
-A correlated final voice result. In bundled mode VoiceMem produces it; in
-external final-ASR mode Companion adapts authoritative ASR text immediately and
-enqueues VoiceMem enrichment separately. It may include optional transcript,
-affect, speaker and context; unsupported capabilities remain absent. JAWL
-consumes one final event, never a second turn from late enrichment.
+A correlated final voice result. In the selected product path Companion adapts
+the GigaAM v3 final text and enqueues VoiceMem enrichment separately. VoiceMem's
+bundled recognizer fields describe a compatibility transport, not a second
+selected ASR. Optional affect/speaker/context fields require separately
+accepted capabilities and otherwise remain absent. JAWL consumes one final
+event, never a second turn from late enrichment.
 
 ### `VOICE_DEGRADED`
 

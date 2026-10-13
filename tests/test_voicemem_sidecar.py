@@ -5,6 +5,9 @@ import os
 import subprocess
 import sys
 import unittest
+import threading
+import time
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +18,46 @@ from jawl_voicecompanion.voicemem_client import VoiceMemProcessClient  # noqa: E
 
 
 class VoiceMemSidecarTests(unittest.TestCase):
+    def test_abort_unblocks_writer_before_closing_buffered_stdin(self):
+        client = VoiceMemProcessClient(sys.executable, runner='-c',
+                                      args=('import time;time.sleep(30)',), timeout_seconds=2)
+        errors = []
+        def request():
+            try:
+                client.feed_partial('x' * 12000)
+            except Exception as exc:
+                errors.append(type(exc).__name__)
+        worker = threading.Thread(target=request, daemon=True)
+        worker.start()
+        try:
+            deadline = time.monotonic() + 2
+            while client._process is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertIsNotNone(client._process)
+            time.sleep(.1)  # Child never reads; the 12KB request exceeds its pipe buffer.
+            self.assertTrue(worker.is_alive())
+            self.assertIsNone(client._process.poll())
+            client.abort()
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive(), 'abort left buffered write/request blocked')
+            self.assertTrue(errors)
+        finally:
+            if client._process is not None:
+                client._process.kill()
+            worker.join(timeout=2)
+            client.close()
+
+    def test_reader_start_failure_reaps_process(self):
+        client = VoiceMemProcessClient(sys.executable, args=('--test-stub',), timeout_seconds=2)
+        try:
+            with patch('jawl_voicecompanion.voicemem_client.Thread.start', side_effect=RuntimeError('fixture')):
+                with self.assertRaises(ConnectionError):
+                    client.feed_partial('test')
+            self.assertIsNone(client._process)
+            self.assertIsNone(client._reader)
+        finally:
+            client.close()
+
     def test_partial_and_final_events_are_bounded_and_correlated(self):
         streams = []
 

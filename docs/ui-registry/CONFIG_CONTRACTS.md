@@ -1,7 +1,57 @@
 # Контракты конфигурации и отката (U0 → U1)
 
+## Актуальная граница — 2026-10-10
+
+ConfigHub уже поддерживает revision check, backup generations, secret masking,
+readback и restart semantics. Это не подтверждает полную parity формы: полный
+round-trip всех scalar, string-list и object-list полей и совпадение effective
+state не доказаны. Наличие сохранённого значения отдельно от применённого
+состояния обязательно отражать в UI и acceptance. Новые задачи и статус —
+[TODO](../../TODO.md) и [STATE](../STATE.md); карта документов —
+[docs/README.md](../README.md).
+
 Источник: снапшот `jawl-20260906-daily-v2` (`src/web/server.py`, `config_io.py`, `drives.py`).
 Документ фиксирует, КАК сегодня пишутся настройки, чтобы единый writer (U1) не потерял семантику.
+
+## Актуальное расширение — voice capture, 2026-10-05
+
+Обычная ConfigHub запись сохраняет консервативную `agent_restart` политику
+ниже. Исключение, проверенное по consumer-коду: `interfaces.yaml voice.capture.*`
+использует `next_capture`, без перезапуска JAWL и без изменения уже открытого mic.
+Это тот же ConfigHub, revision lock, 5 backup generations и атомарная запись,
+не browser localStorage и не второй конфигурационный файл.
+
+Authenticated GET `/api/voice/capture` возвращает `settings`, `revision`,
+`settings_writable`, lease state и top-level snapshot значений. POST configure:
+
+```json
+{"action":"configure","settings":{"gate_open":0.02,"gate_close":0.012,"silence_ms":1200,"pre_roll_ms":120},"expected_revision":"revision-from-get"}
+```
+
+Partial update объединяется с текущими значениями. Разрешены finite numeric
+gate_open 0.001–0.25, gate_close ≥0.0005 и строго <open, integer silence_ms
+300–5000, integer pre_roll_ms 0–500. Bool/NaN/Infinity/unknown keys отклоняются.
+Conflict →409 без записи; ConfigHub не настроен →503; invalid persisted config
+→явная ошибка, не молчаливый reset. Ответ сохранения содержит новую revision,
+settings, `restart_required:false`, `restart_policy:"next_capture"`.
+Persisted/parser/I/O error responses redacted: без YAML соседних строк и
+локальных путей; только фиксированные validation hints либо просьба проверить
+`interfaces.yaml voice.capture`. UI load/save bounded 5 с, draft не теряется.
+
+Fresh capture subtree вставляется точечно с сохранением комментариев/CRLF.
+Перед backup/replace parsed candidate сравнивается с original interfaces плюс
+ровно разрешённые capture значения. Неподдерживаемые quoted/flow/null формы
+отклоняются, исходные байты не меняются. Protected snapshot writer не изменён.
+
+Acquire/renew/release используют `{action,owner,capture_id}`; owner = desktop
+или native, identity ≤128 символов. Busy →409 до device permission, TTL 15 с.
+`/api/voice/audio` и `/api/voice/end` несут тот же owner/capture_id. Legacy
+unclaimed requests возможны только без активного lease; это не второй default
+mic lane. Настройки/lease не расширяют authority JAWL, HostOS или ambient capture.
+
+Actual UI save/readback/new-acquire и release regression PASS в
+`gate-capture-settings-20261005.log`; это synthetic media/mock providers,
+не реальный микрофон. Статус приёмки — [STATE](../STATE.md).
 
 ## Три файла-владельца
 

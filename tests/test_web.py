@@ -22,6 +22,14 @@ from jawl_voicecompanion.web import (  # noqa: E402
 )
 
 
+def _stop_test_http_server(server, thread):
+    server.shutdown()
+    thread.join(timeout=2)
+    if thread.is_alive():
+        raise AssertionError("test HTTP server thread did not stop")
+    server.server_close()
+
+
 class MeaningfulTranscriptTests(unittest.TestCase):
     def test_rejects_asr_noise_artifacts(self):
         for junk in (
@@ -176,9 +184,7 @@ class WebTests(unittest.TestCase):
         }
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def get_json(self, path):
         with urlopen(self.base + path, timeout=2) as response:
@@ -284,7 +290,8 @@ class WebTests(unittest.TestCase):
             with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
                 self.fail("expected 404 for the removed /avatar page")
         except HTTPError as exc:
-            self.assertEqual(exc.code, 404)
+            with exc:
+                self.assertEqual(exc.code, 404)
         with urlopen(self.base + "/mic-processor.js", timeout=2) as response:
             self.assertEqual(response.status, 200)
             self.assertIn(b"AudioWorkletProcessor", response.read())
@@ -586,15 +593,14 @@ class WebTests(unittest.TestCase):
         try:
             with self.assertRaises(HTTPError) as context:
                 urlopen(request, timeout=2)
-            body = json.loads(context.exception.read().decode("utf-8"))
-            self.assertEqual(context.exception.code, 503)
-            self.assertFalse(body["ok"])
-            self.assertTrue(body["policy"]["emergency_stop"])
-            self.assertEqual(body["jawl_policy"]["status"], "offline")
+            with context.exception as error:
+                body = json.loads(error.read().decode("utf-8"))
+                self.assertEqual(error.code, 503)
+                self.assertFalse(body["ok"])
+                self.assertTrue(body["policy"]["emergency_stop"])
+                self.assertEqual(body["jawl_policy"]["status"], "offline")
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=2)
+            _stop_test_http_server(server, thread)
 
     def test_hostos_registry_is_visible_and_requests_use_server_policy(self):
         status, tools = self.get_json("/api/hostos/tools")
@@ -648,9 +654,7 @@ class WebTests(unittest.TestCase):
             self.assertTrue(payload["native"])
             self.assertEqual(native.calls[0][0], "HostOSReader.read_file_range")
         finally:
-            bridge.shutdown()
-            bridge.server_close()
-            thread.join(timeout=2)
+            _stop_test_http_server(bridge, thread)
 
     def test_browser_approval_queue_is_server_side_and_one_shot(self):
         self.post_json("/api/hostos/level", {"level": 3})
@@ -898,12 +902,8 @@ class PresentationWebTests(unittest.TestCase):
         self.base = f"http://127.0.0.1:{self.presentation.server_port}"
 
     def tearDown(self):
-        self.presentation.shutdown()
-        self.presentation.server_close()
-        self.control.shutdown()
-        self.control.server_close()
-        self.presentation_thread.join(timeout=2)
-        self.control_thread.join(timeout=2)
+        _stop_test_http_server(self.presentation, self.presentation_thread)
+        _stop_test_http_server(self.control, self.control_thread)
 
     def test_presentation_origin_has_only_bounded_read_only_state(self):
         with urlopen(self.base + "/api/presentation/state", timeout=2) as response:
@@ -982,7 +982,7 @@ class _FakeStreamingAsr:
         self.active = active
         self.silence_ms = silence_ms
 
-    def snapshot(self):
+    def snapshot(self, *, scope_id=None, session_id=None):
         return {"active": self.active, "text": self.text, "silence_ms": self.silence_ms}
 
 
@@ -1008,9 +1008,7 @@ class VoicePrefaceTests(unittest.TestCase):
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
-        self.addCleanup(thread.join, 2)
+        self.addCleanup(_stop_test_http_server, server, thread)
         self.base = f"http://127.0.0.1:{server.server_port}"
         self.session_headers = {
             "X-Companion-Session": server.session_token,
@@ -1075,7 +1073,8 @@ class VoicePrefaceTests(unittest.TestCase):
         self._start_server(partial="что на экране", fusion=_FakeFusion("Экран: окно"))
         with self.assertRaises(HTTPError) as context:
             self._post("/api/voice/preface", {"session_id": "s1"}, headers={})
-        self.assertEqual(context.exception.code, 403)
+        with context.exception:
+            self.assertEqual(context.exception.code, 403)
 
 
 class VoiceMemoryBlockTests(unittest.TestCase):
@@ -1145,9 +1144,7 @@ class ShellStatusTests(unittest.TestCase):
         }
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def test_shell_status_is_light_and_bounded(self):
         request = Request(self.base + "/api/shell/status", headers=self.session_headers)
@@ -1166,7 +1163,8 @@ class ShellStatusTests(unittest.TestCase):
     def test_shell_status_requires_browser_session(self):
         with self.assertRaises(HTTPError) as context:
             urlopen(self.base + "/api/shell/status", timeout=2)
-        self.assertEqual(context.exception.code, 403)
+        with context.exception:
+            self.assertEqual(context.exception.code, 403)
 
 
 class AgentLogTests(unittest.TestCase):
@@ -1179,9 +1177,7 @@ class AgentLogTests(unittest.TestCase):
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
-        self.addCleanup(thread.join, 2)
+        self.addCleanup(_stop_test_http_server, server, thread)
         self.base = f"http://127.0.0.1:{server.server_port}"
         self.session_headers = {
             "X-Companion-Session": server.session_token,
@@ -1306,9 +1302,7 @@ class SettingsHubUITests(unittest.TestCase):
         }
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def _post(self, payload):
         request = Request(
@@ -1461,9 +1455,7 @@ class PutProxyTests(unittest.TestCase):
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def test_put_requires_session_and_proxies_console_paths(self):
         request = Request(
@@ -1474,7 +1466,8 @@ class PutProxyTests(unittest.TestCase):
         )
         with self.assertRaises(HTTPError) as context:
             urlopen(request, timeout=3)
-        self.assertEqual(context.exception.code, 403)
+        with context.exception:
+            self.assertEqual(context.exception.code, 403)
 
     def test_put_outside_console_paths_is_method_not_allowed(self):
         request = Request(
@@ -1489,7 +1482,8 @@ class PutProxyTests(unittest.TestCase):
         )
         with self.assertRaises(HTTPError) as context:
             urlopen(request, timeout=3)
-        self.assertEqual(context.exception.code, 405)
+        with context.exception:
+            self.assertEqual(context.exception.code, 405)
 
 
 if __name__ == "__main__":

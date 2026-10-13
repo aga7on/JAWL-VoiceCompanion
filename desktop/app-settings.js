@@ -57,18 +57,40 @@ function fieldDescriptor(key, value) {
 
 let configHub = null;
 const settingsDirty = new Map();
+let settingsSaving = false;
+
+function updateSaveButton() {
+  const save = document.querySelector('#settings-save');
+  if (!save) return;
+  save.textContent = settingsSaving
+    ? 'сохранение…'
+    : `сохранить (${settingsDirty.size})`;
+  save.disabled = settingsSaving || settingsDirty.size === 0;
+}
+
+function markSettingDirty(key, value) {
+  settingsDirty.set(key, value);
+  updateSaveButton();
+}
 
 async function loadSettings() {
   const list = document.querySelector('#settings-list');
   if (!list) return;
   try {
     const r = await fetch('/api/config-hub', {credentials: 'include', headers: API.headers()});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const hub = await r.json();
-    if (!hub.ok && !hub.values) { list.textContent = 'config hub недоступен'; return; }
+    if (!hub || (!hub.ok && !hub.values)) throw new Error('config hub недоступен');
     configHub = hub;
-    settingsDirty.clear();
     renderSettings('');
-  } catch { list.textContent = 'config hub недоступен'; }
+  } catch (e) {
+    if (settingsDirty.size) {
+      setStatusLine(`не удалось обновить настройки; черновики сохранены: ${e.message}`);
+      renderSettings(document.querySelector('#settings-search')?.value || '');
+    } else {
+      list.textContent = 'config hub недоступен';
+    }
+  }
 }
 
 function flattenHub(values, prefix = '') {
@@ -95,7 +117,7 @@ function renderSettings(filter) {
   const entries = flat.filter(([key]) =>
     !filter || key.toLowerCase().includes(filter.toLowerCase()));
   list.replaceChildren();
-  if (!entries.length) { list.textContent = 'ничего не найдено'; return; }
+  if (!entries.length) list.textContent = 'ничего не найдено';
 
   // group by descriptor
   const groups = SETTING_GROUPS.map(g => ({...g, entries: []}));
@@ -113,17 +135,18 @@ function renderSettings(filter) {
     h.textContent = group.title;
     card.appendChild(h);
     for (const [key, value] of group.entries) {
-      card.appendChild(renderField(key, value));
+      card.appendChild(renderField(key, settingsDirty.has(key) ? settingsDirty.get(key) : value));
     }
     list.appendChild(card);
   }
   // save button
   const save = document.createElement('button');
+  save.id = 'settings-save';
   save.className = 'btn';
-  save.textContent = `сохранить (${settingsDirty.size})`;
-  save.disabled = settingsDirty.size === 0;
+  save.type = 'button';
   save.addEventListener('click', saveSettings);
   list.appendChild(save);
+  updateSaveButton();
 }
 
 function renderField(key, value) {
@@ -154,7 +177,7 @@ function renderField(key, value) {
     control.addEventListener('click', () => {
       const next = control.getAttribute('aria-checked') !== 'true';
       control.setAttribute('aria-checked', String(next));
-      settingsDirty.set(key, next);
+      markSettingDirty(key, next);
     });
   } else if (d.type === 'range') {
     const wrap = document.createElement('span');
@@ -167,8 +190,8 @@ function renderField(key, value) {
     num.type = 'number';
     num.min = range.min; num.max = range.max; num.step = range.step;
     num.value = range.value;
-    range.addEventListener('input', () => { num.value = range.value; settingsDirty.set(key, Number(range.value)); });
-    num.addEventListener('input', () => { range.value = num.value; settingsDirty.set(key, Number(num.value)); });
+    range.addEventListener('input', () => { num.value = range.value; markSettingDirty(key, Number(range.value)); });
+    num.addEventListener('input', () => { range.value = num.value; markSettingDirty(key, Number(num.value)); });
     wrap.append(range, num);
     control = wrap;
   } else if (d.type === 'number') {
@@ -180,7 +203,7 @@ function renderField(key, value) {
     if (d.min !== undefined) num.min = d.min;
     if (d.max !== undefined) num.max = d.max;
     if (d.step !== undefined) num.step = d.step;
-    num.addEventListener('input', () => settingsDirty.set(key, Number(num.value)));
+    num.addEventListener('input', () => markSettingDirty(key, Number(num.value)));
     wrap.appendChild(num);
     if (d.unit) {
       const u = document.createElement('span');
@@ -198,20 +221,22 @@ function renderField(key, value) {
       control.appendChild(option);
     }
     control.value = String(value ?? '');
-    control.addEventListener('change', () => settingsDirty.set(key, control.value));
+    control.addEventListener('change', () => markSettingDirty(key, control.value));
   } else {
     control = document.createElement('input');
     control.type = 'text';
     control.value = value === null || value === undefined ? '' : String(value);
-    control.addEventListener('input', () => settingsDirty.set(key, control.value));
+    control.addEventListener('input', () => markSettingDirty(key, control.value));
   }
   row.appendChild(control);
   return row;
 }
 
 async function saveSettings() {
-  if (!configHub || !settingsDirty.size) return;
+  if (!configHub || !settingsDirty.size || settingsSaving) return;
   const values = Object.fromEntries(settingsDirty);
+  settingsSaving = true;
+  updateSaveButton();
   try {
     const r = await fetch('/api/config-hub/save', {
       method: 'POST',
@@ -219,26 +244,45 @@ async function saveSettings() {
       headers: API.headers(),
       body: JSON.stringify({values, expected_revision: configHub.revision}),
     });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
-    if (!d.ok) { alert('Не сохранено: ' + (d.error || 'конфликт ревизий')); return; }
-    settingsDirty.clear();
+    if (!d || d.ok !== true) throw new Error(d?.error || 'сервер не подтвердил сохранение');
+    if (d.unknown?.length || d.missing?.length) {
+      throw new Error(`не записаны ключи: ${[...(d.unknown || []), ...(d.missing || [])].join(', ')}`);
+    }
+    for (const [key, savedValue] of Object.entries(values)) {
+      if (settingsDirty.get(key) === savedValue) settingsDirty.delete(key);
+    }
+    if (typeof d.revision === 'string') configHub.revision = d.revision;
+    updateSaveButton();
     // JAWL reads settings.yaml at startup: apply means save + agent restart.
     // The hub itself reports restart_required; honor it automatically so the
     // UI never shows stale "not applied" values.
     if (d.restart_required) {
       setStatusLine('настройки сохранены — перезапускаю JAWL…');
       try {
-        await fetch('/api/jawl/restart', {
+        const restart = await fetch('/api/jawl/restart', {
           method: 'POST', credentials: 'include', headers: API.headers(), body: '{}'});
-        setStatusLine('JAWL перезапускается с новыми настройками…');
+        if (!restart.ok) throw new Error(`HTTP ${restart.status}`);
+        const result = await restart.json();
+        if (!result || result.ok !== true) {
+          throw new Error(result?.error || 'сервер не подтвердил перезапуск');
+        }
+        setStatusLine(`JAWL перезапускается с новыми настройками…${settingsDirty.size ? '; остались несохранённые черновики' : ''}`);
       } catch (e) {
-        setStatusLine('сохранено, но перезапуск не удался: ' + e.message);
+        setStatusLine(`сохранено, но перезапуск не удался: ${e.message}${settingsDirty.size ? '; остались несохранённые черновики' : ''}`);
       }
     } else {
-      setStatusLine('настройки сохранены');
+      setStatusLine(`настройки сохранены${settingsDirty.size ? '; остались несохранённые черновики' : ''}`);
     }
-    loadSettings();
-  } catch (e) { alert('Ошибка сохранения: ' + e.message); }
+    await loadSettings();
+  } catch (e) {
+    setStatusLine('не сохранено; черновики сохранены: ' + e.message);
+    alert('Ошибка сохранения: ' + e.message);
+  } finally {
+    settingsSaving = false;
+    updateSaveButton();
+  }
 }
 
 function setStatusLine(text) {
@@ -249,3 +293,185 @@ function setStatusLine(text) {
 document.querySelector('#settings-search')?.addEventListener('input', (e) => {
   renderSettings(e.target.value);
 });
+
+// Shared microphone capture configuration. Values are saved through the
+// capture lease endpoint and are read by the server on the next mic acquire.
+const MIC_CAPTURE_FIELDS = {
+  gate_open: '#mic-gate-open',
+  gate_close: '#mic-gate-close',
+  silence_ms: '#mic-silence-ms',
+  pre_roll_ms: '#mic-pre-roll-ms',
+};
+let micCaptureRevision = null;
+let micCaptureWritable = false;
+let micCaptureLoading = false;
+let micCaptureSaving = false;
+let micCaptureDirty = false;
+let micCaptureNeedsReload = false;
+
+function micCaptureControls() {
+  return Object.fromEntries(Object.entries(MIC_CAPTURE_FIELDS).map(([key, selector]) => [
+    key, document.querySelector(selector),
+  ]));
+}
+
+function micCaptureValues() {
+  return Object.fromEntries(Object.entries(micCaptureControls()).map(([key, input]) => [
+    key, input?.value.trim() ? Number(input.value) : Number.NaN,
+  ]));
+}
+
+function setMicCaptureStatus(message) {
+  const status = document.querySelector('#mic-capture-disabled');
+  if (status) status.textContent = message;
+}
+
+function setMicCaptureError(message) {
+  const error = document.querySelector('#mic-capture-error');
+  if (!error) return;
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+function updateMicCaptureControls() {
+  const fieldset = document.querySelector('#mic-capture-fields');
+  const save = document.querySelector('#mic-capture-save');
+  const reload = document.querySelector('#mic-capture-reload');
+  if (fieldset) fieldset.disabled = !micCaptureWritable || micCaptureLoading || micCaptureSaving;
+
+  const values = micCaptureValues();
+  const controls = micCaptureControls();
+  const individuallyValid = Object.values(controls).every(input => input && input.checkValidity());
+  const thresholdsValid = Number.isFinite(values.gate_open)
+    && Number.isFinite(values.gate_close) && values.gate_close < values.gate_open;
+  if (micCaptureDirty && !individuallyValid) {
+    setMicCaptureError('Заполните все поля и проверьте допустимые диапазоны.');
+  } else if (micCaptureDirty && !thresholdsValid) {
+    setMicCaptureError('Порог закрытия должен быть ниже порога открытия.');
+  }
+  controls.gate_open?.setAttribute('aria-invalid', String(!controls.gate_open?.checkValidity() || !thresholdsValid));
+  controls.gate_close?.setAttribute('aria-invalid', String(!controls.gate_close?.checkValidity() || !thresholdsValid));
+  for (const key of ['silence_ms', 'pre_roll_ms']) {
+    controls[key]?.setAttribute('aria-invalid', String(!controls[key]?.checkValidity()));
+  }
+  if (save) {
+    save.disabled = !micCaptureWritable || micCaptureLoading || micCaptureSaving
+      || !micCaptureDirty || !individuallyValid || !thresholdsValid || micCaptureNeedsReload;
+    save.setAttribute('aria-busy', String(micCaptureSaving));
+    save.textContent = micCaptureSaving ? 'Сохранение…' : 'Сохранить';
+  }
+  if (reload) {
+    reload.hidden = !micCaptureNeedsReload;
+    reload.disabled = !micCaptureWritable || micCaptureLoading || micCaptureSaving;
+  }
+}
+
+async function waitForMicCaptureSession() {
+  const deadline = Date.now() + 5_000;
+  while (!API.csrf && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return Boolean(API.csrf);
+}
+
+async function loadMicCaptureSettings() {
+  const fieldset = document.querySelector('#mic-capture-fields');
+  if (!fieldset) return;
+  micCaptureLoading = true;
+  setMicCaptureError('');
+  setMicCaptureStatus('Загрузка настроек захвата…');
+  updateMicCaptureControls();
+  try {
+    let response = await fetch('/api/voice/capture', {
+      credentials: 'include', headers: API.headers(), signal: AbortSignal.timeout(5_000),
+    });
+    if (response.status === 403) {
+      if (!API.csrf) await waitForMicCaptureSession();
+      if (API.csrf) {
+        response = await fetch('/api/voice/capture', {
+          credentials: 'include', headers: API.headers(), signal: AbortSignal.timeout(5_000),
+        });
+      }
+    }
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok !== true) {
+      micCaptureWritable = false;
+      const reason = response.status === 503
+        ? 'ConfigHub недоступен. Настройка захвата отключена.'
+        : result.error || `HTTP ${response.status}`;
+      setMicCaptureStatus(reason);
+      if (response.status !== 503) setMicCaptureError(reason);
+      return;
+    }
+    micCaptureWritable = result.settings_writable === true;
+    micCaptureRevision = result.revision;
+    const settings = result.settings || {};
+    for (const [key, input] of Object.entries(micCaptureControls())) {
+      if (input && settings[key] !== undefined) input.value = String(settings[key]);
+    }
+    micCaptureDirty = false;
+    micCaptureNeedsReload = false;
+    setMicCaptureError('');
+    setMicCaptureStatus(micCaptureWritable
+      ? 'Сохранённые значения. Изменения применяются при следующем запуске микрофона.'
+      : 'ConfigHub недоступен. Параметры захвата отключены.');
+  } catch (error) {
+    micCaptureWritable = false;
+    const reason = `Не удалось загрузить настройки захвата: ${error.message}`;
+    setMicCaptureStatus(reason);
+    setMicCaptureError(reason);
+  } finally {
+    micCaptureLoading = false;
+    updateMicCaptureControls();
+  }
+}
+
+async function saveMicCaptureSettings() {
+  if (!micCaptureWritable || !micCaptureRevision || micCaptureSaving || !micCaptureDirty) return;
+  const values = micCaptureValues();
+  const controls = micCaptureControls();
+  if (!Object.values(controls).every(input => input?.checkValidity())
+      || values.gate_close >= values.gate_open) {
+    setMicCaptureError('Проверьте диапазоны: порог закрытия должен быть ниже порога открытия.');
+    updateMicCaptureControls();
+    return;
+  }
+
+  micCaptureSaving = true;
+  setMicCaptureError('');
+  setMicCaptureStatus('Сохранение настроек…');
+  updateMicCaptureControls();
+  try {
+    const response = await fetch('/api/voice/capture', {
+      method: 'POST', credentials: 'include', headers: API.headers(),
+      signal: AbortSignal.timeout(5_000),
+      body: JSON.stringify({action: 'configure', settings: values, expected_revision: micCaptureRevision}),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok !== true) {
+      if (response.status === 409) micCaptureNeedsReload = true;
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
+    micCaptureRevision = result.revision;
+    micCaptureDirty = false;
+    setMicCaptureStatus('Сохранено. Новые значения применятся при следующем запуске микрофона.');
+  } catch (error) {
+    setMicCaptureError(`Не удалось сохранить настройки захвата: ${error.message}`);
+    setMicCaptureStatus('Изменения не сохранены. Черновик оставлен в полях.');
+  } finally {
+    micCaptureSaving = false;
+    updateMicCaptureControls();
+  }
+}
+
+for (const input of Object.values(micCaptureControls())) {
+  input?.addEventListener('input', () => {
+    micCaptureDirty = true;
+    setMicCaptureError('');
+    setMicCaptureStatus('Есть несохранённые изменения.');
+    updateMicCaptureControls();
+  });
+}
+document.querySelector('#mic-capture-save')?.addEventListener('click', saveMicCaptureSettings);
+document.querySelector('#mic-capture-reload')?.addEventListener('click', loadMicCaptureSettings);
+loadMicCaptureSettings();

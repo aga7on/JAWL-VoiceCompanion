@@ -1,5 +1,10 @@
 # Full-duplex research adoption — TinyDuplex (2026-09-10)
 
+> **Historical research/adoption record (2026-09-10).** Recommendations and
+> run-specific evidence do not imply current end-to-end acceptance. Current
+> state and queue: [STATE](STATE.md), [TODO](../TODO.md),
+> [documentation map](README.md).
+
 ## Update 2026-09-12 - adaptive speech system shipped (v1)
 
 The first full-duplex milestone from FULLDUPLEX.md is now implemented in the

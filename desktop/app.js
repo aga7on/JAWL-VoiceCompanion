@@ -19,7 +19,13 @@ const state = {
   micActive: false,
   voiceSessionId: null,
   voiceCorrelationId: null,
+  voiceSequence: 0,
+  speechGeneration: 0,
+  speechPlayback: null,
 };
+let micStartGeneration = 0;
+let micStarting = false;
+let pendingCaptureLease = null;
 
 // ---------------------------------------------------------------------------
 // boot
@@ -173,6 +179,7 @@ function setThinking(on) {
   state.thinking = on;
   thinkingEl.classList.toggle('on', on);
   chatSend.disabled = on;
+  window.__jawlScene?.setMotionState?.(on ? 'listening' : 'idle');
 }
 
 function showCaption(text) {
@@ -189,7 +196,9 @@ function handleEnvelope(envelope, {speak = true} = {}) {
     addMessage('assistant', envelope.text);
     showCaption(envelope.text);
   }
-  window.__jawlScene?.setEmotion(envelope.emotion?.id || 'neutral');
+  if (!window.__jawlScene?.applyAvatarEnvelope?.(envelope)) {
+    window.__jawlScene?.setEmotion?.(envelope.emotion?.id || 'neutral');
+  }
   setVal('avatar-current', envelope.emotion?.id || 'neutral');
   if (speak && envelope.speak !== false && envelope.text) speakFinal(envelope);
 }
@@ -197,6 +206,7 @@ function handleEnvelope(envelope, {speak = true} = {}) {
 async function sendChat() {
   const text = chatInput.value.trim();
   if (!text || state.thinking) return;
+  cancelSpeechPlayback();
   chatInput.value = '';
   addMessage('user', text);
   setThinking(true);
@@ -245,36 +255,162 @@ chatInput.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 
 let lipContext = null;
-async function speakFinal(envelope) {
+function publishSpeechState(playback, eventState) {
+  const now = performance.now();
+  window.dispatchEvent(new CustomEvent('jawl-speech-state', {detail: {
+    state: eventState,
+    generation: playback.generation,
+    activeSources: playback.sources?.size || 0,
+    sourcePeak: playback.sourcePeak || 0,
+    elapsedMs: Math.max(0, Math.round(now - playback.startedAt)),
+  }}));
+}
+
+function releaseSpeechPlayback(playback, eventState = null) {
+  if (!playback || state.speechPlayback !== playback) return;
+  state.speechPlayback = null;
+  setSpeechStopEnabled(false);
+  if (eventState === 'cancel' || eventState === 'error') cancelRemoteSpeech(playback);
+  playback.abortController.abort();
+  for (const source of playback.sources) {
+    source.onended = null;
+    try { source.stop(); } catch {}
+    try { source.disconnect(); } catch {}
+  }
+  playback.sources.clear();
+  if (playback.frameId !== null) cancelAnimationFrame(playback.frameId);
+  playback.frameId = null;
+  playback.analyser?.disconnect();
+  window.__jawlScene?.setLipLevel(0);
+  window.__jawlScene?.setMotionState?.(state.mic?.heard ? 'listening' : 'idle');
+  if (eventState) publishSpeechState(playback, eventState);
+}
+
+function cancelRemoteSpeech(playback) {
+  if (!playback?.requestDispatched || playback.remoteCancelSent) return;
+  playback.remoteCancelSent = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
   try {
+    void fetch('/api/tts/cancel', {
+      method: 'POST',
+      credentials: 'include',
+      headers: API.headers(),
+      body: JSON.stringify({request_id: playback.requestId}),
+      keepalive: true,
+      signal: controller.signal,
+    }).catch(() => {}).finally(() => clearTimeout(timeout));
+  } catch {
+    clearTimeout(timeout);
+  }
+}
+
+function cancelSpeechPlayback() {
+  state.speechGeneration += 1;
+  releaseSpeechPlayback(state.speechPlayback, 'cancel');
+}
+
+function setSpeechStopEnabled(enabled) {
+  const button = document.querySelector('#speech-stop');
+  if (button) button.disabled = !enabled;
+}
+
+document.querySelector('#speech-stop')?.addEventListener('click', cancelSpeechPlayback);
+setSpeechStopEnabled(false);
+
+async function speakFinal(envelope) {
+  cancelSpeechPlayback();
+  const generation = state.speechGeneration;
+  const playback = {
+    generation,
+    requestId: crypto.randomUUID(),
+    requestDispatched: false,
+    remoteCancelSent: false,
+    abortController: new AbortController(),
+    sources: new Set(),
+    sourcePeak: 0,
+    analyser: null,
+    frameId: null,
+    startedAt: performance.now(),
+  };
+  state.speechPlayback = playback;
+  setSpeechStopEnabled(true);
+  try {
+    const {consumeSpeechStream} = await import('./speech-stream.js');
+    if (state.speechPlayback !== playback || generation !== state.speechGeneration) return;
+    playback.requestDispatched = true;
     const response = await fetch('/api/tts/stream', {
       method: 'POST',
       credentials: 'include',
       headers: API.headers(),
-      body: JSON.stringify({text: envelope.text}),
+      body: JSON.stringify({text: envelope.text, request_id: playback.requestId}),
+      signal: playback.abortController.signal,
     });
-    if (!response.ok) return;
-    const blob = await response.blob();
-    const audio = new Audio(URL.createObjectURL(blob));
+    if (state.speechPlayback !== playback || generation !== state.speechGeneration) return;
+    if (!response.ok || !response.body) {
+      const error = new Error('TTS_STREAM_UNAVAILABLE');
+      error.code = 'TTS_STREAM_UNAVAILABLE';
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.headers?.get?.('content-type')?.toLowerCase().includes('application/x-ndjson')) {
+      const error = new Error('TTS_INVALID_CONTENT_TYPE');
+      error.code = 'TTS_INVALID_CONTENT_TYPE';
+      throw error;
+    }
     if (!lipContext) lipContext = new AudioContext();
     if (lipContext.state === 'suspended') await lipContext.resume();
-    const source = lipContext.createMediaElementSource(audio);
-    const analyser = lipContext.createAnalyser();
+    if (state.speechPlayback !== playback || generation !== state.speechGeneration) return;
+    const analyser = playback.analyser = lipContext.createAnalyser();
     analyser.fftSize = 256;
-    source.connect(analyser).connect(lipContext.destination);
+    analyser.connect(lipContext.destination);
     const data = new Uint8Array(analyser.frequencyBinCount);
     const pump = () => {
+      if (state.speechPlayback !== playback || generation !== state.speechGeneration) return;
       analyser.getByteTimeDomainData(data);
       let sum = 0;
       for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
       window.__jawlScene?.setLipLevel(Math.sqrt(sum / data.length) * 2.2);
-      if (!audio.ended) requestAnimationFrame(pump);
+      if (playback.sources.size) playback.frameId = requestAnimationFrame(pump);
       else window.__jawlScene?.setLipLevel(0);
     };
-    audio.onplay = pump;
-    audio.onended = () => window.__jawlScene?.setLipLevel(0);
-    await audio.play();
-  } catch { /* voice is optional; text stays */ }
+    const isCurrent = () => state.speechPlayback === playback && generation === state.speechGeneration;
+    const promise = consumeSpeechStream(response, {
+      audioContext: lipContext,
+      signal: playback.abortController.signal,
+      isCurrent,
+      connectSource: source => source.connect(analyser),
+      onSourceStart: source => {
+        if (!isCurrent()) return;
+        playback.sources.add(source);
+        playback.sourcePeak = Math.max(playback.sourcePeak, playback.sources.size);
+        if (playback.sources.size === 1) {
+          window.__jawlScene?.setMotionState?.('speaking');
+          pump();
+          publishSpeechState(playback, 'firstscheduled');
+        } else if (playback.sources.size > (playback.reportedSourcePeak || 1)) {
+          playback.reportedSourcePeak = playback.sources.size;
+          publishSpeechState(playback, 'sourcespeak');
+        }
+      },
+      onSourceEnd: source => playback.sources.delete(source),
+      onStreamDone: () => { playback.streamDone = true; },
+    });
+    await promise;
+    if (isCurrent()) releaseSpeechPlayback(playback, 'done');
+  } catch (error) {
+    if (state.speechPlayback === playback && generation === state.speechGeneration) {
+      const cancelled = playback.abortController.signal.aborted || error?.code === 'TTS_CANCELLED';
+      if (!cancelled) {
+        const status = Number.isInteger(error?.status) ? ` (HTTP ${error.status})` : '';
+        addMessage('system', `Голосовой ответ не удалось воспроизвести${status}.`);
+      }
+      releaseSpeechPlayback(playback, cancelled ? 'cancel' : 'error');
+    }
+  }
+  finally {
+    if (state.speechPlayback === playback && generation === state.speechGeneration && playback.abortController.signal.aborted) releaseSpeechPlayback(playback, 'cancel');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +450,10 @@ function pcm16Base64(samples) {
   return btoa(binary);
 }
 
-chatMic.addEventListener('click', () => { state.micActive ? stopMic() : startMic(); });
+chatMic.addEventListener('click', () => {
+  if (micStarting || state.micActive) void stopMic();
+  else void startMic();
+});
 
 // ---------------------------------------------------------------------------
 // microphone device selection: enumerated labels need one permission grant,
@@ -356,7 +495,37 @@ micSelect?.addEventListener('change', () => setPreferredMicId(micSelect.value));
 navigator.mediaDevices?.addEventListener?.('devicechange', refreshMicDevices);
 
 async function startMic() {
+  if (micStarting || state.micActive) return;
+  micStarting = true;
+  const startGeneration = ++micStartGeneration;
+  let captureLease = null;
+  let stream = null;
+  let context = null;
   try {
+    const micHelpers = await import('./voice-input.js');
+    const {createVoiceDraftController} = await import('./voice-draft.js');
+    const {CaptureLease, MicInputGate} = micHelpers;
+    const captureId = getCaptureClientId();
+    captureLease = new CaptureLease({
+      captureId,
+      headers: () => API.headers(),
+      onLost: (error) => {
+        if (state.mic?.lease === captureLease ||
+            (pendingCaptureLease === captureLease && startGeneration === micStartGeneration)) {
+          const mic = state.mic?.lease === captureLease ? state.mic : null;
+          if (!mic || !mic.leaseLost) {
+            if (mic) mic.leaseLost = true;
+            addMessage('system', 'Захват остановлен: ' + error.message);
+          }
+          void stopMic();
+        }
+      },
+    });
+    pendingCaptureLease = captureLease;
+    const lease = await captureLease.acquire();
+    if (startGeneration !== micStartGeneration) { await captureLease.release(); return; }
+    captureLease.startRenewal(lease.renewAfterMs);
+
     const wanted = preferredMicId();
     const constraints = {
       audio: {
@@ -367,11 +536,23 @@ async function startMic() {
         ...(wanted ? {deviceId: {exact: wanted}} : {}),
       },
     };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    const context = new AudioContext();
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (startGeneration !== micStartGeneration) {
+      stream.getTracks().forEach(t => t.stop());
+      await captureLease.release();
+      return;
+    }
+    context = new AudioContext();
     await context.audioWorklet.addModule('/mic-processor.js');
+    if (startGeneration !== micStartGeneration) {
+      stream.getTracks().forEach(t => t.stop());
+      await context.close().catch(() => {});
+      await captureLease.release();
+      return;
+    }
     const source = context.createMediaStreamSource(stream);
     const gate = new AudioWorkletNode(context, 'jawl-mic-processor');
+    const inputGate = new MicInputGate(captureLease.config);
     const analyser = context.createAnalyser();
     analyser.fftSize = 512;
     source.connect(gate);
@@ -382,101 +563,271 @@ async function startMic() {
     // labels are visible now: refresh the picker with real names
     refreshMicDevices();
 
-    state.voiceSessionId = `app-mic-${Date.now()}`;
-    state.voiceCorrelationId = `turn-voice-${Date.now()}`;
-    state.mic = {stream, context, gate, analyser, lastLoud: performance.now(), sending: false, pending: 0};
+    const firstUtterance = newVoiceUtterance();
+    state.voiceSessionId = firstUtterance.sessionId;
+    state.voiceCorrelationId = firstUtterance.correlationId;
+    state.mic = {
+      stream, context, gate, analyser, inputGate, helpers: micHelpers, lease: captureLease, utterance: firstUtterance,
+      uploadQueue: {tail: Promise.resolve(), pending: 0}, finalizing: false, heard: false,
+      turnGeneration: 0, active: true, abortController: new AbortController(), flushWaiters: [],
+    };
+    pendingCaptureLease = null;
 
+    const micCapture = state.mic;
+    micCapture.draftText = '';
+    micCapture.drafts = createVoiceDraftController({
+      getCurrent: () => state.mic === micCapture && micCapture.active &&
+        micCapture.heard && !micCapture.finalizing ? {
+          session_id: micCapture.utterance.sessionId,
+          correlation_id: micCapture.utterance.correlationId,
+          capture_id: micCapture.lease.leaseId,
+          generation: micCapture.turnGeneration,
+        } : null,
+      request: async (payload, signal) => {
+        const response = await fetch('/api/voice/draft', {
+          method: 'POST', credentials: 'include', headers: API.headers(),
+          body: JSON.stringify(payload), signal,
+        });
+        micHelpers.requireVoiceResponseOk(response, 'voice/draft');
+        return response.json();
+      },
+      onDraft: (text) => {
+        micCapture.draftText = text;
+        if (state.mic === micCapture && micCapture.active && micCapture.heard && !micCapture.finalizing) {
+          micState.textContent = text ? 'Слышу (предварительно): ' + text.slice(0, 160) : 'Слушаю…';
+        }
+      },
+    });
+    micCapture.draftPoll = setInterval(() => { void micCapture.drafts.tick(); }, 350);
     gate.port.onmessage = (event) => {
+      const mic = micCapture;
+      if (state.mic !== mic || !mic.active) return;
+      if (event.data?.type === 'flushed') {
+        mic.flushWaiters.shift()?.();
+        return;
+      }
       if (!(event.data instanceof ArrayBuffer)) return;
-      const samples = new Float32Array(event.data);
-      uploadChunk(samples, context.sampleRate);
+      mic.workletChunks = Math.min(1000000, (mic.workletChunks || 0) + 1);
+      mic.lastFrameAt = performance.now();
+      const result = mic.inputGate.push(new Float32Array(event.data), context.sampleRate);
+      if (result.opened) {
+        if (!mic.heard) {
+          cancelSpeechPlayback();
+          mic.turnGeneration += 1;
+          mic.drafts.reset();
+          mic.drafts.resume();
+        }
+        mic.heard = true;
+        window.__jawlScene?.setMotionState?.('listening');
+        micState.textContent = mic.draftText ? 'Слышу (предварительно): ' + mic.draftText.slice(0, 160) : 'Слушаю…';
+      }
+      for (const frame of result.frames) uploadChunk(frame, context.sampleRate);
     };
 
-    const data = new Uint8Array(analyser.frequencyBinCount);
     state.mic.poll = setInterval(() => {
-      if (!state.mic) return;
-      analyser.getByteTimeDomainData(data);
-      let energy = 0;
-      for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; energy += v * v; }
-      const rms = Math.sqrt(energy / data.length);
-      if (rms > 0.02) {
-        state.mic.lastLoud = performance.now();
-        state.mic.heard = true;
-        micState.textContent = 'Слушаю…';
-      } else if (state.mic.heard && performance.now() - state.mic.lastLoud > 2000) {
-        finishUtterance();
+      const mic = state.mic;
+      if (mic && mic.active && mic.heard && !mic.finalizing &&
+          performance.now() - mic.inputGate.lastVoiceAt >= mic.inputGate.config.silenceMs) {
+        void finishUtterance();
       }
-    }, 200);
+    }, 100);
 
     state.micActive = true;
     chatMic.style.background = 'var(--accent)';
     micState.textContent = 'Микрофон включён — говорите.';
     setVal('mic-state', 'Микрофон включён.');
   } catch (error) {
-    micState.textContent = 'Микрофон недоступен: ' + error.message;
+    stream?.getTracks().forEach(t => t.stop());
+    if (context && context.state !== 'closed') await context.close().catch(() => {});
+    await captureLease?.release();
+    if (pendingCaptureLease === captureLease) pendingCaptureLease = null;
+    if (startGeneration === micStartGeneration) micState.textContent = 'Микрофон недоступен: ' + error.message;
+  } finally {
+    if (startGeneration === micStartGeneration) micStarting = false;
   }
+}
+
+function getCaptureClientId() {
+  return globalThis.crypto?.randomUUID?.() || `desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 async function uploadChunk(samples, sampleRate) {
   const mic = state.mic;
-  if (!mic || mic.finalizing) return;
-  if (mic.pending > 6) return; // bounded backpressure
-  mic.pending += 1;
-  try {
-    const payload = {
-      session_id: state.voiceSessionId,
-      correlation_id: state.voiceCorrelationId,
-      sample_rate: 16000,
-      channels: 1,
-      pcm16_base64: pcm16Base64(downsample(samples, sampleRate, 16000)),
-    };
-    await fetch('/api/voice/audio', {
+  if (!mic) return;
+  const utterance = mic.helpers.uploadUtteranceFor(mic);
+  const payload = {
+    session_id: utterance.sessionId,
+    correlation_id: utterance.correlationId,
+    owner: 'desktop',
+    capture_id: mic.lease.leaseId,
+    sample_rate: 16000,
+    channels: 1,
+    pcm16_base64: pcm16Base64(downsample(samples, sampleRate, 16000)),
+  };
+  const task = enqueueMicOperation(mic, async () => {
+    const response = await fetch('/api/voice/audio', {
       method: 'POST', credentials: 'include', headers: API.headers(),
       body: JSON.stringify(payload),
+      signal: mic.abortController.signal,
     });
-  } catch { /* a dropped chunk is not fatal: the utterance continues */ }
-  finally { if (state.mic) state.mic.pending -= 1; }
+    return mic.helpers.requireVoiceResponseOk(response, 'voice/audio');
+  }, true);
+  const fail = (error, reason = error?.code === 'VOICE_CAPTURE_HTTP_ERROR' ? 'http_failure'
+    : error?.name === 'TypeError' ? 'transport_failure' : 'upload_failure') => {
+    if (state.mic !== mic || !mic.active || mic.uploadFailed) return;
+    mic.uploadFailed = true;
+    try { voiceCaptureDiagnostic(mic, reason, error); }
+    catch { /* optional diagnostics must never prevent capture teardown */ }
+    addMessage('system', 'Захват остановлен: ' + error.message);
+    void stopMic();
+  };
+  if (!task) fail(new Error('аудиоканал не успевает принимать звук'), 'upload_backpressure');
+  else task.catch(fail);
+}
+
+function voiceCaptureDiagnostic(mic, reason, error) {
+  if (typeof CustomEvent !== 'function' || typeof window.dispatchEvent !== 'function') return;
+  const contextState = mic.context?.state;
+  const errorName = error?.name;
+  const age = performance.now() - mic.lastFrameAt;
+  const detail = {
+    schema_version: 1, reason,
+    error_name: ['TypeError', 'AbortError', 'TimeoutError', 'Error'].includes(errorName) ? errorName : 'unknown',
+    status: Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? error.status : null,
+    context_state: ['running', 'suspended', 'closed'].includes(contextState) ? contextState : 'unknown',
+    track_states: mic.stream.getAudioTracks().slice(0, 4).map(track =>
+      ['live', 'ended'].includes(track.readyState) ? track.readyState : 'unknown'),
+    upload_pending: Math.max(0, Math.min(6, mic.uploadQueue.pending)),
+    worklet_chunks: mic.workletChunks || 0,
+    last_frame_age_ms: Number.isFinite(age) ? Math.max(0, Math.min(3600000, Math.round(age))) : null,
+    active: Boolean(mic.active), finalizing: Boolean(mic.finalizing),
+  };
+  try { window.dispatchEvent(new CustomEvent('jawl-voice-capture', {detail})); }
+  catch { /* diagnostics must not prevent capture teardown */ }
+}
+
+function enqueueMicOperation(mic, operation, bounded = false) {
+  const queue = mic.uploadQueue;
+  if (bounded && queue.pending >= 6) return null;
+  if (bounded) queue.pending += 1;
+  const task = queue.tail.catch(() => {}).then(() => mic.active ? operation() : undefined);
+  queue.tail = task.then(() => undefined, () => undefined).finally(() => {
+    if (bounded) queue.pending -= 1;
+  });
+  return task;
+}
+
+function finalizeAfterMicUploads(mic, finalize) {
+  const previousUploads = mic.uploadQueue.tail;
+  mic.uploadQueue = {tail: Promise.resolve(), pending: 0};
+  return previousUploads.catch(() => {}).then(() => mic.active ? finalize() : null);
+}
+
+function micTurnIsCurrent(mic, generation) {
+  return Boolean(mic.active && state.mic === mic && mic.turnGeneration === generation);
+}
+
+function newVoiceUtterance() {
+  const id = `${Date.now()}-${++state.voiceSequence}`;
+  return {sessionId: `app-mic-${id}`, correlationId: `turn-voice-${id}`};
 }
 
 async function finishUtterance() {
   const mic = state.mic;
-  if (!mic || mic.finalizing) return;
+  if (!mic || mic.finalizing || !mic.heard) return;
   mic.finalizing = true;
+  mic.drafts?.finalize();
+  const lastVoiceAt = mic.inputGate.lastVoiceAt;
+  mic.flushDestination = mic.utterance;
+  const turnGeneration = mic.turnGeneration;
   micState.textContent = 'Распознаю…';
   try {
-    const response = await fetch('/api/voice/end', {
+    await flushMicWorklet(mic);
+    if (!micTurnIsCurrent(mic, turnGeneration)) return;
+    const boundary = mic.helpers.completeMicFlushBoundary(mic, lastVoiceAt, newVoiceUtterance());
+    if (boundary.resumed) return;
+    const utterance = boundary.utterance;
+    state.voiceSessionId = mic.utterance.sessionId;
+    state.voiceCorrelationId = mic.utterance.correlationId;
+    const data = await finalizeAfterMicUploads(mic, async () => {
+      const response = await fetch('/api/voice/end', {
       method: 'POST', credentials: 'include', headers: API.headers(),
-      body: JSON.stringify({session_id: state.voiceSessionId, correlation_id: state.voiceCorrelationId}),
+      body: JSON.stringify({
+        session_id: utterance.sessionId,
+        correlation_id: utterance.correlationId,
+        owner: 'desktop',
+        capture_id: mic.lease.leaseId,
+      }),
+      signal: mic.abortController.signal,
+      });
+      mic.helpers.requireVoiceResponseOk(response, 'voice/end');
+      return response.json();
     });
-    const data = await response.json();
+    if (!data || !micTurnIsCurrent(mic, turnGeneration)) return;
     if (data.transcript) addMessage('user', data.transcript);
     const answers = data.responses || [];
     const last = answers[answers.length - 1];
     if (last) handleEnvelope(last);
     else if (data.error) addMessage('system', 'Голос: ' + data.error);
-    // a fresh session for the next utterance
-    state.voiceSessionId = `app-mic-${Date.now()}`;
-    state.voiceCorrelationId = `turn-voice-${Date.now()}`;
-    mic.heard = false;
   } catch (error) {
-    addMessage('system', 'Голосовой ход не завершился: ' + error.message);
+    if (micTurnIsCurrent(mic, turnGeneration)) {
+      addMessage('system', 'Голосовой ход не завершился: ' + error.message);
+      await stopMic();
+    }
   } finally {
-    if (state.mic) state.mic.finalizing = false;
-    micState.textContent = state.micActive ? 'Микрофон включён — говорите.' : 'Микрофон выключен.';
+    if (state.mic === mic && mic.active) {
+      mic.flushDestination = null;
+      mic.finalizing = false;
+      mic.drafts?.reset();
+      mic.drafts?.resume();
+      micState.textContent = state.micActive ? 'Микрофон включён — говорите.' : 'Микрофон выключен.';
+    }
   }
 }
 
+function flushMicWorklet(mic) {
+  if (!mic.active || !mic.gate?.port) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (flushed = true) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const index = mic.flushWaiters.indexOf(done);
+      if (index >= 0) mic.flushWaiters.splice(index, 1);
+      if (flushed) resolve();
+      else reject(new Error('AudioWorklet не подтвердил границу реплики'));
+    };
+    const timer = setTimeout(() => done(false), 500);
+    mic.flushWaiters.push(done);
+    mic.gate.port.postMessage({type: 'flush'});
+  });
+}
+
 async function stopMic() {
+  const stopGeneration = ++micStartGeneration;
+  micStarting = false;
   const mic = state.mic;
+  const pendingLease = pendingCaptureLease;
+  pendingCaptureLease = null;
   state.mic = null;
   state.micActive = false;
+  cancelSpeechPlayback();
   chatMic.style.background = '';
+  micState.textContent = 'Микрофон выключен.';
   if (mic) {
+    mic.active = false;
+    clearInterval(mic.draftPoll);
+    mic.drafts?.stop();
+    mic.abortController.abort();
     clearInterval(mic.poll);
     mic.stream.getTracks().forEach(t => t.stop());
-    await mic.context.close().catch(() => {});
+    mic.flushWaiters.splice(0).forEach(done => done());
+    await Promise.allSettled([mic.context.close(), mic.lease?.release(), pendingLease?.release()]);
+  } else {
+    await pendingLease?.release();
   }
-  micState.textContent = 'Микрофон выключен.';
+  if (micStartGeneration === stopGeneration) micState.textContent = 'Микрофон выключен.';
 }
 
 // ---------------------------------------------------------------------------
@@ -518,19 +869,9 @@ document.querySelectorAll('[data-emotion]').forEach(button => {
 // TTS preview
 // ---------------------------------------------------------------------------
 
-document.querySelector('#tts-preview')?.addEventListener('click', async () => {
-  const text = document.querySelector('#tts-preview-text').value.trim();
-  const audio = document.querySelector('#tts-audio');
-  if (!text) return;
-  try {
-    const response = await fetch('/api/tts/synthesize', {
-      method: 'POST', credentials: 'include', headers: API.headers(),
-      body: JSON.stringify({text}),
-    });
-    if (!response.ok) throw new Error('tts status ' + response.status);
-    audio.src = URL.createObjectURL(await response.blob());
-    audio.play();
-  } catch (e) { audio.removeAttribute('src'); alert('Превью не удалось: ' + e.message); }
+document.querySelector('#tts-preview')?.addEventListener('click', () => {
+  const text = document.querySelector('#tts-preview-text')?.value.trim();
+  if (text) void speakFinal({text});
 });
 
 // ---------------------------------------------------------------------------

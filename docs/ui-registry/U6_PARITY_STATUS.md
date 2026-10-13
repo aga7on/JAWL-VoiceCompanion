@@ -1,5 +1,26 @@
 # U6 parity status (2026-09-15)
 
+## Текущее состояние — 2026-10-10
+
+Исторические проценты, размеры реестра, PASS и списки перенесённых полей ниже
+сохранены как evidence тех срезов; они не описывают сегодняшнюю общую parity.
+Актуальная приёмка требует свежего contract-by-contract round-trip и проверки
+эффективного состояния.
+
+| Область | Текущее утверждение | Открытая граница |
+|---|---|---|
+| Общая оболочка | Electron single-window `/app`, VRM three-vrm, chat и mic | Полный daily scenario ещё не принят |
+| Цель интеграции | Все функции JAWL в общей панели Companion | `/console/` fallback сохраняется до полной parity acceptance |
+| ConfigHub | Revision/conflict, backup generations, masked secrets, readback и restart semantics реализованы | Полный scalar/list/object-list round-trip и effective-state parity не доказаны |
+| Chat UX | Текст и mic доступны | History, attachments, emoji, slash-команды, library и task UX OPEN |
+| Vision | Bonsai 8986 настроен | Не утверждает прохождение всех OCR/grounding путей |
+| Runtime evidence | Последняя сохранённая приёмка — 2026-10-05 | Документальный аудит 2026-10-10 был READ-ONLY и не создавал runtime evidence |
+
+Провайдерная рамка: default TeraTTS ru_f1:9889; OmniVoice — выбираемый TTS;
+GigaAM v3 — единственный ASR; JAWL использует Bonsai-2 27B Hikari PQ2_0 на
+GPU 1. Сводная карта: [docs/README.md](../README.md); фактический статус:
+[STATE](../STATE.md); новая очередь только в [TODO](../../TODO.md).
+
 АУДИТ 2026-09-16: найдено и исправлено 5 дефектов (ниже — «Исправления
 аудита»); прежние проценты и статус iframe в этом документе устарели и
 приведены к фактическому состоянию. Приёмка в браузере ещё не проведена.
@@ -20,7 +41,7 @@
    `tree_of_thoughts.mode`, `tree_of_thoughts.llm_model`,
    `subconscious.llm_model`.
 
-## Текущее состояние (фактическое)
+## Исторический статус U6 — 2026-09-16
 
 - Перенесено: все скалярные зоны настроек и интеграций, строковые списки,
   объектные списки (feeds/MCP/coding-профили), свои мотиваторы, память

@@ -23,6 +23,10 @@ class ConfigureProfileNativeTests(unittest.TestCase):
             profile = instances / "test"
             config = profile / "config"
             config.mkdir(parents=True)
+            daily = instances / "daily" / "config"
+            daily.mkdir(parents=True)
+            (daily / "settings.yaml").write_bytes(b"daily settings must stay untouched\n")
+            (daily / "interfaces.yaml").write_bytes(b"daily interfaces must stay untouched\n")
             (config / "settings.yaml").write_text(
                 "identity: {agent_name: baseline}\n"
                 "llm:\n  main_model: baseline-model\n  available_models: [baseline-model]\n",
@@ -49,6 +53,8 @@ class ConfigureProfileNativeTests(unittest.TestCase):
             )
             self.assertEqual(settings["llm"]["main_model"], "candidate-model:latest")
             self.assertEqual(settings["llm"]["temperature"], 0.2)
+            self.assertEqual((daily / "settings.yaml").read_bytes(), b"daily settings must stay untouched\n")
+            self.assertEqual((daily / "interfaces.yaml").read_bytes(), b"daily interfaces must stay untouched\n")
 
     def test_rejects_invalid_temperature_override(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -13,6 +13,7 @@ from jawl_voicecompanion.ambient_audio import (  # noqa: E402
     PlaybackSuppression,
 )
 from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer  # noqa: E402
+from jawl_voicecompanion.asr import UtteranceBuffer  # noqa: E402
 from jawl_voicecompanion.audio_understanding import AudioDescriptionService  # noqa: E402
 from jawl_voicecompanion.voicemem_client import VoiceMemUnavailable  # noqa: E402
 
@@ -64,7 +65,7 @@ class _FakeFinalASR:
     def __init__(self):
         self.calls = []
 
-    def feed_audio(self, pcm16, *, sample_rate, channels, session_id):
+    def feed_audio(self, pcm16, *, sample_rate, channels, session_id, cancel_event=None):
         self.calls.append((pcm16, sample_rate, channels, session_id))
         return {"status": "buffered", "bytes": sum(len(item[0]) for item in self.calls)}
 
@@ -118,7 +119,7 @@ class _SequencedFinalASR:
         self.fail_finishes = fail_finishes
         self.release = release
 
-    def feed_audio(self, pcm16, *, sample_rate, channels, session_id):
+    def feed_audio(self, pcm16, *, sample_rate, channels, session_id, cancel_event=None):
         self.feed_calls.append((pcm16, sample_rate, channels, session_id))
         return {"status": "buffered", "bytes": len(pcm16)}
 
@@ -413,6 +414,38 @@ class AmbientAudioTests(unittest.TestCase):
         self.assertTrue(_wait_for(lambda: memory.state()["observation_count"] == 1))
         bridge.stop("stale", flush=False)
         self.assertGreaterEqual(bridge.state()["stale_segments"], 1)
+
+    def test_stop_cancels_active_asr_without_cancelling_microphone_buffer(self):
+        entered = Event()
+
+        class CooperativeTranscriber:
+            def transcribe(self, wav_bytes, *, cancel_event):
+                entered.set()
+                for _ in range(400):
+                    if cancel_event.is_set():
+                        break
+                    Event().wait(0.005)
+                return "cancelled ambient text"
+
+        final_asr = UtteranceBuffer(CooperativeTranscriber())
+        final_asr.feed_audio(b"\x01\x00" * 32, sample_rate=16000, channels=1, session_id="independent-mic")
+        memory = AmbientMemoryBuffer(enabled=True)
+        bridge = AmbientAudioASRBridge(
+            _FakeVoiceMem(), memory, final_asr=final_asr,
+            max_feed_bytes=2048, segment_max_bytes=4096,
+        )
+        self.addCleanup(final_asr.close)
+        self.addCleanup(bridge.stop, flush=False)
+        bridge.start("ambient-cancel")
+        for _ in range(2):
+            bridge.consume(b"\x01\x00" * 1024, 16000, 1, "ambient-cancel")
+        self.assertTrue(entered.wait(1))
+        stopped = bridge.stop("ambient-cancel", flush=False, timeout=1.0)
+        self.assertEqual(stopped["status"], "cancelled")
+        self.assertFalse(bridge.state()["processing_worker_alive"])
+        self.assertEqual(final_asr.state()["inflight_transcriptions"], 0)
+        self.assertIsNotNone(final_asr.to_wav("independent-mic"))
+        self.assertEqual(memory.state()["observation_count"], 0)
 
     def test_blocking_description_cannot_commit_after_cancel(self):
         memory = AmbientMemoryBuffer(enabled=True)

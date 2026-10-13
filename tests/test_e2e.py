@@ -103,7 +103,7 @@ class _StubGigaamTranscriber:
     def __init__(self):
         self.wavs = []
 
-    def transcribe(self, wav_bytes):
+    def transcribe(self, wav_bytes, *, cancel_event=None):
         self.wavs.append(wav_bytes)
         return self.text
 
@@ -153,13 +153,12 @@ class _JawlWebHandler(BaseHTTPRequestHandler):
 class _JawlControlHandler(BaseHTTPRequestHandler):
     config_values = {}
     calls = []
+    running = False
+    drop_start_response_once = False
 
     def do_GET(self):  # noqa: N802 - stdlib handler API
         if self.path == "/api/agent/status":
-            # The product polls the agent status after a HostOS level change
-            # (stop -> wait -> start). Without this route the wait loop runs its
-            # full 30 s budget and the client's 3 s timeout fires first.
-            self._reply({"ok": True, "running": False})
+            self._reply({"ok": True, "running": _JawlControlHandler.running})
             return
         if self.path != "/api/config":
             self.send_error(404)
@@ -191,8 +190,14 @@ class _JawlControlHandler(BaseHTTPRequestHandler):
         elif self.path.endswith("reset"):
             self._reply({"ok": True, "policy": {"emergency_stop": False}})
         elif self.path.endswith("start"):
+            _JawlControlHandler.running = True
+            if _JawlControlHandler.drop_start_response_once:
+                _JawlControlHandler.drop_start_response_once = False
+                self.close_connection = True
+                return
             self._reply({"ok": True, "pid": 42})
         else:
+            _JawlControlHandler.running = False
             self._reply({"ok": True, "forced": False})
 
     def _reply(self, payload):
@@ -652,6 +657,8 @@ class LocalE2ETests(unittest.TestCase):
             "interfaces:host.os.access_level": 0,
         }
         _JawlControlHandler.calls = []
+        _JawlControlHandler.running = False
+        _JawlControlHandler.drop_start_response_once = False
         threading.Thread(target=self.jawl_control_provider.serve_forever, daemon=True).start()
         self.jawl_chat_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlChatWebHandler)
         _JawlChatWebHandler.messages = []
@@ -1282,6 +1289,9 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(hostos["enabled"])
 
     def test_jawl_hostos_control_syncs_native_and_companion_policy(self):
+        # The native start succeeds but its HTTP acknowledgment is lost. The
+        # adapter must observe the resulting state instead of replaying start.
+        _JawlControlHandler.drop_start_response_once = True
         adapter = JawlWebAdapter(
             f"http://127.0.0.1:{self.jawl_control_provider.server_port}",
             token="e2e-console-token",

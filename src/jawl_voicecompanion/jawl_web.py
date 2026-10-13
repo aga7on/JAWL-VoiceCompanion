@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import socket
 import time
 from uuid import uuid4
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
+
+from .http_lifecycle import HttpCallCancelled, read_scoped
 
 from .jawl_adapter import (
     JawlTurnCancelled,
@@ -399,26 +402,42 @@ class JawlWebAdapter:
         if written.get("ok") is not True:
             raise JawlWebUnavailable("JAWL rejected the HostOS configuration")
         # Restart the agent so the new level takes effect. The console's
-        # stop/start can be slow to report; retry a few times and only treat a
-        # still-running old agent as a real failure.
+        # stop can be slow to report; poll without replaying mutations and
+        # never start until the old process is confirmed stopped.
         self._request_json("/api/agent/stop", method="POST", payload={})
         for _ in range(30):
             try:
                 status = self._request_json("/api/agent/status")
-                if not status.get("running"):
+                if status.get("running") is False and status.get("starting") is not True:
                     break
             except JawlWebUnavailable:
                 pass
             time.sleep(1.0)
-        started = None
-        for attempt in range(5):
+        else:
+            raise JawlWebUnavailable("JAWL agent stop was not confirmed; refusing to start")
+        try:
+            started = self._request_json("/api/agent/start", method="POST", payload={})
+        except JawlWebUnavailable as exc:
+            # The start may have taken effect even if its response was lost.
+            # Confirm native state before deciding whether the operation failed;
+            # replaying this side effect can launch the agent more than once.
             try:
-                started = self._request_json("/api/agent/start", method="POST", payload={})
-                if started.get("ok") is True:
-                    break
+                status = self._request_json(
+                    "/api/agent/status",
+                    request_timeout=self._LIFECYCLE_TIMEOUT_SECONDS,
+                )
             except JawlWebUnavailable:
-                started = None
-            time.sleep(2.0)
+                raise JawlWebUnavailable(
+                    "JAWL agent start outcome is unknown; refusing to replay start"
+                ) from exc
+            if status.get("running") is True or status.get("starting") is True:
+                started = {"ok": True}
+                if isinstance(status.get("pid"), int):
+                    started["pid"] = status["pid"]
+            else:
+                raise JawlWebUnavailable(
+                    "JAWL agent start was not confirmed; refusing to replay start"
+                ) from exc
         if not (isinstance(started, dict) and started.get("ok") is True):
             raise JawlWebUnavailable("JAWL agent could not be started with the new HostOS level")
         return {
@@ -575,6 +594,7 @@ class _SseReader:
     """Read one bounded JAWL SSE stream without blocking the request thread."""
 
     _MAX_LINE_BYTES = 128 * 1024
+    _MAX_EVENT_BYTES = 128 * 1024
 
     def __init__(self, opener: Callable[..., Any], request: Request, timeout: float):
         self._opener = opener
@@ -590,9 +610,14 @@ class _SseReader:
         self._thread = Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
-        self._thread.start()
+        with self._lock:
+            if self._stop.is_set():
+                raise RuntimeError("a stopped SSE reader cannot be restarted")
+            self._thread.start()
 
     def get(self, timeout: float) -> dict[str, Any] | None:
+        if self._stop.is_set():
+            return None
         try:
             return self._events.get(timeout=max(0.01, timeout))
         except Empty:
@@ -602,26 +627,60 @@ class _SseReader:
         """Return whether an already-read SSE packet still awaits delivery."""
         return not self._events.empty()
 
-    def stop(self) -> None:
-        self._stop.set()
+    def stop(self) -> bool:
+        """Interrupt only this response's socket, then join its reader.
+
+        urllib's buffered close can otherwise wait for the same read lock
+        that stop needs to release. A non-cooperative injected opener can
+        still outlive the join; the return value is actual thread evidence.
+        """
         with self._lock:
+            self._stop.set()
             response = self._response
+            while True:
+                try:
+                    self._events.get_nowait()
+                except Empty:
+                    break
         if response is not None:
+            try:
+                owned_socket = response.fp.raw._sock
+                try:
+                    owned_socket.shutdown(socket.SHUT_RDWR)
+                finally:
+                    native_close = getattr(owned_socket, "_real_close", None)
+                    if callable(native_close):
+                        native_close()
+            except (AttributeError, OSError):
+                pass
             try:
                 response.close()
             except Exception:
                 pass
-        self._thread.join(timeout=0.5)
+        if self._thread.ident is not None:
+            self._thread.join(timeout=1.25)
+        return not self._thread.is_alive()
 
     def _run(self) -> None:
         data_lines: list[str] = []
+        data_bytes = 0
         try:
-            with self._opener(self._request, timeout=self._timeout) as response:
+            # An opener blocked before response headers cannot be closed via
+            # _response yet. Bound that phase separately from the idle SSE
+            # read budget, which remains the configured full turn timeout.
+            with self._opener(self._request, timeout=min(self._timeout, 1.0)) as response:
                 with self._lock:
                     self._response = response
+                    stopped = self._stop.is_set()
+                if stopped:
+                    return
+                try:
+                    response.fp.raw._sock.settimeout(self._timeout)
+                except AttributeError:
+                    pass  # injected streams must provide their own close hook
                 self.ready.set()
                 while not self._stop.is_set():
-                    line = response.readline()
+                    line = response.readline(self._MAX_LINE_BYTES + 1)
                     if not line:
                         break
                     if len(line) > self._MAX_LINE_BYTES:
@@ -630,10 +689,17 @@ class _SseReader:
                     if decoded.startswith(":"):
                         continue
                     if decoded.startswith("data:"):
+                        data_bytes += len(line)
+                        if data_bytes > self._MAX_EVENT_BYTES:
+                            raise JawlWebUnavailable("JAWL chat SSE event exceeds the bounded limit")
                         data_lines.append(decoded[5:].lstrip())
                     elif not decoded and data_lines:
                         self._publish("\n".join(data_lines))
                         data_lines.clear()
+                        data_bytes = 0
+        except JawlWebUnavailable as exc:
+            if not self._stop.is_set():
+                self.error = exc
         except HTTPError as exc:
             exc.close()
             if not self._stop.is_set():
@@ -650,6 +716,8 @@ class _SseReader:
             if not self._stop.is_set():
                 self.error = JawlWebUnavailable("JAWL chat stream failed")
         finally:
+            with self._lock:
+                self._response = None
             self.ready.set()
             self.done.set()
 
@@ -657,18 +725,34 @@ class _SseReader:
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:
-            self.error = JawlWebUnavailable("JAWL chat stream returned invalid JSON")
-            return
+            raise JawlWebUnavailable("JAWL chat stream returned invalid JSON") from None
         if not isinstance(event, dict):
             return
-        try:
-            self._events.put_nowait(event)
-        except Exception:
-            # Dropping the oldest packet can hide a final/error event.  Stop
-            # with an explicit integrity error so the caller can reconnect or
-            # surface a terminal failure instead of inventing success.
-            self.error = JawlWebUnavailable("JAWL chat stream event queue overflowed")
-            self._stop.set()
+        with self._lock:
+            if self._stop.is_set():
+                return
+            try:
+                self._events.put_nowait(event)
+            except Exception:
+                # Never drop a final/error packet to make room for new data.
+                raise JawlWebUnavailable("JAWL chat stream event queue overflowed") from None
+
+
+class _NativeCancellation:
+    """Carry local cancellation and the admitted producer's diagnostic token."""
+    def __init__(self, external: Event | None):
+        self.external = external
+        self.local = Event()
+        self.diagnostics_owner: object | None = None
+
+    def is_set(self) -> bool:
+        return self.local.is_set() or (self.external is not None and self.external.is_set())
+
+    def wait(self, seconds: float) -> bool:
+        deadline = time.monotonic() + seconds
+        while not self.is_set() and time.monotonic() < deadline:
+            self.local.wait(min(0.025, max(0, deadline - time.monotonic())))
+        return self.is_set()
 
 
 class JawlWebChatAdapter(JawlWebAdapter):
@@ -694,6 +778,38 @@ class JawlWebChatAdapter(JawlWebAdapter):
         # cancel an older token, but must not POST a second native cycle until
         # the older adapter call has completed its cancellation cleanup.
         self._native_turn_lock = Lock()
+        # Native diagnostics share fields with legacy chat. Fence writes from
+        # consumer code that can resume after the native producer is replaced.
+        self._native_diagnostic_lock = Lock()
+        self._native_diagnostic_owner: object | None = None
+
+    @staticmethod
+    def _new_native_diagnostic_owner() -> object:
+        return object()
+
+    def _claim_native_diagnostics(self, owner: object) -> None:
+        with self._native_diagnostic_lock:
+            self._native_diagnostic_owner = owner
+            self.last_chat_status = "starting"
+            self.last_chat_error = ""
+
+    def _set_native_diagnostics(
+        self, owner: object, status: str | None = None, error: str | None = None,
+    ) -> bool:
+        with self._native_diagnostic_lock:
+            if self._native_diagnostic_owner is not owner:
+                return False
+            if status is not None:
+                self.last_chat_status = status
+            if error is not None:
+                self.last_chat_error = error
+            return True
+
+    def _native_diagnostic_status(self, owner: object) -> str | None:
+        with self._native_diagnostic_lock:
+            if self._native_diagnostic_owner is not owner:
+                return None
+            return self.last_chat_status
 
     def chat_status(self) -> str:
         if self.last_chat_status == "not_checked":
@@ -745,29 +861,40 @@ class JawlWebChatAdapter(JawlWebAdapter):
         return self._respond_native(clean, cancel_event, correlation_id)
 
     def _respond_native(self, text: str, cancel_event: Event | None, correlation_id: str | None = None) -> dict[str, Any]:
-        with self._native_turn_lock:
-            return self._respond_native_serialized(text, cancel_event, correlation_id)
+        from .jawl_gateway_contract import validate_turn_id
+        turn_id = validate_turn_id(correlation_id) if correlation_id is not None else f"turn-{uuid4().hex}"
+        owner = self._new_native_diagnostic_owner()
+        return self._respond_native_serialized(text, cancel_event, turn_id, owner)
 
-    def _respond_native_serialized(self, text: str, cancel_event: Event | None, correlation_id: str | None = None) -> dict[str, Any]:
+    def _respond_native_serialized(
+        self, text: str, cancel_event: Event | None, correlation_id: str | None = None,
+        diagnostics_owner: object | None = None,
+    ) -> dict[str, Any]:
         """Use JAWL's typed correlated stream; no sequence/broadcast scraping."""
+        owner = diagnostics_owner if diagnostics_owner is not None else self._new_native_diagnostic_owner()
         try:
-            for event in self._iter_native_events(text, cancel_event, correlation_id):
+            for event in self._iter_native_events(text, cancel_event, correlation_id, owner):
                 if event.type == "assistant.final":
                     response = dict(event.payload["response"])
-                    response["text"] = filter_user_response(response["text"])
+                    try:
+                        response["text"] = filter_user_response(response["text"])
+                    except JawlUnsafeResponse as exc:
+                        self._set_native_diagnostics(owner, "invalid_response", str(exc))
+                        raise JawlWebUnavailable("JAWL returned unsafe Companion response text") from exc
                     return response
                 if event.type == "turn.cancelled":
                     raise JawlTurnCancelled(event.payload.get("reason", "JAWL cancelled the turn"))
                 if event.type == "turn.error":
                     raise JawlWebUnavailable(event.payload.get("reason", "JAWL turn failed"))
         except JawlTurnCancelled:
-            self.last_chat_status = "cancelled"
+            self._set_native_diagnostics(owner, "cancelled")
             raise
-        except JawlWebUnavailable:
+        except JawlWebUnavailable as exc:
             # Preserve the public adapter invariant used by health checks:
             # a terminal native error is an offline/degraded transport result,
             # while the detailed reason remains in ``last_chat_error``.
-            self.last_chat_status = "offline"
+            if self._native_diagnostic_status(owner) != "invalid_response":
+                self._set_native_diagnostics(owner, "offline", str(exc))
             raise
         raise JawlWebUnavailable("JAWL produced no terminal Companion event")
 
@@ -788,12 +915,15 @@ class JawlWebChatAdapter(JawlWebAdapter):
 
         if not self.native_gateway:
             raise JawlWebUnavailable("native JAWL envelope mode is disabled")
-        for event in self._iter_native_events(text, cancel_event, correlation_id):
+        from .jawl_gateway_contract import validate_turn_id
+        turn_id = validate_turn_id(correlation_id) if correlation_id is not None else f"turn-{uuid4().hex}"
+        owner = self._new_native_diagnostic_owner()
+        for event in self._iter_native_events(text, cancel_event, turn_id, owner):
             if event.type == "assistant.delta":
                 try:
                     fragment = filter_user_delta(event.payload.get("text", ""))
                 except JawlUnsafeResponse as exc:
-                    self.last_chat_status = "invalid_response"
+                    self._set_native_diagnostics(owner, "invalid_response", str(exc))
                     raise JawlWebUnavailable("JAWL returned an unsafe Companion delta") from exc
                 if fragment:
                     yield {"type": "delta", "text": fragment}
@@ -803,14 +933,16 @@ class JawlWebChatAdapter(JawlWebAdapter):
                 try:
                     response["text"] = filter_user_response(response["text"])
                 except JawlUnsafeResponse as exc:
-                    self.last_chat_status = "invalid_response"
+                    self._set_native_diagnostics(owner, "invalid_response", str(exc))
                     raise JawlWebUnavailable("JAWL returned an unsafe Companion response") from exc
                 yield {"type": "final", "response": response}
                 return
             if event.type == "turn.cancelled":
                 raise JawlTurnCancelled(event.payload.get("reason", "JAWL cancelled the turn"))
             if event.type == "turn.error":
-                raise JawlWebUnavailable(event.payload.get("reason", "JAWL turn failed"))
+                reason = event.payload.get("reason", "JAWL turn failed")
+                self._set_native_diagnostics(owner, "error", str(reason))
+                raise JawlWebUnavailable(reason)
         raise JawlWebUnavailable("JAWL produced no terminal Companion event")
 
     def _iter_native_events(
@@ -818,22 +950,105 @@ class JawlWebChatAdapter(JawlWebAdapter):
         text: str,
         cancel_event: Event | None,
         correlation_id: str | None,
+        diagnostics_owner: object | None = None,
+    ) -> Iterator[Any]:
+        """One admitted producer; a paused consumer cannot retain the lease.
+
+        Waiters create no producer thread or native request until admission.
+        Only the producer releases the lock, after its transport cleanup, even
+        if a cancelled consumer returns before an in-flight POST has settled.
+        """
+        from .jawl_gateway_contract import validate_turn_id
+        turn_id = validate_turn_id(correlation_id) if correlation_id is not None else f"turn-{uuid4().hex}"
+        owner = diagnostics_owner if diagnostics_owner is not None else self._new_native_diagnostic_owner()
+        cancel = _NativeCancellation(cancel_event)
+        cancel.diagnostics_owner = owner
+        events: Queue[Any] = Queue(maxsize=32)
+        done = Event()
+        result: dict[str, Any] = {}
+        admission_deadline = time.monotonic() + self.chat_timeout_seconds
+        while True:
+            self._check_cancel(cancel)
+            if time.monotonic() >= admission_deadline:
+                raise JawlWebUnavailable("JAWL native turn admission timed out")
+            if self._native_turn_lock.acquire(timeout=0.025):
+                break
+        def produce() -> None:
+            source = None
+            try:
+                self._check_cancel(cancel)
+                source = self._iter_native_events_serialized(text, cancel, turn_id)
+                for event in source:
+                    while True:
+                        self._check_cancel(cancel)
+                        try:
+                            events.put(event, timeout=0.025)
+                            break
+                        except Full:
+                            continue
+            except Exception as exc:
+                result["error"] = exc
+            finally:
+                try:
+                    if source is not None:
+                        source.close()
+                except Exception as exc:
+                    result.setdefault("error", exc)
+                finally:
+                    self._native_turn_lock.release()
+                    done.set()
+
+        try:
+            self._claim_native_diagnostics(owner)
+            producer = Thread(target=produce, name="jawl-native-turn", daemon=True)
+            producer.start()
+        except BaseException:
+            self._native_turn_lock.release()
+            raise
+        try:
+            while True:
+                self._check_cancel(cancel)
+                try:
+                    event = events.get(timeout=0.025)
+                except Empty:
+                    if done.is_set():
+                        if "error" in result:
+                            raise result["error"]
+                        return
+                    continue
+                self._check_cancel(cancel)
+                yield event
+        finally:
+            cancel.local.set()
+            # Pending HTTP admission may outlive the caller; the admitted
+            # producer remains tracked by its lock and cannot be replaced early.
+            producer.join(timeout=0.25)
+
+    def _iter_native_events_serialized(
+        self, text: str, cancel_event: Event | None, correlation_id: str | None,
     ) -> Iterator[Any]:
         """Read one correlated native stream with bounded reconnects."""
 
         from .jawl_gateway_contract import JawlGatewayEvent
 
-        turn_id = str(correlation_id or f"turn-{uuid4().hex}")[:128]
+        from .jawl_gateway_contract import validate_turn_id
+        turn_id = validate_turn_id(correlation_id)
+        owner = getattr(cancel_event, "diagnostics_owner", None)
+        if owner is None:
+            owner = self._new_native_diagnostic_owner()
         deadline = time.monotonic() + self.chat_timeout_seconds
-        self.last_chat_status = "starting"
-        self.last_chat_error = ""
+        self._set_native_diagnostics(owner, "starting", "")
         after = 0
         submitted = False
         for attempt in range(6):
             if attempt:
                 # A transient gap (remote cursor still catching up while the
                 # agent is busy) must not burn all reconnects in milliseconds.
-                time.sleep(min(0.5, 0.2 * attempt))
+                if cancel_event is not None:
+                    cancel_event.wait(min(0.5, 0.2 * attempt))
+                else:
+                    time.sleep(min(0.5, 0.2 * attempt))
+            self._check_cancel(cancel_event)
             self._last_native_event_seq = max(0, after)
             stream_url = urljoin(self.base_url, "/api/companion/stream")
             if after:
@@ -854,8 +1069,12 @@ class JawlWebChatAdapter(JawlWebAdapter):
                 if not reader.ready.is_set():
                     raise JawlWebUnavailable("JAWL Companion stream did not start")
                 if not submitted:
-                    self._post_native(text, turn_id)
+                    self._check_cancel(cancel_event)
+                    # A lost ACK does not prove the native write never happened.
+                    # Never replay this mutation; cleanup addresses its exact ID.
                     submitted = True
+                    self._post_native(text, turn_id, diagnostics_owner=owner, cancel_event=cancel_event)
+                    self._check_cancel(cancel_event)
                 while time.monotonic() < deadline:
                     self._check_cancel(cancel_event)
                     packet = reader.get(min(0.1, max(0.01, deadline - time.monotonic())))
@@ -876,7 +1095,9 @@ class JawlWebChatAdapter(JawlWebAdapter):
                             try:
                                 parsed = JawlGatewayEvent.from_mapping(raw_event)
                             except ValueError as exc:
-                                self.last_chat_status = "invalid_response"
+                                self._set_native_diagnostics(
+                                    owner, "invalid_response", "JAWL returned an invalid Companion event"
+                                )
                                 raise JawlWebUnavailable(
                                     "JAWL returned an invalid Companion event"
                                 ) from exc
@@ -886,11 +1107,13 @@ class JawlWebChatAdapter(JawlWebAdapter):
                             if parsed.turn_id != turn_id:
                                 continue
                             if parsed.type == "assistant.final":
-                                self.last_chat_status = "connected"
+                                self._set_native_diagnostics(owner, "connected", "")
                             elif parsed.type == "turn.cancelled":
-                                self.last_chat_status = "cancelled"
+                                self._set_native_diagnostics(owner, "cancelled", "")
                             elif parsed.type == "turn.error":
-                                self.last_chat_status = "error"
+                                self._set_native_diagnostics(
+                                    owner, "error", str(parsed.payload.get("reason", "JAWL turn failed"))
+                                )
                             yield parsed
                             if parsed.type in {"assistant.final", "turn.cancelled", "turn.error"}:
                                 return
@@ -898,19 +1121,19 @@ class JawlWebChatAdapter(JawlWebAdapter):
                     if reader.error:
                         raise reader.error
                     if reader.done.is_set() and not reader.has_pending():
-                        self.last_chat_status = "no_broadcast"
+                        self._set_native_diagnostics(owner, "no_broadcast")
                         raise JawlWebUnavailable(
                             "JAWL Companion stream closed without a final event"
                         )
-                self.last_chat_status = "no_broadcast"
+                self._set_native_diagnostics(owner, "no_broadcast")
                 raise JawlWebUnavailable("JAWL produced no final Companion event before timeout")
             except JawlTurnCancelled:
-                if cancel_event is not None and cancel_event.is_set():
-                    self._post_native_cancel(turn_id)
-                self.last_chat_status = "cancelled"
+                if submitted and cancel_event is not None and cancel_event.is_set():
+                    self._post_native_cancel(turn_id, diagnostics_owner=owner)
+                self._set_native_diagnostics(owner, "cancelled")
                 raise
             except JawlWebUnavailable as exc:
-                self.last_chat_error = str(exc)
+                self._set_native_diagnostics(owner, error=str(exc))
                 next_after = max(after, int(getattr(self, "_last_native_event_seq", after)))
                 reconnectable = (
                     self.last_chat_status == "no_broadcast"
@@ -921,13 +1144,16 @@ class JawlWebChatAdapter(JawlWebAdapter):
                     after = next_after
                     continue
                 if submitted:
-                    self._post_native_cancel(turn_id)
-                self.last_chat_status = "offline"
+                    self._post_native_cancel(turn_id, diagnostics_owner=owner)
+                self._set_native_diagnostics(owner, "offline")
                 raise
             finally:
                 reader.stop()
 
-    def _post_native(self, text: str, turn_id: str) -> None:
+    def _post_native(
+        self, text: str, turn_id: str, diagnostics_owner: object | None = None,
+        cancel_event: Event | None = None,
+    ) -> None:
         body = json.dumps({"text": text, "turn_id": turn_id}, ensure_ascii=False).encode("utf-8")
         request = Request(urljoin(self.base_url, "/api/companion/turn"), data=body,
                           method="POST", headers={
@@ -935,41 +1161,30 @@ class JawlWebChatAdapter(JawlWebAdapter):
                               "Content-Type": "application/json",
                               **({"X-Console-Token": self.token} if self.token else {}),
                           })
-        deadline = time.monotonic() + min(8.0, self.timeout_seconds)
-        for attempt in range(6):
-            offline = False
-            try:
-                with self._opener(request, timeout=self.timeout_seconds) as response:
-                    raw = response.read(self._MAX_CHAT_RESPONSE_BYTES + 1)
-            except HTTPError as exc:
-                # The console answers 409 while its agent bridge is still
-                # warming up (idle -> connecting). The open native stream is
-                # the watcher that brings it online, so a short retry wins.
-                offline = exc.code == 409
+        # Native bridge offline can mean writer.drain failed after write().
+        # Neither HTTP409 nor a lost response proves non-admission. Retrying
+        # would duplicate tools/tasks on a bridge without durable dedup.
+        try:
+            raw = read_scoped(request, opener=self._opener, cancel_event=cancel_event,
+                              timeout_seconds=self.timeout_seconds, max_bytes=self._MAX_CHAT_RESPONSE_BYTES)
+        except HttpCallCancelled as exc:
+            raise JawlTurnCancelled("JAWL Companion POST cancelled") from exc
+        except (HTTPError, URLError, OSError, TimeoutError) as exc:
+            if isinstance(exc, HTTPError):
                 exc.close()
-                if not offline:
-                    self.last_chat_status = "offline"
-                    raise JawlWebUnavailable("JAWL Companion turn request failed") from exc
-            except (URLError, OSError, TimeoutError) as exc:
-                offline = True
-            if not offline:
-                if len(raw) > self._MAX_CHAT_RESPONSE_BYTES:
-                    raise JawlWebUnavailable("JAWL Companion turn response exceeds the bounded limit")
-                try:
-                    payload = json.loads(raw.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise JawlWebUnavailable("JAWL Companion turn returned invalid JSON") from exc
-                if isinstance(payload, dict) and payload.get("ok") is True and payload.get("turn_id") == turn_id:
-                    return
-                if not isinstance(payload, dict) or payload.get("offline") is not True:
-                    raise JawlWebUnavailable("JAWL did not acknowledge the Companion turn")
-            if attempt >= 5 or time.monotonic() >= deadline:
-                break
-            time.sleep(0.3)
-        self.last_chat_status = "offline"
-        raise JawlWebUnavailable("JAWL Companion turn bridge did not come online")
+            if diagnostics_owner is not None:
+                self._set_native_diagnostics(diagnostics_owner, "offline")
+            raise JawlWebUnavailable("JAWL Companion turn admission is unconfirmed; not replayed") from exc
+        if len(raw) > self._MAX_CHAT_RESPONSE_BYTES:
+            raise JawlWebUnavailable("JAWL Companion turn response exceeds the bounded limit")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise JawlWebUnavailable("JAWL Companion turn returned invalid JSON") from exc
+        if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("turn_id") != turn_id:
+            raise JawlWebUnavailable("JAWL did not acknowledge the Companion turn; not replayed")
 
-    def _post_native_cancel(self, turn_id: str) -> bool:
+    def _post_native_cancel(self, turn_id: str, diagnostics_owner: object | None = None) -> bool:
         """Forward local cancellation so JAWL stops the live ReAct task too."""
 
         body = json.dumps({"turn_id": turn_id}, ensure_ascii=False).encode("utf-8")
@@ -984,27 +1199,34 @@ class JawlWebChatAdapter(JawlWebAdapter):
             },
         )
         try:
-            with self._opener(request, timeout=self.timeout_seconds) as response:
-                raw = response.read(self._MAX_CHAT_RESPONSE_BYTES + 1)
+            # The old turn's event is already set: cancellation itself gets
+            # its own bounded scope so it can still reach the native owner.
+            raw = read_scoped(request, opener=self._opener, timeout_seconds=self.timeout_seconds,
+                              max_bytes=self._MAX_CHAT_RESPONSE_BYTES)
         except HTTPError as exc:
             exc.close()
-            self.last_chat_error = "JAWL Companion cancel request returned HTTP error"
+            if diagnostics_owner is not None:
+                self._set_native_diagnostics(diagnostics_owner, error="JAWL Companion cancel request returned HTTP error")
             return False
         except (URLError, OSError, TimeoutError):
             # The caller is already cancelling locally; network failure must
             # not turn a successful local cancellation into a hard error.
-            self.last_chat_error = "JAWL Companion cancel request is not reachable"
+            if diagnostics_owner is not None:
+                self._set_native_diagnostics(diagnostics_owner, error="JAWL Companion cancel request is not reachable")
             return False
         if len(raw) > self._MAX_CHAT_RESPONSE_BYTES:
-            self.last_chat_error = "JAWL Companion cancel response exceeds the bounded limit"
+            if diagnostics_owner is not None:
+                self._set_native_diagnostics(diagnostics_owner, error="JAWL Companion cancel response exceeds the bounded limit")
             return False
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            self.last_chat_error = "JAWL Companion cancel returned invalid JSON"
+            if diagnostics_owner is not None:
+                self._set_native_diagnostics(diagnostics_owner, error="JAWL Companion cancel returned invalid JSON")
             return False
         if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("turn_id") != turn_id:
-            self.last_chat_error = "JAWL Companion cancel was not acknowledged for this turn"
+            if diagnostics_owner is not None:
+                self._set_native_diagnostics(diagnostics_owner, error="JAWL Companion cancel was not acknowledged for this turn")
             return False
         return True
 

@@ -1,5 +1,19 @@
 # Tablet/LAN access
 
+## Статус приёмки — 2026-10-10
+
+Документ описывает существующие LAN HTTPS/auth контракты, не подтверждает
+проверку физического планшета или телефона. TLS, Basic auth, session cookie,
+CSRF и Origin/Host checks реализованы для control; presentation остаётся
+отдельной read-only поверхностью с отдельным токеном при удалённом bind.
+Доверие сертификату на устройстве, фактическая работа responsive UI и
+микрофона на tablet/mobile остаются OPEN. Не считать автоматические LAN-тесты
+проверкой устройства.
+
+Текущий основной клиент — Electron desktop `/app`; LAN используется для
+адаптивной веб-панели. JAWL — один мозг, VoiceMem — сенсорный контекст. Карта:
+[docs/README.md](README.md), состояние: [STATE](STATE.md), очередь: [TODO](../TODO.md).
+
 LAN access is an explicit deployment mode. The default launcher remains
 loopback-only (`127.0.0.1:2367` control and `127.0.0.1:8766` presentation).
 Remote control binds are rejected unless `--lan` is present, a private or

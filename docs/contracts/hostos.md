@@ -1,5 +1,11 @@
 # HostOS Contract
 
+Reviewed 2026-10-10 (source/API contract audit; no runtime execution). This
+document separates existing adapter behavior from required production policy;
+illustrative schemas are not a claim that every native provider implements
+every field. See [README.md](../README.md), [STATE.md](../STATE.md), and
+[TODO.md](../../TODO.md).
+
 HostOS is the single side-effect boundary for the companion. Model output,
 the browser and other services can request actions, but only HostOS may
 perform them.
@@ -68,13 +74,12 @@ over unattended execution; downgrading below level 3 disables it.
 `requested_access_level` is informational. The backend uses the active policy
 level, never a model-supplied value, to authorize the request.
 
-For every mutating operation, `idempotency_key` is mandatory and enforced.
-The authority keeps a bounded result record for the key and exact normalized
-request fingerprint. An identical retry returns the prior result; reusing the
-key with a different request fails closed. The current prototype carries this
-field and now enforces a bounded cache for supported fallback mutations.
-This is not evidence of durable native idempotency for every JAWL tool or
-crash recovery. The requirement above remains to be verified per native path.
+Target requirement: mutating operations should use an authority-owned
+`idempotency_key` and bind it to the normalized request. In the current
+prototype, a bounded result cache is enforced only for supported fallback
+mutations. This is not evidence of durable native idempotency for every JAWL
+tool or crash recovery; verify each native path separately. Do not describe
+the target requirement as universally implemented.
 
 For `filesystem.write`, an optional `arguments.expected_sha256` enables a
 conditional workspace write. `filesystem.read` returns `sha256` when the

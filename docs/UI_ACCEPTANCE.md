@@ -1,5 +1,30 @@
 # Приёмка интерфейса по требованиям владельца
 
+## Текущее состояние — 2026-10-10
+
+Аудит документации выполнен read-only; последнее сохранённое runtime evidence
+датировано 2026-10-05. Ниже прежние результаты и открытые пункты оставлены как
+снимок своего времени, они не переоценивают текущее состояние.
+
+Фактическая оболочка — Electron single-window `/app` с three-vrm, чатом и
+микрофонным вводом. JAWL — единственный агентный контур; VoiceMem — сенсорный
+слой. TeraTTS ru_f1 на 9889 — default, OmniVoice выбирается отдельно; GigaAM v3
+— единственный ASR; Bonsai-2 27B Hikari PQ2_0 работает как мозг на GPU 1.
+Vision Bonsai 8986 настроен, но полная OCR/grounding acceptance не заявлена.
+
+| Область | Состояние | Предел доказательств |
+|---|---|---|
+| Текст + mic | Реализованы в desktop chat | Реальное устройство, физический tablet/mobile mic и полный daily voice flow OPEN |
+| Chat UX | Базовый ввод подключён | History, attachments, emoji, slash-команды, library и task UX OPEN |
+| JAWL в общей панели | Целевое место — общая навигация | Полная операция-за-операцией parity и effective-state parity не доказаны; `/console/` fallback сохраняется |
+| ConfigHub | Revision, backups, masked secrets, readback и restart policy есть | Full scalar/list/object-list round-trip и effective parity не доказаны |
+| VRM/OBS | VRM находится в Electron | Равное состояние VRM в desktop и OBS presentation OPEN; старые Live2D инструкции только исторические |
+| LAN | HTTPS/auth/session/CSRF/origin security реализованы | Tablet/mobile browser trust, физическая проверка микрофона и приемлемость на устройстве OPEN |
+| Release | Wheel smoke существует | Wheel smoke не подтверждает full clean install, upgrade migration или rollback |
+
+Карта и указатели: [docs/README.md](README.md), [STATE](STATE.md),
+[TODO](../TODO.md). Новые задачи находятся только в TODO.
+
 2026-09-05. Проверка HTML/JS и браузерных снимков. Полный regression gate
 не подтверждает удобство или работу живой модели. Общая UI-приёмка открыта.
 

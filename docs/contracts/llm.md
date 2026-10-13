@@ -1,5 +1,11 @@
 # LLM Provider Boundary
 
+Reviewed 2026-10-10 (documentation/source audit; latest saved runtime evidence
+2026-10-05). Selected brain profile is Hikari Bonsai-2 27B PQ2_0 on GPU1.
+Temporary test adapters and launcher defaults described below are not that
+selection and do not constitute native JAWL provider acceptance. See
+[README.md](../README.md), [STATE.md](../STATE.md), and [TODO.md](../../TODO.md).
+
 JAWL owns the canonical conversation and action protocol. Its provider layer
 uses OpenAI-compatible JSON Chat Completions messages and may add native
 `tool_calls` or JAWL's provider-independent JSON action envelope. QWB-JAWL is

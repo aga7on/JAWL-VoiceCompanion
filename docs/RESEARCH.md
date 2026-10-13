@@ -1,5 +1,16 @@
 # Repository Research
 
+> **Research archive — recommendations are not implementation.** This file
+> records dated candidate reviews and historical measurements; it does not
+> define the active provider stack or work queue. See [current state](STATE.md),
+> [current queue](../TODO.md), and the [documentation map](README.md).
+
+## 2026-10-13 — Micro-turn и EmbeddingGemma 2
+
+[Отдельный обзор](RESEARCH_MICROTURN_EMBEDDINGGEMMA2.md): RU ограничения,
+границы turn-taking/мультимодальных эмбеддингов, CPU/RAM и критерии сравнительных
+тестов. Research-only: без скачиваний, смены stack и заявлений о локальной скорости.
+
 ## 2026-09-19 — R2T2 (Confucius4-R2T2): true-streaming ASR кандидат
 
 Запрос владельца: r2t2.ai — тестировать. Модель от NetEase Youdao.

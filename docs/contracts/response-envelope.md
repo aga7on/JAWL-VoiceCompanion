@@ -1,5 +1,12 @@
 # Response envelope v1
 
+Reviewed 2026-10-10. This JSON schema carries semantic response/control
+metadata. It constrains the envelope, not the media transport: PCM may use a
+separate bounded binary/audio stream. JSON envelopes do not prohibit streaming
+PCM. Current voice/provider acceptance limits are in [voice](voice.md) and
+[tts](tts.md); see the documentation map at [README.md](../README.md),
+[STATE.md](../STATE.md), and the only current queue [TODO.md](../../TODO.md).
+
 JAWL is the canonical producer of the final response envelope. The Companion
 accepts it from the native correlated Gateway and validates it before routing
 text to the browser, TTS and the presentation surface.

@@ -1,6 +1,112 @@
 # Запуск профилей, сборка и будущая поставка
 
-Актуально: 2026-09-05. Проект — **интеграционный прототип**, не RC.
+## Актуальный статус — 2026-10-12
+
+После документального аудита начат code slice B0 (2026-10-10): общий manifest,
+launcher defaults и preflight. Результат полного gate — в STATE. Текущий UI —
+Electron single-window `/app` с VRM three-vrm; JAWL остаётся единственным
+агентом, VoiceMem — сенсорным слоем. Выбранный target: Bonsai-2 27B Hikari
+PQ2_0 / GPU 1, GigaAM v3 only, TeraTTS ru_f1 default на 9889, OmniVoice как
+выбираемый TTS; Bonsai 8986 настроен для vision без заявления полной
+OCR/grounding acceptance. Python, два основных PS launchers и Electron теперь
+используют этот manifest. Rust получил bounded local overlay и discovery;
+полная differential parity и portable installation OPEN.
+
+Текущая safety-граница: `scripts/run_target_jawl_smoke.ps1` не применять до
+отдельной review и acceptance owned runtime/layout, native loader и process
+ownership/lifecycle. Source содержит explicit-`-Live`, owned-marker,
+protected-root, no-reparse и shared-`.env` guards. Их наличие — статическая
+защита, не live acceptance.
+
+### Общий профиль и границы launchers
+
+Daily/integrated launchers используют выбранный owned Python в форме
+`python -B scripts/run_owned_jawl_console.py ...`.
+Entry проверяет immutable snapshot и все instance/registry paths, добавляет
+bounded HTTP admission после native auth и редактирует startup console tokens.
+Core JAWL/ChatBridge не копируется/не патчится. Integrated readiness требует
+`/api/companion/admission-capabilities`, feature `http-turn-admission-v1`.
+Прямой `python -m src.web.server` не имеет этой защиты и не является daily
+Companion entry. Исходный JAWL-Coding остаётся read-only референсом.
+Actual isolated console probe PASS12Oct не доказывает whole-profile/model/device
+readiness; параметры/TTL и ограничения — [контракт](contracts/jawl.md).
+
+Default client turn/cancel POST используют scoped socket abort и абсолютный
+deadline;13 HTTP/TLS +3 native-adapter loopback tests входят в unittest gate.
+Для ephemeral TLS cert fixtures нужен pinned `requirements-dev.txt`
+(`cryptography` только test dependency); production runtime не расширяется.
+Этот gate не подтверждает освобождение compute выбранной LLM.
+
+Selected-model diagnostic (не daily launcher) требует явного opt-in:
+`python -B scripts/run_llm_model_cancel_acceptance.py --allow-cpu-model --report runtime/llm-model-cancel-cpu-new.json`.
+Не повторять без новой гипотезы: оба actual CPU runs12Oct FAIL35s; reports retained,
+canonical GPU1/65536 не менялся. Протокол — [benchmark](LLM_MODEL_CANCEL_BENCHMARK.md).
+
+| Источник / профиль | Параметры по source или выбранный target | Как соотносится с target |
+|---|---|---|
+| `config/runtime.manifest.json` | console8770/control2367/presentation8766/Tera9889/brain8990; RunSeconds0; local-bonsai2, Hikari PQ2_0, ctx65536, output2048, CUDA1 | Canonical defaults; configured не означает live ready |
+| `run_local_bonsai_integrated.ps1` | Manifest + explicit overrides; поднимает supervised Hikari holder, затем integrated | Preflight до holder; health + exact alias; daily до остановки, smoke60s задаётся явно |
+| `run_integrated_profile.ps1` | Тот же manifest, Tera paths, vision8986 alias bonsai; owned JAWL/Companion | Сам по себе не поднимает primary brain; screen-watch opt-in, нет auto GPU0 launch |
+| `run_coding_server.ps1` | Port 8986, Bonsai-27B-Q1_0, taardis server | Отдельный legacy coding/chat server; не Hikari brain и не доказательство выбранного vision runtime |
+
+Сначала проверить effective конфигурацию без запуска моделей/устройств:
+
+```powershell
+python -B scripts/resolve_runtime_manifest.py
+```
+
+Не копировать секреты в manifest. `config/runtime.manifest.local.json`
+(gitignored) содержит только изменённые поля и deep-merges canonical JSON.
+Явные CLI параметры приоритетнее manifest. Brain URL должен совпадать с
+brain_port; reserved8765, collisions, неверные aliases/paths/limits отклоняются.
+`--manifest`/`-ManifestPath` выбирает alternate canonical и sibling local file.
+Electron поддерживает canonical/local control port и env override; не начинает
+второй model runtime. При ошибке manifest не подключается молча к2367.
+
+Local wrapper поддерживает `-ProfileName <owned-name> -NoBrowser` и передаёт
+temperature явно; больше не применяет overrides к hardcoded daily. Integrated
+блокирует профиль до prepare/native configure и освобождает lock при отказе.
+Для acceptance использовать новую instance, не daily. Это пока не live startup
+acceptance: сначала проверить resource availability, GPU1 mapping и VoiceMem
+storage/cache isolation. Занятые порты/модели не «освобождать» чужим kill.
+
+Для согласованного ограниченного startup smoke после проверки ресурсов/consent:
+
+```powershell
+.\scripts\run_local_bonsai_integrated.ps1 -RunSeconds 60
+```
+
+Без `RunSeconds` daily работает до остановки. VisionUrl/VisionModel передаются
+wrapper→child явно; endpoint сам не запускается. Пример не является новой live
+приёмкой. Legacy Qwen/mmproj пути на текущем диске отсутствуют: они optional,
+не основание автоматически скачать модель или заменить primary brain.
+
+Reviewable baseline без git commit:
+
+```powershell
+python -B scripts/capture_runtime_baseline.py --report runtime/baseline-unique-run.json
+```
+
+Report должен быть новым JSON внутри runtime. Он хранит HEAD, dirty-diff и
+source hashes, pinned snapshot, версии Python/packages, worker/VRM inventory.
+Сырые diff/код/env/PCM туда не попадают; большие GGUF имеют metadata, не полный
+weight hash. Baseline не доказывает active avatar selection, art или clean install.
+
+Wheel smoke подтверждает только ограниченный package/import/startup сценарий.
+Он не равен full clean install, полной матрице внешних ресурсов, проверенной
+миграции данных или rollback. RC/production readiness не заявляются без
+сценариев и приёмки, указанных ниже. Не заменять исторические PASS/FAIL и
+числа новой интерпретацией. [Карта](README.md) · [STATE](STATE.md) ·
+[очередь](../TODO.md).
+
+## Исторические инструкции по запуску и поставке — срез 2026-09-05
+
+Все следующие команды и примеры сохранены как инструкции того среза. Они не
+являются актуальным рецептом запуска/установки; перед применением нужно
+сверить конкретные параметры с выбранным профилем и source. Выше находится
+текущая граница и таблица расхождений launcher defaults.
+
+Исторический срез 2026-09-05: проект — **интеграционный прототип**, не RC.
 Wheel не содержит JAWL, VoiceMem, model weights и лицензируемый Live2D bundle.
 Следующие команды — существующие интерфейсы разработки, не «установка готового
 компаньона». Аудит/ограничения — [TECHNICAL_AUDIT.md](TECHNICAL_AUDIT.md).
@@ -17,11 +123,15 @@ presentation ports, зарезервированные соседние порт
 consent. Он пока не является one-click installer и не подменяет pinned JAWL
 runtime; это первый P0-A контракт воспроизводимой поставки.
 
-## Важное ограничение live runs
+## Историческая диагностика A3 — архивный снимок 2026-10-10
 
-Не запускать `scripts/run_target_jawl_smoke.ps1` до исправления A3 аудита.
-Он пишет runtime/logs в protected JAWL и небезопасно определяет ownership
-процессов при cleanup. Прежняя рекомендация запускать его отозвана.
+Архивное описание предыдущей версии launcher-а утверждало, что runtime/logs
+могли попадать в protected JAWL и cleanup небезопасно определял владельцев
+процессов. Это исторический диагноз, сохранённый в архивном аудите; дата
+первичного диагноза там не указана. Его нельзя считать воспроизведённой
+проблемой текущего source. Текущий source содержит перечисленные выше guards,
+но их наличие само по себе не является live acceptance и не снимает требование
+отдельной review/acceptance owned layout и lifecycle.
 
 `G:\AI\JAWL-Coding` — read-only reference, включая runtime/config/data/logs.
 Нужен отдельный согласованный JAWL runtime; его provisioning/versioning —
@@ -32,7 +142,7 @@ P0-A в [TODO](../TODO.md). Нельзя ради smoke менять рабоч�
 их значения в CLI arguments: они попадут в argv/history. Native профили
 различаются именами env vars; проверить parser, не копировать ключи в файлы.
 
-## Демонстрация UI
+## Историческая инструкция: демонстрация UI
 
 ```powershell
 cd G:\AI\JAWL-VoiceCompanion
@@ -54,7 +164,7 @@ cd G:\AI\JAWL-VoiceCompanion
 уровня/stop/start меняет подключённый runtime. `--hostos-live` не заменяет
 native JAWL и не является готовым Full Access профилем общей системы.
 
-### Integrated JAWL profile и Full Access
+### Историческая инструкция: integrated JAWL profile и Full Access
 
 Для connected runtime используйте `scripts/run_integrated_profile.ps1`. Его
 безопасный default — native access level `0` и отключённый Debug Broker. Для
@@ -81,7 +191,7 @@ Companion не является fallback executor. `-NativeAccessLevel 3` озн
 `runtime/native-catalog-full-access-launcher-20260909-r2.json` и
 `runtime/native-namespace-full-access-launcher-20260909-r2.json`.
 
-## Существующие голосовые workers
+## Исторические инструкции: голосовые workers
 
 Запускать каждый выбранный worker в отдельной сессии: launcher остаётся
 работать до остановки. Веса/окружения должны уже существовать; это не команды
@@ -122,9 +232,12 @@ TeraTTSv2 — быстрый CPU профиль рядом:
 Qwen CPU clone медленный и не имеет принятого emotion control.
 Текстовый ответ без TTS остаётся допустимым degraded режимом, не voice acceptance.
 
-VoiceMem sidecar должен сохранять memoryspace/cache в owned runtime; проверить
-конфигурацию перед запуском. Сам interpreter path не разрешает запись в upstream.
-Qwen-ASR шлёт whole utterance на end; hands-free/real device качество отдельно.
+Integrated launcher передаёт VoiceMem explicit memory-root в
+`runtime/instances/<profile>/data/sensory/voicemem`; standalone CLI поддерживает
+`--voicemem-memory-root`. Это sensory cache, не отдельный JAWL memory owner.
+Пути model/HF/torch caches ещё проверить до live; interpreter path не разрешает
+запись в upstream. GigaAM final транскрибирует whole utterance на end;
+hands-free/real device качество отдельно, Qwen-ASR fallback отсутствует.
 OmniVoice и CozyVoice не обязательны для этого профиля.
 
 Системный звук — отдельный opt-in `--ambient-audio --ambient-memory`;
@@ -132,7 +245,7 @@ OmniVoice и CozyVoice не обязательны для этого профи�
 суточная сегментация. Модель music/sound captioning не выбрана.
 Vision не запускать/фиксировать до решения владельца. OBS — [OBS.md](OBS.md).
 
-## Что проверяют существующие harness
+## Исторические заметки: область проверок harness
 
 | Инструмент | Реальная граница |
 |---|---|
@@ -172,7 +285,7 @@ report с fake provider sink не переносить в integrated acceptance.
 Gateway 100-turn Big Pickle отчёт остаётся evidence своего disposable relay
 профиля; нельзя обещать прямой или бессрочно бесплатный доступ.
 
-## Сборка
+## Историческая инструкция: сборка
 
 Из нашего checkout:
 
@@ -198,7 +311,7 @@ package import, наличие frontend и CLI, затем реальный за
 Python/env и модельные зависимости фиксировать отдельно; требования
 `requires-python` не равны полной Windows/model compatibility.
 
-## Upgrade / rollback / выпуск
+## Исторические инструкции: upgrade / rollback / выпуск
 
 Перед изменением schema/версии сделать согласованный backup owned runtime.
 Новая версия ставится рядом, проходит приёмку, затем operator переключает

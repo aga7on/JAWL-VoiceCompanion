@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { createAvatarMotionController, createGenerationGate } from './avatar-motion.js';
+import { createAvatarPhysicsController } from './avatar-physics.js';
 
 const canvas = document.getElementById('avatar-canvas');
 const statusEl = document.getElementById('avatar-status');
@@ -17,6 +19,8 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
 const scene = new THREE.Scene();
+const gazeTarget = new THREE.Object3D();
+scene.add(gazeTarget);
 const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 40);
 // Soft three-point light: the single hard PI-strength directional blew out
 // the MToon materials (vision check: near-uniform white). VRM/MToon wants
@@ -29,6 +33,25 @@ fill.position.set(-2, 2, 1);
 scene.add(fill);
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 const clock = new THREE.Clock();
+const reducedMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+const preferencesKey = 'jawl-avatar-motion-v1';
+let preferences = {enabled: true, intensity: 0.5, reducedMotion: false};
+try {
+  const saved = JSON.parse(localStorage.getItem(preferencesKey) || 'null');
+  if (saved && typeof saved === 'object') {
+    if (typeof saved.enabled === 'boolean') preferences.enabled = saved.enabled;
+    if (typeof saved.reducedMotion === 'boolean') preferences.reducedMotion = saved.reducedMotion;
+    if (Number.isFinite(saved.intensity)) preferences.intensity = Math.max(0, Math.min(1, saved.intensity));
+  }
+} catch { /* Invalid/blocked storage cannot prevent rendering. */ }
+let reducedMotion = Boolean(reducedMotionQuery?.matches || preferences.reducedMotion);
+const motion = createAvatarMotionController({reducedMotion});
+const physics = createAvatarPhysicsController({...preferences, reducedMotion});
+reducedMotionQuery?.addEventListener?.('change', (event) => setReducedMotion(event.matches || preferences.reducedMotion));
+const idleRestPoses = new WeakMap();
+const expressionAliases = new WeakMap();
+const modelLoadGate = createGenerationGate();
+let lastEnvelopeGestureId = '';
 
 const state = {
   vrm: null,
@@ -38,6 +61,7 @@ const state = {
   blinkNext: 0,
   lookTarget: new THREE.Vector3(0, 1.35, 4),
   wornModel: null,
+  motionState: 'idle',
 };
 
 const EMOTION_PRESETS = {
@@ -52,25 +76,31 @@ function setStatus(text) { statusEl.textContent = text; }
 
 function tick() {
   requestAnimationFrame(tick);
-  const delta = clock.getDelta();
+  const delta = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
   const vrm = state.vrm;
   if (vrm) {
-    state.expressionWeight = Math.min(1, state.expressionWeight + delta * 3.0);
+    state.expressionWeight = reducedMotion ? 1 : Math.min(1, state.expressionWeight + delta * 3.0);
     applyExpression(vrm, state.expression, state.expressionWeight);
     applyLipSync(vrm, state.lipLevel);
+    physics.restore(vrm);
+    motion.restore(vrm);
     applyIdle(vrm, delta, elapsed);
+    motion.update(vrm, delta, elapsed, state.motionState, state.lipLevel);
     // Gaze: the look-at target IS the head controller in three-vrm (it
     // overrides head bone rotation in vrm.update), so the living gaze
     // drift goes through the target, not the bones.
     if (vrm.lookAt?.target) {
       const t = state.lookTarget;
-      vrm.lookAt.target.set(
-        t.x + noise1(elapsed * 0.31, 5.2) * 0.09,
-        t.y + noise1(elapsed * 0.23, 8.1) * 0.06,
+      vrm.lookAt.target.position.set(
+        t.x + (reducedMotion ? 0 : noise1(elapsed * 0.31, 5.2) * 0.09),
+        t.y + (reducedMotion ? 0 : noise1(elapsed * 0.23, 8.1) * 0.06),
         t.z);
     }
-    vrm.update(delta);
+    vrm.update(reducedMotion ? 0 : delta);
+    // These weighted custom bones are NOT native spring bones. One owner,
+    // after the normalized pose has reached the raw rig, before rendering.
+    physics.update(vrm, delta, elapsed, {state: state.motionState, speechLevel: state.lipLevel});
   }
   renderer.render(scene, camera);
 }
@@ -78,16 +108,27 @@ function tick() {
 function applyExpression(vrm, expression, weight) {
   const manager = vrm?.expressionManager;
   if (!manager) return;
-  manager.setValue('happy', expression === 'happy' ? weight : 0);
-  manager.setValue('angry', expression === 'angry' ? weight : 0);
-  manager.setValue('sad', expression === 'sad' ? weight : 0);
-  manager.setValue('relaxed', expression === 'relaxed' ? weight : 0);
-  manager.setValue('surprised', expression === 'surprised' ? weight : 0);
+  let aliases = expressionAliases.get(manager);
+  if (!aliases) {
+    aliases = new Map(manager.expressions.map(e => [e.expressionName.toLowerCase(), e.expressionName]));
+    expressionAliases.set(manager, aliases);
+  }
+  for (const name of ['happy', 'angry', 'sad', 'relaxed', 'surprised']) {
+    const actual = aliases.get(name);
+    if (actual) manager.setValue(actual, expression === name ? weight : 0);
+  }
   manager.update();
 }
 
 function applyLipSync(vrm, level) {
   vrm?.expressionManager?.setValue('aa', level);
+}
+
+function resetLipSync(vrm) {
+  const manager = vrm?.expressionManager;
+  if (!manager) return;
+  applyLipSync(vrm, 0);
+  manager.update();
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +173,21 @@ function applyIdle(vrm, delta, elapsed) {
   const humanoid = vrm?.humanoid;
   const manager = vrm?.expressionManager;
   if (!humanoid || !manager) return;
+  if (reducedMotion) {
+    manager.setValue('blink', 0);
+    const rest = idleRestPoses.get(vrm);
+    const k = 1 - Math.exp(-Math.min(delta, 0.05) / 0.18);
+    if (rest) {
+      for (const {node, rotation, y} of rest) {
+        node.rotation.x += (rotation.x - node.rotation.x) * k;
+        node.rotation.y += (rotation.y - node.rotation.y) * k;
+        node.rotation.z += (rotation.z - node.rotation.z) * k;
+        if (y !== null) node.position.y += (y - node.position.y) * k;
+      }
+    }
+    gesture.kind = null;
+    return;
+  }
 
   // ---- blink: irregular, sometimes double ----
   if (elapsed > state.blinkNext) {
@@ -156,6 +212,10 @@ function applyIdle(vrm, delta, elapsed) {
   const rShoulder = humanoid.getNormalizedBoneNode('rightShoulder');
   const lArm = humanoid.getNormalizedBoneNode('leftUpperArm');
   const rArm = humanoid.getNormalizedBoneNode('rightUpperArm');
+
+  // Emotion bursts are offsets from rest, never additions to last frame.
+  if (lArm) lArm.rotation.z = (lArm.userData.baseZ ??= lArm.rotation.z);
+  if (rArm) rArm.rotation.z = (rArm.userData.baseZ ??= rArm.rotation.z);
 
   if (chest) chest.rotation.x = breath * 0.022;
   if (lShoulder) lShoulder.rotation.z = -breath * 0.03;
@@ -327,11 +387,32 @@ function applyRestPose(vrm) {
   window.__jawlRestPose = 'failed-to-verify';
 }
 
+function captureIdleRestPose(vrm) {
+  const humanoid = vrm?.humanoid;
+  if (!humanoid) return;
+  const names = ['chest', 'spine', 'hips', 'neck', 'head', 'leftShoulder', 'rightShoulder', 'leftUpperArm', 'rightUpperArm'];
+  const pose = [];
+  for (const name of names) {
+    const node = humanoid.getNormalizedBoneNode(name);
+    if (!node) continue;
+    if (name.endsWith('UpperArm')) node.userData.baseZ = node.rotation.z;
+    pose.push({
+      node,
+      rotation: {x: node.rotation.x, y: node.rotation.y, z: node.rotation.z},
+      y: name === 'hips' ? node.position.y : null,
+    });
+  }
+  idleRestPoses.set(vrm, pose);
+}
+
 function frameCamera(vrm) {
   // VRM 0.x models face -Z; the canonical helper rotates them to +Z (1.0
   // models are untouched). Camera sits at +Z, so this is "face the viewer"
   // for every model version.
   VRMUtils.rotateVRM0?.(vrm);
+  // Spring tails were initialized before the VRM0 root was rotated. Rebase
+  // their world-space history so the first frame is not a 180-degree impulse.
+  vrm.springBoneManager?.reset();
   vrm.update(0.0);
   const box = new THREE.Box3().setFromObject(vrm.scene);
   const size = box.getSize(new THREE.Vector3());
@@ -347,8 +428,8 @@ function frameCamera(vrm) {
   resize();
 }
 
-async function loadModel(url) {
-  setStatus(`Аватар: загрузка…`);
+async function loadModel(url, requestId) {
+  if (modelLoadGate.isCurrent(requestId)) setStatus(`Аватар: загрузка…`);
   const loader = new GLTFLoader();
   loader.register((parser) => new VRMLoaderPlugin(parser));
   // Fetch with the session CSRF header first, then parse from memory:
@@ -369,30 +450,50 @@ async function loadModel(url) {
     gltf = await loader.loadAsync(resource);
   }
   const vrm = gltf.userData.vrm;
+  if (!modelLoadGate.isCurrent(requestId)) {
+    VRMUtils.deepDispose(vrm.scene);
+    return null;
+  }
   // No removeUnnecessaryJoints/combineSkeletons: they collapse finger bones
   // on VRM 0.x models (AvatarSample_A rendered wedge hands - vision-caught).
   // They are perf optimizations; correctness first.
-  scene.add(vrm.scene);
   applyRestPose(vrm);
-  frameCamera(vrm);
-  setStatus(`Аватар: готов (${listExpressions(vrm).length} выражений)`);
   return vrm;
 }
 
 function unload(vrm) {
   if (vrm) {
-    VRMUtils.deepDispose(vrm.scene);
+    motion.restore(null);
+    resetLipSync(vrm);
     scene.remove(vrm.scene);
+    VRMUtils.deepDispose(vrm.scene);
   }
 }
 
-async function swapModel(url) {
+async function swapModel(url, requestId = modelLoadGate.next()) {
   const previous = state.vrm;
-  state.vrm = null;
   try {
-    state.vrm = await loadModel(url);
+    const next = await loadModel(url, requestId);
+    if (!next || !modelLoadGate.isCurrent(requestId)) {
+      if (next) VRMUtils.deepDispose(next.scene);
+      return null;
+    }
+    state.lipLevel = 0;
+    state.motionState = 'idle';
+    motion.setState('idle');
+    resetLipSync(next);
+    scene.add(next.scene);
+    captureIdleRestPose(next);
+    frameCamera(next);
+    if (next.lookAt) next.lookAt.target = gazeTarget;
+    if (reducedMotion) next.springBoneManager?.reset();
+    state.vrm = next;
+    physics.reset(next);
+    renderPhysicsControls();
     unload(previous);
+    setStatus(`Аватар: готов (${listExpressions(next).length} выражений)`);
   } catch (error) {
+    if (!modelLoadGate.isCurrent(requestId)) return null;
     setStatus(`Аватар: ошибка загрузки: ${error}`);
     state.vrm = previous;
     return null;
@@ -401,17 +502,25 @@ async function swapModel(url) {
 }
 
 async function wear(model) {
+  return wearForRequest(model, modelLoadGate.next());
+}
+
+async function wearForRequest(model, requestId) {
   const name = String(model || '').replace(/[^a-zA-Z0-9_-]/g, '');
   if (!name) return null;
   // resolve through the wardrobe API (bounded, session-gated)
   try {
     const r = await wardrobeFetch('/api/avatar/wardrobe');
     const w = await r.json();
+    if (!modelLoadGate.isCurrent(requestId)) return null;
     const known = (w.models || []).some(m => m.model === name);
     if (!known) { setStatus(`Аватар: модель ${name} не в гардеробе`); return null; }
-  } catch { /* offline wardrobe: refuse */ setStatus('Аватар: гардероб недоступен'); return null; }
-  const vrm = await swapModel(`${WARDROBE_ROOT}/${name}.vrm`);
-  if (!vrm) { state.wornModel = null; return null; }
+  } catch {
+    if (modelLoadGate.isCurrent(requestId)) setStatus('Аватар: гардероб недоступен');
+    return null;
+  }
+  const vrm = await swapModel(`${WARDROBE_ROOT}/${name}.vrm`, requestId);
+  if (!vrm || !modelLoadGate.isCurrent(requestId)) return null;
   state.wornModel = name;
   return vrm;
 }
@@ -435,10 +544,115 @@ function setEmotion(emotionId) {
   state.expression = next;
 }
 
+function setMotionState(mode) {
+  const normalized = mode === 'thinking' ? 'listening' : mode;
+  if (normalized === 'idle' || normalized === 'listening' || normalized === 'speaking') {
+    state.motionState = normalized;
+    if (normalized !== 'speaking') state.lipLevel = 0;
+    motion.setState(normalized);
+  }
+}
+
+function setLipLevel(level) {
+  const value = Number(level);
+  state.lipLevel = state.motionState === 'speaking' && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : 0;
+}
+
+function setReducedMotion(enabled) {
+  reducedMotion = Boolean(enabled);
+  motion.setReducedMotion(reducedMotion);
+  physics.setReducedMotion(reducedMotion);
+  if (reducedMotion) {
+    gesture.kind = null;
+    state.vrm?.springBoneManager?.reset();
+  }
+  renderPhysicsControls();
+}
+
+function renderPhysicsControls() {
+  const stats = physics.getStats();
+  const enabled = document.getElementById('avatar-physics-enabled');
+  const intensity = document.getElementById('avatar-physics-intensity');
+  const reduced = document.getElementById('avatar-reduced-motion');
+  const status = document.getElementById('avatar-physics-status');
+  if (enabled) enabled.checked = stats.enabled;
+  if (reduced) reduced.checked = reducedMotion;
+  if (intensity) {
+    intensity.value = Math.round(stats.intensity * 100);
+    intensity.disabled = !stats.enabled || reducedMotion || !stats.supported;
+    intensity.setAttribute('aria-valuetext', `${intensity.value}%`);
+    const output = document.getElementById('avatar-physics-value');
+    if (output) output.textContent = `${intensity.value}%`;
+  }
+  if (status) status.textContent = !state.vrm ? 'Проверяем риг модели…'
+    : reducedMotion ? 'Уменьшенное движение: вторичная физика остановлена.'
+    : !stats.supported ? 'У этой модели нет подготовленных костей вторичной физики.'
+    : !stats.enabled ? 'Вторичная физика выключена.'
+    : `Поддерживается ${stats.boundNodes} костей. Сила: ${Math.round(stats.intensity * 100)}%.`;
+}
+
+function saveMotionPreferences() {
+  const status = document.getElementById('avatar-preferences-status');
+  try {
+    localStorage.setItem(preferencesKey, JSON.stringify(preferences));
+    if (status) status.textContent = '';
+  } catch {
+    if (status) status.textContent = 'Настройки действуют сейчас, но браузер запретил их сохранение.';
+  }
+}
+
+document.getElementById('avatar-physics-enabled')?.addEventListener('change', (event) => {
+  preferences.enabled = event.target.checked;
+  physics.setEnabled(preferences.enabled);
+  renderPhysicsControls();
+  saveMotionPreferences();
+});
+document.getElementById('avatar-physics-intensity')?.addEventListener('input', (event) => {
+  preferences.intensity = Math.max(0, Math.min(1, Number(event.target.value) / 100 || 0));
+  physics.setIntensity(preferences.intensity);
+  renderPhysicsControls();
+  saveMotionPreferences();
+});
+document.getElementById('avatar-reduced-motion')?.addEventListener('change', (event) => {
+  preferences.reducedMotion = event.target.checked;
+  setReducedMotion(preferences.reducedMotion || reducedMotionQuery?.matches);
+  saveMotionPreferences();
+});
+
+function applyAvatarEnvelope(envelope) {
+  if (!envelope || typeof envelope !== 'object') return false;
+  const avatar = envelope.avatar;
+  if (!avatar || typeof avatar !== 'object') return false;
+  setEmotion(avatar.expression || envelope.emotion?.id || 'neutral');
+  setMotionState(avatar.state || 'idle');
+
+  const requested = String(avatar.motion || '').toLowerCase();
+  const gestures = {wave: 'wave', greeting: 'greeting', nod: 'nod', soft_nod: 'nod'};
+  const gestureName = gestures[requested];
+  if (gestureName) {
+    const gestureId = String(envelope.response_id || envelope.turn_id || '');
+    if (!gestureId || gestureId !== lastEnvelopeGestureId) {
+      motion.triggerGesture(gestureName);
+      lastEnvelopeGestureId = gestureId;
+    }
+  }
+  return true;
+}
+
+window.addEventListener('jawl-avatar-envelope', (event) => applyAvatarEnvelope(event.detail));
+
 // public surface for app.js
 window.__jawlScene = {
   setEmotion,
-  setLipLevel: (level) => { state.lipLevel = Math.max(0, Math.min(1, Number(level) || 0)); },
+  setLipLevel,
+  setMotionState,
+  triggerMotion: (gestureName) => motion.triggerGesture(gestureName),
+  setReducedMotion,
+  get physicsStats() { return physics.getStats(); },
+  get isReducedMotion() { return reducedMotion; },
+  applyAvatarEnvelope,
   swapModel,
   wear,
   get currentEmotion() { return state.expression; },
@@ -446,22 +660,28 @@ window.__jawlScene = {
 };
 
 resize();
+renderPhysicsControls();
 tick();
 // default model: the wardrobe's first, else the constraint sample.
 // Waits for app.js to establish the session (csrf) first - the wardrobe
 // and model endpoints are session-gated.
 (async () => {
+  const requestId = modelLoadGate.next();
   for (let i = 0; i < 20 && !window.__jcsrf; i++) {
     await new Promise(resolve => setTimeout(resolve, 300));
   }
+  if (!modelLoadGate.isCurrent(requestId)) return;
   try {
     const r = await wardrobeFetch('/api/avatar/wardrobe');
     const w = await r.json();
+    if (!modelLoadGate.isCurrent(requestId)) return;
     const first = (w.models || [])[0];
     if (first) {
-      const vrm = await wear(first.model);
+      const vrm = await wearForRequest(first.model, requestId);
       if (vrm) return;
     }
   } catch { /* fall through to direct load */ }
-  loadModel('/app/runtime/vrm-models/VRM1_Constraint_Twist_Sample.vrm').then(vrm => { state.vrm = vrm; });
+  if (modelLoadGate.isCurrent(requestId)) {
+    await swapModel('/app/runtime/vrm-models/VRM1_Constraint_Twist_Sample.vrm', requestId);
+  }
 })();

@@ -1,8 +1,8 @@
 ﻿param(
-    [int]$JawlConsolePort = 8770,
-    [int]$ControlPort = 2367,
-    [int]$PresentationPort = 8766,
-    [int]$RunSeconds = 0,
+    [int]$JawlConsolePort,
+    [int]$ControlPort,
+    [int]$PresentationPort,
+    [int]$RunSeconds,
     [ValidateRange(10,600)]
     [int]$StartupTimeoutSeconds = 180,
     [ValidateRange(30,900)]
@@ -17,9 +17,11 @@
     [switch]$AllowBusyStartup,
     [string[]]$BrowserVoiceWav = @(),
     [string[]]$BrowserVoiceExpected = @(),
-[int]$TtsPort = 9889,
+[int]$TtsPort,
 [ValidateSet('tera', 'voxcpm', 'omnivoice')]
-[string]$TtsProvider = 'tera',
+[string]$TtsProvider,
+[string]$TeraPython,
+[string]$TeraRelease,
 [int]$VoxCPMPort = 9891,
 [int]$OmniVoicePort = 9890,
 [string]$VoxCPMReferenceWav = '',
@@ -34,8 +36,8 @@
 [string]$SensoryFile = '',
 [switch]$EnableScreenWatch,
 [switch]$EnableSensoryWorker,
-[string]$VisionUrl = 'http://127.0.0.1:8983/v1',
-[string]$VisionModel = 'qwen3-vl',
+[string]$VisionUrl,
+[string]$VisionModel,
 [int]$ScreenWatchInterval = 30,
 [int]$HostosLevel = -1,
 [int]$AmbientTriageSeconds = 0,
@@ -51,14 +53,65 @@
     [string]$JawlTemperatureOverride = '',
     [switch]$NoLive2D,
     [switch]$EnableSupervisor,
-    [switch]$SuperviseBrainWorker
+    [switch]$SuperviseBrainWorker,
+    [string]$ManifestPath
 )
 
 $ErrorActionPreference = 'Stop'
 $env:PYTHONDONTWRITEBYTECODE = '1'
-$env:JAWL_MODEL_OVERRIDE = $JawlModelOverride.Trim()
 $env:JAWL_TEMPERATURE_OVERRIDE = $JawlTemperatureOverride.Trim()
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$manifestArgs = @('--repo-root', $repo)
+if ($PSBoundParameters.ContainsKey('ManifestPath')) { $manifestArgs += @('--manifest', $ManifestPath) }
+$manifestJson = & python -X utf8 (Join-Path $repo 'scripts\resolve_runtime_manifest.py') @manifestArgs
+if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest resolution failed.' }
+$runtimeManifest = $manifestJson | ConvertFrom-Json
+
+function Resolve-LauncherRuntimeDefaults {
+    param([object]$Manifest, [System.Collections.IDictionary]$Bound)
+    $values = @{
+        JawlConsolePort = $Manifest.ports.jawl_console
+        ControlPort = $Manifest.ports.control
+        PresentationPort = $Manifest.ports.presentation
+        RunSeconds = $Manifest.launch.run_seconds
+        ProfileName = $Manifest.profile
+        TtsPort = $Manifest.ports.tera_tts
+        TtsProvider = $Manifest.launch.tts_provider
+        TeraPython = $Manifest.models.tera_python
+        TeraRelease = $Manifest.models.tera_release
+        VisionUrl = $Manifest.vision.url
+        VisionModel = $Manifest.vision.model
+    }
+    foreach ($name in @($values.Keys)) {
+        if ($Bound.Keys -contains $name) { $values[$name] = $Bound[$name] }
+        if ($null -eq $values[$name] -or [string]::IsNullOrWhiteSpace([string]$values[$name])) {
+            throw "Runtime manifest is missing required setting: $name"
+        }
+    }
+    return $values
+}
+
+$runtimeDefaults = Resolve-LauncherRuntimeDefaults $runtimeManifest $PSBoundParameters
+foreach ($name in $runtimeDefaults.Keys) { Set-Variable -Name $name -Value $runtimeDefaults[$name] }
+function Assert-EffectivePorts([object[]]$Ports, [int[]]$ReservedPorts) {
+    foreach ($entry in $Ports) {
+        if ($entry.Port -lt 1 -or $entry.Port -gt 65535 -or $entry.Port -eq 8765 -or
+            $ReservedPorts -contains $entry.Port) {
+            throw ("{0} port is invalid or reserved: {1}" -f $entry.Name, $entry.Port)
+        }
+    }
+    $duplicates = @($Ports | Group-Object { $_.Port } | Where-Object Count -gt 1)
+    if ($duplicates.Count) { throw 'Integrated profile service ports must be distinct.' }
+}
+if ($RunSeconds -lt 0) { throw 'RunSeconds cannot be negative.' }
+$effectiveTtsPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } elseif ($TtsProvider -eq 'omnivoice') { $OmniVoicePort } else { $TtsPort }
+Assert-EffectivePorts @(
+    @{ Name = 'JAWL console'; Port = $JawlConsolePort },
+    @{ Name = 'Companion control'; Port = $ControlPort },
+    @{ Name = 'Companion presentation'; Port = $PresentationPort },
+    @{ Name = 'TTS'; Port = $effectiveTtsPort }
+) (@(8765) + @($runtimeManifest.ports.reserved))
+$env:JAWL_MODEL_OVERRIDE = $JawlModelOverride.Trim()
 $source = Join-Path $repo 'runtime\jawl-sources\jawl-20260906-daily-v2'
 $py = Join-Path $repo 'runtime\jawl-daily-venv\Scripts\python.exe'
 $browserPy = (Get-Command python -ErrorAction Stop).Source
@@ -68,8 +121,12 @@ $profileLockPath = Join-Path $profileHome 'run.lock'
 $supervisorStopPath = Join-Path (Join-Path $repo 'runtime\instances') 'supervisor.stop'
 $supervisorPidPath = Join-Path (Join-Path $repo 'runtime\instances') 'supervisor.pid'
 $portFile = Join-Path $profileHome 'data\interfaces\host\terminal\terminal.port'
-$teraPy = 'G:\AI\tts_env\Scripts\python.exe'
-$teraRelease = 'G:\AI\tts_models\TeraSpace__TeraTTSv2'
+function Resolve-RepoPath([string]$PathValue) {
+    if ([IO.Path]::IsPathRooted($PathValue)) { return $PathValue }
+    return Join-Path $repo $PathValue
+}
+$teraPy = Resolve-RepoPath $TeraPython
+$teraRelease = Resolve-RepoPath $TeraRelease
 $voxcpmPy = 'G:\AI\VoxCPM\.venv\Scripts\python.exe'
 $voxcpmModelDir = 'G:\AI\VoxCPM\models\models--openbmb--VoxCPM2\snapshots\32279effe8c19989596f05d353d1447f51d9e915'
 $omniPy = 'G:\AI\OmniVoice\venv\Scripts\python.exe'
@@ -78,12 +135,28 @@ $ttsWorkerName = if ($TtsProvider -eq 'voxcpm') { 'VoxCPM2' } elseif ($TtsProvid
 $ttsWorkerPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } elseif ($TtsProvider -eq 'omnivoice') { $OmniVoicePort } else { $TtsPort }
 $asrPy = 'G:\AI\JAWL-VoiceCompanion\runtime\vision-venv\Scripts\python.exe'
 $voicememPy = 'G:\AI\VoiceMem\.venv\Scripts\python.exe'
+$voicememMemoryRoot = Join-Path $profileHome 'data\sensory\voicemem'
 
 if (-not (Test-Path -LiteralPath $py)) { throw "Owned runtime Python is missing: $py" }
 if (-not (Test-Path -LiteralPath $source)) { throw "Pinned JAWL source is missing: $source" }
 if ($StartLocalAudio -and -not $UseVoiceMem) {
     throw 'StartLocalAudio requires -UseVoiceMem: the audio route is intentionally fail-closed without the sensory sidecar.'
 }
+# Lock before prepare/configure, not merely before starting processes: a
+# second launcher must not rewrite the configuration of a running profile.
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$profileLock = $null
+try {
+    $profileLock = [IO.File]::Open($profileLockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+} catch [IO.IOException] {
+    throw "Managed profile is already running: $ProfileName. Stop it before starting another launcher."
+}
+try {
+    $lockText = "pid=$PID`nstarted=$([DateTime]::UtcNow.ToString('o'))`nprofile=$ProfileName`n"
+    $lockBytes = [Text.UTF8Encoding]::new($false).GetBytes($lockText)
+    $profileLock.SetLength(0)
+    $profileLock.Write($lockBytes, 0, $lockBytes.Length)
+    $profileLock.Flush()
 & $browserPy (Join-Path $repo 'scripts\verify_jawl_snapshot.py') --source $source | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'Pinned JAWL source verification failed; refusing to start.' }
 $env:JAWL_PROFILE_NAME = $ProfileName
@@ -168,23 +241,6 @@ if ($UseOpenCodeRelay) {
 # The JAWL web console protects mutating control routes with a console token.
 # Generate one for this owned process tree only; do not expose it in argv/logs.
 if (-not $env:CONSOLE_TOKEN) { $env:CONSOLE_TOKEN = [Guid]::NewGuid().ToString('N') }
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-# Keep one launcher per managed profile. FileShare.None is released by the OS
-# when the launcher exits, including an interrupted PowerShell session, so a
-# stale lock file never blocks recovery. This protects the profile data and
-# prevents two companions from consuming the same JAWL terminal concurrently.
-$profileLock = $null
-try {
-    $profileLock = [IO.File]::Open($profileLockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-    $lockText = "pid=$PID`nstarted=$([DateTime]::UtcNow.ToString('o'))`nprofile=$ProfileName`n"
-    $lockBytes = [Text.UTF8Encoding]::new($false).GetBytes($lockText)
-    $profileLock.SetLength(0)
-    $profileLock.Write($lockBytes, 0, $lockBytes.Length)
-    $profileLock.Flush()
-} catch [IO.IOException] {
-    throw "Managed profile is already running: $ProfileName ($profileLockPath). Stop the existing profile before starting another one."
-}
-
 function New-RuntimeProcess {
     param([string]$FileName, [string]$Arguments, [string]$WorkingDirectory, [hashtable]$Environment, [string]$LogName)
     $info = [Diagnostics.ProcessStartInfo]::new()
@@ -214,6 +270,17 @@ function Save-RuntimeLog($process) {
     $process.WaitForExit(5000) | Out-Null
     $text = $process.OutputTask.Result + "`n" + $process.ErrorTask.Result
     [IO.File]::WriteAllText($process.LogPath, $text, [Text.UTF8Encoding]::new($false))
+}
+
+function Format-EnvironmentDiagnostic {
+    param([System.Collections.IDictionary]$Environment)
+
+    foreach ($name in @($Environment.Keys | Sort-Object)) {
+        $configured = $null -ne $Environment[$name] -and
+            -not [string]::IsNullOrEmpty([string]$Environment[$name])
+        $state = if ($configured) { '<configured>' } else { '<unset>' }
+        "ENV $name=$state"
+    }
 }
 
 function Assert-PortAvailable([int]$Port, [string]$Name) {
@@ -400,12 +467,21 @@ try {
         if ($supervisor.HasExited -or -not (Test-Path -LiteralPath $supervisorPidPath)) { throw 'Native instance supervisor did not publish readiness.' }
     }
     $startupStartedAt = Get-Date
-    $jawl = New-RuntimeProcess $py "-m src.web.server --host 127.0.0.1 --port $JawlConsolePort --no-browser --keep-agent" $profileHome $jawlEnv 'jawl-console.log'
+    $consoleEntry = Join-Path $repo 'scripts\run_owned_jawl_console.py'
+    $jawl = New-RuntimeProcess $py "-B `"$consoleEntry`" --host 127.0.0.1 --port $JawlConsolePort --no-browser --keep-agent" $profileHome $jawlEnv 'jawl-console.log'
     $consoleUrl = "http://127.0.0.1:$JawlConsolePort"
     $consoleHeaders = @{ 'X-Console-Token' = $env:CONSOLE_TOKEN }
     $ready = $false
     for ($i = 0; $i -lt 60; $i++) {
-        try { Invoke-RestMethod "$consoleUrl/api/agent/status" -Headers $consoleHeaders -TimeoutSec 2 | Out-Null; $ready = $true; break } catch { Start-Sleep -Seconds 1 }
+        try {
+            Invoke-RestMethod "$consoleUrl/api/agent/status" -Headers $consoleHeaders -TimeoutSec 2 | Out-Null
+            $admission = Invoke-RestMethod "$consoleUrl/api/companion/admission-capabilities" -Headers $consoleHeaders -TimeoutSec 2
+            if ($admission.feature -ne 'http-turn-admission-v1' -or $admission.cancel_before_dispatch -ne $true) {
+                throw 'Owned JAWL admission capability is missing.'
+            }
+            $ready = $true
+            break
+        } catch { Start-Sleep -Seconds 1 }
     }
     if (-not $ready) { throw 'JAWL console did not become ready.' }
     $agentStatus = Invoke-RestMethod "$consoleUrl/api/agent/status" -Headers $consoleHeaders -TimeoutSec 10
@@ -445,7 +521,7 @@ try {
     # ADR-045: Live2D assets are removed; the 3D VRM avatar lives in the
     # Electron desktop shell. $NoLive2D stays accepted as a no-op for older
     # command lines.
-    if ($UseVoiceMem) { $companionArgs += " --voicemem-python `"$voicememPy`" --voicemem-local-memory --voicemem-warmup text --voicemem-timeout 120" }
+    if ($UseVoiceMem) { $companionArgs += " --voicemem-python `"$voicememPy`" --voicemem-memory-root `"$voicememMemoryRoot`" --voicemem-local-memory --voicemem-warmup text --voicemem-timeout 120" }
     if ($SuperviseBrainWorker) {
         # One executable entry (ADR-041 stage 2): the Companion process owns
         # the local brain worker via RuntimeSupervisor (health, bounded
@@ -460,29 +536,9 @@ try {
         if ($AmbientTriageSeconds -gt 0) { $companionArgs += " --ambient-triage-interval $AmbientTriageSeconds" }
     }
     if ($EnableScreenWatch) {
-        # Lightweight vision server (ADR/Phase B): Qwen3-VL-2B on GPU1 port 8983
-        # is the screen-watch describer (Bonsai 27B stays for on-demand heavy
-        # analysis on 8986). Start it if the port is free; skip if already up.
-        if ($VisionModel -eq 'qwen3-vl' -and -not (Test-NetConnection 127.0.0.1 -Port 8983 -WarningAction SilentlyContinue -InformationLevel Quiet)) {
-            $vlmExe = 'G:\AI\llamacpp-taardis\build\bin\llama-server.exe'
-            $vlmModel = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-Q4_K_M.gguf'
-            $vlmMmproj = 'G:\AI\VLM-RealTime-Bench\models\Qwen3-VL-2B-mmproj-F16.gguf'
-            if ((Test-Path -LiteralPath $vlmExe) -and (Test-Path -LiteralPath $vlmModel) -and (Test-Path -LiteralPath $vlmMmproj)) {
-                $env:CUDA_VISIBLE_DEVICES = '1'
-                # VLM runs as a low-priority process with few CPU threads so its
-                # periodic screen scans (every ~30s) never micro-freeze the
-                # interactive workload (vision encoder + mmproj prefill run on CPU).
-                $vlmArgs = @('--model', $vlmModel, '--alias', 'qwen3-vl', '--host', '127.0.0.1', '--port', '8983', '--ctx-size', '8192', '--threads', '4', '-ngl', '99', '--no-webui', '--reasoning', 'off', '--mmproj', $vlmMmproj)
-                $vlmProc = Start-Process -FilePath $vlmExe -ArgumentList $vlmArgs -WindowStyle Hidden -Priority Low -PassThru
-                Write-Host "Vision server (qwen3-vl, low priority, 4 threads) starting (pid $($vlmProc.Id)) on 8983"
-                $vlmDeadline = (Get-Date).AddSeconds(30)
-                do { Start-Sleep -Milliseconds 800; $vlmUp = Test-NetConnection 127.0.0.1 -Port 8983 -WarningAction SilentlyContinue -InformationLevel Quiet } until ($vlmUp -or (Get-Date) -gt $vlmDeadline)
-                if (-not $vlmUp) { Write-Warning 'qwen3-vl vision server did not open 8983; screen-watch will use a slow/missing describer.' }
-            } else {
-                Write-Warning 'qwen3-vl weights/server missing; screen-watch describer unavailable.'
-            }
-        }
-        if (-not $JawlEventDir) { $JawlEventDir = Join-Path $profileHome 'sandbox\_system\instances\daily\.jawl_events' }
+        # Screen capture remains explicit opt-in. The launcher connects to the
+        # configured vision endpoint and never chooses a model or GPU worker.
+        if (-not $JawlEventDir) { $JawlEventDir = Join-Path $profileHome "sandbox\_system\instances\$ProfileName\.jawl_events" }
         New-Item -ItemType Directory -Force -Path $JawlEventDir | Out-Null
         $companionArgs += " --hostos-live --screen-enabled --vision-url $VisionUrl --vision-model $VisionModel --screen-watch --screen-watch-interval $ScreenWatchInterval --jawl-event-dir `"$JawlEventDir`""
         if ($HostosLevel -ge 0) { $companionArgs += " --hostos-level $HostosLevel" }
@@ -490,7 +546,9 @@ try {
     } elseif ($HostosLevel -ge 0) {
         $companionArgs += " --hostos-level $HostosLevel"
     }
-    $debugDump = @("PY=$py", "ARGS=$companionArgs") + @($companionEnv.GetEnumerator() | ForEach-Object { "ENV $($_.Key)=$($_.Value)" })
+    # Arguments contain local paths/options and loopback URLs; environment
+    # values, including credentials, are represented only by configured state.
+    $debugDump = @("PY=$py", "ARGS=$companionArgs") + @(Format-EnvironmentDiagnostic -Environment $companionEnv)
     [IO.File]::WriteAllLines((Join-Path $logDir 'companion-debug.txt'), $debugDump)
     $companion = New-RuntimeProcess $py $companionArgs $repo $companionEnv 'companion.log'
     $companionReady = $false
@@ -570,6 +628,13 @@ try {
                 }
             }
         }
+    }
+}
+} finally {
+    # Preparation/provider failures can happen before the process-loop
+    # finally is entered. Release only a relay this launcher actually owns.
+    if ($relayOwned -and $relayProc -and -not $relayProc.HasExited) {
+        try { $relayProc.Kill(); $relayProc.WaitForExit(5000) | Out-Null } catch { }
     }
     if ($profileLock) { $profileLock.Dispose() }
 }

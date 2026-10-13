@@ -107,6 +107,7 @@ class AmbientAudioASRBridge:
         )
         self._processing_queue: Queue[AmbientSegment] | None = None
         self._processing_stop = Event()
+        self._asr_cancel = Event()
         self._processing_worker: Thread | None = None
         self._session_id: str | None = None
         self._generation: str | None = None
@@ -205,6 +206,7 @@ class AmbientAudioASRBridge:
             with self._lock:
                 self._processing_queue = processing_queue
                 self._processing_stop = processing_stop
+                self._asr_cancel = Event()
                 self._session_id = normalized
                 self._generation = str(generation or "")
                 worker = Thread(
@@ -239,6 +241,7 @@ class AmbientAudioASRBridge:
                     return {"status": "degraded", "error": "ambient_session_changed"}
                 self._stopping = True
                 if not flush:
+                    self._asr_cancel.set()
                     self._generation = None
                     self._session_id = None
                     self._clear_processing_queue(processing_queue)
@@ -355,10 +358,11 @@ class AmbientAudioASRBridge:
                         self._stopping = False
 
     def _process_segment(self, segment: AmbientSegment) -> None:
-        if not self._is_current(segment):
-            with self._lock:
+        with self._lock:
+            if not self._is_current_locked(segment):
                 self._stale_segments += 1
-            return
+                return
+            asr_cancel = self._asr_cancel
         session_id = self._segment_session(segment)
         events: list[dict[str, Any]] = []
         succeeded = False
@@ -371,6 +375,7 @@ class AmbientAudioASRBridge:
                             sample_rate=self.target_sample_rate,
                             channels=1,
                             session_id=session_id,
+                            cancel_event=asr_cancel,
                         )
                     with self._lock:
                         self._asr_finishes += 1

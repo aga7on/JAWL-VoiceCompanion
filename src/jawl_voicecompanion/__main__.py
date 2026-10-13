@@ -275,6 +275,12 @@ def main() -> None:
         help="use VoiceMem local E5 memory components without an LLM request",
     )
     parser.add_argument(
+        "--voicemem-memory-root",
+        type=Path,
+        default=None,
+        help="explicit VoiceMem sensory cache directory (standalone default remains VoiceMem-managed)",
+    )
+    parser.add_argument(
         "--voicemem-warmup",
         choices=("none", "text", "audio"),
         default="none",
@@ -372,34 +378,34 @@ def main() -> None:
     )
     parser.add_argument(
         "--supervised-llm-command",
-        default="G:\\AI\\llamacpp-prism\\build-fa\\bin\\llama-server.exe",
+        default=None,
         help="executable for the supervised local brain worker",
     )
     parser.add_argument(
         "--supervised-llm-model",
-        default="G:\\AI\\models\\Ternary-Bonsai-2-27B-Abliterated-Hikari\\Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf",
+        default=None,
         help="GGUF model for the supervised local brain worker",
     )
     parser.add_argument(
         "--supervised-llm-port",
         type=int,
-        default=8990,
+        default=None,
         help="loopback port for the supervised local brain worker",
     )
     parser.add_argument(
         "--supervised-tts-command",
-        default="G:\\AI\\tts_env\\Scripts\\python.exe",
+        default=None,
         help="executable for the supervised TTS worker",
     )
     parser.add_argument(
         "--supervised-tts-release",
-        default="G:\\AI\\tts_models\\TeraSpace__TeraTTSv2",
+        default=None,
         help="TeraTTS release directory for the supervised TTS worker",
     )
     parser.add_argument(
         "--supervised-tts-port",
         type=int,
-        default=9889,
+        default=None,
         help="loopback port for the supervised TTS worker",
     )
     args = parser.parse_args()
@@ -414,6 +420,10 @@ def main() -> None:
         screen_redaction_rects = _parse_redaction_rects(args.screen_redact_rect)
     except ValueError as exc:
         parser.error(str(exc))
+    try:
+        supervisor_runtime = _build_worker_supervisor(args) if args.supervise_workers else None
+    except ValueError as exc:
+        parser.error(str(exc))
     runtime = build_companion_runtime(
         args,
         frontend_dir=args.frontend or _default_frontend_dir(),
@@ -423,7 +433,6 @@ def main() -> None:
     )
     # ADR-041 stage 2: when asked, this process also owns the local workers.
     # They start before the server accepts traffic and stop when it exits.
-    supervisor_runtime = _build_worker_supervisor(args) if args.supervise_workers else None
     if supervisor_runtime is not None:
         report = supervisor_runtime.start()
         if not report.ok:
@@ -454,65 +463,68 @@ def main() -> None:
             print("supervised workers stopped")
 
 
-def _build_worker_supervisor(args) -> "RuntimeSupervisor | None":  # noqa: ANN001
+def _build_worker_supervisor(args) -> "RuntimeSupervisor":  # noqa: ANN001
     """Specs for the local workers this process should own (stage 2 slice).
 
-    The manifest stays the source of truth for ports; the worker executables
-    come from CLI defaults that match this dev machine's layout and can be
-    overridden. Workers without a runnable executable are skipped (the server
-    still serves; its own doctor reports what is missing) rather than failing
-    the whole profile.
+    Explicit CLI arguments override the validated canonical + local manifest.
+    Missing workers or occupied ports fail before any model process starts;
+    asking for a supervised stack must not silently serve a degraded mock.
     """
-    import json
-    from pathlib import Path
-
+    from .runtime_manifest import load_runtime_manifest
     from .supervisor import RuntimeSupervisor, WorkerSpec
+    from .worker_readiness import model_ready, require_free_ports
 
-    manifest_path = Path(__file__).resolve().parents[2] / "config" / "runtime.manifest.json"
-    ports = {}
-    try:
-        ports = json.loads(manifest_path.read_text(encoding="utf-8")).get("ports", {})
-    except (OSError, ValueError):
-        pass
     repo = Path(__file__).resolve().parents[2]
+    manifest = load_runtime_manifest(repo)
+    ports, models, brain = (manifest[key] for key in ("ports", "models", "brain"))
 
-    def probe(port: int):
-        def check() -> bool:
-            import urllib.request
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
-                return response.status == 200
-        return check
+    def configured_path(argument: str, key: str) -> Path:
+        value = getattr(args, argument, None)
+        value = value if value is not None else models.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"supervised worker setting models.{key} is missing")
+        result = Path(value)
+        return result if result.is_absolute() else repo / result
 
-    specs = []
-    llm_port = args.supervised_llm_port or ports.get("brain_port", 8990)
-    if Path(args.supervised_llm_command).exists() and Path(args.supervised_llm_model).exists():
-        specs.append(WorkerSpec(
+    llm_exe = configured_path("supervised_llm_command", "brain_server_exe")
+    llm_model = configured_path("supervised_llm_model", "bonsai_model")
+    tts_exe = configured_path("supervised_tts_command", "tera_python")
+    tts_release = configured_path("supervised_tts_release", "tera_release")
+    for name, path in (("brain executable", llm_exe), ("brain model", llm_model), ("TTS executable", tts_exe)):
+        if not path.is_file():
+            raise ValueError(f"supervised {name} is missing; configure runtime.manifest.local.json")
+    if not tts_release.is_dir():
+        raise ValueError("supervised TTS release is missing; configure runtime.manifest.local.json")
+    llm_port = args.supervised_llm_port if args.supervised_llm_port is not None else ports["brain_port"]
+    tts_port = args.supervised_tts_port if args.supervised_tts_port is not None else ports["tera_tts"]
+    require_free_ports([llm_port, tts_port])
+    return RuntimeSupervisor([
+        WorkerSpec(
             name="brain",
-            command=[args.supervised_llm_command, "--model", args.supervised_llm_model,
-                     "--alias", "local-brain", "--host", "127.0.0.1", "--port", str(llm_port),
-                     "--threads", "12", "--ctx-size", "16384", "--parallel", "1",
-                     "--gpu-layers", "99", "--device", "CUDA1"],
-            probe=probe(llm_port),
+            command=[str(llm_exe), "--model", str(llm_model),
+                     "--alias", brain["model"], "--host", "127.0.0.1", "--port", str(llm_port),
+                     "--threads", str(brain["threads"]), "--ctx-size", str(brain["context_size"]),
+                     "--parallel", "1", "--gpu-layers", str(brain["gpu_layers"]),
+                     "--device", brain["device"], "--reasoning", "off", "--no-webui"],
+            cwd=str(repo),
+            probe=lambda: model_ready(llm_port, brain["model"]),
             startup_timeout_seconds=240.0,
             max_restarts=1,
             order=0,
-        ))
-    tts_port = args.supervised_tts_port or ports.get("tera_tts", 9889)
-    if Path(args.supervised_tts_command).exists() and Path(args.supervised_tts_release).exists():
-        specs.append(WorkerSpec(
+        ),
+        WorkerSpec(
             name="tts",
-            command=[args.supervised_tts_command, "scripts/teratts_server.py",
-                     "--release-dir", args.supervised_tts_release, "--voice", "ru_f1",
+            command=[str(tts_exe), str(repo / "scripts" / "teratts_server.py"),
+                     "--release-dir", str(tts_release), "--voice", "ru_f1",
                      "--model", "distilled", "--threads", "24",
                      "--host", "127.0.0.1", "--port", str(tts_port)],
-            probe=probe(tts_port),
+            cwd=str(repo),
+            probe=lambda: model_ready(tts_port),
             startup_timeout_seconds=240.0,
             max_restarts=1,
             order=1,
-        ))
-    if not specs:
-        return None
-    return RuntimeSupervisor(specs)
+        ),
+    ])
 
 
 if __name__ == "__main__":

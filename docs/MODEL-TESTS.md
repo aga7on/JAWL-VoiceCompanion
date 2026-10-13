@@ -1,5 +1,9 @@
 # Local model test record
 
+> **Historical model evidence.** Entries below retain their original dates,
+> measurements, and verdicts; they are not the current provider selection.
+> See [STATE](STATE.md), [TODO](../TODO.md), and the [documentation map](README.md).
+
 Measurements below: historical 2026-09-01/02 snapshot.
 Product-selection clarification: 2026-09-05 (no new model runs).
 See [PRODUCT.md](PRODUCT.md) for current intent and [STATE.md](STATE.md) for

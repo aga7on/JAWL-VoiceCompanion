@@ -1,5 +1,27 @@
 # OBS and desktop-pet presentation
 
+## Актуальное состояние — 2026-10-10
+
+Основной персонаж сейчас — VRM в Electron/three-vrm. OBS Browser Source URL
+для VRM и передача туда того же состояния пока не реализованы. В legacy
+presentation handler жив `/api/presentation/state`; `/api/presentation/config`
+отвечает `enabled:false`, `deprecated:"live2d"`; `/` отдаёт только placeholder,
+а `/avatar` возвращает 404. Старый URL builder всё ещё формирует `/avatar`, но
+это не рабочая страница. Ни placeholder, ни собранный URL не являются готовым
+VRM presentation endpoint или инструкцией к подключению OBS.
+
+Остальные разделы про Live2D bundle, Live2D smoke и staged model относятся к
+исторической реализации и не являются инструкцией для текущего VRM клиента.
+Не переносить их команды на VRM. Текущая карта: [docs/README.md](README.md),
+состояние: [STATE](STATE.md), очередь: [TODO](../TODO.md).
+
+## Исторические инструкции: legacy presentation / Live2D
+
+Все следующие команды, URL-примеры, описания renderer-а и acceptance в этом
+разделе относятся к прежней 2D/Live2D presentation реализации. Это архивная
+справка, не инструкция для текущей VRM-сцены Electron; точка перехода к
+актуальному статусу находится выше.
+
 The CLI starts two loopback servers:
 
 - control UI: `http://127.0.0.1:2367/`;
@@ -22,7 +44,7 @@ read-only presentation token and includes it in the printed
 `/avatar?token=...` URL. This token cannot authorize the control plane and must
 not be reused as the LAN control credential.
 
-## OBS setup
+### Historical OBS setup
 
 1. Start the service with `scripts/run_web.ps1`.
 2. In OBS add a `Browser` source.
@@ -40,7 +62,7 @@ latest bounded subtitle, expression, motion and speaking state. It also uses a
 short-lived audio-amplitude signal for mouth movement; no audio bytes are sent
 to or stored by the presentation server. Add `?debug=1` to show diagnostics.
 
-## Live2D bundle
+### Исторические инструкции: Live2D bundle
 
 The workspace now contains a locally staged, license-documented Mao sample
 bundle under `runtime/live2d/`: Cubism Core, PixiJS, the Cubism 4 renderer and
@@ -69,7 +91,7 @@ escape and serves the asset tree read-only. Missing optional motions or an
 incompatible runtime leave the reactive fallback active. The full asset
 contract is in [contracts/avatar.md](contracts/avatar.md).
 
-## Integrated scene and audio ownership
+### Исторические инструкции: integrated 2D scene and audio ownership
 
 The product requires the same 2D character in the mint Aero control panel,
 an optional separate window and OBS. The existing inline CSS figure is a
@@ -100,7 +122,7 @@ The window launcher can be inspected independently of a model:
 This is a browser presentation shell, not proof of native transparency,
 click-through or multi-monitor behavior. See [PRODUCT.md](PRODUCT.md).
 
-## Acceptance still required
+### Исторические acceptance records: Live2D
 
 The isolated server boundary is covered by automated HTTP tests, but release
 still requires a real target-machine check for transparent compositing,

@@ -19,6 +19,7 @@ build/
 .env
 .env.*
 !.env.example
+config/runtime.manifest.local.json
 *.key
 *.pem
 *.token

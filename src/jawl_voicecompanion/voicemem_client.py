@@ -14,6 +14,7 @@ from threading import Lock, Thread
 from time import monotonic, sleep
 from typing import Any, Iterable
 from uuid import uuid4
+from .owned_pipe import spawn_owned_pipe
 
 
 class VoiceMemUnavailable(ConnectionError):
@@ -129,14 +130,14 @@ class VoiceMemProcessClient:
         with self._lock:
             process = self._process
             reader = self._reader
+            if process is not None:
+                self._retire_process(process, reader)
             self._process = None
             self._reader = None
             self._status = "stopped"
-        if process is None:
-            return
+    @staticmethod
+    def _retire_process(process, reader) -> None:
         try:
-            if process.stdin is not None:
-                process.stdin.close()
             process.terminate()
             process.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
@@ -146,20 +147,23 @@ class VoiceMemProcessClient:
                 process.wait(timeout=2)
         if reader is not None:
             reader.join(timeout=2)
+            if reader.is_alive():
+                raise VoiceMemUnavailable('VoiceMem reader teardown incomplete')
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass  # Child/tree already reaped; buffered writes cannot survive.
         if process.stdout is not None:
             process.stdout.close()
 
     def abort(self) -> None:
         """Best-effort interrupt for a request running in another thread."""
         process = self._process
-        if process is None or process.poll() is not None:
+        if process is None:
             return
         try:
-            if process.stdin is not None:
-                process.stdin.close()
-        except OSError:
-            pass
-        try:
+            # Stop the tree before touching a potentially blocked buffered writer.
             process.terminate()
         except OSError:
             pass
@@ -180,13 +184,13 @@ class VoiceMemProcessClient:
     def _ensure_process(self) -> subprocess.Popen[bytes]:
         if self._process is not None and self._process.poll() is None:
             return self._process
+        if self._process is not None:
+            self._retire_process(self._process, self._reader)
+            self._process = self._reader = None
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        process = subprocess.Popen(
+        process = spawn_owned_pipe(
             [self.python_executable, self.runner, *self.args],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
             env=env,
         )
         self._process = process
@@ -194,7 +198,13 @@ class VoiceMemProcessClient:
         result_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._queue = result_queue
         self._reader = Thread(target=self._read_stdout, args=(process, result_queue), daemon=True)
-        self._reader.start()
+        try:
+            self._reader.start()
+        except RuntimeError:
+            self._reader = None
+            self._retire_process(process, None)
+            self._process = None
+            raise VoiceMemUnavailable('VoiceMem reader startup failed')
         return process
 
     def _read_stdout(
@@ -213,9 +223,8 @@ class VoiceMemProcessClient:
                     result_queue.put(item)
         finally:
             result_queue.put(None)
-            with self._lock:
-                if self._process is process and process.poll() is not None and self._status == "running":
-                    self._status = "degraded"
+            # Never acquire the request/lifecycle lock here: close/replacement
+            # joins this reader while owning it. state() derives dead-child status.
 
     def _read_until_complete(self, request_id: str) -> list[dict[str, Any]]:
         deadline = monotonic() + self.timeout_seconds

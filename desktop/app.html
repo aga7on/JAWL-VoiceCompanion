@@ -26,6 +26,8 @@
     --danger: #e0705f;
     --radius: 10px;
     --rail: 52px;
+    --control-target: 24px;
+    --focus-width: 2px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -227,8 +229,33 @@
 
   /* chat mic state */
   #mic-state {
+    overflow-wrap: anywhere;
     font-size: 11px; color: var(--muted); padding: 4px 0 0; text-align: center;
     min-height: 16px;
+  }
+  .avatar-controls label { cursor: pointer; }
+  .section[data-section=avatar] .row { flex-wrap: wrap; }
+  .avatar-controls input { accent-color: var(--accent); min-height: var(--control-target); }
+  .avatar-controls input[type=checkbox] { min-width: var(--control-target); }
+  .avatar-controls input[type=range] { flex: 1; min-width: 0; }
+  .avatar-controls input:focus-visible { outline: var(--focus-width) solid var(--accent); }
+  .avatar-controls input:disabled { cursor: not-allowed; opacity: .5; }
+  .avatar-controls output { color: var(--text); font: inherit; }
+  .mic-capture-settings label { cursor: pointer; }
+  .mic-capture-settings input:focus-visible {
+    outline: var(--focus-width) solid var(--accent); outline-offset: var(--focus-width);
+  }
+  .mic-capture-settings input:disabled { cursor: not-allowed; }
+  .mic-capture-settings fieldset { min-width: 0; border: 0; }
+  .mic-capture-settings input[aria-invalid="true"] { border-color: var(--danger); }
+  .mic-capture-settings .save-row { justify-content: flex-end; }
+  .mic-capture-settings button[aria-busy="true"] { cursor: progress; }
+  @media (prefers-reduced-motion: reduce) {
+    .mic-capture-settings * { scroll-behavior: auto; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #thinking.on { animation: none; }
+    #avatar-caption { transition: none; }
   }
 </style>
 </head>
@@ -268,6 +295,7 @@
             <button id="chat-mic" title="Микрофон: вкл/выкл">🎙</button>
           </div>
           <div id="mic-state">Микрофон выключен.</div>
+          <button id="speech-stop" class="btn secondary" type="button" disabled>Остановить речь</button>
         </section>
 
         <section class="section" data-section="avatar">
@@ -280,11 +308,30 @@
             <h3>Выражение</h3>
             <div class="row"><span class="label">Текущее</span><span class="value" id="avatar-current">neutral</span></div>
             <div class="row"><span class="label">Тест</span>
-              <button class="btn secondary" data-emotion="happy">😊</button>
-              <button class="btn secondary" data-emotion="sad">😢</button>
-              <button class="btn secondary" data-emotion="surprised">😮</button>
-              <button class="btn secondary" data-emotion="relaxed">😌</button>
+              <button class="btn secondary" data-emotion="happy">Радость</button>
+              <button class="btn secondary" data-emotion="sad">Грусть</button>
+              <button class="btn secondary" data-emotion="surprised">Удивление</button>
+              <button class="btn secondary" data-emotion="relaxed">Спокойствие</button>
             </div>
+          </div>
+          <div class="card avatar-controls" aria-labelledby="avatar-physics-title">
+            <h3 id="avatar-physics-title">Движение и физика</h3>
+            <div class="row">
+              <label for="avatar-physics-enabled" class="label">Инерция тела и одежды</label>
+              <input id="avatar-physics-enabled" type="checkbox" checked aria-describedby="avatar-physics-help">
+            </div>
+            <div class="row">
+              <label for="avatar-physics-intensity" class="label">Сила движения</label>
+              <input id="avatar-physics-intensity" type="range" min="0" max="100" step="5" value="50" aria-valuetext="50%" aria-describedby="avatar-physics-help">
+              <output id="avatar-physics-value" for="avatar-physics-intensity">50%</output>
+            </div>
+            <div class="row">
+              <label for="avatar-reduced-motion" class="label">Уменьшить движение</label>
+              <input id="avatar-reduced-motion" type="checkbox" aria-describedby="avatar-physics-help">
+            </div>
+            <p class="note" id="avatar-physics-help">Лёгкая инерция только у моделей с подготовленным ригом. Волосы управляются родной физикой VRM. Режим уменьшенного движения системы имеет приоритет.</p>
+            <p class="note" id="avatar-physics-status" role="status">Проверяем риг модели…</p>
+            <p class="note" id="avatar-preferences-status" role="status"></p>
           </div>
         </section>
 
@@ -294,7 +341,7 @@
             <div class="row"><span class="label">Провайдер</span><span class="value" id="tts-provider">—</span></div>
             <div class="row"><span class="label">Статус</span><span class="value" id="tts-status">—</span></div>
             <div class="row"><span class="label">Превью</span><input type="text" id="tts-preview-text" value="Привет! Это превью голоса." style="flex:2"><button class="btn secondary" id="tts-preview">▶</button></div>
-            <audio id="tts-audio" controls></audio>
+            <p class="note">Превью использует общий поток речи. Остановить его можно в чате или новым сообщением.</p>
           </div>
           <div class="card">
             <h3>Голос компаньона</h3>
@@ -308,7 +355,35 @@
             </div>
             <div class="row"><span class="label">Активен сейчас</span><span class="value" id="mic-device">—</span></div>
             <div class="row"><span class="label">ASR</span><span class="value" id="asr-status">—</span></div>
-            <p class="note">GigaAM — единственный ASR. Гейт AudioWorklet сохранён. Выбор запоминается между запусками.</p>
+            <p class="note">GigaAM — единственный ASR. Выбор устройства запоминается между запусками.</p>
+          </div>
+          <div class="card mic-capture-settings" aria-labelledby="mic-capture-title">
+            <h3 id="mic-capture-title">Захват микрофона</h3>
+            <p class="note" id="mic-capture-help">Порог, пауза завершения реплики и запас начала применятся при следующем запуске микрофона.</p>
+            <fieldset id="mic-capture-fields" disabled aria-labelledby="mic-capture-title" aria-describedby="mic-capture-help mic-capture-disabled mic-capture-error">
+              <div class="field">
+                <label for="mic-gate-open" class="label fl">Порог открытия</label>
+                <input id="mic-gate-open" type="number" min="0.001" max="0.25" step="any" inputmode="decimal" required>
+              </div>
+              <div class="field">
+                <label for="mic-gate-close" class="label fl">Порог закрытия</label>
+                <input id="mic-gate-close" type="number" min="0.0005" max="0.25" step="any" inputmode="decimal" required>
+              </div>
+              <div class="field">
+                <label for="mic-silence-ms" class="label fl">Тишина до конца реплики</label>
+                <span class="fc"><input id="mic-silence-ms" type="number" min="300" max="5000" step="1" inputmode="numeric" required><span class="unit">мс</span></span>
+              </div>
+              <div class="field">
+                <label for="mic-pre-roll-ms" class="label fl">Запас начала речи</label>
+                <span class="fc"><input id="mic-pre-roll-ms" type="number" min="0" max="500" step="1" inputmode="numeric" required><span class="unit">мс</span></span>
+              </div>
+              <div class="row save-row">
+                <button class="btn secondary" id="mic-capture-reload" type="button" hidden disabled>Загрузить актуальные значения</button>
+                <button class="btn" id="mic-capture-save" type="button" disabled>Сохранить</button>
+              </div>
+            </fieldset>
+            <p class="note" id="mic-capture-disabled" role="status">Загрузка настроек захвата…</p>
+            <p class="note" id="mic-capture-error" role="alert" hidden></p>
           </div>
         </section>
 

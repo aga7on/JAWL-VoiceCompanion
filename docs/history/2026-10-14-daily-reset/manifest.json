@@ -1,0 +1,123 @@
+{
+  "date": "2026-10-14",
+  "base_commit": "0e53329fbbce2d74cef1bae88c06daae70c30923",
+  "branch": "dev/daily-companion-20261014",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "2f417762c0f16cce019497f48072e0c5b77c98bf5d3cecbe9179fe0d87ae58ea"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "e4b94fd73163a4948cf20ad1170e4c6a9c9c0f1bf0ae0a54fdd82bfe370f26f8"
+    },
+    {
+      "path": "HANDOFF.md",
+      "sha256": "264f8c194d70cb3f7780c4adbfcfb73b63aaad589abe635c4c4ceac401b8b961"
+    },
+    {
+      "path": "README.md",
+      "sha256": "351c504bb7d49912a37c98c473ca6c4c8eb3efd11624d5a72cc0db37f8c3a49e"
+    },
+    {
+      "path": "TODO.md",
+      "sha256": "7cc03dafae6ef4cfd03ed0de6a6c90fc50776868c47c3c71d26f2f55e2d185d4"
+    },
+    {
+      "path": "docs/AMBIENT_TRIAGE_BENCHMARK.md",
+      "sha256": "c62020ee3cf552f4a62a3fd61798c468e8a16db1aef936fa3b641e22802717aa"
+    },
+    {
+      "path": "docs/CHARACTER_BLOCKING_V3_REVIEW.md",
+      "sha256": "8f8fcc280c8ee85db3ea3e4b65ce30b3a031740d56726a581f76e2fe664ef1d2"
+    },
+    {
+      "path": "docs/CHARACTER_CLOSEUP_AUDIT_20261004.md",
+      "sha256": "050c8d5dcf1a41e31ad8231f52e27e50abf3ddf0d68999eaccbdbbe84b5274ce"
+    },
+    {
+      "path": "docs/CHARACTER_DELIVERY_20261004.md",
+      "sha256": "28daf23589a10f8739594214a2a41fb0f73d28da2087a4f570e0c6f57e4bd991"
+    },
+    {
+      "path": "docs/CHARACTER_FIT_V4_REVIEW.md",
+      "sha256": "d29763f120aa5c661152119e16d1e4fcd777cb167c1c720718dd82a81c82799b"
+    },
+    {
+      "path": "docs/CHARACTER_HAIR_V7_REVIEW.md",
+      "sha256": "227411c56ca2780e6ecee62cd8c0bcb01b94f7614ab1760ecb7dfecdb7fbed69"
+    },
+    {
+      "path": "docs/CHARACTER_HAIR_V8_REVIEW.md",
+      "sha256": "0f171de5cb58f0be1872697579c56eff1eb23359ec3dd384e749daedb0fa0171"
+    },
+    {
+      "path": "docs/CHARACTER_SHOULDER_V6_REVIEW.md",
+      "sha256": "85c988adaf3fb853a3f92e6534d734264544e4a136e77c9c76e31c8d4cbdb694"
+    },
+    {
+      "path": "docs/COSYVOICE3_CPU_BENCHMARK.md",
+      "sha256": "fa0eccdc14925d18a0a0885b0b6ae1f07f44089b59b9238a8214e398c341ec3e"
+    },
+    {
+      "path": "docs/CRANE_ACCEPTANCE_20260908.md",
+      "sha256": "72cef36ea1cc7574efd44864abbc6e701c44e52abfb0454e02b6c96eadeba700"
+    },
+    {
+      "path": "docs/MINICPM5_1B_REVIEW.md",
+      "sha256": "9c6b0029f9b50d6ab787d9f3dd3c085eb0346c30b4c0c860632b474599806d34"
+    },
+    {
+      "path": "docs/MINICPM_O45_BENCHMARK.md",
+      "sha256": "fd6dc75f35ddd6d9c98a87bab8baf25c3effdeef88ea2ff3b95e10dab769237a"
+    },
+    {
+      "path": "docs/PRODUCT.md",
+      "sha256": "186c61271e2980df9061df38c25fd142a5fbcffa288553b4014f4a6c9b7ec12e"
+    },
+    {
+      "path": "docs/PRODUCTION_DELIVERY_GOAL.md",
+      "sha256": "7ea042e7a6516f287a8b63e919bfdecac052a362e3c22db03b8fbd554a8254e3"
+    },
+    {
+      "path": "docs/PRODUCTION_STATUS_20260909.md",
+      "sha256": "488bc4611d4897b1cb447020f5f7abe4dc64847b0eff30a84995d7c76202c44a"
+    },
+    {
+      "path": "docs/README.md",
+      "sha256": "ea23d36d7c343fdf44df2e86e3723514c8342014af78a38f45d05cc2436e6fb0"
+    },
+    {
+      "path": "docs/RECOVERY_PLAN.md",
+      "sha256": "a34554bcd65e1827f19586490c1af1974adf1500b19aebf12c37103c99bbd863"
+    },
+    {
+      "path": "docs/STATE.md",
+      "sha256": "b08d863157eecb05acf2db0a8f2d01cbcbc34c6f0f43d5c19420a32ba41c01f5"
+    },
+    {
+      "path": "docs/TECHNICAL_AUDIT.md",
+      "sha256": "b6ec32fa6aefe157c39a6146e14b094f21df187dc91c8f28b70e3cf6f1cbba97"
+    },
+    {
+      "path": "docs/UNIFIED_UI_INTEGRATION_PLAN.md",
+      "sha256": "a21d5765253b89bffef380af6129266d5f22556b9d24ce6bd59c4a644e4a9c9e"
+    },
+    {
+      "path": "docs/VOXCPM_INTEGRATION_20260909.md",
+      "sha256": "89bacead42a44ea7a1cb443fd5dc99d5716a10aaa69cb3878515bb33408d23d0"
+    },
+    {
+      "path": "docs/WORK_REMAINING.md",
+      "sha256": "bc9e1b16e792eda3707296b1e2d3fb143aaa12846e97d29abe55d68473bfbe2e"
+    },
+    {
+      "path": "scripts/needle3_extract_probe.py",
+      "sha256": "cf4fa24c73e03faec0abe8fb9da0f5af67d52cb1acd1e8753a8b6eb80bac556e"
+    },
+    {
+      "path": "scripts/needle3_framing_probe.py",
+      "sha256": "eff258008aab324dad6a49c2799a86e73ef3d037313a5ea1b552057189edb757"
+    }
+  ]
+}

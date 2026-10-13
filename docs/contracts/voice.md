@@ -1,10 +1,30 @@
 # VoiceMem Sidecar Contract
 
+Reviewed 2026-10-12. The earlier whole-pipeline evidence is 2026-10-05;
+12Oct adds a controlled real Tera CPU cancellation/follow-up probe, not a new
+whole-pipeline or device acceptance. Current evidence is in STATE.
+GigaAM v3 is the only ASR in the selected product profile. The sidecar's
+`feed_audio`/bundled-recognizer interface below is a compatibility transport,
+not an alternate accepted Russian ASR. ASR is not an audio captioner or affect
+reader. See [README.md](../README.md), [STATE.md](../STATE.md), and
+[TODO.md](../../TODO.md).
+
 This contract keeps the heavy VoiceMem runtime outside the JAWL/web process.
 The current transport is a subprocess stdin/stdout JSON-lines adapter, not a
 network loopback server. The payload contract stays transport-neutral.
 
 ## Input
+
+### Selected TTS worker evidence (12Oct)
+
+`runtime/tera-cancel-actual-20261012-r3.json` passed with observed exit0:
+CPU24/distilled/ru_f1, scoped cancellation then worker+speech lease idle102.8ms,
+three non-silent PCM16 WAVs (complete response1.465–1.859s; RTF0.399–0.482).
+The ephemeral listener was proven in the exact owned Windows Job, including
+its venv child, and stopped afterwards. Default9889 was not started or changed.
+This does not establish transcript accuracy, acoustic quality, precise ONNX
+kernel cancellation timing, first-audible/p95, microphone or live duplex.
+The earlier RAM SKIP and launcher/listener PID mismatch FAIL remain recorded.
 
 One bounded JSON request per line:
 
@@ -38,18 +58,19 @@ For microphone input, the same sidecar accepts bounded mono PCM16 chunks:
 ```
 
 The browser downsamples microphone data to 16 kHz before sending it. The
-sidecar forwards bytes to VoiceMem `stream.feed`, so VoiceMem owns the
-streaming ASR and VAD choice. A `type=end_audio` request sends bounded 32 ms
+sidecar forwards bytes to VoiceMem `stream.feed`; this compatibility surface
+does not make VoiceMem a second product ASR. A `type=end_audio` request sends bounded 32 ms
 silence frames for up to 0.8 seconds, stopping early when VoiceMem confirms a
 turn. Audio is not persisted or included in output events; chunks are limited
 to 48 KiB.
 
-The browser microphone adapter has a local noise gate before this contract is
-invoked. Its threshold is configurable in the control page as a normalized
-RMS amplitude and is stored only in browser local storage. A closed gate does
-not enqueue or transmit PCM; an opening gate includes at most 120 ms of
-bounded pre-roll, and a three-block release plus hysteresis prevents short
-consonants from being clipped. The page exposes instantaneous RMS, peak hold
+The browser microphone adapter has a software noise gate before this contract
+is invoked. Shared gate-open/gate-close, silence and pre-roll settings persist
+through ConfigHub/revision-checked atomic YAML writes and apply on next capture;
+they are not merely browser-local preferences. A closed gate does not enqueue
+or transmit PCM. An opening gate includes bounded pre-roll (120 ms default,
+0–500 ms configurable); release and hysteresis reduce clipped consonants.
+The page exposes instantaneous RMS, peak hold
 and gate state. `getUserMedia` receives browser AEC/noise-suppression hints,
 but the gate cannot promise hardware-level filtering because that depends on
 the browser, driver and microphone interface.
@@ -89,15 +110,77 @@ Partials have exactly one owner — the CrispASR streaming bridge; without it
 `/api/voice/draft` reports mode `unavailable` rather than silently
 re-transcribing the buffer.
 
+### Cancellation and capture ownership
+
+Final ASR sessions are keyed by capture scope plus utterance ID; ambient and
+unleased compatibility voice have separate scopes. The eight-session bound
+includes active transcriptions as well as buffered audio. A final-ASR session
+cannot be replaced while its transcription is active.
+
+`transcribe(wav_bytes, cancel_event=...)` checks cancellation through `is_set()`;
+its per-call child is polled at most every 50 ms and stopped/reaped on cancel
+or timeout before transient WAV cleanup. Transcript JSON is capped at 256 KiB;
+nonzero process exit is failure even if a JSON file exists. These are process
+fixture guarantees, not an accepted real-model cancellation latency SLA.
+
+Successful `/api/voice/capture` release cancels only that capture's final ASR
+and drops its buffered sessions. Its deadline-aware token also expires without
+requiring a status poll; delayed uploads cannot resurrect a released capture.
+`UtteranceBuffer.discard()` cancels one utterance and `close()` cancels all its
+owned transcriptions. Ambient `Stop(flush=false)` cancels only its generation;
+normal flush drains rather than aborting. Late cancelled transcripts produce
+no conversation event or response. Fixture transcribers must accept the
+`cancel_event` keyword, even when they do not cooperate, to test stale-drop.
+
+This does not cancel an already admitted JAWL turn or durable goal. Full
+in-flight barge-in, actual-model TTS/LLM compute release and descendant-tree containment are
+separate B1 acceptance items. Physical microphone and real inference still
+require the live checks in TODO.
+
+### Scoped streaming partials
+
+The partial bridge binds one owned child to `(scope_id, session_id)` plus its
+capture cancellation token. A new capture or utterance reaps the old child
+before spawn; stale reader events cannot mutate the replacement. The raw-PCM
+worker protocol has no acknowledged reset, so this isolation currently reloads
+the child per utterance. Its real GigaAM latency cost is not yet accepted.
+
+HTTP enqueues only canonical accepted PCM, never writes directly into a stalled
+pipe. Raw chunks are48KiB maximum, resampled mono96KiB; queue8 plus one writer
+is at most864KiB retained PCM (not total process RAM). Stdout lines64KiB/text4000;
+invalid schema/numbers are dropped, oversize/queue overload stops the partial
+lane fail-closed without changing the canonical final engine. Retry after a
+partial failure requires reset; no hidden spawn loop or fallback ASR.
+
+Capture release and a50ms deadline/token watcher terminate and reap only the
+owning child. A failed reap remains tracked and blocks replacement. Terminal
+close rejects future feed; scoped reset/old final cannot clear another utterance.
+Draft, preface and WS reset authorize the lease and use matching scope/session;
+cancellation after snapshot returns an empty cancelled result. These are
+17 bridge +9 HTTP fixture tests, including actual HTTP/buffer/bridge/cheap child,
+not a model or microphone SLA. Desktop streaming-partial presentation is OPEN.
+13Oct code audit confirms `/app` has no draft consumer: `/api/voice/audio` in
+canonical external-final mode returns no partial events, and `/api/voice/draft`
+is not queried there. A future consumer must be optional, single-inflight and
+bounded, bind responses to the captured lease/session/utterance generation,
+clear on finalization/stop, and discard stale late results. Draft must never
+become durable memory, USER_FINAL or an instruction to the brain.
+
+The alternative Rust capture path has a cancellable upload/final socket worker,
+100ms poll, captured generation checks, bounded queue and joined cleanup.
+22 unit plus1 CLI test PASS; a stalled upload/final Stop+join is under1s on mock
+HTTP. The10s uncancelled upload deadline is not a current Stop delay. Physical
+device, real provider/duplex and the whole admitted JAWL turn remain separate.
+
 For an offline VoiceMem cognitive path, the sidecar accepts
 `--local-memory`. This injects VoiceMem's local E5 classifier and embedder and
-does not make an LLM request; the acoustic recognizer is still determined by
-the configured VoiceMem audio profile. A separate `warmup` request is exposed
-through the process client and selected from the Companion CLI with
+does not make an LLM request; it does not change the selected product ASR. A
+separate `warmup` request is exposed through the process client and selected
+from the Companion CLI with
 `--voicemem-warmup text|audio`; it returns `VOICE_READY` before capture starts.
-The current bundled sherpa profile is not accepted as a Russian ASR, so Russian
-production capture uses the GigaAM final-utterance bridge described above, which
-is the single validated Russian provider in this product.
+The current bundled sherpa profile is not accepted as a Russian ASR. Russian
+capture uses GigaAM v3 as the only selected ASR; runtime acceptance remains
+bounded by the saved evidence cited in STATE.
 
 ## Output events
 
@@ -157,26 +240,22 @@ child PID. It never exposes the executable path, arguments or environment.
 
 ## Ambient system-audio session
 
-The system-output loopback uses the same sidecar transport only through a
-separate session ID prefixed with `ambient-audio:`. `AmbientAudioASRBridge`
-downmixes/resamples bounded PCM16 and accepts only final `VOICE_TURN` events as
-`AMBIENT_AUDIO_OBSERVATION`. `USER_PARTIAL` never enters ambient memory and no
-ambient event is converted into JAWL `USER_FINAL`, speech or a tool call.
+The system-output loopback uses a separate session ID prefixed with
+`ambient-audio:`. `AmbientAudioASRBridge` accepts only final transcription
+results as `AMBIENT_AUDIO_OBSERVATION`. `USER_PARTIAL` never enters ambient
+memory and no ambient event is converted into JAWL `USER_FINAL`, speech or a
+tool call. GigaAM v3 remains the only ASR; VoiceMem's bundled acoustic
+recognizer is not a production fallback.
 
-Default-output loopback can contain the companion's own TTS. Every playback
-span therefore carries a correlation ID/time range and is suppressed or
-ducked before ambient ASR; an explicitly separated virtual output device is an
-acceptable alternative. The bundled VoiceMem recognizer is not a validated
-Russian ambient ASR. Ambient Russian speech uses Qwen3-ASR or another selected
-Russian provider behind a separate non-user session.
+Default-output loopback can contain the companion's own TTS. Playback spans
+may carry correlation/time metadata for suppression or ducking; this does not
+prove reliable per-application source attribution. Ambient Russian speech
+uses the same canonical GigaAM v3 ASR behind a separate non-user session.
 
-When the optional `ExternalASRService` is configured, `AmbientAudioASRBridge`
-uses it for the ambient session instead of asking VoiceMem's bundled audio
-recognizer to decode Russian. PCM is downmixed/resampled and bounded in the
-external final-utterance buffer; `flush` performs one ASR request and retains
-only the returned text. This is intentionally delayed and must not be used to
-create a user turn. Without external ASR, the VoiceMem path remains available
-for compatibility and is not accepted as Russian production evidence.
+The ambient final-utterance buffer is bounded; `flush` performs one GigaAM
+transcription and retains only returned text. This is intentionally delayed
+and must not create a user turn. A VoiceMem recognizer path may remain in the
+sidecar compatibility contract, but it is not an accepted ASR selection.
 
 ### Speech plus non-speech audio description
 
@@ -202,11 +281,11 @@ metadata and the same ambient-only policy. Invalid provider output, an
 overlong clip or a provider failure is dropped/degraded closed. The result is
 never `USER_FINAL`, proactive speech or a HostOS request.
 
-The current local inventory has Qwen3-ASR but no accepted audio-captioning
-model. Qwen2-Audio is a candidate for an isolated benchmark because its
+The selected ASR is GigaAM v3; no accepted audio-captioning
+model is documented here. Qwen2-Audio was a candidate for an isolated benchmark because its
 official evaluation covers environmental sound and music analysis and its
 documentation recommends short clips; it is not a dependency or production
-selection yet. A guarded Qwen3-ASR probe on the local `nyan_audio_30s.wav`
+selection yet. A historical Qwen3-ASR probe on the local `nyan_audio_30s.wav`
 fixture with a non-speech description prompt returned empty text; the ASR
 model must not be treated as a captioner based on its speech benchmark.
 See the [official Qwen2-Audio repository](https://github.com/QwenLM/Qwen2-Audio).
@@ -227,14 +306,12 @@ See the [official Qwen2-Audio repository](https://github.com/QwenLM/Qwen2-Audio)
 The repository contains the runner in `services/voicemem_sidecar.py`, the
 stdlib client in `src/jawl_voicecompanion/voicemem_client.py` and the web
 bridges at `/api/voice/partial`, `/api/voice/audio` and `/api/voice/end`.
-The optional external client is in
-`src/jawl_voicecompanion/asr.py`; the current microphone path remains an
-input adapter. Russian ASR quality, AEC, real-device capture and production
-model warmup remain validation work. The browser has a bounded RMS activity
-trigger that requests TTS cancellation once while speech is active; it does
-not promote that signal to `BARGE_IN` or `USER_FINAL`. In external-ASR mode,
-final normalized ASR text is authoritative; in bundled mode VoiceMem finalizes.
-Neither amplitude nor ambient audio is proof of an operator instruction.
+The canonical microphone ASR is GigaAM v3. The browser has a bounded RMS
+activity trigger that requests TTS cancellation once while speech is active;
+it does not promote that signal to `BARGE_IN` or `USER_FINAL`. Speech cancel
+must preserve JAWL task/checkpoint state. It does not prove provider inference
+was cancelled. Neither amplitude nor ambient audio is proof of an operator
+instruction.
 
 The browser arms that cancellation trigger only after a real audio element or
 WebAudio buffer source has started playback. A pending TTS request or an
@@ -265,23 +342,24 @@ rotation; the current external-ASR bridge flushes on stop.
 
 ## Live/Voice parity status
 
-The architecture has the necessary seams for a duplex voice experience, but the
-current reliable behavior is still turn-based at the application boundary:
+Duplex is a target, not an accepted capability. The documented behavior is
+turn-based at the application boundary:
 
 | Capability | Current state | Acceptance needed for live parity |
 |---|---|---|
 | Microphone capture | Browser PCM16 chunks, local gate, device selection | Real device test with paced speech, noise and recovery |
-| ASR | External ASR receives chunks; final text is authoritative | Partial transcript events and stable VAD boundaries |
+| ASR | GigaAM v3 is the only engine; final utterance and any configured partial lane are distinct capabilities | Stable partial transcript events and VAD boundaries need their own evidence |
 | JAWL response | Native JAWL receives one finalized user turn | Cancellable streaming response with one terminal envelope |
 | TTS | Streaming endpoint and latest-request-wins orchestration | First-audible timing and provider cancellation verified |
 | Barge-in | RMS can request one TTS cancellation | Speech/backchannel/correction/new-turn classification and no stale audio |
 | Conversation mode | Half-duplex turn completion is reliable path | Full-duplex overlap, interruption and restart E2E |
 
-This is therefore not yet equivalent to ChatGPT Live/Voice. The design remains
+This is therefore not accepted as full duplex. The design remains
 compatible with that direction: input, JAWL reasoning and output share a session
 and correlation IDs, while the arbiter makes a newer user turn supersede stale
-speech and model work. Live parity is not claimed until the duplex interruption
-row passes on a real browser/device profile.
+speech and model work. This does not prove provider inference cancellation.
+Live parity is not claimed until the duplex interruption row passes on a real
+browser/device profile.
 
 ## Product acceptance boundary
 

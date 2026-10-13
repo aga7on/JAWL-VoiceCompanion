@@ -1,5 +1,25 @@
 # Реестр UI-функций: JAWL-консоль vs Companion (U0)
 
+## Актуальная рамка — 2026-10-10
+
+Ниже сохранён инвентаризационный снимок U0; исторические количества DOM/API
+вызовов не считать актуальной метрикой покрытия. Приложение сейчас использует
+Electron single-window `/app` с VRM three-vrm и встроенным чатом. Все функции
+JAWL целятся в общую панель Companion; `/console/` остаётся fallback до полной
+приёмки. Один мозг — JAWL, VoiceMem — сенсорный контекст.
+
+Статус parity фиксируется по конкретным source contract и end-to-end evidence,
+а не процентом перенесённых полей. ConfigHub уже предоставляет revision,
+backups, masked secrets, readback и restart semantics. Полный круговой проход
+скаляров, строковых и объектных списков, а также effective parity остаются
+недоказанными. Сохранять различия saved/effective/restart и не заявлять успех по
+одному наличию control в DOM.
+
+Desktop text chat + mic есть. История, вложения, emoji, slash-команды, library и
+task UX остаются OPEN. Настроенный Bonsai vision endpoint не означает общую
+приёмку OCR/grounding. Текущая карта — [docs/README.md](../README.md), состояние —
+[STATE](../STATE.md), очередь — [TODO](../../TODO.md).
+
 Источник: снапшот jawl-20260906-daily-v2 + фронт компаньона. 
 Сгенерировано `extract_ui_registry.py`; обновлять при изменении панелей.
 

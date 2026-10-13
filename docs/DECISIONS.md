@@ -1,5 +1,12 @@
 # Architecture Decisions
 
+Навигация на 2026-10-10: [карта](README.md), [текущий продукт](PRODUCT.md),
+[состояние](STATE.md), [единственная очередь](../TODO.md).
+Это хронологический журнал, не backlog и не показатель runtime readiness.
+ADR-044–046 заменяют ранние ASR fallback/2D-only/Live2D решения;
+текущий клиент Electron + three-vrm, GigaAM-only, TeraTTS default.
+Старые команды/providers/defaults читать в контексте даты, не как текущий запуск.
+
 Product clarification: 2026-09-05. These decisions describe intent, not live
 readiness. [PRODUCT.md](PRODUCT.md) is the current product specification;
 [STATE.md](STATE.md) records implemented/verified limits. Later clarifications
@@ -29,7 +36,7 @@ voice models to be replaced without rewriting JAWL.
 
 ## ADR-003 — 2D Live2D only for the current product
 
-Status: Accepted
+Status: Superseded by ADR-045
 Date: 2026-08-31
 
 The first avatar target is 2D Live2D. VRM/3D is deferred indefinitely until
@@ -556,7 +563,7 @@ external account actions during development.
 
 ## ADR-036 — Native Rust client as audio owner and Live2D host
 
-Status: Accepted
+Status: Superseded by ADR-045 (avatar) and ADR-046 (capture ownership)
 Date: 2026-09-17
 
 The browser tab must not own the character's hearing or body. A thin native
@@ -762,3 +769,57 @@ Qwen3-VL-2B (port 8983): 4.2 s live answers, ~0.2–0.8 s warm inference,
 ~11 GB VRAM. Bonsai stays available only as an on-demand manual tool via
 `scripts/run_coding_server.ps1` (8986), started explicitly when a heavy
 coding/vision task needs it. The `--all` launcher no longer starts Bonsai.
+
+## ADR-045 — Electron и 3D VRM как текущая оболочка
+
+Status: Accepted
+Date: 2026-10-01; запись консолидирована 2026-10-05
+
+Это фиксация уже выбранной границы из STATE, не новый возврат к 3D.
+Companion использует `desktop/` Electron и three-vrm; Live2D/Mocari удалены.
+JAWL остаётся единственным владельцем persona/memory/tasks/tools/policy.
+Эмоция и speech level одного конверта управляют лицом/телом; OBS должен
+показывать тот же персонаж без private control/chat. Единую панель, LAN и
+OBS принимать отдельно, не считать автоматически готовыми после удаления Live2D.
+
+Прежнее ограничение 2D-only и Cubism-host из ADR-003/036 не действует.
+Существующие VRM/license и активный выбор сохраняются; новая reference-модель
+не поставлена до likeness/physics acceptance. Канон — PRODUCT/STATE,
+art stage gates — CHARACTER_ART_DIRECTION.
+
+## ADR-046 — Один активный mic capture, renderer по умолчанию
+
+Status: Accepted (implementation boundary); live-device acceptance OPEN
+Date: 2026-10-05
+
+Штатный разговор Electron `/app` использует getUserMedia → AudioWorklet →
+bounded software gate → общий UtteranceBuffer/GigaAM/JAWL. Rust остаётся
+явной альтернативой native capture, не параллельным default owner. Обе
+дорожки приобретают один server lease до открытия устройства, renew/release
+сохраняют identity; срок истечения ограничивает потерянного клиента.
+Lease не даёт HostOS/ambient authority и не отменяет durable задачи.
+
+Один ConfigHub хранит `interfaces.yaml voice.capture.*`; revision-check,
+backup и безопасная атомарная запись сохраняют остальные настройки. Порог
+открытия/закрытия, pre-roll и endpoint берутся snapshot при новом capture.
+Save не перезапускает JAWL и не перестраивает текущую реплику. Capture при
+простом открытии страницы не начинается; нужны явный выбор/разрешение.
+RMS gate — программный, не hardware noise suppression и не acoustic echo test.
+
+NDJSON/WebAudio отменяет текущую speech generation, не задачу агента.
+Actual synthetic browser acceptance обязательно до real-provider/device
+duplex/echo/barge-in; PASS одной дорожки не доказывает другую.
+
+## ADR-047 — OmniVoice is the default TTS voice
+
+Status: Accepted
+Date: 2026-10-13
+
+Owner decision: default synthesis switches from TeraTTSv2 (ru_f1, port 9889) to
+OmniVoice (k2-fsa venv `G:\AI\OmniVoice`, port 9890, cuda:1, reference voice
+`runtime/models/asr/voice_ref_aleksandra.wav`). Rationale: explicit owner request
+2026-10-13; RU realtime lane measured next to the Hikari brain; live strict run
+attempt7 proved the owned Job holds 9890 and the owner confirmed hearing the voice.
+TeraTTSv2 remains a selectable provider (`-TtsProvider tera`); OmniVoice paths stay
+launcher-side until the manifest carries them. Prosody/emotion alignment and voice
+cloning remain separate work (B2-06, A-04 lip-sync).
