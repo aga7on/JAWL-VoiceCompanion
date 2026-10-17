@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.composition import build_companion_runtime  # noqa: E402
 from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge, AmbientAudioService  # noqa: E402
-from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler  # noqa: E402
+from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
+from jawl_voicecompanion.resources import ResourceGovernor  # noqa: E402
 from jawl_voicecompanion.asr import UtteranceBuffer  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
@@ -727,9 +728,11 @@ class LocalE2ETests(unittest.TestCase):
         self.ambient_memory = AmbientMemoryBuffer(enabled=True)
         self.ambient_scheduler = AmbientTriageScheduler(self.ambient_memory, interval_seconds=1)
         self.ambient_bridge = AmbientAudioASRBridge(_AmbientVoiceMem(), self.ambient_memory)
+        self.resource_governor = ResourceGovernor()
         self.ambient_audio = AmbientAudioService(
             self.ambient_bridge,
             capture=SystemAudioLoopback(self.ambient_bridge.consume, backend=_AmbientBackend()),
+            governor=self.resource_governor,
         )
         self.jawl_event_dir = Path(self.temp.name) / "jawl-events"
         self.server = create_server(
@@ -746,6 +749,7 @@ class LocalE2ETests(unittest.TestCase):
             ambient_memory=self.ambient_memory,
             ambient_audio=self.ambient_audio,
             ambient_scheduler=self.ambient_scheduler,
+            resource_governor=self.resource_governor,
             activity_provider=lambda: {
                 "status": "verified",
                 "idle_seconds": 120.0,
@@ -913,15 +917,17 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(doctor_checks["avatar"]["ready"])
         self.assertTrue(doctor_checks["hostos"]["ready"])
         self.assertNotIn("must-not-cross", json.dumps(doctor, ensure_ascii=False))
-        with urlopen(self.base + "/", timeout=3) as response:
+        with urlopen(self.base + "/app", timeout=3) as response:
             frontend = response.read()
-            self.assertIn(b"attention-dnd", frontend)
-            self.assertIn(b"/api/avatar/audio", frontend)
-            self.assertIn(b"createMediaElementSource", frontend)
-            self.assertIn(b"hands-free", frontend)
-            self.assertIn(b"finishVoiceUtterance", frontend)
+            self.assertIn(b"JAWL Companion", frontend)
+            self.assertIn(b"hud-mic", frontend)
+            self.assertIn(b"hud-senses", frontend)
+            self.assertIn(b"hud-dnd", frontend)
+            self.assertIn(b"compact-mode", frontend)
+        with urlopen(self.base + "/app.js", timeout=3) as response:
+            js = response.read()
+            self.assertIn(b"/api/attention", js)
         # ADR-045: the Live2D /avatar page and /avatar-assets store are
-        # removed (the 3D VRM avatar lives in the Electron shell).
         with self.assertRaises(HTTPError) as context:
             urlopen(self.base + "/avatar", timeout=3)
         self.assertEqual(context.exception.code, 404)
@@ -1460,6 +1466,27 @@ class LocalE2ETests(unittest.TestCase):
         _, stopped = self.post_json("/api/ambient-audio/stop", {})
         self.assertFalse(stopped["state"]["capture"]["running"])
         self.assertEqual(stopped["state"]["flush"]["status"], "flushed")
+
+    def test_ambient_audio_pause_and_resume_lifecycle(self):
+        self.server.ambient_memory.set_enabled(True)
+        _, started = self.post_json("/api/ambient-audio/start", {})
+        self.assertTrue(started["state"]["capture"]["running"])
+        _, paused = self.post_json("/api/ambient-audio/pause", {})
+        self.assertTrue(paused["state"]["paused"])
+        self.assertFalse(paused["state"]["capture"]["running"])
+        _, resumed = self.post_json("/api/ambient-audio/resume", {})
+        self.assertFalse(resumed["state"]["paused"])
+        self.assertTrue(resumed["state"]["capture"]["running"])
+        _, stopped = self.post_json("/api/ambient-audio/stop", {})
+        self.assertFalse(stopped["state"]["capture"]["running"])
+
+    def test_gaming_mode_marks_ambient_audio_as_yielding(self):
+        _, configured = self.post_json("/api/resources", {"gaming_mode": True})
+        self.assertTrue(configured["resources"]["gaming_mode"])
+        _, state = self.get_json("/api/ambient-audio")
+        self.assertTrue(state["yields_to_game"])
+        _, reset = self.post_json("/api/resources", {"gaming_mode": False})
+        self.assertFalse(reset["resources"]["gaming_mode"])
 
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
         _, status = self.get_json("/api/voice/status")

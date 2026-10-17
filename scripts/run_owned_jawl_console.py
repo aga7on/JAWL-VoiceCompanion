@@ -8,7 +8,15 @@ import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "runtime/jawl-sources/jawl-20260906-daily-v2"
+SOURCE_ROOT = (ROOT / "runtime/jawl-sources").resolve()
+
+
+def resolve_source() -> Path:
+    raw = os.environ.get("JAWL_SOURCE_ROOT")
+    source = Path(raw).resolve() if raw else (SOURCE_ROOT / "jawl-20260906-daily-v2").resolve()
+    if source == SOURCE_ROOT or not source.is_relative_to(SOURCE_ROOT) or not source.is_dir():
+        raise ValueError("JAWL_SOURCE_ROOT must name a source snapshot under runtime/jawl-sources")
+    return source
 
 
 class RedactedConsole:
@@ -90,8 +98,9 @@ def main() -> int:
     sys.dont_write_bytecode = True
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     from verify_jawl_snapshot import verify
-    verify(SOURCE)
-    sys.path.insert(0, str(SOURCE))
+    source = resolve_source()
+    verify(source)
+    sys.path.insert(0, str(source))
     secrets = [os.environ.get("CONSOLE_TOKEN", "")]
     for index, arg in enumerate(sys.argv[1:], 1):
         if arg == "--token" and index + 1 < len(sys.argv):
@@ -105,6 +114,16 @@ def main() -> int:
     sys.stdout, sys.stderr = (RedactedConsole(stream, secrets) for stream in streams)
     try:
         from src.web import server
+        from src.web import agent
+        from src.instances.manager import InstanceManager
+        owned_brain_script = (ROOT / "scripts" / "run_owned_jawl_brain.py").resolve()
+        agent.MAIN_SCRIPT = owned_brain_script
+        load_owned_extension("_owned_supervisor_identity", "native_supervisor_identity.py").install_native_supervisor_identity(InstanceManager)
+        agent._supervised_manager = lambda: InstanceManager(
+            agent.ROOT_DIR, entrypoint=owned_brain_script
+        )
+        os.environ["JAWL_SOURCE_ROOT"] = str(source)
+
         extension = load_extension()
         delivery_extension = load_delivery_extension()
         delivery_extension.install_native_delivery_guard()

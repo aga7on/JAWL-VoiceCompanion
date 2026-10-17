@@ -24,7 +24,40 @@ _BINDING_TEXT = (
     "not a background request. A terminal delivery is still required. "
     "If this turn has already been delivered, do not send it again."
 )
+_FAST_CONVERSATION_HINT = (
+    "Fast conversational reply mode: keep observation/reasoning/reflection "
+    "minimal. Return one JSON envelope with exactly one "
+    "HostTerminalMessages.send_message_to_terminal action using its `text` "
+    "argument. Close the actions array and the envelope after that action; "
+    "do not repeat the delivery. Use no unnecessary inspection/tool loops."
+)
+_ACTION_KEYWORDS_RE = re.compile(
+    r"(?:\b(?:file|folder|dir|path|code|repo|git|terminal|shell|cmd|powershell|"
+    r"process|debug|ghidra|x64dbg|browser|url|http|goal|task|remember|forget|"
+    r"memory|note|screen|window|click|type|open|run|execute|create|delete|edit)\b|"
+    r"файл|папк|директор|код|репо|гит|терминал|консоль|команд|процесс|отлад|"
+    r"гидр|браузер|ссылк|сайт|цель|задач|запомн|забуд|памят|заметк|экран|окн|"
+    r"клик|нажм|открой|запуст|выполн|создай|удал|исправ|мод|скрипт|провер)",
+    re.IGNORECASE,
+)
 _REGISTRATION_LOCK = RLock()
+
+
+def is_conversational_turn_payload(payload: Any) -> bool:
+    """Return True when a correlated Companion turn is a short casual utterance."""
+    if not isinstance(payload, dict):
+        return False
+    if not _valid_turn_id(payload.get("_companion_turn_id")):
+        return False
+    if payload.get("_jawl_context_profile"):
+        return False
+    message = payload.get("message")
+    if not isinstance(message, str):
+        return False
+    text = message.strip()
+    if not text or len(text) > 160 or text.startswith("/"):
+        return False
+    return _ACTION_KEYWORDS_RE.search(text) is None
 
 
 def _valid_turn_id(value: Any) -> str:
@@ -110,6 +143,12 @@ def install_native_jawl_turn_context(
         active_turn_id = _valid_turn_id(current_turn_id())
         if not payload_turn_id or payload_turn_id != active_turn_id:
             return ""
+        if is_conversational_turn_payload(payload):
+            return (
+                f"{_BINDING_TEXT}\n"
+                f"{_FAST_CONVERSATION_HINT}\n"
+                f"turn_id: {payload_turn_id}"
+            )
         return f"{_BINDING_TEXT}\nturn_id: {payload_turn_id}"
 
     def ensure_registered(registry: Any) -> None:

@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import queue
 import socket
+import statistics
 import sys
 import threading
 import time
@@ -217,6 +219,8 @@ class ProfileReport:
     tool_lifecycle_turns: int = 0
     require_tool_lifecycle: bool = False
     failures: list[str] = field(default_factory=list)
+    turn_latencies_ms: list[float] = field(default_factory=list)
+    scoped_event_counts: dict[str, int] = field(default_factory=dict)
 
     def finish(self) -> None:
         self.finished_at = _utc_now()
@@ -240,9 +244,15 @@ class ProfileReport:
             "tool_lifecycle_turns": self.tool_lifecycle_turns,
             "require_tool_lifecycle": self.require_tool_lifecycle,
             "event_counts": dict(sorted(self.event_counts.items())),
+            "scoped_event_counts": dict(sorted(self.scoped_event_counts.items())),
             "duplicate_events": self.duplicate_events,
             "sequence_gaps": list(self.sequence_gaps),
             "failures": list(self.failures),
+            "turn_latencies_ms": list(self.turn_latencies_ms),
+            "latency_boundary": "native HTTP turn dispatch to correlated terminal event; no audio",
+            "latency_p50_ms": statistics.median(self.turn_latencies_ms) if len(self.turn_latencies_ms) >= 20 else None,
+            "latency_p95_ms": sorted(self.turn_latencies_ms)[math.ceil(len(self.turn_latencies_ms) * .95) - 1] if len(self.turn_latencies_ms) >= 20 else None,
+            "latency_percentile_method": "median; nearest-rank p95; published for at least20 samples",
             "pass": not self.failures
             and self.completed_turns == self.requested_turns
             and (not self.cancel_requested or self.cancellation_observed)
@@ -272,6 +282,7 @@ class NativeGatewayProfile:
         self.turn_timeout = float(args.turn_timeout)
         self.cancel_delay = float(args.cancel_delay)
         self.prompt_template = args.prompt_template
+        self.prompts = _load_prompts(getattr(args, "prompts_file", None), args.turns)
         self.report = ProfileReport(
             base_url=self.base_url,
             requested_turns=args.turns,
@@ -283,6 +294,8 @@ class NativeGatewayProfile:
         self._last_sequence = 0
         self._turn_types: dict[str, set[str]] = {}
         self._lifecycle_turns: set[str] = set()
+        self._submitted_turns: set[str] = set()
+        self._terminal_counts: dict[str, int] = {}
 
     def _post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -357,6 +370,14 @@ class NativeGatewayProfile:
             self._seen_sequences.add(sequence)
             self._last_sequence = sequence
             self.report.event_counts[event.type] = self.report.event_counts.get(event.type, 0) + 1
+            if event.turn_id in self._submitted_turns:
+                counts = self.report.scoped_event_counts
+                counts[event.type] = counts.get(event.type, 0) + 1
+                if event.type in _TERMINAL_EVENTS:
+                    total = self._terminal_counts.get(event.turn_id, 0) + 1
+                    self._terminal_counts[event.turn_id] = total
+                    if total > 1:
+                        raise ProfileFailure(f"turn {event.turn_id} has multiple terminal events")
             turn_types = self._turn_types.setdefault(event.turn_id, set())
             turn_types.add(event.type)
             if event.type in _TOOL_EVENTS:
@@ -407,16 +428,25 @@ class NativeGatewayProfile:
 
     def _submit(self, reader: SseBatchReader, text: str) -> tuple[str, str]:
         turn_id = f"profile-{uuid4().hex}"
+        self._submitted_turns.add(turn_id)
+        started = time.perf_counter()
         result = self._post(self.turn_url, {"text": text, "turn_id": turn_id})
         if result.get("ok") is not True or result.get("turn_id") != turn_id:
             raise ProfileFailure("JAWL did not acknowledge the correlated turn")
         terminal = self._wait_for_turn(reader, turn_id)
-        self._require_lifecycle(reader, turn_id)
-        time.sleep(_TURN_SETTLE_DELAY_SEC)
+        self.report.turn_latencies_ms.append(round((time.perf_counter() - started) * 1000, 1))
+        if terminal == "assistant.final":
+            self._require_lifecycle(reader, turn_id)
+        deadline = time.monotonic() + _TURN_SETTLE_DELAY_SEC
+        while time.monotonic() < deadline:
+            packet = reader.get(min(.05, max(.001, deadline - time.monotonic())))
+            if packet is not None:
+                self._consume(packet)
         return turn_id, terminal
 
     def _run_reconnect_probe(self, reader: SseBatchReader, baseline: int) -> SseBatchReader:
         turn_id = f"profile-reconnect-{uuid4().hex}"
+        self._submitted_turns.add(turn_id)
         result = self._post(
             self.turn_url,
             {"text": self.prompt_template.format(index=0), "turn_id": turn_id},
@@ -436,6 +466,7 @@ class NativeGatewayProfile:
 
     def _run_cancellation_probe(self, reader: SseBatchReader) -> None:
         turn_id = f"profile-cancel-{uuid4().hex}"
+        self._submitted_turns.add(turn_id)
         result = self._post(
             self.turn_url,
             {
@@ -469,7 +500,7 @@ class NativeGatewayProfile:
             for index in range(1, self.report.requested_turns + 1):
                 turn_id, terminal = self._submit(
                     reader,
-                    self.prompt_template.format(index=index),
+                    self.prompts[index - 1] if self.prompts else self.prompt_template.format(index=index),
                 )
                 if terminal != "assistant.final":
                     raise ProfileFailure(f"normal turn {turn_id} ended with {terminal}")
@@ -482,6 +513,21 @@ class NativeGatewayProfile:
         return self.report.as_dict()
 
 
+def _load_prompts(path: Path | None, turns: int) -> list[str] | None:
+    if path is None:
+        return None
+    with Path(path).open("rb") as source:
+        raw = source.read(256 * 1024 + 1)
+    if len(raw) > 256 * 1024:
+        raise ValueError("prompt file exceeds256KiB")
+    values = json.loads(raw.decode("utf-8"))
+    if not isinstance(values, list) or len(values) != turns or any(
+        not isinstance(value, str) or not value.strip() or len(value) > 4000 for value in values
+    ):
+        raise ValueError("prompt file must contain exactly one bounded nonempty string per turn")
+    return values
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=os.environ.get("JAWL_WEB_URL", "http://127.0.0.1:8770"))
@@ -490,6 +536,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-live-turns", action="store_true", help="required because turns reach the real model")
     parser.add_argument("--dry-run", action="store_true", help="print the profile plan without connecting")
     parser.add_argument("--turns", type=int, default=100)
+    parser.add_argument("--prompts-file", type=Path, help="UTF-8 JSON array, exactly one short prompt per turn")
     parser.add_argument("--after", type=int, default=0, help="known native event cursor to resume from")
     parser.add_argument(
         "--timeout",

@@ -117,7 +117,7 @@ class OwnedPipeTests(unittest.TestCase):
         self.addCleanup(retained_handle[0].CloseHandle, retained_handle[1])
 
         self.assertEqual(process.wait(timeout=10), 0)
-        self._assert_signaled(retained_handle)
+        self._assert_signaled(retained_handle, timeout_ms=0)
         self.assertEqual(self._bounded_read(process, process.stdout.read), b'')
         self.assertFalse(process.cleanup_pending)
 
@@ -144,30 +144,41 @@ class OwnedPipeTests(unittest.TestCase):
 
         process.terminate()
         self.assertIsNotNone(process.wait(timeout=10))
-        self._assert_signaled(retained_handle)
+        self._assert_signaled(retained_handle, timeout_ms=0)
         self.assertIsNone(foreign.poll(), 'terminating the owned Job affected a foreign process')
 
     def test_failed_job_drain_keeps_cleanup_pending_for_retry(self):
-        process = self._spawn('pass', bufsize=0)
+        process = self._spawn(
+            'import subprocess,sys,time; '
+            'p=subprocess.Popen([sys.executable,"-B","-c","import time;time.sleep(60)"]); '
+            'print(p.pid,flush=True);time.sleep(60)', bufsize=0)
+        child_pid = int(self._bounded_read(process, process.stdout.readline).strip())
+        retained_handle = self._process_wait_handle(child_pid)
+        self.addCleanup(retained_handle[0].CloseHandle, retained_handle[1])
+        process.terminate()
+        self.assertTrue(process._wait_handles)
         process.stdin.close()
         real_drain = supervisor._drain_windows_job
         drain_calls = 0
 
-        def fail_once_then_drain(*args):
+        def fail_once_then_drain(*args, **kwargs):
             nonlocal drain_calls
             drain_calls += 1
             if drain_calls == 1:
                 raise OSError('injected drain failure')
-            return real_drain(*args)
+            return real_drain(*args, **kwargs)
 
         with patch.object(supervisor, '_drain_windows_job',
                           side_effect=fail_once_then_drain) as drain:
             with self.assertRaisesRegex(OSError, 'injected drain failure'):
                 process.wait(timeout=10)
             self.assertTrue(process.cleanup_pending)
-            self.assertEqual(process.wait(timeout=5), 0)
+            self.assertTrue(process._wait_handles, 'retry must retain exact descendant wait identities')
+            self.assertIsNotNone(process.wait(timeout=5))
             self.assertEqual(drain.call_count, 2)
         self.assertFalse(process.cleanup_pending)
+        self.assertEqual(process._wait_handles, [])
+        self._assert_signaled(retained_handle, timeout_ms=0)
 
 
 if __name__ == '__main__':

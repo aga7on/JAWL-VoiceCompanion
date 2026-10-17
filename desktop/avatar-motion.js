@@ -1,6 +1,6 @@
 // Small additive motion layer. Restore its offsets before writing the next
 // base pose; no Three.js dependency keeps the motion math testable alone.
-const MODES = new Set(['idle', 'listening', 'speaking']);
+const MODES = new Set(['idle', 'listening', 'thinking', 'speaking']);
 const GESTURES = {wave: 2.4, greeting: 2.8, nod: 0.9};
 const LIMITS = {upperChestX: 0.16, upperChestZ: 0.07, forearmZ: 0.72, handZ: 0.62, handX: 0.16};
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
@@ -23,7 +23,7 @@ export function createAvatarMotionController({reducedMotion = false} = {}) {
   let elapsed = 0;
   let gesture = null;
   let currentVrm = null;
-  const weights = {idle: 1, listening: 0, speaking: 0};
+  const weights = {idle: 1, listening: 0, thinking: 0, speaking: 0};
   const applied = new Map();
 
   function setState(next) {
@@ -75,9 +75,10 @@ export function createAvatarMotionController({reducedMotion = false} = {}) {
 
     const speaking = Number.isFinite(Number(speechLevel)) && Number(speechLevel) > 0.04;
     const target = reduced
-      ? {idle: 0, listening: 0, speaking: 0}
+      ? {idle: 0, listening: 0, thinking: 0, speaking: 0}
       : {idle: mode === 'idle' && !speaking ? 1 : 0,
         listening: mode === 'listening' && !speaking ? 1 : 0,
+        thinking: mode === 'thinking' && !speaking ? 1 : 0,
         speaking: speaking || mode === 'speaking' ? 1 : 0};
     const blend = 1 - Math.exp(-safeDelta / 0.24);
     for (const key of Object.keys(weights)) weights[key] += (target[key] - weights[key]) * blend;
@@ -97,6 +98,11 @@ export function createAvatarMotionController({reducedMotion = false} = {}) {
     add(upperChest, 'x', Math.sin(elapsed * Math.PI * 0.48) * 0.018 * weights.idle, LIMITS.upperChestX);
     add(upperChest, 'x', 0.026 * weights.listening, LIMITS.upperChestX);
     add(upperChest, 'z', Math.sin(elapsed * 0.55) * 0.018 * weights.listening, LIMITS.upperChestZ);
+    // Thinking / working pose: thoughtful upper-body lean and raised forearm contemplation.
+    add(upperChest, 'x', 0.038 * weights.thinking, LIMITS.upperChestX);
+    add(upperChest, 'z', -0.028 * weights.thinking + Math.sin(elapsed * 0.9) * 0.012 * weights.thinking, LIMITS.upperChestZ);
+    add(forearm, 'z', -0.32 * weights.thinking, LIMITS.forearmZ);
+    add(hand, 'x', (0.06 + Math.sin(elapsed * 1.8) * 0.025) * weights.thinking, LIMITS.handX);
     add(upperChest, 'x', Math.sin(elapsed * 5.2) * 0.014 * weights.speaking, LIMITS.upperChestX);
     add(hand, 'x', Math.sin(elapsed * 4.8) * 0.035 * weights.speaking, LIMITS.handX);
 

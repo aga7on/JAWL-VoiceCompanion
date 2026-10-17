@@ -40,10 +40,10 @@ const SETTING_FIELDS = [
 ];
 
 const SETTING_GROUPS = [
-  { title: 'Интерфейсы · MCP', match: (k) => k.startsWith('interfaces:mcp') },
-  { title: 'Интерфейсы · Debug Broker', match: (k) => k.startsWith('interfaces:debug_broker') },
-  { title: 'Мультимодальность', match: (k) => k.startsWith('interfaces:multimodality') },
-  { title: 'Личность и LLM', match: (k) => k.startsWith('settings:llm') || k.startsWith('settings:identity') || k.startsWith('settings:system') },
+  { title: '🧠 Мозг и Личность (JAWL Core)', match: (k) => k.startsWith('settings:llm') || k.startsWith('settings:identity') || k.startsWith('settings:system') },
+  { title: '👁 Чувства и Мультимодальность', match: (k) => k.startsWith('interfaces:multimodality') },
+  { title: '🔌 Инструменты и MCP-мосты', match: (k) => k.startsWith('interfaces:mcp') },
+  { title: '🛠 Инженерия и Реверс (Debug Broker / RE)', match: (k) => k.startsWith('interfaces:debug_broker') },
 ];
 
 function fieldDescriptor(key, value) {

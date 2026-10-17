@@ -616,9 +616,12 @@ class AmbientAudioService:
         bridge: AmbientAudioASRBridge,
         *,
         capture: SystemAudioLoopback | None = None,
+        governor: Any | None = None,
     ) -> None:
         self.bridge = bridge
         self.capture = capture or SystemAudioLoopback(bridge.consume, session_id="ambient-audio")
+        self.governor = governor
+        self._paused = False
 
     def start(self) -> dict[str, Any]:
         if not self.bridge.memory.enabled:
@@ -640,10 +643,36 @@ class AmbientAudioService:
             flushed = self.bridge.stop(self.capture.session_id, flush=True)
         return {"capture": capture_state, "bridge": self.bridge.state(), "flush": flushed}
 
+    def pause(self) -> dict[str, Any]:
+        self._paused = True
+        if self.capture.running:
+            self.capture.stop()
+        return self.state()
+
+    def resume(self) -> dict[str, Any]:
+        self._paused = False
+        if not self.capture.running and self.bridge.memory.enabled:
+            try:
+                self.capture.start()
+                self.bridge.start(self.capture.session_id)
+            except Exception:
+                pass
+        return self.state()
+
+    def _yields_to_game(self) -> bool:
+        if self.governor is None:
+            return False
+        try:
+            return bool(self.governor.state().get("gaming_mode"))
+        except Exception:
+            return False
+
     def state(self) -> dict[str, Any]:
         return {
             "configured": True,
             "enabled": self.bridge.memory.enabled,
+            "paused": self._paused,
+            "yields_to_game": self._yields_to_game(),
             "capture": self.capture.state(),
             "bridge": self.bridge.state(),
         }

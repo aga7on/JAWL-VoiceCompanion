@@ -46,16 +46,36 @@ class JawlGoalRecoveryTests(unittest.TestCase):
             key: os.environ.get(key)
             for key in (
                 "JAWL_INSTANCE_ID",
+                "JAWL_INSTANCE_HOME",
+                "JAWL_INSTANCES_ROOT",
+                "JAWL_DATA_DIR",
+                "JAWL_CONFIG_DIR",
                 "JAWL_LOG_DIR",
+                "JAWL_CACHE_DIR",
+                "JAWL_PROMPT_DIR",
+                "JAWL_SANDBOX_DIR",
+                "JAWL_ENV_FILE",
                 "PYTHONDONTWRITEBYTECODE",
             )
         }
         with tempfile.TemporaryDirectory() as temp:
             temp_root = Path(temp)
+            instance = temp_root / "instance"
+            instances = temp_root / "instances"
+            for name in ("data", "config", "logs", "cache", "prompts", "sandbox"):
+                (instance / name).mkdir(parents=True, exist_ok=True)
             os.environ.update(
                 {
                     "JAWL_INSTANCE_ID": "goal-recovery-test",
-                    "JAWL_LOG_DIR": str(temp_root / "logs"),
+                    "JAWL_INSTANCE_HOME": str(instance),
+                    "JAWL_INSTANCES_ROOT": str(instances),
+                    "JAWL_DATA_DIR": str(instance / "data"),
+                    "JAWL_CONFIG_DIR": str(instance / "config"),
+                    "JAWL_LOG_DIR": str(instance / "logs"),
+                    "JAWL_CACHE_DIR": str(instance / "cache"),
+                    "JAWL_PROMPT_DIR": str(instance / "prompts"),
+                    "JAWL_SANDBOX_DIR": str(instance / "sandbox"),
+                    "JAWL_ENV_FILE": str(instance / ".env"),
                     "PYTHONDONTWRITEBYTECODE": "1",
                 }
             )

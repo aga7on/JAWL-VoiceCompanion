@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import time
 from urllib.error import HTTPError
@@ -30,8 +32,12 @@ def probe(report: dict) -> None:
         path = home / key.lower()
         path.mkdir()
         env["JAWL_" + key + "_DIR"] = str(path)
-    env.update(CONSOLE_TOKEN="local-admission-probe", JAWL_INSTANCES_ROOT=str(ROOT / "runtime/instances"),
+    env.update(CONSOLE_TOKEN="local-admission-probe",
+               JAWL_CACHE_DIR=str(home / "cache"),
+               JAWL_INSTANCES_ROOT=str(ROOT / "runtime/instances"),
                PYTHONPATH=str(PINNED_SOURCE))
+    if source_root := os.environ.get("JAWL_SOURCE_ROOT"):
+        env["JAWL_SOURCE_ROOT"] = source_root
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -104,6 +110,45 @@ def probe(report: dict) -> None:
                 report.update(listener_gone=False, status="failed")
                 break
             time.sleep(.02)
+
+    brain_env = dict(env)
+    brain_env["JAWL_BRAIN_BOOTSTRAP_ONLY"] = "1"
+    brain_process = subprocess.Popen(
+        [str(PINNED_PYTHON), "-B", str(ROOT / "scripts/run_owned_jawl_brain.py")],
+        cwd=str(home), env=brain_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+    )
+    try:
+        brain_output, _ = brain_process.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        brain_process.kill()
+        brain_output, _ = brain_process.communicate(timeout=3)
+    report["brain_bootstrap"] = {
+        "pid": brain_process.pid,
+        "exit_code": brain_process.returncode,
+        "initialized": "Owned brain entrypoint initialized." in brain_output,
+        "probe_complete": "Owned brain bootstrap probe complete." in brain_output,
+        "main_import_skipped": "Traceback" not in brain_output,
+    }
+    receipt = json.loads((Path(brain_env["JAWL_LOG_DIR"]) / "owned-brain-startup.json").read_text(encoding="utf-8"))
+    report["brain_bootstrap"]["startup_receipt"] = receipt
+    # Windows venv python.exe is a redirector: Popen may retain its PID while
+    # the actual interpreter (which writes the receipt) is its direct child.
+    report["brain_bootstrap"]["runtime_pid"] = receipt["pid"]
+    report["brain_bootstrap"]["venv_redirector_observed"] = receipt["parent_pid"] == brain_process.pid
+    report["brain_bootstrap"]["identity_verified"] = bool(
+        (receipt["pid"] == brain_process.pid or receipt["parent_pid"] == brain_process.pid)
+        and receipt["bootstrap_only"] is True
+        and receipt["hooks"] == {"delivery_guard": True, "turn_context": True, "policy_completion": True}
+        and Path(receipt["instance_home"]).resolve() == home.resolve()
+    )
+    if not (brain_process.returncode == 0 and report["brain_bootstrap"]["initialized"]
+            and report["brain_bootstrap"]["probe_complete"]
+            and report["brain_bootstrap"]["main_import_skipped"]):
+        report.update(status="failed")
+        raise AssertionError("owned brain child bootstrap did not complete")
+    if not report["brain_bootstrap"]["identity_verified"]:
+        raise AssertionError("owned brain bootstrap receipt identity did not match")
 
 
 def main(argv=None) -> int:

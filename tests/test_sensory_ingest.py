@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -120,6 +121,27 @@ class SensoryOffsetPersistenceTests(unittest.TestCase):
         _write(self.path, {"type": "speech", "ts": "t2", "text": "снова", "speech_seconds": 1.0})
         restarted = SensoryIngestor(self.memory, self.path, music_dedupe_s=300.0)
         self.assertEqual(restarted.state()["offset"], 0)
+
+    def test_pause_blocks_polling_until_resume(self):
+        ingestor = SensoryIngestor(
+            self.memory, self.path, music_dedupe_s=300.0, poll_interval_s=0.05
+        )
+        self.addCleanup(ingestor.stop)
+        _write(self.path, {"type": "screen_frame", "ts": "t", "window": "Code", "changed": True})
+        ingestor.pause()
+        self.assertTrue(ingestor.state()["paused"])
+        ingestor.start()
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(ingestor.state()["counters"]["visual"], 0)
+        ingestor.resume()
+        self.assertFalse(ingestor.state()["paused"])
+        deadline = time.monotonic() + 3.0
+        while ingestor.state()["counters"]["visual"] == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(ingestor.state()["counters"]["visual"], 1)
+        self.assertEqual(self.memory.state()["observation_count"], 1)
 
 
 if __name__ == "__main__":

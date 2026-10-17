@@ -217,16 +217,16 @@ while not stop.exists():
             finally:
                 log_stream.close()
 
+            counter = paths.instance_home / "child-starts.txt"
             if not wait_until(
                 lambda: manager.supervisor_status()["running"]
-                and child_alive(manager, instance_id),
+                and child_alive(manager, instance_id)
+                and counter.is_file()
+                and counter.read_text(encoding="utf-8") == "1",
                 args.timeout,
             ):
                 raise AcceptanceFailure("supervisor or first child did not become ready")
             first = manager.status(instance_id)
-            counter = paths.instance_home / "child-starts.txt"
-            if counter.read_text(encoding="utf-8") != "1":
-                raise AcceptanceFailure("first child generation marker was not written")
 
             first_pid = first["runtime"]["pid"]
             kill_owned(manager, instance_id)

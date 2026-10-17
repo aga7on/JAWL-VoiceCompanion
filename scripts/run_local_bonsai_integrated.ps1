@@ -194,7 +194,7 @@ try {
     # profile, under its profile lock. Never pre-write the daily profile here.
     $integratedArgs = @(
         '-StartLocalAudio', '-UseVoiceMem', '-RunSeconds', [string]$RunSeconds,
-        '-ProfileName', $ProfileName, '-JawlTemperatureOverride', '0.3',
+        '-ProfileName', $ProfileName, '-JawlTemperatureOverride', '0.3', '-NativeContextWindowTokens', [string]$BrainContextSize,
         '-JawlConsolePort', [string]$JawlConsolePort, '-ControlPort', [string]$ControlPort,
         '-PresentationPort', [string]$PresentationPort, '-TtsPort', [string]$TtsPort,
         '-TtsProvider', $TtsProvider, '-VisionUrl', $VisionUrl, '-VisionModel', $VisionModel,

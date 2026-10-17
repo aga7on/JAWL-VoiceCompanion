@@ -65,6 +65,27 @@ class OwnedConsoleEntryTests(unittest.TestCase):
             with patch.object(entry, "ROOT", root), patch.dict(os.environ, env, clear=True), self.assertRaises(ValueError):
                 entry.check_isolation()
 
+    def test_source_selection_is_confined_to_managed_snapshot_root(self):
+        expected = (ROOT / "runtime/jawl-sources/jawl-20260906-daily-v2").resolve()
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(entry.resolve_source(), expected)
+        with tempfile.TemporaryDirectory(dir=ROOT / "runtime/jawl-sources") as temp:
+            candidate = Path(temp).resolve()
+            with patch.dict(os.environ, {"JAWL_SOURCE_ROOT": str(candidate)}, clear=True):
+                self.assertEqual(entry.resolve_source(), candidate)
+            outside = Path(temp).parent
+            with patch.dict(os.environ, {"JAWL_SOURCE_ROOT": str(outside)}, clear=True):
+                with self.assertRaisesRegex(ValueError, "under runtime/jawl-sources"):
+                    entry.resolve_source()
+
+    def test_brain_bootstrap_probe_exits_before_native_main_import(self):
+        source = (ROOT / "scripts/run_owned_jawl_brain.py").read_text(encoding="utf-8")
+        self.assertIn('JAWL_BRAIN_BOOTSTRAP_ONLY") == "1"', source)
+        self.assertLess(source.index("install_native_jawl_turn_context()"),
+                        source.index("Owned brain bootstrap probe complete."))
+        self.assertLess(source.index("Owned brain bootstrap probe complete."),
+                        source.index("from src import main as jawl_main"))
+
     def test_extension_loads_directly_from_owned_file(self):
         extension = entry.load_extension()
         self.assertEqual(Path(extension.__file__), ROOT / "src/jawl_voicecompanion/native_jawl_admission.py")
@@ -89,8 +110,11 @@ class OwnedConsoleEntryTests(unittest.TestCase):
         extension = SimpleNamespace(install_native_admission=lambda a, b: actions.append(("extension", a, b)))
         delivery = SimpleNamespace(install_native_delivery_guard=lambda: actions.append(("delivery",)))
         turn_context = SimpleNamespace(install_native_jawl_turn_context=lambda: actions.append(("turn-context",)))
+        fake_manager_cls = type("FakeInstanceManager", (), {"supervisor_status": lambda self: {"running": False, "pid": None}})
         modules = {"verify_jawl_snapshot": SimpleNamespace(verify=lambda source: actions.append(("verify", source))),
-                   "src.web": SimpleNamespace(server=server)}
+                   "src.web": SimpleNamespace(server=server, agent=SimpleNamespace(ROOT_DIR=ROOT)),
+                   "src.web.agent": SimpleNamespace(ROOT_DIR=ROOT),
+                   "src.instances.manager": SimpleNamespace(InstanceManager=fake_manager_cls)}
         with patch.object(entry, "check_isolation", side_effect=lambda: actions.append(("isolation",))), \
                 patch.object(entry, "load_extension", return_value=extension), patch.dict(sys.modules, modules), \
                 patch.object(entry, "load_delivery_extension", return_value=delivery), \
@@ -100,7 +124,7 @@ class OwnedConsoleEntryTests(unittest.TestCase):
             self.assertTrue(sys.dont_write_bytecode)
             self.assertEqual(os.environ["PYTHONDONTWRITEBYTECODE"], "1")
         self.assertEqual(actions[0], ("isolation",))
-        self.assertEqual(actions[1], ("verify", entry.SOURCE))
+        self.assertEqual(actions[1], ("verify", entry.resolve_source()))
         self.assertEqual(actions[2], ("delivery",))
         self.assertEqual(actions[3], ("turn-context",))
         self.assertEqual(actions[4], ("native", "fixture"))
@@ -109,7 +133,8 @@ class OwnedConsoleEntryTests(unittest.TestCase):
     def test_failed_snapshot_never_starts_native_console(self):
         server = SimpleNamespace(main=lambda: self.fail("native main called"))
         modules = {"verify_jawl_snapshot": SimpleNamespace(verify=lambda source: (_ for _ in ()).throw(ValueError("snapshot"))),
-                   "src.web": SimpleNamespace(server=server)}
+                   "src.web": SimpleNamespace(server=server, agent=SimpleNamespace()),
+                   "src.web.agent": SimpleNamespace()}
         with patch.object(entry, "check_isolation"), patch.dict(sys.modules, modules), patch.dict(os.environ), \
                 patch.object(sys, "dont_write_bytecode", False), self.assertRaisesRegex(ValueError, "snapshot"):
             entry.main()
@@ -122,6 +147,18 @@ class OwnedConsoleEntryTests(unittest.TestCase):
         text = (ROOT / "scripts/run_integrated_profile.ps1").read_text(encoding="utf-8")
         self.assertIn("/api/companion/admission-capabilities", text)
         self.assertIn("http-turn-admission-v1", text)
+
+    def test_integrated_launcher_confines_and_propagates_source_snapshot(self):
+        text = (ROOT / "scripts/run_integrated_profile.ps1").read_text(encoding="utf-8")
+        self.assertIn("JawlSourceRoot", text)
+        self.assertIn("runtime\\jawl-sources", text)
+        self.assertIn("$jawlEnv['JAWL_SOURCE_ROOT'] = $source", text)
+        self.assertIn("verify_jawl_snapshot.py", text)
+        self.assertIn("run_owned_jawl_supervisor.py", text)
+        reg_text = (ROOT / "scripts/register_supervised_profile.py").read_text(encoding="utf-8")
+        self.assertIn("run_owned_jawl_brain.py", reg_text)
+        sup_text = (ROOT / "scripts/run_owned_jawl_supervisor.py").read_text(encoding="utf-8")
+        self.assertIn("run_owned_jawl_brain.py", sup_text)
 
     def test_console_token_redaction_handles_split_writes_and_flush(self):
         output = io.StringIO()

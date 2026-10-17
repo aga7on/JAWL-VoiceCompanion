@@ -296,6 +296,19 @@ class NativeJawlTurnContextTests(unittest.IsolatedAsyncioTestCase):
             ast.dump(fixture, include_attributes=False),
         )
 
+    async def test_conversational_turn_adds_fast_hint_while_action_turn_does_not(self):
+        _, chat_ctx = await self.build(
+            "HOST_TERMINAL_MESSAGE",
+            {"_companion_turn_id": "turn-1", "message": "Привет, как у тебя дела?"},
+        )
+        self.assertIn("Fast conversational reply mode", chat_ctx)
+
+        _, action_ctx = await self.build(
+            "HOST_TERMINAL_MESSAGE",
+            {"_companion_turn_id": "turn-1", "message": "Открой терминал и проверь файлы в папке"},
+        )
+        self.assertNotIn("Fast conversational reply mode", action_ctx)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -254,15 +254,62 @@ def build_companion_runtime(
     )
     if ambient_scheduler is not None:
         ambient_scheduler.start()
+    from .eg2_sensory import DEFAULT_EG2_ONNX_ROOT, EmbeddingGemmaSensoryCortex, RollingMediaBuffer
     from .perception_fusion import PerceptionFusion
-    perception_fusion = PerceptionFusion()
+    perception_fusion = PerceptionFusion(media_buffer=RollingMediaBuffer(window_seconds=300.0, max_items=1800))
+    try:
+        if (DEFAULT_EG2_ONNX_ROOT / "onnx" / "model_q4.onnx").is_file():
+            perception_fusion.eg2 = EmbeddingGemmaSensoryCortex(DEFAULT_EG2_ONNX_ROOT)
+    except Exception:  # noqa: BLE001 - optional sensory cortex must not block startup
+        perception_fusion.eg2 = None
+
+    def _describe_displays(max_displays: int = 2, audio_wav_bytes: bytes | None = None) -> dict[str, Any]:
+        adapter = getattr(hostos_executor, "screen_capture", None)
+        if adapter is None or not hasattr(adapter, "capture_displays"):
+            return {"status": "degraded", "reason": "screen_capture_not_configured", "persisted": False}
+        captures = adapter.capture_displays(max_displays=max_displays)
+        images: list[bytes] = []
+        for capture in captures:
+            if not isinstance(capture, dict) or capture.get("status") != "verified":
+                continue
+            image = capture.get("image")
+            if not isinstance(image, dict):
+                continue
+            encoded = image.get("data_base64")
+            if not isinstance(encoded, str) or not encoded:
+                continue
+            try:
+                import base64
+
+                images.append(base64.b64decode(encoded))
+            except Exception:  # noqa: BLE001
+                continue
+        if not images:
+            return {"status": "degraded", "reason": "no_verified_display_captures", "persisted": False}
+        cortex = perception_fusion.eg2_cortex() if hasattr(perception_fusion, "eg2_cortex") else perception_fusion.eg2
+        if cortex is None or not hasattr(cortex, "describe_displays"):
+            return {"status": "degraded", "reason": "eg2_not_configured", "persisted": False}
+        try:
+            description = str(cortex.describe_displays(images, audio_wav_bytes=audio_wav_bytes) or "").strip()[:4000]
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "degraded", "reason": str(exc)[:200], "persisted": False}
+        try:
+            perception_fusion.observe_displays(images, cortex=cortex, audio_wav_bytes=audio_wav_bytes)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"status": "ok", "description": description, "displays": len(images), "audio_described": bool(audio_wav_bytes), "persisted": False}
+
+    if hostos_executor is not None:
+        hostos_executor.display_describer = _describe_displays
+    from .resources import ResourceGovernor
+    resource_governor = ResourceGovernor()
     sensory_ingestor = None
     if getattr(args, "sensory_file", ""):
         if not args.ambient_memory:
             error("--sensory-file requires --ambient-memory")
         from .sensory_ingest import SensoryIngestor
         sensory_ingestor = SensoryIngestor(
-            ambient_memory, args.sensory_file, governor=None,
+            ambient_memory, args.sensory_file, governor=resource_governor,
             fusion=perception_fusion,
         )
         sensory_ingestor.start()
@@ -274,7 +321,7 @@ def build_companion_runtime(
             voice_mem,
             ambient_memory,
             final_asr=asr_service,
-        ))
+        ), governor=resource_governor)
 
     if args.tts_url:
         tts_client = {
@@ -342,6 +389,7 @@ def build_companion_runtime(
         audit_file=args.audit_file or project_root / "runtime" / "audit.ndjson",
         presence_file=project_root / "runtime" / "presence.json",
         legacy_presentation=False,
+        resource_governor=resource_governor,
         lan_mode=args.lan,
         lan_access_token=lan_access_token,
         lan_auth_user=args.lan_auth_user,

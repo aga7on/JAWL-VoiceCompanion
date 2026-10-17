@@ -78,5 +78,6 @@ voicemem_memoryspace/demo/
 
 # Rust build output (source is tracked)
 rust-client/target/
+docs/history/2026-10-16-h1-ui-defrag/rust-client/target/
 
 jawl-companion.exe

@@ -1,6 +1,7 @@
 """Owned guard for correlated native JAWL cycle completion.
 
-The extension observes native terminal events without changing their payloads.
+The extension confirms one native terminal delivery per active correlated cycle
+without changing its payload, suppressing repeated terminal broadcasts.
 If a correlated ReAct cycle returns without a terminal event, it emits one
 bounded ``turn.error``.  It never turns private tick/thought content into reply
 text and never changes native goal state.
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import importlib
 import re
 from typing import Any, Callable
@@ -19,6 +20,7 @@ _TURN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _MISSING_REPLY_REASON = (
     "Native ReAct cycle ended without a correlated terminal response."
 )
+NATIVE_POLICY_DENIAL_REASON = "Native HostOS policy denied the action; the request was stopped."
 _DEFAULT_EMIT_TIMEOUT_SECONDS = 1.0
 _MAX_EMIT_TIMEOUT_SECONDS = 5.0
 _INSTALL_ATTR = "__jawl_native_delivery_guard_installation__"
@@ -35,6 +37,43 @@ class _CycleState:
     terminal_client: Any = None
     closed: bool = False
     suppress_private_completion: bool = False
+    terminal_result: Any = None
+    policy_denied: bool = False
+    native_loop: Any = None
+    emit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    broadcast_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def native_policy_denied() -> bool:
+    state = _CYCLE.get()
+    return bool(state is not None and not state.closed and state.policy_denied)
+
+
+def native_companion_chat_active() -> bool:
+    state = _CYCLE.get()
+    if state is None or state.closed:
+        return False
+    manager = getattr(state.native_loop, "goal_manager", None)
+    return getattr(manager, "active_goal", None) is None
+
+
+def record_native_policy_denial() -> bool:
+    """Called only by the owned hook observing native authority's exception."""
+    state = _CYCLE.get()
+    if state is None or state.closed:
+        return False
+    state.policy_denied = True
+    return True
+
+
+def _active_state(turn_id: Any) -> _CycleState | None:
+    turn_id = _valid_turn_id(turn_id)
+    state = _CYCLE.get()
+    while state is not None:
+        if not state.closed and state.turn_id == turn_id:
+            return state
+        state = state.parent
+    return None
 
 
 def _valid_turn_id(value: Any) -> str:
@@ -73,6 +112,7 @@ def _record_terminal_event(
         if not state.closed and state.turn_id == turn_id:
             state.terminal_client = client
             state.terminal_event = event_type
+            state.terminal_result = result
         state = state.parent
 
 
@@ -198,6 +238,7 @@ def install_native_delivery_guard(
     original_run = getattr(react_loop_class, "run", None)
     original_completion = getattr(react_loop_class, "_handle_completion", None)
     original_emit = getattr(terminal_client_class, "emit_gateway_event", None)
+    original_broadcast = getattr(terminal_client_class, "broadcast_message", None)
     original_publish = getattr(event_bus_class, "publish", None)
     if not all(
         callable(method)
@@ -223,10 +264,33 @@ def install_native_delivery_guard(
     async def observed_emit(
         client: Any, turn_id: str, event_type: str, payload: dict[str, Any]
     ) -> Any:
-        _remember_terminal_client(client, turn_id)
-        result = await original_emit(client, turn_id, event_type, payload)
-        _record_terminal_event(client, turn_id, event_type, result)
-        return result
+        async def emit():
+            _remember_terminal_client(client, turn_id)
+            result = await original_emit(client, turn_id, event_type, payload)
+            _record_terminal_event(client, turn_id, event_type, result)
+            return result
+
+        state = _active_state(turn_id)
+        if state is None or event_type not in {"assistant.final", "turn.error", "turn.cancelled"}:
+            return await emit()
+        async with state.emit_lock:
+            if state.terminal_event:
+                return state.terminal_result
+            return await emit()
+
+    async def guarded_broadcast(client, text, turn_id=None, response=None):
+        # Native tool batches may contain several terminal actions even though
+        # terminate_loop ends the cycle only after the whole batch. Suppress
+        # repeats before native history/legacy writers as well as typed SSE.
+        current = _CYCLE.get()
+        effective_turn = turn_id or (current.turn_id if current is not None else "")
+        state = _active_state(effective_turn)
+        if state is None:
+            return await original_broadcast(client, text, turn_id=turn_id, response=response)
+        async with state.broadcast_lock:
+            if state.terminal_event:
+                return None
+            return await original_broadcast(client, text, turn_id=turn_id, response=response)
 
     async def guarded_completion(
         loop: Any, thoughts: str, status: str = "completed"
@@ -278,7 +342,7 @@ def install_native_delivery_guard(
                 emit(
                     state.turn_id,
                     "turn.error",
-                    {"reason": _MISSING_REPLY_REASON},
+                    {"reason": NATIVE_POLICY_DENIAL_REASON if state.policy_denied else _MISSING_REPLY_REASON},
                 ),
                 timeout=installation.emit_timeout_seconds,
             )
@@ -300,7 +364,7 @@ def install_native_delivery_guard(
         if not turn_id:
             return await original_run(loop, *args, **kwargs)
 
-        state = _CycleState(turn_id=turn_id, parent=_CYCLE.get())
+        state = _CycleState(turn_id=turn_id, parent=_CYCLE.get(), native_loop=loop)
         token = _CYCLE.set(state)
         try:
             try:
@@ -327,6 +391,8 @@ def install_native_delivery_guard(
     setattr(react_loop_class, "run", guarded_run)
     setattr(react_loop_class, "_handle_completion", guarded_completion)
     setattr(event_bus_class, "publish", guarded_publish)
+    if callable(original_broadcast):
+        setattr(terminal_client_class, "broadcast_message", guarded_broadcast)
     setattr(terminal_client_class, _INSTALL_ATTR, installation)
     setattr(react_loop_class, _INSTALL_ATTR, installation)
     setattr(event_bus_class, _INSTALL_ATTR, installation)

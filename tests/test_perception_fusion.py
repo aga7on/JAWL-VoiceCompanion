@@ -40,6 +40,49 @@ class PerceptionFusionTests(unittest.TestCase):
         self.assertIn("window", state["fresh"])
         self.assertIn("код", state["fresh"]["window"]["text"])
 
+    def test_observe_eg2_merges_compact_multimodal_observation(self):
+        fusion = PerceptionFusion()
+
+        class Observation:
+            def to_dict(self):
+                return {
+                    "top_label": "code_ide_terminal",
+                    "audio_top_label": "human_speech_ru",
+                    "vibe_score": 0.42,
+                    "reflex": {"emotion": "attentive"},
+                }
+
+        text = fusion.observe_eg2(Observation(), now=10.0)
+        self.assertIn("EG2: code_ide_terminal", text)
+        self.assertIn("audio=human_speech_ru", text)
+        self.assertIn("vibe=0.420", text)
+
+
+class DisplayFusionTests(unittest.TestCase):
+    def test_observe_displays_builds_combined_description(self):
+        fusion = PerceptionFusion()
+
+        class FakeCortex:
+            def describe_displays(self, images):
+                return "Дисплей 1: code_ide_terminal (0.90); Дисплей 2: anime_movie_video (0.80)"
+
+            def classify_displays(self, images):
+                class Obs:
+                    top_label = "code_ide_terminal"
+
+                return [Obs(), Obs()]
+
+        text = fusion.observe_displays([b"img1", b"img2"], cortex=FakeCortex(), now=10.0)
+        self.assertIn("Дисплей 1: code_ide_terminal", text)
+        self.assertIn("Дисплей 2: anime_movie_video", text)
+
+    def test_observe_displays_degrades_without_cortex(self):
+        fusion = PerceptionFusion()
+        fusion.eg2 = None
+        fusion.eg2_cortex = lambda: None
+        text = fusion.observe_displays([b"img1"], cortex=None, now=10.0)
+        self.assertIn("Дисплеи: нет данных", text)
+
 
 if __name__ == "__main__":
     unittest.main()

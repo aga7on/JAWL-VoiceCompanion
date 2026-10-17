@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
-const html = fs.readFileSync(new URL('../frontend/index.html', import.meta.url), 'utf8');
+const html = fs.readFileSync(new URL('../desktop/app.html', import.meta.url), 'utf8');
 const worklet = fs.readFileSync(new URL('../frontend/mic-processor.js', import.meta.url), 'utf8');
 
 assert.match(html, /AudioWorkletNode/);

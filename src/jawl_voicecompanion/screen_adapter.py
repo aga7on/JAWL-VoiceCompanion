@@ -135,6 +135,114 @@ class ScreenCaptureAdapter:
             str(term).casefold() for term in redaction_terms if str(term).strip()
         )
 
+    def capture_displays(self, *, max_displays: int = 2) -> list[dict[str, Any]]:
+        """Capture up to ``max_displays`` monitors without persisting frames."""
+        count = max(0, min(int(max_displays), 4))
+        if count == 0:
+            return []
+        if not self.enabled:
+            return [
+                {
+                    "status": "degraded",
+                    "reason": "screen_observation_disabled",
+                    "display_index": index,
+                    "persisted": False,
+                }
+                for index in range(count)
+            ]
+        if os.name != "nt":
+            return [
+                {
+                    "status": "degraded",
+                    "reason": "multi_display_capture_requires_windows",
+                    "display_index": index,
+                    "persisted": False,
+                }
+                for index in range(count)
+            ]
+        try:
+            import win32api
+            import win32gui
+            from PIL import ImageGrab
+        except ImportError:
+            return [
+                {
+                    "status": "degraded",
+                    "reason": "screen_capture_dependencies_unavailable",
+                    "display_index": index,
+                    "persisted": False,
+                }
+                for index in range(count)
+            ]
+
+        try:
+            monitors = win32api.EnumDisplayMonitors()
+        except Exception:  # noqa: BLE001
+            monitors = []
+        rects: list[tuple[int, int, int, int]] = []
+        for monitor in monitors:
+            try:
+                rect = monitor[2]
+                left, top, right, bottom = (int(v) for v in rect)
+            except (TypeError, ValueError, IndexError):
+                continue
+            if right > left and bottom > top:
+                rects.append((left, top, right, bottom))
+        if not rects:
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(win32gui.GetDesktopWindow())
+                if right > left and bottom > top:
+                    rects.append((left, top, right, bottom))
+            except Exception:  # noqa: BLE001
+                rects = []
+        rects = rects[:count]
+
+        results: list[dict[str, Any]] = []
+        for index, rect in enumerate(rects):
+            left, top, right, bottom = rect
+            try:
+                image = ImageGrab.grab(
+                    bbox=(left, top, right, bottom),
+                    all_screens=True,
+                    include_layered_windows=False,
+                ).convert("RGB")
+                encoded = self._encode_jpeg(image)
+            except (OSError, TypeError, ValueError) as exc:
+                results.append(
+                    {
+                        "status": "degraded",
+                        "reason": "screen_capture_failed",
+                        "detail": str(exc)[:200],
+                        "display_index": index,
+                        "bounds": [left, top, right, bottom],
+                        "persisted": False,
+                    }
+                )
+                continue
+            digest = __import__("hashlib").sha256(encoded["data_base64"].encode("ascii")).hexdigest()
+            results.append(
+                {
+                    "status": "verified",
+                    "captured_at": _now(),
+                    "source": "display",
+                    "display_index": index,
+                    "bounds": [left, top, right, bottom],
+                    "observation_digest": digest,
+                    "image": encoded,
+                    "persisted": False,
+                }
+            )
+        while len(results) < count:
+            results.append(
+                {
+                    "status": "degraded",
+                    "reason": "display_unavailable",
+                    "display_index": len(results),
+                    "persisted": False,
+                }
+            )
+        return results
+
     def profile(self) -> dict[str, Any]:
         """Return the bounded capture profile without exposing local paths."""
         return {

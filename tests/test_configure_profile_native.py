@@ -55,6 +55,18 @@ class ConfigureProfileNativeTests(unittest.TestCase):
             self.assertEqual(settings["llm"]["temperature"], 0.2)
             self.assertEqual((daily / "settings.yaml").read_bytes(), b"daily settings must stay untouched\n")
             self.assertEqual((daily / "interfaces.yaml").read_bytes(), b"daily interfaces must stay untouched\n")
+            with patch.object(MODULE, "INSTANCES_ROOT", instances):
+                MODULE.configure("test", access_level=0, enable_debug_broker=False, enable_browser=True,
+                                 context_window_tokens=65536)
+                enabled = MODULE.yaml.safe_load(result.read_text(encoding="utf-8"))
+                self.assertTrue(enabled["web"]["browser"]["enabled"])
+                self.assertTrue(enabled["web"]["browser"]["headless"])
+                selected_settings = MODULE.yaml.safe_load((config / "settings.yaml").read_text(encoding="utf-8"))
+                self.assertEqual(selected_settings["system"]["context_depth"]["budget"]["max_dynamic_chars"], 48000)
+                self.assertTrue((profile / MODULE.RECEIPT_NAME).exists())
+                MODULE.configure("test", access_level=0, enable_debug_broker=False)
+                self.assertTrue(MODULE.yaml.safe_load(result.read_text(encoding="utf-8"))["web"]["browser"]["enabled"])
+            self.assertEqual((daily / "interfaces.yaml").read_bytes(), b"daily interfaces must stay untouched\n")
 
     def test_rejects_invalid_temperature_override(self):
         with tempfile.TemporaryDirectory() as directory:

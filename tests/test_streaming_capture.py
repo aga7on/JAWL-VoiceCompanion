@@ -4,6 +4,7 @@ import sys
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -298,6 +299,45 @@ class StreamingCaptureHttpTests(unittest.TestCase):
         status, _ = self.request("/api/voice/audio", self.audio())
         self.assertEqual(status, 200)
         self.assertEqual(self.streaming.feeds[-1][3:], ("voice:legacy", "session-a"))
+
+    def test_canonical_backchannel_is_consumed_without_dispatch_or_memory_write(self):
+        from jawl_voicecompanion.web import CompanionRequestHandler
+
+        self.server.asr = _CanonicalASR()
+        self.server.asr.finish = Mock(return_value={"status": "transcribed", "text": "Угу, понятно."})
+        self.acquire("owned")
+        self.streaming.publish("capture:owned", "session-a", "provisional")
+        self.streaming.publish("capture:peer", "session-a", "keep")
+        with patch.object(CompanionRequestHandler, "_external_asr_events") as dispatch:
+            status, result = self.request("/api/voice/end", {
+                "capture_id": "owned", "session_id": "session-a", "suppress_backchannel": True,
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual(result["filtered"], "user_backchannel")
+        self.assertEqual(result["responses"], [])
+        self.assertEqual(result["transcript"], "")
+        dispatch.assert_not_called()
+        self.server.asr.finish.assert_called_once_with("session-a", scope_id="capture:owned")
+        self.assertIn(("capture:owned", "session-a"), self.streaming.resets)
+        self.assertEqual(self.streaming.snapshot(scope_id="capture:peer", session_id="session-a")["text"], "keep")
+        self.assertEqual(self.voice_mem.turns, [])
+
+    def test_backchannel_filter_requires_explicit_overlap_and_canonical_acknowledgement(self):
+        from jawl_voicecompanion.web import CompanionRequestHandler
+
+        self.server.asr = _CanonicalASR()
+        self.server.voice_mem_async = None
+        self.acquire("owned")
+        for text, suppress in (("Стоп", True), ("Открой браузер", True), ("Ага", False), ("Ага", "true")):
+            with self.subTest(text=text, suppress=suppress):
+                self.server.asr.finish = Mock(return_value={"status": "transcribed", "text": text})
+                with patch.object(CompanionRequestHandler, "_external_asr_events", return_value=[]) as dispatch:
+                    _, result = self.request("/api/voice/end", {
+                        "capture_id": "owned", "session_id": "session-a", "suppress_backchannel": suppress,
+                    })
+                self.assertEqual(result["transcript"], text)
+                self.assertNotIn("filtered", result)
+                dispatch.assert_called_once()
 
     def test_release_during_snapshot_drops_inflight_draft_and_preface(self):
         for path, field in (("/api/voice/draft", "draft"), ("/api/voice/preface", "text")):

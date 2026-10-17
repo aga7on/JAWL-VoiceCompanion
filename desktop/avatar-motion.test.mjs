@@ -25,14 +25,17 @@ test('idle breathing stays bounded and returns to rest when reduced motion is en
   assert.ok(Math.abs(rig.nodes.upperChest.rotation.x) < 1e-8);
 });
 
-test('listening and speaking blend without exceeding motion limits', () => {
+test('listening, thinking and speaking blend without exceeding motion limits', () => {
   const controller = createAvatarMotionController();
   const rig = makeRig();
   step(controller, rig, 0, 1.5, 'listening');
   assert.ok(rig.nodes.upperChest.rotation.x > 0);
-  step(controller, rig, 1.5, 3, 'speaking', 0.8);
+  step(controller, rig, 1.5, 3, 'thinking');
+  assert.ok(rig.nodes.upperChest.rotation.x > 0);
+  assert.ok(rig.nodes.rightLowerArm.rotation.z < 0);
+  step(controller, rig, 3, 4.5, 'speaking', 0.8);
   assert.ok(Math.abs(rig.nodes.upperChest.rotation.x) <= 0.16);
-  assert.ok(Math.abs(rig.nodes.rightHand.rotation.x) <= 0.036);
+  assert.ok(Math.abs(rig.nodes.rightHand.rotation.x) <= 0.16);
 });
 
 test('greeting wave and nod decay fully back to the base pose', () => {

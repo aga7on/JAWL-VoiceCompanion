@@ -13,6 +13,7 @@ class OwnedPipeProcess:
     def __init__(self, process, job):
         self._lock = threading.Lock()
         self._process, self._job = process, job
+        self._wait_handles = []
 
     def __getattr__(self, name):
         return getattr(self._process, name)
@@ -24,9 +25,11 @@ class OwnedPipeProcess:
     def terminate(self):
         import ctypes
         from ctypes import wintypes as w
+        from .supervisor import _capture_windows_job_processes
         with self._lock:
             if self._job is None:
                 return
+            _capture_windows_job_processes(self._job, self._wait_handles)
             api = ctypes.WinDLL('kernel32', use_last_error=True)
             api.TerminateJobObject.argtypes = [w.HANDLE, w.UINT]
             api.TerminateJobObject.restype = w.BOOL
@@ -43,15 +46,16 @@ class OwnedPipeProcess:
             if self._job is not None:
                 # Root exit is not tree exit: close descendants holding inherited pipes.
                 remaining = 2.0 if timeout is None else max(0, timeout - (time.monotonic() - started))
-                _drain_windows_job(self._job, remaining)
+                _drain_windows_job(self._job, remaining, process_handles=self._wait_handles)
                 self._job = None
         return code
 
     def __del__(self):
         try:
-            from .supervisor import _close_windows_job
+            from .supervisor import _close_windows_job, _close_process_wait_handles
             if self._job is not None:
                 _close_windows_job(self._job)
+            _close_process_wait_handles(self._wait_handles)
         except Exception:
             pass
 

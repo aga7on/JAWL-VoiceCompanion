@@ -56,6 +56,7 @@ class SensoryIngestor:
         self._last_music_at = 0.0
         self._stop = Event()
         self._lock = RLock()
+        self._paused = False
         self._thread: Thread | None = None
 
     def start(self) -> dict[str, Any]:
@@ -77,12 +78,23 @@ class SensoryIngestor:
                 self._thread = None
         return self.state()
 
+    def pause(self) -> dict[str, Any]:
+        with self._lock:
+            self._paused = True
+        return self.state()
+
+    def resume(self) -> dict[str, Any]:
+        with self._lock:
+            self._paused = False
+        return self.state()
+
     def state(self) -> dict[str, Any]:
         with self._lock:
             running = self._thread is not None and self._thread.is_alive()
             return {
                 "enabled": True,
                 "running": running,
+                "paused": self._paused,
                 "path": str(self.path),
                 "poll_interval_s": self.poll_interval_s,
                 "offset": self._offset,
@@ -261,6 +273,9 @@ class SensoryIngestor:
 
     def _run(self) -> None:
         while not self._stop.wait(self.poll_interval_s):
+            with self._lock:
+                if self._paused:
+                    continue
             if self.governor is not None and not self.governor.try_acquire(
                 "ambient", background=True
             ):

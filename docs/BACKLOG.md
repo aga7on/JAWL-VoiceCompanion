@@ -15,6 +15,7 @@
 | A01–A06 | Референс≥90, лицо/волосы/одежда, физика, VRMA/graph, source/license | Текущие assets остаются, art не блокирует daily |
 | S01,S02 | Stream/Restream chat и social accounts | После настройки владельцем, отдельные scoped integrations |
 | S03 | AIRI/NEKO/Crane/эмбеддинги/OBS RAM buffer | Research по измеренной необходимости |
+| H1–H5 | [Гармоничная архитектура](HARMONIZED_ARCHITECTURE_AND_ROADMAP.md): «Окно-Хамелеон» (Compact HUD ↔ Studio Drawer), двухскоростной контур JAWL, `DuplexCascade` + `OmniVoice`, сенсорная кора `EmbeddingGemma 2` (`eg2`) и 3-слойный игровой агент | D3 (базовый Compact/Studio) + этапы H1–H5 в [TODO](../TODO.md) |
 | B4 | Полная упаковка/переносимость/restore/license/resource/release matrix | D6 локальный профиль, универсальная поставка позже |
 
 Музыкальное понимание и напевание не принимаются по ASR transcript или TTS WAV.

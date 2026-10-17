@@ -46,6 +46,7 @@ $lines = @(Format-EnvironmentDiagnostic -Environment $fixture)
             [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded_command],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=20,
         )

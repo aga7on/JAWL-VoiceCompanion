@@ -244,7 +244,7 @@ function micHarness({fetchImpl, getUserMedia, closeContext} = {}) {
     }}},
     preferredMicId: () => 'selected-device', refreshMicDevices: () => {}, setVal: () => {},
     chatMic: {style: {}}, micState: {textContent: ''},
-    cancelSpeechPlayback: () => { made.cancellations += 1; },
+    cancelSpeechPlayback: () => { made.cancellations += 1; context.state.speechPlayback = null; },
     addMessage: (...args) => made.messages.push(args), handleEnvelope: data => made.envelopes.push(data),
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
     window: {__jawlScene: {setMotionState() {}}, dispatchEvent: event => made.diagnostics.push(event.detail)},
@@ -252,7 +252,7 @@ function micHarness({fetchImpl, getUserMedia, closeContext} = {}) {
   };
   const names = ['startMic', 'getCaptureClientId', 'uploadChunk', 'voiceCaptureDiagnostic', 'enqueueMicOperation',
     'finalizeAfterMicUploads', 'micTurnIsCurrent', 'newVoiceUtterance', 'finishUtterance',
-    'flushMicWorklet', 'stopMic', 'downsample', 'pcm16Base64'];
+    'flushMicWorklet', 'stopMic', 'downsample', 'pcm16Base64', 'updateMicTurn'];
   const source = names.map(appFunction).join('\n').replace(
     "await import('./voice-input.js')", 'await Promise.resolve(globalThis.micHelpers)',
   ).replace("await import('./voice-draft.js')", 'await Promise.resolve(globalThis.draftHelpers)');
@@ -500,12 +500,84 @@ test('actual microphone barge-in cancels playback only and leaves a durable task
   await harness.voice.startMic();
   const task = {status: 'running', cancelCalls: 0};
   harness.context.state.durableTask = task;
+  harness.context.state.speechPlayback = {};
   const mic = harness.context.state.mic;
-  mic.inputGate.push = () => ({opened: true, frames: []});
+  mic.inputGate.push = () => ({opened: true, frames: [], voiceActive: true, rms: 0.03});
   mic.gate.samples(new Float32Array(160).fill(0.03));
+  assert.equal(harness.made.cancellations, 0, 'onset alone does not establish an interruption');
+  mic.draftText = 'Стой!';
+  await harness.clock.advance(100);
   assert.equal(harness.made.cancellations, 1);
   assert.deepEqual(task, {status: 'running', cancelCalls: 0});
   assert.equal(harness.made.requests.some(item => /cancel|task/i.test(item.url)), false);
+  await harness.voice.stopMic();
+});
+
+test('short overlapping acknowledgement finalizes under its own identity without cancelling speech', async () => {
+  const harness = micHarness({fetchImpl: (url, options, fallback) => url.endsWith('/api/voice/end')
+    ? jsonResponse({ok: true, filtered: 'user_backchannel', responses: []}) : fallback(url, options)});
+  await harness.voice.startMic();
+  const playback = {};
+  harness.context.state.speechPlayback = playback;
+  const mic = harness.context.state.mic;
+  const oldSession = mic.utterance.sessionId;
+  mic.inputGate.push = () => ({opened: true, frames: [], voiceActive: true, rms: 0.03});
+  mic.gate.samples(new Float32Array(4800).fill(0.03));
+  mic.draftText = 'Угу, понятно.';
+  await harness.clock.advance(400);
+  assert.equal(mic.finalizing, true);
+  mic.gate.flushed();
+  await waitFor(() => harness.requests('/api/voice/end').length === 1 && !mic.finalizing);
+  assert.equal(harness.made.cancellations, 0);
+  assert.equal(harness.context.state.speechPlayback, playback);
+  const end = harness.requests('/api/voice/end')[0].payload;
+  assert.equal(end.session_id, oldSession);
+  assert.equal(end.suppress_backchannel, true);
+  assert.notEqual(mic.utterance.sessionId, oldSession);
+  assert.equal(harness.made.envelopes.length, 0);
+  await harness.voice.stopMic();
+});
+
+test('noise followed by silence cannot accumulate barge-in duration or cancel a newer playback', async () => {
+  const harness = micHarness();
+  await harness.voice.startMic();
+  harness.context.state.speechPlayback = {};
+  const mic = harness.context.state.mic;
+  mic.inputGate.push = () => ({opened: true, frames: [], voiceActive: true, rms: 0.03});
+  mic.gate.samples(new Float32Array(4800).fill(0.03));
+  await harness.clock.advance(600);
+  assert.equal(harness.made.cancellations, 0);
+  assert.equal(mic.voicedMs, 100);
+  harness.context.state.speechPlayback = {};
+  mic.draftText = 'Стоп';
+  await harness.clock.advance(100);
+  assert.equal(harness.made.cancellations, 0, 'old draft cannot cancel replacement playback');
+  await harness.voice.stopMic();
+});
+
+test('sustained voiced audio interrupts when streaming drafts are unavailable', async () => {
+  const harness = micHarness();
+  await harness.voice.startMic();
+  harness.context.state.speechPlayback = {};
+  const mic = harness.context.state.mic;
+  mic.inputGate.push = () => ({opened: true, frames: [], voiceActive: true, rms: 0.03});
+  for (let i = 0; i < 6; i += 1) mic.gate.samples(new Float32Array(4800).fill(0.03));
+  assert.equal(harness.made.cancellations, 1);
+  mic.gate.samples(new Float32Array(4800).fill(0.03));
+  assert.equal(harness.made.cancellations, 1);
+  await harness.voice.stopMic();
+});
+
+test('Russian unfinished draft extends the actual microphone endpoint beyond the configured silence', async () => {
+  const harness = micHarness();
+  await harness.voice.startMic();
+  const mic = listeningMic(harness);
+  mic.draftText = 'Я хотел чтобы';
+  await harness.clock.advance(1300);
+  assert.equal(mic.finalizing, false);
+  assert.equal(harness.requests('/api/voice/end').length, 0);
+  await harness.clock.advance(900);
+  assert.equal(mic.finalizing, true);
   await harness.voice.stopMic();
 });
 

@@ -169,6 +169,14 @@ def journal_cycle_evidence(journal: Path, marker: str) -> dict[str, Any]:
         and isinstance(item.get("parameters"), dict)
         and item["parameters"].get("content") == marker
     }
+    # A ReAct goal can write and verify in different action plans. Include
+    # those plans only through the same native trace, never by pathname alone
+    # (the acceptance harness also reads that pathname after completion).
+    trace_ids = {item.get("trace", {}).get("trace_id") for item in started
+                 if isinstance(item.get("trace"), dict) and item["trace"].get("trace_id")}
+    plan_ids.update(str(item.get("plan_id") or "") for item in entries
+                    if isinstance(item.get("trace"), dict)
+                    and item["trace"].get("trace_id") in trace_ids)
     started_ids = {
         (str(item.get("plan_id") or ""), str(item.get("action_id") or ""))
         for item in entries
@@ -199,6 +207,17 @@ def journal_cycle_evidence(journal: Path, marker: str) -> dict[str, Any]:
         and item.get("tool_name") == "HostOSWriter.write_file"
         and "idempotent no-op" in str(item.get("message") or "").casefold()
     ]
+    targets = {item.get("parameters", {}).get("filepath") for item in started
+               if item.get("parameters", {}).get("filepath")}
+    read_ids = {(item.get("plan_id"), item.get("action_id")) for item in entries
+                if item.get("event") == "action_started"
+                and item.get("tool_name") == "HostOSReader.read_file"
+                and str(item.get("plan_id") or "") in plan_ids
+                and item.get("parameters", {}).get("filepath") in targets}
+    write_positions = [index for index, item in enumerate(entries) if item in successful]
+    read_positions = [index for index, item in enumerate(entries)
+                      if item.get("event") == "action_finished" and item.get("is_success") is True
+                      and (item.get("plan_id"), item.get("action_id")) in read_ids]
     tools = sorted(
         {
             str(item.get("tool_name") or "")
@@ -212,6 +231,7 @@ def journal_cycle_evidence(journal: Path, marker: str) -> dict[str, Any]:
         "action_finished_count": len(finished),
         "successful_target_writes": len(successful),
         "idempotent_noop_writes": len(idempotent_noops),
+        "write_then_read_verified": bool(write_positions and any(index > max(write_positions) for index in read_positions)),
         "tools_seen": tools[:40],
         "journal_entries": len(entries),
     }
@@ -312,6 +332,7 @@ def run_cycle(
     goal_timeout: float,
     poll_seconds: float,
     http_timeout: float,
+    resource_sampler=None,
 ) -> dict[str, Any]:
     run_id = uuid4().hex[:12]
     marker = f"UNATTENDED_SOAK_{cycle:04d}_{run_id}"
@@ -358,7 +379,8 @@ def run_cycle(
         raise AcceptanceFailure("unattended goal.create did not return an active goal")
     item["goal_id"] = goal_id
     item["goal_created"] = goal
-    item["resource_before"] = sample_owned_processes(profile, source)
+    sample = resource_sampler or (lambda: sample_owned_processes(profile, source))
+    item["resource_before"] = sample()
     try:
         terminal = wait_for_goal(
             port_file,
@@ -367,7 +389,7 @@ def run_cycle(
             poll_seconds=poll_seconds,
         )
         item["goal_terminal"] = terminal
-        item["resource_after_goal"] = sample_owned_processes(profile, source)
+        item["resource_after_goal"] = sample()
         item["terminal_ledger"] = terminal_ledger_evidence(terminal)
         item["forbidden_goal_actions"] = forbidden_goal_actions(terminal)
         item["journal"] = journal_cycle_evidence(journal, marker)
@@ -396,6 +418,8 @@ def run_cycle(
             )
         if item["journal"]["successful_target_writes"] != 1:
             raise AcceptanceFailure("unattended journal did not prove exactly one successful target write")
+        if not item["journal"]["write_then_read_verified"]:
+            raise AcceptanceFailure("unattended agent did not verify the write through a fresh native read")
 
         read_status, read_payload = native_action(
             base,

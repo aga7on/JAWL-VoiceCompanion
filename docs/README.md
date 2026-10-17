@@ -1,6 +1,6 @@
 # Карта документации
 
-Обновлено14Oct2026. Активный план один: ежедневная версия D1–D6.
+Обновлено16Oct2026. Активный план один: ежедневная версия D1–D6.
 
 | Читать | Назначение |
 | --- | --- |
@@ -10,6 +10,7 @@
 | [DAILY_ACCEPTANCE](DAILY_ACCEPTANCE.md) | Достаточная проверка личного использования |
 | [DAILY_RUNBOOK](DAILY_RUNBOOK.md) | Существующий запуск, честные ограничения |
 | [PRODUCT](PRODUCT.md) | Замысел владельца |
+| [HARMONIZED_ARCHITECTURE](HARMONIZED_ARCHITECTURE_AND_ROADMAP.md) | Целевая гармоничная архитектура: «Окно-Хамелеон», DuplexCascade, EmbeddingGemma 2 (`eg2`), Игровой слой |
 | [BACKLOG](BACKLOG.md) | Не отменённые расширения |
 | [AGENTS](../AGENTS.md) / [HANDOFF](../HANDOFF.md) | Правила и ближайшее действие |
 

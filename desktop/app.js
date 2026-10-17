@@ -116,6 +116,19 @@ async function refreshStatuses() {
     // ASR status: is the voice lane armed?
     const vs = await (await fetch('/api/voice/status', {credentials: 'include'})).json().catch(() => ({}));
     setVal('asr-status', vs.asr || vs.streaming_asr || (vs.configured ? 'настроен' : 'выключен'));
+    const att = await (await fetch('/api/attention', {credentials: 'include'})).json().catch(() => ({}));
+    if (typeof att.dnd === 'boolean') {
+      dndActive = att.dnd;
+      setVal('proactive-state', dndActive ? 'Не беспокоить (DND)' : 'включён');
+      setVal('quiet-state', att.quiet_hours || 'нет');
+      syncHudToggles();
+    }
+    const amb = await (await fetch('/api/ambient-memory', {credentials: 'include', headers: API.headers()})).json().catch(() => ({}));
+    if (typeof amb?.state?.enabled === 'boolean') {
+      sensesActive = amb.state.enabled;
+      setVal('ambient-state', amb.state.paused ? 'пауза' : (sensesActive ? `активна (${amb.state.observation_count || 0})` : 'выключена'));
+      syncHudToggles();
+    }
   } catch {
     setConn('err', 'компаньон не отвечает');
   }
@@ -179,7 +192,7 @@ function setThinking(on) {
   state.thinking = on;
   thinkingEl.classList.toggle('on', on);
   chatSend.disabled = on;
-  window.__jawlScene?.setMotionState?.(on ? 'listening' : 'idle');
+  window.__jawlScene?.setMotionState?.(on ? 'thinking' : 'idle');
 }
 
 function showCaption(text) {
@@ -313,9 +326,12 @@ function cancelSpeechPlayback() {
 function setSpeechStopEnabled(enabled) {
   const button = document.querySelector('#speech-stop');
   if (button) button.disabled = !enabled;
+  const hudStop = document.querySelector('#hud-stop');
+  if (hudStop) hudStop.disabled = !enabled;
 }
 
 document.querySelector('#speech-stop')?.addEventListener('click', cancelSpeechPlayback);
+document.querySelector('#hud-stop')?.addEventListener('click', cancelSpeechPlayback);
 setSpeechStopEnabled(false);
 
 async function speakFinal(envelope) {
@@ -468,6 +484,18 @@ function preferredMicId() {
 function setPreferredMicId(id) {
   localStorage.setItem('jawl.app.micDeviceId', id || '');
 }
+function selectDefaultFifineDevice(inputs) {
+  const saved = localStorage.getItem('jawl.app.micDeviceId');
+  if (saved !== null) return saved;
+  const fifine = (inputs || []).find(d =>
+    d && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications' &&
+    String(d.label || '').toLowerCase().includes('fifine'));
+  if (fifine) {
+    setPreferredMicId(fifine.deviceId);
+    return fifine.deviceId;
+  }
+  return '';
+}
 
 async function refreshMicDevices() {
   if (!micSelect || !navigator.mediaDevices?.enumerateDevices) return;
@@ -486,7 +514,7 @@ async function refreshMicDevices() {
       option.textContent = device.label || `устройство ${device.deviceId.slice(0, 6)}`;
       micSelect.appendChild(option);
     }
-    const wanted = preferredMicId();
+    const wanted = preferredMicId() || selectDefaultFifineDevice(inputs);
     if (wanted && inputs.some(d => d.deviceId === wanted)) micSelect.value = wanted;
   } catch { /* enumeration optional */ }
 }
@@ -570,6 +598,7 @@ async function startMic() {
       stream, context, gate, analyser, inputGate, helpers: micHelpers, lease: captureLease, utterance: firstUtterance,
       uploadQueue: {tail: Promise.resolve(), pending: 0}, finalizing: false, heard: false,
       turnGeneration: 0, active: true, abortController: new AbortController(), flushWaiters: [],
+      overlapPlayback: null, overlapStarted: false, voicedMs: 0, bargeInConfirmed: false,
     };
     pendingCaptureLease = null;
 
@@ -612,28 +641,41 @@ async function startMic() {
       const result = mic.inputGate.push(new Float32Array(event.data), context.sampleRate);
       if (result.opened) {
         if (!mic.heard) {
-          cancelSpeechPlayback();
+          mic.draftText = '';
+          mic.overlapPlayback = state.speechPlayback;
+          mic.overlapStarted = Boolean(state.speechPlayback);
+          mic.voicedMs = 0;
+          mic.bargeInConfirmed = false;
           mic.turnGeneration += 1;
           mic.drafts.reset();
           mic.drafts.resume();
         }
         mic.heard = true;
-        window.__jawlScene?.setMotionState?.('listening');
+        if (!state.speechPlayback) window.__jawlScene?.setMotionState?.('listening');
         micState.textContent = mic.draftText ? 'Слышу (предварительно): ' + mic.draftText.slice(0, 160) : 'Слушаю…';
       }
+      if (mic.heard && result.voiceActive && result.rms >= mic.inputGate.config.closeRms) {
+        mic.voicedMs += event.data.byteLength / Float32Array.BYTES_PER_ELEMENT * 1000 / context.sampleRate;
+      }
+      updateMicTurn(mic);
       for (const frame of result.frames) uploadChunk(frame, context.sampleRate);
     };
 
     state.mic.poll = setInterval(() => {
       const mic = state.mic;
-      if (mic && mic.active && mic.heard && !mic.finalizing &&
-          performance.now() - mic.inputGate.lastVoiceAt >= mic.inputGate.config.silenceMs) {
+      if (!mic || !mic.active || !mic.heard || mic.finalizing) return;
+      const decision = updateMicTurn(mic);
+      if (decision.action === 'commit_turn' || decision.action === 'finish_backchannel') {
         void finishUtterance();
       }
     }, 100);
 
     state.micActive = true;
     chatMic.style.background = 'var(--accent)';
+    if (typeof document !== 'undefined') {
+      const hudMic = document.querySelector('#hud-mic');
+      if (hudMic) hudMic.style.background = 'var(--accent)';
+    }
     micState.textContent = 'Микрофон включён — говорите.';
     setVal('mic-state', 'Микрофон включён.');
   } catch (error) {
@@ -645,6 +687,21 @@ async function startMic() {
   } finally {
     if (startGeneration === micStartGeneration) micStarting = false;
   }
+}
+
+function updateMicTurn(mic) {
+  if (!mic.heard || mic.finalizing) return {action: 'hold_turn'};
+  const decision = mic.helpers.decideMicTurn({
+    text: mic.draftText, overlap: mic.overlapStarted && !mic.bargeInConfirmed,
+    voicedMs: mic.voicedMs, silenceMs: performance.now() - mic.inputGate.lastVoiceAt,
+    normalSilenceMs: mic.inputGate.config.silenceMs,
+  });
+  if (decision.action === 'cancel_tts' && !mic.bargeInConfirmed) {
+    mic.bargeInConfirmed = true;
+    // A late draft from this utterance must not cancel a newer playback owner.
+    if (state.speechPlayback && state.speechPlayback === mic.overlapPlayback) cancelSpeechPlayback();
+  }
+  return decision;
 }
 
 function getCaptureClientId() {
@@ -740,6 +797,7 @@ async function finishUtterance() {
   const lastVoiceAt = mic.inputGate.lastVoiceAt;
   mic.flushDestination = mic.utterance;
   const turnGeneration = mic.turnGeneration;
+  const suppressBackchannel = mic.overlapStarted && !mic.bargeInConfirmed;
   micState.textContent = 'Распознаю…';
   try {
     await flushMicWorklet(mic);
@@ -757,6 +815,7 @@ async function finishUtterance() {
         correlation_id: utterance.correlationId,
         owner: 'desktop',
         capture_id: mic.lease.leaseId,
+        suppress_backchannel: suppressBackchannel,
       }),
       signal: mic.abortController.signal,
       });
@@ -764,6 +823,7 @@ async function finishUtterance() {
       return response.json();
     });
     if (!data || !micTurnIsCurrent(mic, turnGeneration)) return;
+    if (data.filtered === 'user_backchannel') window.__jawlScene?.triggerMotion?.('nod');
     if (data.transcript) addMessage('user', data.transcript);
     const answers = data.responses || [];
     const last = answers[answers.length - 1];
@@ -814,6 +874,10 @@ async function stopMic() {
   state.micActive = false;
   cancelSpeechPlayback();
   chatMic.style.background = '';
+  if (typeof document !== 'undefined') {
+    const hudMic = document.querySelector('#hud-mic');
+    if (hudMic) hudMic.style.background = '';
+  }
   micState.textContent = 'Микрофон выключен.';
   if (mic) {
     mic.active = false;
@@ -904,6 +968,179 @@ document.querySelector('#emergency-stop')?.addEventListener('click', async () =>
     addMessage('system', 'Аварийный стоп выполнен.');
   } catch (e) { alert('Не удалось: ' + e.message); }
 });
+
+// ---------------------------------------------------------------------------
+// Chameleon window modes: Compact HUD <-> Studio Drawer & OBS (?mode=obs)
+// ---------------------------------------------------------------------------
+
+let alwaysOnTop = false;
+let clickThrough = false;
+let dndActive = false;
+let sensesActive = false;
+
+function syncHudToggles() {
+  if (typeof document === 'undefined') return;
+  const dndBtn = document.querySelector('#hud-dnd');
+  if (dndBtn) {
+    dndBtn.style.background = dndActive ? 'rgba(224,112,95,.32)' : '';
+    dndBtn.setAttribute('aria-pressed', String(dndActive));
+  }
+  const sensesBtn = document.querySelector('#hud-senses');
+  if (sensesBtn) {
+    sensesBtn.style.background = sensesActive ? 'var(--accent-2)' : '';
+    sensesBtn.setAttribute('aria-pressed', String(sensesActive));
+  }
+  const ghostBtn = document.querySelector('#hud-ghost');
+  if (ghostBtn) {
+    ghostBtn.style.background = clickThrough ? 'var(--accent-2)' : '';
+    ghostBtn.setAttribute('aria-pressed', String(clickThrough));
+  }
+}
+
+async function toggleDndMode() {
+  const next = !dndActive;
+  try {
+    const r = await fetch('/api/attention', {
+      method: 'POST', credentials: 'include', headers: API.headers(),
+      body: JSON.stringify({dnd: next}),
+    });
+    if (r.ok) {
+      dndActive = next;
+      setVal('proactive-state', dndActive ? 'Не беспокоить (DND)' : 'включён');
+      syncHudToggles();
+      // DND also pauses ambient capture: while DND is on the companion does not listen.
+      const ambientAction = next ? '/pause' : '/resume';
+      for (const base of ['/api/ambient-audio', '/api/ambient-memory']) {
+        try {
+          await fetch(base + ambientAction, {method: 'POST', credentials: 'include', headers: API.headers()});
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+async function toggleSensesMode() {
+  const next = !sensesActive;
+  try {
+    const r = await fetch('/api/ambient-memory/config', {
+      method: 'POST', credentials: 'include', headers: API.headers(),
+      body: JSON.stringify({mode: 'set', enabled: next}),
+    });
+    if (r.ok) {
+      sensesActive = next;
+      setVal('ambient-state', sensesActive ? 'активна' : 'пауза');
+      syncHudToggles();
+    }
+  } catch {}
+}
+
+function syncDesktopWindowMode() {
+  const compact = Boolean(document.body?.classList?.contains('compact-mode'));
+  const pinBtn = document.querySelector('#hud-pin');
+  if (pinBtn) {
+    pinBtn.style.background = alwaysOnTop ? 'var(--accent-2)' : '';
+    pinBtn.setAttribute('aria-pressed', String(alwaysOnTop));
+  }
+  syncHudToggles();
+  try {
+    window.__jawlDesktop?.setWindowMode?.({compact, alwaysOnTop, clickThrough});
+  } catch {}
+}
+
+function setCompactMode(compact, {defaultPin = true} = {}) {
+  const next = Boolean(compact);
+  if (!next) clickThrough = false;
+  if (next && defaultPin && localStorage.getItem('jawl.app.alwaysOnTop') === null) {
+    alwaysOnTop = true;
+  }
+  document.body?.classList?.toggle('compact-mode', next);
+  try { localStorage.setItem('jawl.app.compactMode', next ? '1' : '0'); } catch {}
+  syncDesktopWindowMode();
+  setTimeout(() => window.dispatchEvent?.(new Event('resize')), 30);
+  // Also persist to electron userData via IPC (already done in syncDesktopWindowMode)
+}
+
+// Restore compact mode from localStorage on boot
+try {
+  const savedCompact = localStorage.getItem('jawl.app.compactMode');
+  if (savedCompact === '1') {
+    document.body?.classList?.add('compact-mode');
+    alwaysOnTop = localStorage.getItem('jawl.app.alwaysOnTop') === '1' || localStorage.getItem('jawl.app.alwaysOnTop') === null;
+    syncDesktopWindowMode();
+    // Also notify Electron to resize window
+    setTimeout(() => {
+      syncDesktopWindowMode();
+    }, 100);
+  }
+} catch (_) {}
+
+function toggleAlwaysOnTop() {
+  alwaysOnTop = !alwaysOnTop;
+  try { localStorage.setItem('jawl.app.alwaysOnTop', alwaysOnTop ? '1' : '0'); } catch {}
+  syncDesktopWindowMode();
+}
+
+function toggleClickThrough() {
+  clickThrough = !clickThrough;
+  syncDesktopWindowMode();
+}
+
+function toggleCompactMode() {
+  setCompactMode(!document.body?.classList?.contains('compact-mode'));
+}
+
+document.querySelector('#toggle-compact')?.addEventListener('click', () => setCompactMode(true));
+document.querySelector('#hud-expand')?.addEventListener('click', () => setCompactMode(false));
+document.querySelector('#hud-pin')?.addEventListener('click', toggleAlwaysOnTop);
+document.querySelector('#hud-ghost')?.addEventListener('click', toggleClickThrough);
+document.querySelector('#hud-dnd')?.addEventListener('click', () => void toggleDndMode());
+document.querySelector('#hud-senses')?.addEventListener('click', () => void toggleSensesMode());
+document.querySelector('#hud-mic')?.addEventListener('click', () => {
+  if (micStarting || state.micActive) void stopMic();
+  else void startMic();
+});
+
+try {
+  alwaysOnTop = localStorage.getItem('jawl.app.alwaysOnTop') === '1';
+  const params = new URLSearchParams(globalThis.location?.search || '');
+  const modeParam = params.get('mode');
+  if (modeParam === 'obs') {
+    document.body?.classList?.add('obs-mode');
+  } else if (modeParam === 'compact' || localStorage.getItem('jawl.app.compactMode') === '1') {
+    setCompactMode(true, {defaultPin: false});
+  } else if (alwaysOnTop) {
+    syncDesktopWindowMode();
+  }
+  window.addEventListener?.('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyM') {
+      e.preventDefault();
+      toggleCompactMode();
+    } else if (e.ctrlKey && e.shiftKey && e.code === 'KeyG') {
+      e.preventDefault();
+      toggleClickThrough();
+    }
+  });
+  // When hovering the HUD dock while clickThrough is on, temporarily allow mouse clicks on the dock!
+  const hudDock = document.querySelector('.hud-dock');
+  hudDock?.addEventListener('mouseenter', () => {
+    if (clickThrough) {
+      window.__jawlDesktop?.setWindowMode?.({
+        compact: Boolean(document.body?.classList?.contains('compact-mode')),
+        alwaysOnTop,
+        clickThrough: false,
+      });
+    }
+  });
+  hudDock?.addEventListener('mouseleave', () => {
+    if (clickThrough) {
+      window.__jawlDesktop?.setWindowMode?.({
+        compact: Boolean(document.body?.classList?.contains('compact-mode')),
+        alwaysOnTop,
+        clickThrough: true,
+      });
+    }
+  });
+} catch { /* non-browser test harness safe */ }
 
 // ---------------------------------------------------------------------------
 // go

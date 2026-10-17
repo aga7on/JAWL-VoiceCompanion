@@ -74,6 +74,45 @@ only the native event/envelope.
 
 ## Native control routes
 
+### Owned brain startup identity and local JSON wire format (15Oct)
+
+The brain entrypoint validates all isolated profile paths before protected
+imports. After strict snapshot verification and hook installation it atomically
+writes `logs/owned-brain-startup.json`: actual interpreter PID/creation time,
+parent PID, source SHA and actual native-class hook identities. No prompt,
+thought, token or environment dump enters this receipt. The live acceptance
+driver checks the PID's exact launcher Job and creation time while it is alive.
+Windows venv redirector PID is distinct from the actual interpreter PID.
+
+Owned supervisor readback (16Oct) uses `owned-supervisor-identity.json` under
+the owned instances root, plus the native `supervisor.pid` marker. The receipt
+contains PID/creation time and the expected owned entrypoint/root; the process
+must still match. No native command-line fallback runs. The actual supervisor
+publishes the bounded atomic receipt only after acquiring the native exclusive
+lock and removes it before releasing that lock. Failed acquisition/write,
+PID reuse, malformed receipts and foreign roots cannot report running=true.
+After forced Job drain, acceptance cleanup removes a stale receipt only if it
+matches the identity captured while that supervisor belonged to the exact Job.
+
+The owned `native_jawl_json_format.py` corrects only local OpenAI-compatible
+`json_envelope` requests with the single native `execute_skill` SDK wrapper
+and automatic tool choice. It constrains the outer JSON object through
+`response_format.json_schema` and avoids offering a second SDK representation
+of the same envelope. The wire grammar imposes no action/argument whitelist.
+Native discovery, arguments, Goal Protocol v2 and ledger fields remain available;
+JAWL still validates, parses and executes every action.
+Remote/native-tool/explicit-format requests keep their existing behavior.
+
+The installed llama.cpp maps plain `json_object` to an empty schema, which some
+template branches do not treat as constrained output. A schema combined with
+the wrapper failed sampler initialization on this build. A full-schema trial
+produced repetitive actions and exhausted the output budget. The current wire
+format is probed against the actual server before model acceptance; this is
+not permission to repair arbitrary generated actions or speak private fields.
+The [llama.cpp server contract](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+documents schema-constrained response formats. Current live results belong in
+[STATE](../STATE.md), separately from controlled regression tests.
+
 ### Owned cycle delivery boundary (13Oct)
 
 `scripts/run_owned_jawl_console.py` verifies isolation and the pinned snapshot
@@ -89,6 +128,13 @@ EventBus publication boundary; background tick publication and native status
 remain. Only actual successful native terminal delivery counts as an answer.
 Failed error emission is not reported as successful delivery. Installation is
 process-local/idempotent, not persistent exactly-once execution.
+
+Within an active correlated cycle the first confirmed terminal event wins.
+Concurrent/repeated terminal emits are serialized; an unconfirmed failed emit
+allows retry. Repeated terminal tool broadcasts are suppressed before history
+and legacy writer side effects, not just before SSE. Native action execution
+and goal state stay authoritative. This guards a native batch containing several
+terminal actions; it does not deduplicate arbitrary native effects after restart.
 
 Evidence:11 controlled/snapshot and12 launcher checks on3.14/3.11, actual isolated
 console startup/import/auth/cancel probe, full regression844/66/16 plus browser

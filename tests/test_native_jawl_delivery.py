@@ -15,6 +15,12 @@ def _classes(run_impl=None):
         def __init__(self):
             self.events = []
             self.fail_final = False
+            self.history = []
+
+        async def broadcast_message(self, text, turn_id=None, response=None):
+            self.history.append(text)
+            await asyncio.sleep(0)
+            await self.emit_gateway_event(turn_id or "turn-batch", "assistant.final", {"response": {"text": text}})
 
         async def emit_gateway_event(self, turn_id, event_type, payload):
             event = {
@@ -96,6 +102,34 @@ def _install(loop_class, client_class, bus_class, *, timeout=1.0):
 
 
 class NativeJawlDeliveryGuardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repeated_batch_broadcasts_are_suppressed_before_history_and_sse(self):
+        async def batch(loop, _event, payload, _missed):
+            await asyncio.gather(*(loop.client.broadcast_message(text, payload["_companion_turn_id"])
+                                   for text in ("first", "second", "third")))
+        loop_class, client_class, bus_class = _classes(batch)
+        _install(loop_class, client_class, bus_class)
+        client = client_class()
+        await loop_class(client).run("HOST_TERMINAL_MESSAGE", {"_companion_turn_id": "turn-batch"}, [])
+        self.assertEqual(client.history, ["first"])
+        self.assertEqual([event["type"] for event in client.events], ["assistant.final"])
+        # Uncorrelated legacy broadcasts retain their behavior outside a cycle.
+        await client.broadcast_message("legacy", "other-turn")
+        self.assertEqual(client.history, ["first", "legacy"])
+
+    async def test_direct_concurrent_terminal_emits_confirm_once_and_allow_failed_retry(self):
+        async def batch(loop, _event, payload, _missed):
+            turn = payload["_companion_turn_id"]
+            loop.client.fail_final = True
+            self.assertIsNone(await loop.client.emit_gateway_event(turn, "assistant.final", {}))
+            loop.client.fail_final = False
+            results = await asyncio.gather(*(loop.client.emit_gateway_event(turn, "assistant.final", {}) for _ in range(3)))
+            self.assertTrue(all(result is results[0] for result in results))
+        loop_class, client_class, bus_class = _classes(batch)
+        _install(loop_class, client_class, bus_class)
+        client = client_class()
+        await loop_class(client).run("HOST_TERMINAL_MESSAGE", {"_companion_turn_id": "turn-batch"}, [])
+        self.assertEqual(len(client.events), 2)  # failed attempt, one confirmed retry
+
     async def test_cycle_without_terminal_gets_one_correlated_fixed_error(self):
         loop_class, client_class, bus_class = _classes()
         _install(loop_class, client_class, bus_class)

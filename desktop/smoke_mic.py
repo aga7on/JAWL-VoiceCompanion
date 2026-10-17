@@ -26,7 +26,7 @@ import websocket
 ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
 DESKTOP = ROOT / "desktop"
 REPORT = ROOT / "runtime" / "desktop-mic-smoke.json"
-DEBUG_PORT = 9222
+DEBUG_PORT = 9229
 PANEL_PORT = 2379  # disposable; no brain, just the panel server
 
 
@@ -67,9 +67,11 @@ def kill_stale_electron() -> int:
     return killed
 
 
-def window_ws_url(match: str) -> str | None:
+def window_ws_url(match: str, report: dict | None = None) -> str | None:
     with urllib.request.urlopen(f"http://127.0.0.1:{DEBUG_PORT}/json/list", timeout=5) as response:
         targets = json.loads(response.read().decode("utf-8"))
+    if report is not None:
+        report["cdp_targets"] = [{"type": t.get("type"), "url": str(t.get("url", ""))[:80]} for t in targets]
     for target in targets:
         if target.get("type") == "page" and match in (target.get("url") or ""):
             return target["webSocketDebuggerUrl"]
@@ -125,21 +127,28 @@ def main() -> int:
 
         electron_env = dict(os.environ)
         electron_env["JAWL_DESKTOP_CONTROL_PORT"] = str(PANEL_PORT)
+        electron_env.pop("ELECTRON_RUN_AS_NODE", None)
+        electron_exe = DESKTOP / "node_modules" / "electron" / "dist" / "electron.exe"
+        electron_cmd = str(electron_exe if electron_exe.is_file() else DESKTOP / "node_modules" / ".bin" / "electron.cmd")
         electron = subprocess.Popen(
-            ["node_modules\\.bin\\electron.cmd", ".", "--remote-debugging-port"],
+            [electron_cmd, ".", f"--remote-debugging-port={DEBUG_PORT}"],
             cwd=DESKTOP, env=electron_env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         report["electron_pid"] = electron.pid
 
-        deadline = time.time() + 60
+        deadline = time.time() + 15
         panel = None
         while time.time() < deadline:
+            if electron.poll() is not None:
+                report["electron_exit_code"] = electron.returncode
+                report["electron_output"] = (electron.stdout.read() if electron.stdout else "")[:1000]
+                break
             try:
-                panel = window_ws_url(f":{PANEL_PORT}")
+                panel = window_ws_url(f":{PANEL_PORT}", report)
                 if panel:
                     break
-            except Exception:
-                pass
+            except Exception as exc:
+                report["last_cdp_error"] = str(exc)
             time.sleep(1)
         checks["panel_window_found"] = panel is not None
 
@@ -159,11 +168,14 @@ def main() -> int:
             labels = [d.get("label", "") for d in (report.get("audio_inputs") or []) if isinstance(d, dict)]
             checks["devices_enumerated"] = len(labels) > 0 and any("fifine" in l.lower() for l in labels)
 
-            # 4. Open the REAL mic stream (no fake device in flags).
+            # 4. Open the REAL fifine mic stream (no fake device in flags).
             stream_probe = cdp.evaluate("""
                 (async () => {
                   try {
-                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    const list = await navigator.mediaDevices.enumerateDevices();
+                    const fifine = list.find(d => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications' && String(d.label || '').toLowerCase().includes('fifine'));
+                    const constraints = fifine ? {audio: {deviceId: {exact: fifine.deviceId}}} : {audio: true};
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     const track = stream.getAudioTracks()[0];
                     const settings = track.getSettings();
                     const result = {
@@ -181,19 +193,22 @@ def main() -> int:
             mic = report.get("mic_stream") or {}
             checks["mic_stream_opened"] = bool(mic.get("label")) and not mic.get("error")
             checks["mic_is_real_device"] = bool(mic.get("label")) and not mic.get("fake")
+            checks["mic_is_fifine"] = "fifine" in str(mic.get("label", "")).lower()
 
             # 5. AudioWorklet gate: the panel's own mic-processor.js loads and
-            #    real room audio produces non-silent PCM chunks (the gate
-            #    posts raw Float32 buffers, not rms summaries).
+            #    real room/fifine audio produces PCM chunks.
             worklet_probe = cdp.evaluate("""
                 (async () => {
                   try {
                     const context = new AudioContext();
                     await context.audioWorklet.addModule('/mic-processor.js');
-                    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+                    const list = await navigator.mediaDevices.enumerateDevices();
+                    const fifine = list.find(d => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications' && String(d.label || '').toLowerCase().includes('fifine'));
+                    const constraints = fifine ? {audio: {deviceId: {exact: fifine.deviceId}}} : {audio: true};
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
                     const source = context.createMediaStreamSource(stream);
                     const gate = new AudioWorkletNode(context, 'jawl-mic-processor');
-                    let frames = 0, loudFrames = 0;
+                    let frames = 0, loudFrames = 0, peakRms = 0;
                     gate.port.onmessage = (event) => {
                       const data = event.data;
                       if (data instanceof ArrayBuffer) {
@@ -204,6 +219,7 @@ def main() -> int:
                           energy += samples[i] * samples[i];
                         }
                         const rms = Math.sqrt(energy / (samples.length / 16));
+                        if (rms > peakRms) peakRms = rms;
                         if (rms > 0.0005) loudFrames += 1;
                       }
                     };
@@ -212,7 +228,7 @@ def main() -> int:
                     const tracks = stream.getAudioTracks();
                     tracks.forEach(t => t.stop());
                     await context.close();
-                    return JSON.stringify({frames, loudFrames});
+                    return JSON.stringify({frames, loudFrames, peakRms: Math.round(peakRms * 10000) / 10000});
                   } catch (e) { return JSON.stringify({error: String(e)}); }
                 })()
             """, timeout=60)
@@ -234,7 +250,20 @@ def main() -> int:
         kill_stale_electron()
 
     report["checks"] = checks
-    report["status"] = "passed" if checks and all(checks.values()) else "failed"
+    expected_keys = {
+        "panel_server_up",
+        "panel_window_found",
+        "devices_enumerated",
+        "mic_stream_opened",
+        "mic_is_real_device",
+        "worklet_gate_loaded",
+        "worklet_frames_flowing",
+    }
+    report["status"] = (
+        "passed"
+        if not report.get("error") and expected_keys.issubset(checks) and all(checks.values())
+        else "failed"
+    )
     REPORT.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["status"] == "passed" else 1

@@ -4,7 +4,7 @@
 // The legacy two-window shell (panel + avatar) stays available via
 // --legacy-shell for OBS/verification runs.
 
-const { app, BrowserWindow, shell, ipcMain, session } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, session, screen, globalShortcut } = require('electron');
 const path = require('path');
 const http = require('http');
 
@@ -118,11 +118,33 @@ function remoteUrl() {
 }
 
 function createAppWindow() {
-  appWindow = new BrowserWindow({
-    width: 1060,
-    height: 720,
-    minWidth: 720,
-    minHeight: 480,
+  // Restore persisted compact mode and window position from the Electron user data dir.
+  let width = 1060, height = 720, x, y;
+  try {
+    const stateFile = path.join(app.getPath('userData'), 'jawl-window-state.json');
+    if (require('fs').existsSync(stateFile)) {
+      const saved = JSON.parse(require('fs').readFileSync(stateFile, 'utf8'));
+      if (saved && typeof saved === 'object') {
+        if (saved.compact) { width = 360; height = 540; }
+        else {
+          if (Number.isInteger(saved.width) && saved.width >= 320) width = saved.width;
+          if (Number.isInteger(saved.height) && saved.height >= 420) height = saved.height;
+        }
+        if (Number.isInteger(saved.x) && Number.isInteger(saved.y)) {
+          // Validate that the saved position is on a connected display.
+          const displays = screen.getAllDisplays();
+          const validDisplay = displays.some(d => {
+            return saved.x >= d.bounds.x && saved.x < d.bounds.x + d.bounds.width &&
+                   saved.y >= d.bounds.y && saved.y < d.bounds.y + d.bounds.height;
+          });
+          if (validDisplay) { x = saved.x; y = saved.y; }
+        }
+      }
+    }
+  } catch (_) {}
+  const windowOpts = {
+    width, height,
+    minWidth: 320, minHeight: 420,
     title: 'JAWL Companion',
     backgroundColor: '#0a1520',
     autoHideMenuBar: true,
@@ -133,11 +155,49 @@ function createAppWindow() {
       // code). Sandbox off: GLTFLoader needs to fetch blob: texture URLs
       // that the sandboxed renderer rejects (blank untextured model).
       sandbox: false,
+      preload: path.join(__dirname, 'panel-preload.js'),
     },
-  });
+  };
+  if (x !== undefined && y !== undefined) { windowOpts.x = x; windowOpts.y = y; }
+  appWindow = new BrowserWindow(windowOpts);
+  // Persist position and size on move/resize (debounced).
+  let saveTimer = null;
+  const saveState = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        if (!appWindow || appWindow.isDestroyed()) return;
+        const bounds = appWindow.getBounds();
+        const display = screen.getDisplayNearestPoint({x: bounds.x, y: bounds.y});
+        const stateFile = path.join(app.getPath('userData'), 'jawl-window-state.json');
+        require('fs').writeFileSync(stateFile, JSON.stringify({
+          width: bounds.width, height: bounds.height,
+          x: bounds.x, y: bounds.y,
+          displayId: display.id,
+        }), 'utf8');
+      } catch (_) {}
+    }, 500);
+  };
+  appWindow.on('moved', saveState);
+  appWindow.on('resized', saveState);
   installNavigationGuards(appWindow, retryPanelReadiness);
   appWindow.loadURL(START_PAGE_URL);
   appWindow.on('closed', () => { appWindow = null; });
+  // Register global shortcut for exiting click-through mode (Ctrl+Shift+G).
+  try {
+    globalShortcut.register('CommandOrControl+Shift+G', () => {
+      if (appWindow && !appWindow.isDestroyed()) {
+        appWindow.setIgnoreMouseEvents(false);
+        try {
+          const stateFile = path.join(app.getPath('userData'), 'jawl-window-state.json');
+          let saved = {};
+          if (require('fs').existsSync(stateFile)) saved = JSON.parse(require('fs').readFileSync(stateFile, 'utf8'));
+          saved.clickThrough = false;
+          require('fs').writeFileSync(stateFile, JSON.stringify(saved), 'utf8');
+        } catch (_) {}
+      }
+    });
+  } catch (_) {}
   return appWindow;
 }
 
@@ -238,12 +298,43 @@ ipcMain.on('jawl-avatar-event', (_event, payload) => {
   }
 });
 
+// Chameleon window resizing, Always-on-Top and Click-through toggle (Compact HUD <-> Studio Drawer).
+ipcMain.on('jawl-window-mode', (_event, payload) => {
+  if (!appWindow || appWindow.isDestroyed() || !payload || typeof payload !== 'object') return;
+  const compact = Boolean(payload.compact);
+  const alwaysOnTop = Boolean(payload.alwaysOnTop);
+  const clickThrough = Boolean(payload.clickThrough);
+  try {
+    appWindow.setAlwaysOnTop?.(alwaysOnTop);
+    appWindow.setIgnoreMouseEvents?.(clickThrough, { forward: true });
+    if (compact) {
+      appWindow.setSize?.(360, 540, true);
+    } else {
+      appWindow.setSize?.(1060, 720, true);
+    }
+    // Persist the compact/studio preference.
+    try {
+      const stateFile = path.join(app.getPath('userData'), 'jawl-window-state.json');
+      let saved = {};
+      if (require('fs').existsSync(stateFile)) saved = JSON.parse(require('fs').readFileSync(stateFile, 'utf8'));
+      saved.compact = compact;
+      require('fs').writeFileSync(stateFile, JSON.stringify(saved), 'utf8');
+    } catch (_) {}
+  } catch (_) {}
+});
+
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
 // NOTE: no fake device: the app window records the owner's real microphone.
-if (process.argv.includes('--remote-debugging-port')) {
-  app.commandLine.appendSwitch('remote-debugging-port', '9222');
-  app.commandLine.appendSwitch('remote-allow-origins', 'http://127.0.0.1:9222');
+const debugPortArg = process.argv.find((arg) => arg.startsWith('--remote-debugging-port='));
+if (debugPortArg) {
+  const debugPort = debugPortArg.split('=', 2)[1];
+  app.commandLine.appendSwitch('remote-debugging-port', debugPort);
+  app.commandLine.appendSwitch('remote-allow-origins', `http://127.0.0.1:${debugPort}`);
+} else if (process.argv.includes('--remote-debugging-port')) {
+  const debugPort = process.env.JAWL_DESKTOP_DEBUG_PORT || '9222';
+  app.commandLine.appendSwitch('remote-debugging-port', debugPort);
+  app.commandLine.appendSwitch('remote-allow-origins', `http://127.0.0.1:${debugPort}`);
 }
 
 app.whenReady().then(async () => {

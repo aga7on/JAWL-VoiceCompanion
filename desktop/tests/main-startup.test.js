@@ -16,6 +16,7 @@ function createHarness({ health = () => true } = {}) {
     permissionRequestHandler: null,
     permissionCheckHandler: null,
     appHandlers: new Map(),
+    ipcHandlers: new Map(),
     commandLine: [],
     startup: null,
   };
@@ -27,6 +28,8 @@ function createHarness({ health = () => true } = {}) {
       this.urls = [];
       this.handlers = new Map();
       this.destroyed = false;
+      this.alwaysOnTop = false;
+      this.size = [options.width, options.height];
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = (handler) => {
         this.webContents.openHandler = handler;
@@ -34,6 +37,15 @@ function createHarness({ health = () => true } = {}) {
       this.webContents.send = () => {};
       this.webContents.getURL = () => this.urls.at(-1) || '';
       state.windows.push(this);
+    }
+    setAlwaysOnTop(flag) {
+      this.alwaysOnTop = Boolean(flag);
+    }
+    setIgnoreMouseEvents(flag) {
+      this.ignoreMouseEvents = Boolean(flag);
+    }
+    setSize(w, h) {
+      this.size = [w, h];
     }
     loadURL(url) {
       this.urls.push(url);
@@ -70,7 +82,7 @@ function createHarness({ health = () => true } = {}) {
     },
     BrowserWindow: MockBrowserWindow,
     shell: { openExternal(url) { state.externalUrls.push(url); return Promise.resolve(); } },
-    ipcMain: { on() {} },
+    ipcMain: { on(name, handler) { state.ipcHandlers.set(name, handler); } },
     session: {
       defaultSession: {
         setPermissionRequestHandler(handler) { state.permissionRequestHandler = handler; },
@@ -190,4 +202,15 @@ test('limits renderer navigation, external links, and media permission to the lo
   const check = harness.state.permissionCheckHandler;
   assert.equal(check(null, 'media', 'http://127.0.0.1:2367', { mediaType: 'audio' }), true);
   assert.equal(check(null, 'media', 'http://127.0.0.1:2367', { mediaType: 'video' }), false);
+
+  const windowModeHandler = harness.state.ipcHandlers.get('jawl-window-mode');
+  assert.equal(typeof windowModeHandler, 'function');
+  windowModeHandler(null, { compact: true, alwaysOnTop: true, clickThrough: true });
+  assert.deepEqual(window.size, [360, 540]);
+  assert.equal(window.alwaysOnTop, true);
+  assert.equal(window.ignoreMouseEvents, true);
+  windowModeHandler(null, { compact: false, alwaysOnTop: false, clickThrough: false });
+  assert.deepEqual(window.size, [1060, 720]);
+  assert.equal(window.alwaysOnTop, false);
+  assert.equal(window.ignoreMouseEvents, false);
 });

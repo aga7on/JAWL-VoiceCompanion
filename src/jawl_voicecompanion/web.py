@@ -43,6 +43,7 @@ from .resources import ResourceGovernor
 from .tts import TTSService, TTSUnavailable, TTSCancelled
 from .speech_requests import validate_speech_request_id
 from . import turn_policy
+from .duplex_cascade import is_user_backchannel
 from .vision import JawlNativeVisionExecutor, VisionLookService
 from .voicemem_client import VoiceMemAsyncIngest, VoiceMemProcessClient, VoiceMemUnavailable
 from .ws_server import WebSocketConnection, WebSocketError, is_websocket_upgrade, send_handshake_response
@@ -1061,6 +1062,14 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if self.server.screen_watcher is not None:
                 status["watcher"] = self.server.screen_watcher.state()
             status["attention"] = self.server.attention.state()
+            fusion = getattr(self.server, "perception_fusion", None)
+            cortex = getattr(fusion, "eg2", None) if fusion is not None else None
+            if cortex is None and hasattr(fusion, "eg2_cortex"):
+                cortex = fusion.eg2_cortex()
+            status["eg2"] = {
+                "configured": cortex is not None,
+                "model_root": str(getattr(cortex, "model_root", "")) if cortex is not None else None,
+            }
             self._json(status)
             return
         if path == "/api/vision/events":
@@ -1397,14 +1406,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path in ("/", "/index.html"):
-            # ADR-045: the Live2D /avatar page is removed (the 3D VRM avatar
-            # lives in the Electron shell); the presentation server keeps the
-            # OBS surface only.
-            index_path = self.server.frontend_dir / "index.html"
+            # ADR-046: the single-window desktop app (chat + 3D VRM character +
+            # all settings) is the only UI. The legacy two-window shell
+            # (frontend/index.html + avatar.html) was removed in H1
+            # (docs/history/2026-10-16-h1-ui-defrag/).
+            app_path = self.server.frontend_dir.parent / "desktop" / "app.html"
             try:
-                body = index_path.read_bytes()
+                body = app_path.read_bytes()
             except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND, "frontend is not installed")
+                self.send_error(HTTPStatus.NOT_FOUND, "desktop app is not installed")
                 return
             self.send_response(HTTPStatus.OK)
             _security_headers(self)
@@ -1610,6 +1620,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                         "hold": bool(decision["hold"]),
                         "silence_ms": snapshot.get("silence_ms"),
                         "required_ms": decision["required_ms"],
+                        "duplex_token": decision.get("duplex_token"),
+                        "duplex_action": decision.get("duplex_action"),
+                        "avatar_gesture": decision.get("avatar_gesture"),
                     })
                     return
                 self._json({"ok": True, "draft": "", "mode": "streaming"})
@@ -1765,6 +1778,27 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     session_id=self.server.session_token,
                 )
                 self._json({"ok": result["status"] in {"ok", "unchanged"}, "result": result})
+                return
+            if self.path == "/api/vision/describe-displays":
+                max_displays = payload.get("max_displays", 2)
+                if isinstance(max_displays, bool) or not isinstance(max_displays, int):
+                    raise ValueError("max_displays must be an integer")
+                max_displays = max(1, min(max_displays, 4))
+                audio_wav_bytes = None
+                audio_b64 = payload.get("audio_wav_base64")
+                if isinstance(audio_b64, str) and audio_b64:
+                    try:
+                        import base64
+
+                        audio_wav_bytes = base64.b64decode(audio_b64)
+                    except Exception:  # noqa: BLE001
+                        audio_wav_bytes = None
+                result = self.server.vision.describe_displays(
+                    max_displays=max_displays,
+                    session_id=self.server.session_token,
+                    audio_wav_bytes=audio_wav_bytes,
+                )
+                self._json({"ok": result.get("status") == "ok", "result": result})
                 return
             if self.path == "/api/vision/execute":
                 if payload.get("confirm") is not True:
@@ -2013,6 +2047,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/ambient-memory/clear":
                 self._json(self.server.ambient_memory.clear())
                 return
+            if self.path == "/api/ambient-memory/pause":
+                self._json({"ok": True, "state": self.server.ambient_memory.pause()})
+                return
+            if self.path == "/api/ambient-memory/resume":
+                self._json({"ok": True, "state": self.server.ambient_memory.resume()})
+                return
             if self.path == "/api/ambient-memory/config":
                 mode = str(payload.get("mode") or "set").strip()
                 if mode == "disable_and_erase":
@@ -2049,6 +2089,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json({"error": "system audio is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 self._json({"ok": True, "state": self.server.ambient_audio.stop()})
+                return
+            if self.path == "/api/ambient-audio/pause":
+                if self.server.ambient_audio is None:
+                    self._json({"error": "system audio is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._json({"ok": True, "state": self.server.ambient_audio.pause()})
+                return
+            if self.path == "/api/ambient-audio/resume":
+                if self.server.ambient_audio is None:
+                    self._json({"error": "system audio is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._json({"ok": True, "state": self.server.ambient_audio.resume()})
                 return
             if self.path == "/api/ambient-audio/playback":
                 active = payload.get("active")
@@ -2392,6 +2444,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     "ok": True, "mode": "external_final_utterance",
                     "transcript": "", "events": [], "responses": [],
                     "filtered": "asr_noise_hallucination",
+                }
+            # A draft is provisional. Confirm acknowledgements using canonical
+            # ASR before dropping them, after consuming/resetting both buffers.
+            # This suppresses only this overlapping utterance, never a goal/TTS.
+            if payload.get("suppress_backchannel") is True and is_user_backchannel(text):
+                return {
+                    "ok": True, "mode": "external_final_utterance",
+                    "transcript": "", "events": [], "responses": [],
+                    "filtered": "user_backchannel",
                 }
             log_event("asr_final", text=text, session=session_id[:40], source=asr_source)
             if self.server.timeline is not None:
@@ -2943,6 +3004,7 @@ def create_server(
         active_executor,
         describer=vision_describer,
         plan_executor=plan_executor,
+        perception_fusion=perception_fusion,
     )
     event_sink = JawlEventFileSink(jawl_event_dir) if jawl_event_dir else None
     active_attention = attention or AttentionPresence(

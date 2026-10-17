@@ -25,6 +25,34 @@ export function normalizeMicConfig(input = {}) {
   });
 }
 
+// A bounded, deterministic turn heuristic. This is not a learned duplex
+// model: ASR drafts may be absent, so sustained voiced audio remains a fallback.
+export function decideMicTurn({text = '', overlap = false, voicedMs = 0,
+  silenceMs = 0, normalSilenceMs = DEFAULT_MIC_CONFIG.silenceMs} = {}) {
+  const raw = String(text).trim().toLowerCase().replaceAll('ё', 'е');
+  const words = raw.match(/[а-яa-z0-9]+(?:-[а-яa-z0-9]+)*/gu) || [];
+  const joined = words.join(' ');
+  const acknowledgements = new Set(['угу', 'ага', 'да', 'ясно', 'понял', 'понятно', 'окей', 'ок',
+    'хорошо', 'круто', 'ого', 'вау', 'классно', 'точно', 'верно', 'ладно', 'мгм', 'хм',
+    'ах', 'ох', 'ха', 'хех', 'прикольно', 'ништяк', 'супер']);
+  const backchannel = words.length > 0 && words.length <= 2 &&
+    (joined === 'ну да' || words.every(word => acknowledgements.has(word)));
+  const interrupt = words.some(word => ['стоп', 'стой', 'подожди', 'погоди', 'хватит',
+    'тихо', 'замолчи', 'остановись', 'перестань', 'слушай', 'послушай', 'нет', 'лучше', 'давай'].includes(word));
+  const thinking = /^(э+|а+|м+|э-э(?:-э)?|а-а(?:-а)?|м-м|ну|вот|типа|короче|и|или|но|что|чтобы|потому|если|когда|который|которая|которые|как|где|в|на|с|для|хотел|хочу|давай)$/.test(words.at(-1) || '')
+    || /(?:как бы|то есть|потому что|я хотел|я хочу)$/.test(joined)
+    || /(?:\.\.\.|…|,|[-—])$/.test(raw);
+  const requiredMs = thinking ? Math.max(normalSilenceMs, 2200)
+    : raw && /[.!?]$/.test(raw) ? Math.min(normalSilenceMs, 380) : normalSilenceMs;
+  if (overlap && !backchannel && (interrupt || words.length >= 2 || voicedMs >= 550)) {
+    return {action: 'cancel_tts', requiredMs};
+  }
+  if (silenceMs >= requiredMs) {
+    return {action: overlap && backchannel ? 'finish_backchannel' : 'commit_turn', requiredMs};
+  }
+  return {action: 'hold_turn', requiredMs};
+}
+
 export function uploadUtteranceFor(mic) {
   return mic.flushDestination || mic.utterance;
 }

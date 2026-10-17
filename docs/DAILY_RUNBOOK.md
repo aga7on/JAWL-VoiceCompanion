@@ -31,3 +31,30 @@ workers. Пользовательский единый launch/stop/tray буде
 
 Микрофон/экран/системный звук настраиваются явно. Начать mic проверку с наушниками.
 Ни этот документ, ни docs-only проверка не включают фактический захват устройств.
+
+В едином окне `Ctrl+Shift+M` переключает Studio и компактный режим; настройки
+открываются из компактного дока. Speech Stop прекращает текущую озвучку,
+а emergency Stop и остановка задачи — отдельные операции.
+
+Проверка15Oct после новых hooks:3 real-model WAV voice turns через `/app`
+прошли с Hikari, GigaAM и OmniVoice. Dispatch→WebAudio≈9.47–11.37с;
+физический Fifine/full duplex и8h эксплуатация ещё не приняты.
+`-RunBrowserVoiceE2E` теперь выбирает актуальный `/app`; его WAV-захват
+не требует говорить в микрофон и не подтверждает аппаратную слышимость.
+
+
+Изолированная native проверка без физических устройств:
+
+```powershell
+python -B scripts/run_owned_gateway_acceptance.py --live --mode ordinary --suite policy --report runtime/policy-check-unique.json
+python -B scripts/run_owned_gateway_acceptance.py --live --mode ordinary --suite voice --voice-turns 20 --report runtime/voice-check-unique.json
+python -B scripts/run_owned_gateway_acceptance.py --live --mode ordinary --suite soak --soak-seconds 28800 --report runtime/soak-check-unique.json
+```
+
+Каждый запуск создаёт свой профиль и Jobs; существующий report не перезаписывается.
+Voice использует три WAV по кругу, реальные ASR/brain/TTS и headless `/app`.
+Soak включает native ROOT3 только в новом disposable profile, временный unattended
+lease, Goal write/read и один контролируемый отказ owned модели с восстановлением.
+Atomic `soak-checkpoint.json` находится в run_root из отчёта. Smoke180с прошёл. Первый8h native soak16Oct остановился с FAIL на63.6мин:
+Goal13 false completion отвергнут native guard; cleanup PASS.
+[Итог первого прогона](../runtime/native-owned-soak-8h-20261016-r1.json).8h не принят. Старый standalone soak с cwd/cmdline sampler не используется.

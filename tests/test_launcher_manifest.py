@@ -71,6 +71,11 @@ FIXTURE = {
 
 
 class LauncherManifestTests(unittest.TestCase):
+    def test_supervised_acceptance_forwards_only_managed_snapshot_override(self) -> None:
+        source = (ROOT / "scripts" / "run_supervised_profile_acceptance.py").read_text(encoding="utf-8")
+        self.assertIn('command.extend(("-JawlSourceRoot", str(source_path)))', source)
+        self.assertIn('source_path.is_relative_to(snapshots_root)', source)
+
     def test_manifest_api_deep_merges_optional_local_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -142,7 +147,7 @@ Invoke-Expression $noBrowser.Extent.Text
 [Console]::Out.WriteLine((ConvertTo-Json -InputObject @($integratedArgs) -Compress))
 """
         encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
-        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], capture_output=True, text=True, timeout=30)
+        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], capture_output=True, text=True, errors="replace", timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         arguments = json.loads(result.stdout.strip())
         self.assertEqual(arguments[arguments.index("-ProfileName") + 1], "b0-fixture")
@@ -175,7 +180,7 @@ $again=[IO.File]::Open($profileLockPath, 'OpenOrCreate', 'ReadWrite', 'None'); $
 [Console]::Out.WriteLine((@{{blocked=$blocked;failed=$failed;released=$true}} | ConvertTo-Json -Compress))
 """
             encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
-            result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], capture_output=True, text=True, timeout=30)
+            result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], capture_output=True, text=True, errors="replace", timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout.strip()), {"blocked": True, "failed": True, "released": True})
 
@@ -197,7 +202,7 @@ $again=[IO.File]::Open($profileLockPath, 'OpenOrCreate', 'ReadWrite', 'None'); $
                 "-File", str(ROOT / "scripts" / "run_local_bonsai_integrated.ps1"),
                 "-ProfileName", "b0-preflight-fixture", "-NoBrowser", "-RunSeconds", "1",
                 "-BrainPort", str(port), "-BrainServer", sys.executable, "-Model", str(model),
-            ], cwd=temporary, capture_output=True, text=True, timeout=30)
+            ], cwd=temporary, capture_output=True, text=True, errors="replace", timeout=30)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Brain port is unavailable", result.stderr)
             self.assertEqual(listener.getsockname()[1], port)
@@ -212,7 +217,7 @@ $again=[IO.File]::Open($profileLockPath, 'OpenOrCreate', 'ReadWrite', 'None'); $
                 "-File", str(ROOT / "scripts" / "run_integrated_profile.ps1"),
                 "-ProfileName", "b0-collision-fixture", "-NoBrowser", "-RunSeconds", "1",
                 "-ControlPort", "2467", "-JawlConsolePort", "2467",
-            ], cwd=temporary, capture_output=True, text=True, timeout=30)
+            ], cwd=temporary, capture_output=True, text=True, errors="replace", timeout=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("service ports must be distinct", result.stderr)
 
@@ -258,6 +263,7 @@ foreach ($path in $paths) {{
             [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=30,
         )
@@ -304,7 +310,7 @@ try {{ Get-BrainProbeUrls 'http://127.0.0.1:8991/v1' 8990 | Out-Null }} catch {{
         encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
         result = subprocess.run(
             [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-            capture_output=True, text=True, check=False, timeout=30,
+            capture_output=True, text=True, errors="replace", check=False, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout.strip().splitlines()[-1])

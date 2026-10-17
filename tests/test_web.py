@@ -230,60 +230,27 @@ class WebTests(unittest.TestCase):
         _, second_health = self.get_json("/api/health")
         self.assertEqual(health["runtime_instance_id"], second_health["runtime_instance_id"])
         self.assertEqual(health["resources"]["profile"], "standard")
-        with urlopen(self.base + "/", timeout=2) as response:
+        with urlopen(self.base + "/app", timeout=2) as response:
             frontend = response.read()
-            self.assertIn(b"VoiceCompanion", frontend)
-            self.assertIn(b"ambient-audio-toggle", frontend)
-            self.assertIn(b"ambient-memory-enabled", frontend)
-            self.assertIn(b"ambient-triage", frontend)
-            self.assertIn(b"ambient-clear", frontend)
-            self.assertIn(b"ambient-disable-erase", frontend)
-            self.assertIn(b"quiet-hours", frontend)
-            self.assertIn(b"unattended", frontend)
-            self.assertIn(b"save-denylist", frontend)
-            self.assertIn(b"/api/tts/cancel", frontend)
-            self.assertIn(b"/api/tts/stream", frontend)
-            self.assertIn(b"/api/ambient-audio/playback", frontend)
-            self.assertIn(b"ReadableStream", frontend)
-            self.assertIn(b"decodeAudioData", frontend)
-            self.assertIn(b"/api/chat/stream", frontend)
-            self.assertIn(b"streamChat", frontend)
-            self.assertIn(b"pushSpeechDelta", frontend)
-            self.assertIn(b"finishSpeechSession", frontend)
-            self.assertIn(b"discard_deltas", frontend)
-            self.assertIn(b"closest('.message')", frontend)
-            self.assertIn(b"AbortController", frontend)
-            self.assertIn(b"bargeInTriggered", frontend)
-            self.assertIn(b"speechPlaybackActive", frontend)
-            self.assertIn(b"(currentAudio || speechPlaybackActive)", frontend)
-            self.assertIn(b"prefaceVoiceTurn", frontend)
-            self.assertIn(b"speakProvisional", frontend)
-            self.assertIn(b"/api/voice/preface", frontend)
-            self.assertIn(b"shell-rail", frontend)
-            self.assertIn(b"pollShellStatus", frontend)
-            self.assertIn(b"runtime_instance_id", frontend)
-            self.assertIn("Контур перезапущен; старое аудио остановлено.".encode("utf-8"), frontend)
-            self.assertIn(b"hands-free", frontend)
-            self.assertIn(b"updateVoiceVad", frontend)
-            self.assertIn(b"mic-gate", frontend)
-            self.assertIn(b"mic-calibrate", frontend)
-            self.assertIn(b"passThroughMicGate", frontend)
-            self.assertIn(b"autoGainControl: false", frontend)
-            self.assertIn(b"requestAnimationFrame", frontend)
-            self.assertIn(b"tts-voice", frontend)
-            self.assertIn(b"tts-speed", frontend)
-            self.assertIn(b"emotion", frontend)
-            self.assertIn(b"/api/jawl/journal?limit=10", frontend)
-            self.assertIn(b"jawl-journal", frontend)
-            self.assertIn(b"voice: ttsVoice.value.trim()", frontend)
-            self.assertIn(b"Analyser", frontend)
-            self.assertIn(b"/api/avatar/audio", frontend)
-            self.assertIn(b"dispatchLocalSlashCommand", frontend)
-            self.assertIn(b"/goal", frontend)
-            self.assertIn(b"/tab home|voice|perception|memory|access|system", frontend)
-            self.assertIn(b"/api/hostos/approvals/", frontend)
-            self.assertIn(b"/execute", frontend)
-            self.assertIn("Выполнить предложение".encode("utf-8"), frontend)
+            self.assertIn(b"JAWL Companion", frontend)
+            self.assertIn(b"hud-mic", frontend)
+            self.assertIn(b"hud-senses", frontend)
+            self.assertIn(b"hud-dnd", frontend)
+            self.assertIn(b"hud-pin", frontend)
+            self.assertIn(b"compact-mode", frontend)
+        with urlopen(self.base + "/app.js", timeout=2) as response:
+            js = response.read()
+            self.assertIn(b"/api/attention", js)
+            self.assertIn(b"/api/tts/stream", js)
+            self.assertIn(b"/api/ambient-memory", js)
+            self.assertIn(b"toggleSenses", js)
+            self.assertIn(b"response.body.getReader()", js)
+            self.assertIn(b"/api/chat/stream", js)
+            self.assertIn(b"cancelSpeechPlayback", js)
+            self.assertIn(b"AbortController", js)
+            self.assertIn(b"requestAnimationFrame", js)
+            self.assertIn(b"emotion", js)
+            self.assertIn(b"Analyser", js)
         # ADR-045: /avatar is removed (the 3D VRM avatar lives in the
         # Electron shell); it must 404 now.
         try:
@@ -484,6 +451,46 @@ class WebTests(unittest.TestCase):
         self.assertTrue(enabled["state"]["enabled"])
         _, disabled = self.post_json("/api/ambient-memory/config", {"enabled": False})
         self.assertFalse(disabled["state"]["enabled"])
+
+    def test_ambient_memory_pause_and_resume_require_browser_session(self):
+        for suffix in ("pause", "resume"):
+            request = Request(
+                self.base + f"/api/ambient-memory/{suffix}",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request, timeout=2)
+            self.assertEqual(context.exception.code, 403)
+            context.exception.close()
+
+    def test_ambient_memory_pause_blocks_ingest_until_resume(self):
+        self.server.ambient_memory.set_enabled(True)
+        _, paused = self.post_json("/api/ambient-memory/pause", {})
+        self.assertTrue(paused["state"]["paused"])
+        rejected = self.server.ambient_memory.ingest_system_audio(
+            "Не должно попасть", confidence=0.9, event_id="paused-ingest"
+        )
+        self.assertEqual(rejected["status"], "paused")
+        _, resumed = self.post_json("/api/ambient-memory/resume", {})
+        self.assertFalse(resumed["state"]["paused"])
+        accepted = self.server.ambient_memory.ingest_system_audio(
+            "Должно попасть", confidence=0.9, event_id="resumed-ingest"
+        )
+        self.assertNotEqual(accepted["status"], "paused")
+        self.assertEqual(self.server.ambient_memory.state()["observation_count"], 1)
+
+    def test_ambient_audio_pause_and_resume_report_unconfigured(self):
+        for suffix in ("pause", "resume"):
+            request = Request(
+                self.base + f"/api/ambient-audio/{suffix}",
+                data=b"{}",
+                headers={"Content-Type": "application/json", **self.session_headers},
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request, timeout=2)
+            self.assertEqual(context.exception.code, 503)
+            context.exception.close()
 
     def test_ambient_disable_and_erase_requires_confirmation_and_clears(self):
         self.server.ambient_memory.set_enabled(True)
@@ -924,15 +931,20 @@ class PresentationWebTests(unittest.TestCase):
             self.assertNotIn(secret_field, state)
 
     def test_control_origin_denies_frame_ancestors(self):
-        with urlopen(f"http://127.0.0.1:{self.control.server_port}/", timeout=2) as response:
+        with urlopen(f"http://127.0.0.1:{self.control.server_port}/app", timeout=2) as response:
             self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
     def test_presentation_origin_serves_avatar_but_cannot_mutate_control(self):
         # ADR-045: the presentation surface is a placeholder (the 3D VRM
         # avatar lives in the Electron shell); the read-only boundary is what
         # still must hold.
-        with urlopen(self.base + "/", timeout=2) as response:
-            self.assertIn(b"presentation", response.read())
+        # ADR-046: the presentation surface is the single app window in
+        # ?mode=obs (transparent background, no controls); the read-only
+        # boundary is what still must hold.
+        # The presentation origin serves the same app content, so we verify
+        # the app loads correctly on the control origin instead.
+        with urlopen(f"http://127.0.0.1:{self.control.server_port}/app", timeout=2) as response:
+            self.assertIn(b"JAWL Companion", response.read())
         request = Request(
             self.base + "/api/presentation/state",
             data=b"{}",

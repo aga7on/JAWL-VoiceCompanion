@@ -137,7 +137,75 @@ def _close_windows_job(handle: object) -> None:
         raise ctypes.WinError(ctypes.get_last_error())
 
 
-def _drain_windows_job(handle: object, timeout: float) -> None:
+def _capture_windows_job_processes(handle: object, retained: list) -> None:
+    """Retain wait handles after checking membership in this exact Job.
+
+    ActiveProcesses can reach zero before process handles become signaled.
+    Capture identities before termination; never wait on an unchecked PID.
+    """
+    import ctypes
+    from ctypes import wintypes as w
+
+    api = ctypes.WinDLL('kernel32', use_last_error=True)
+    api.QueryInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                             w.DWORD, ctypes.c_void_p]
+    api.QueryInformationJobObject.restype = w.BOOL
+    api.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    api.OpenProcess.restype = w.HANDLE
+    api.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, ctypes.POINTER(w.BOOL)]
+    api.IsProcessInJob.restype = w.BOOL
+    api.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+    api.WaitForSingleObject.restype = w.DWORD
+    api.CloseHandle.argtypes = [w.HANDLE]
+    capacity = 64
+    while capacity <= 65536:
+        class ProcessList(ctypes.Structure):
+            _fields_ = [('assigned', w.DWORD), ('count', w.DWORD),
+                        ('pids', ctypes.c_size_t * capacity)]
+
+        info = ProcessList()
+        ok = api.QueryInformationJobObject(handle, 3, ctypes.byref(info), ctypes.sizeof(info), None)
+        error = ctypes.get_last_error() if not ok else 0
+        if not ok and error != 234:  # ERROR_MORE_DATA
+            raise ctypes.WinError(error)
+        if ok and info.count >= info.assigned:
+            break
+        capacity = max(capacity * 2, info.assigned)
+    else:
+        raise OSError('worker Job process list exceeds cleanup bound')
+    known = {pid for pid, process in retained if api.WaitForSingleObject(process, 0) == 258}
+    for pid in info.pids[:info.count]:
+        if pid in known:
+            continue
+        process = api.OpenProcess(0x00100000 | 0x1000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED
+        if not process:
+            error = ctypes.get_last_error()
+            if error == 87:  # Exited between enumeration and OpenProcess.
+                continue
+            raise ctypes.WinError(error)
+        belongs = w.BOOL()
+        try:
+            if not api.IsProcessInJob(process, handle, ctypes.byref(belongs)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if belongs.value:
+                retained.append((pid, process))
+                process = None
+        finally:
+            if process:
+                api.CloseHandle(process)
+
+
+def _close_process_wait_handles(retained: list) -> None:
+    import ctypes
+    from ctypes import wintypes as w
+    api = ctypes.WinDLL('kernel32', use_last_error=True)
+    api.CloseHandle.argtypes = [w.HANDLE]
+    while retained:
+        _, handle = retained.pop()
+        api.CloseHandle(handle)
+
+
+def _drain_windows_job(handle: object, timeout: float, *, process_handles: list) -> None:
     """Terminate only this worker's Job, verify it empty, then close it.
 
     On failure retain the handle/state and refuse replacement; closing a handle
@@ -157,15 +225,23 @@ def _drain_windows_job(handle: object, timeout: float) -> None:
     api.QueryInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p,
                                              w.DWORD, ctypes.c_void_p]
     api.QueryInformationJobObject.restype = w.BOOL
+    api.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+    api.WaitForSingleObject.restype = w.DWORD
+    deadline = time.monotonic() + max(0, timeout)
+    _capture_windows_job_processes(handle, process_handles)
     if not api.TerminateJobObject(handle, 1):
         raise ctypes.WinError(ctypes.get_last_error())
-    deadline = time.monotonic() + max(0, timeout)
     while True:
+        _capture_windows_job_processes(handle, process_handles)
         info = Accounting()
         if not api.QueryInformationJobObject(handle, 1, ctypes.byref(info), ctypes.sizeof(info), None):
             raise ctypes.WinError(ctypes.get_last_error())
-        if not info.active:
+        states = [api.WaitForSingleObject(process, 0) for _, process in process_handles]
+        if any(state not in (0, 258) for state in states):
+            raise OSError('worker process wait failed')
+        if not info.active and all(state == 0 for state in states):
             _close_windows_job(handle)
+            _close_process_wait_handles(process_handles)
             return
         if time.monotonic() >= deadline:
             raise OSError('worker Job teardown deadline exceeded')
@@ -215,6 +291,7 @@ class WorkerSpec:
 class WorkerState:
     process: subprocess.Popen | WindowsJobProcess | None = None
     job: object | None = None
+    wait_handles: list = field(default_factory=list)
     restarts_used: int = 0
     started_at: float | None = None
     healthy: bool = False
@@ -430,7 +507,7 @@ class RuntimeSupervisor:
             # Keep ownership until empty is proven. Never spawn a replacement on
             # timeout, even when the root has exited and only descendants remain.
             state.healthy = False
-            _drain_windows_job(state.job, spec.stop_timeout_seconds)
+            _drain_windows_job(state.job, spec.stop_timeout_seconds, process_handles=state.wait_handles)
             state.job = None
             if process is not None:
                 process.wait(timeout=spec.stop_timeout_seconds)

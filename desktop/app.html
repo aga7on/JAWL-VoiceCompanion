@@ -257,6 +257,90 @@
     #thinking.on { animation: none; }
     #avatar-caption { transition: none; }
   }
+
+  /* ---- Chameleon Compact HUD & OBS mode (Project Airi / N.E.K.O. style) ---- */
+  header.top .win-btn {
+    -webkit-app-region: no-drag;
+    background: rgba(79, 209, 165, .12);
+    color: var(--accent);
+    border: 1px solid rgba(79, 209, 165, .35);
+    border-radius: 6px;
+    padding: 3px 9px;
+    font: 11px/1.2 inherit;
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  header.top .win-btn:hover { background: var(--accent-2); color: #eafff8; }
+
+  .hud-dock {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(10, 21, 32, .82);
+    border: 1px solid rgba(79, 209, 165, .32);
+    backdrop-filter: blur(8px);
+    z-index: 10;
+    opacity: .2;
+    transition: opacity .2s ease;
+  }
+  .stage-wrap:hover .hud-dock,
+  .hud-dock:focus-within { opacity: 1; }
+  .hud-dock button {
+    width: 30px; height: 30px;
+    border: 0; border-radius: 50%;
+    background: rgba(255,255,255,.06);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+  }
+  .hud-dock button:hover { background: var(--accent-2); color: #eafff8; }
+  .hud-dock button:disabled { opacity: .35; cursor: default; }
+
+  body.compact-mode nav.rail,
+  body.compact-mode header.top,
+  body.compact-mode div.side {
+    display: none !important;
+  }
+  body.compact-mode .stage-wrap {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+  }
+  body.compact-mode .hud-dock {
+    display: inline-flex;
+  }
+  body.compact-mode #avatar-caption {
+    bottom: 54px;
+    background: rgba(10, 21, 32, .78);
+    border: 1px solid rgba(79, 209, 165, .28);
+    border-radius: 12px;
+    padding: 6px 10px;
+    text-align: center;
+  }
+  body.compact-mode #avatar-caption:empty {
+    display: none;
+  }
+  body.obs-mode {
+    background: transparent !important;
+  }
+  body.obs-mode nav.rail,
+  body.obs-mode header.top,
+  body.obs-mode div.side,
+  body.obs-mode .hud-dock,
+  body.obs-mode #avatar-status {
+    display: none !important;
+  }
+  body.obs-mode .stage-wrap {
+    background: transparent !important;
+  }
 </style>
 </head>
 <body>
@@ -274,6 +358,7 @@
       <span class="dot" id="conn-dot"></span>
       <span class="title">JAWL Companion</span>
       <span class="status" id="conn-status">подключение…</span>
+      <button id="toggle-compact" class="win-btn" type="button" title="Свернуть в компактный режим компаньона (Ctrl+Shift+M)">🗕 Компактно</button>
     </header>
 
     <div class="split">
@@ -283,6 +368,15 @@
         <span id="avatar-status">Аватар: загрузка…</span>
         <span id="thinking">думаю…</span>
         <div id="avatar-caption"></div>
+        <div class="hud-dock" role="toolbar" aria-label="Быстрое управление компаньоном">
+          <button id="hud-mic" type="button" title="Микрофон: вкл/выкл">🎙</button>
+          <button id="hud-stop" type="button" title="Остановить речь" disabled>⏹</button>
+          <button id="hud-senses" type="button" title="Восприятие (Экран/Звук): вкл/пауза">👁</button>
+          <button id="hud-dnd" type="button" title="Режим Не беспокоить (DND): вкл/выкл">🔕</button>
+          <button id="hud-ghost" type="button" title="Прозрачность для мыши (Click-through / Выход: Ctrl+Shift+G)">👻</button>
+          <button id="hud-pin" type="button" title="Поверх всех окон (Always on Top)">📌</button>
+          <button id="hud-expand" type="button" title="Открыть студию и все настройки">⚙️</button>
+        </div>
       </div>
 
       <!-- боковая панель функций -->

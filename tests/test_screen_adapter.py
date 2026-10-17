@@ -24,6 +24,14 @@ class ScreenCaptureAdapterTests(unittest.TestCase):
         result = ScreenCaptureAdapter().observe()
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(result["reason"], "screen_observation_disabled")
+
+    def test_capture_displays_disabled_returns_bounded_list(self):
+        results = ScreenCaptureAdapter().capture_displays(max_displays=2)
+        self.assertEqual(len(results), 2)
+        for result in results:
+            self.assertEqual(result["status"], "degraded")
+            self.assertEqual(result["reason"], "screen_observation_disabled")
+            self.assertFalse(result["persisted"])
         self.assertFalse(result["persisted"])
 
     def test_metadata_only_request_does_not_capture(self):

@@ -14,6 +14,10 @@ except ImportError:  # direct script execution
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = Path(os.environ.get("JAWL_SOURCE_ROOT", "")).resolve() if os.environ.get("JAWL_SOURCE_ROOT") else DEFAULT_SOURCE.resolve()
+SOURCE_SNAPSHOTS_ROOT = (REPO_ROOT / "runtime" / "jawl-sources").resolve()
+if SOURCE_ROOT == SOURCE_SNAPSHOTS_ROOT or not SOURCE_ROOT.is_relative_to(SOURCE_SNAPSHOTS_ROOT):
+    raise ValueError("JAWL_SOURCE_ROOT must resolve inside runtime/jawl-sources")
 PROFILE_NAME = os.environ.get("JAWL_PROFILE_NAME", "daily").strip() or "daily"
 if Path(PROFILE_NAME).name != PROFILE_NAME or PROFILE_NAME in {".", ".."}:
     raise ValueError("JAWL_PROFILE_NAME must be one safe directory name")
@@ -43,7 +47,7 @@ def check(*, allow_missing_model: bool = False) -> dict[str, object]:
     source_result: dict[str, object] | None = None
     profile_source_error = None
     try:
-        source_result = verify(DEFAULT_SOURCE)
+        source_result = verify(SOURCE_ROOT)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         source_error = str(exc)[:240]
     manifest_path = PROFILE_ROOT / ".managed-files.json"

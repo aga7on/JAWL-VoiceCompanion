@@ -46,10 +46,14 @@
     [ValidateRange(0,3)]
     [int]$NativeAccessLevel = 0,
     [switch]$EnableDebugBroker,
+    [switch]$EnableNativeBrowser,
+    [ValidateRange(0,1048576)]
+    [int]$NativeContextWindowTokens = 0,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$')]
     [string]$ProfileName = 'daily',
     [ValidateLength(0,200)]
     [string]$JawlModelOverride = '',
+    [string]$JawlSourceRoot = '',
     [string]$JawlTemperatureOverride = '',
     [switch]$NoLive2D,
     [switch]$EnableSupervisor,
@@ -60,6 +64,8 @@
 $ErrorActionPreference = 'Stop'
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $env:JAWL_TEMPERATURE_OVERRIDE = $JawlTemperatureOverride.Trim()
+$env:JAWL_NATIVE_BROWSER_ENABLED = $(if ($EnableNativeBrowser) { '1' } else { '0' })
+$env:JAWL_CONTEXT_WINDOW_TOKENS = [string]$NativeContextWindowTokens
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $manifestArgs = @('--repo-root', $repo)
 if ($PSBoundParameters.ContainsKey('ManifestPath')) { $manifestArgs += @('--manifest', $ManifestPath) }
@@ -112,7 +118,16 @@ Assert-EffectivePorts @(
     @{ Name = 'TTS'; Port = $effectiveTtsPort }
 ) (@(8765) + @($runtimeManifest.ports.reserved))
 $env:JAWL_MODEL_OVERRIDE = $JawlModelOverride.Trim()
-$source = Join-Path $repo 'runtime\jawl-sources\jawl-20260906-daily-v2'
+$sourceRoot = [IO.Path]::GetFullPath((Join-Path $repo 'runtime\jawl-sources'))
+$sourceCandidate = if ($JawlSourceRoot) { [IO.Path]::GetFullPath($JawlSourceRoot) } else { Join-Path $sourceRoot 'jawl-20260906-daily-v2' }
+if (-not (Test-Path -LiteralPath $sourceCandidate -PathType Container)) {
+    throw 'JawlSourceRoot must be an existing snapshot inside runtime/jawl-sources.'
+}
+$source = (Resolve-Path -LiteralPath $sourceCandidate).Path
+if (-not $source.StartsWith($sourceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'JawlSourceRoot must resolve inside runtime/jawl-sources.'
+}
+$env:JAWL_SOURCE_ROOT = $source
 $py = Join-Path $repo 'runtime\jawl-daily-venv\Scripts\python.exe'
 $browserPy = (Get-Command python -ErrorAction Stop).Source
 $profileHome = Join-Path (Join-Path $repo 'runtime\instances') $ProfileName
@@ -165,6 +180,8 @@ if ($SyncProfile) { $prepareArgs += '--sync' }
 & $py (Join-Path $repo 'scripts\prepare_daily_profile.py') @prepareArgs | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'Owned JAWL profile preparation failed; refusing to start.' }
 $nativeProfileArgs = @('--profile', $ProfileName, '--access-level', [string]$NativeAccessLevel)
+if ($EnableNativeBrowser) { $nativeProfileArgs += '--enable-browser' }
+if ($NativeContextWindowTokens -gt 0) { $nativeProfileArgs += @('--context-window-tokens', [string]$NativeContextWindowTokens) }
 if ($env:JAWL_MODEL_OVERRIDE) { $nativeProfileArgs += @('--model-override', $env:JAWL_MODEL_OVERRIDE) }
 if ($env:JAWL_TEMPERATURE_OVERRIDE) { $nativeProfileArgs += @('--temperature-override', $env:JAWL_TEMPERATURE_OVERRIDE) }
 if ($EnableDebugBroker) { $nativeProfileArgs += '--enable-debug-broker' }
@@ -424,7 +441,7 @@ try {
             $audioArgs += " --streaming-asr --streaming-asr-exe `"$StreamingAsrExe`" --streaming-asr-model `"$StreamingAsrModel`" --streaming-asr-backend gigaam"
         }
     }
-    $jawlEnv = @{}
+$jawlEnv = @{}
     foreach ($name in 'JAWL_INSTANCE_ID','JAWL_INSTANCE_HOME','JAWL_DATA_DIR','JAWL_CONFIG_DIR','JAWL_LOG_DIR','JAWL_CACHE_DIR','JAWL_PROMPT_DIR','JAWL_SANDBOX_DIR','JAWL_ENV_FILE','JAWL_INSTANCES_ROOT','PYTHONIOENCODING','LLM_API_URL','LLM_MAX_OUTPUT_TOKENS','CONSOLE_TOKEN') {
         # Optional provider tuning variables may be absent. Do not turn an
         # unset value into a launcher failure; required credentials are
@@ -442,6 +459,7 @@ try {
     # Run from the isolated profile home. JAWL has a few relative diagnostic
     # paths; keeping the source tree as cwd would mutate the pinned snapshot.
     $jawlEnv['PYTHONPATH'] = $source
+    $jawlEnv['JAWL_SOURCE_ROOT'] = $source
     if ($EnableSupervisor) { $jawlEnv['JAWL_SUPERVISED'] = '1' }
 
     if ($EnableSupervisor) {
@@ -458,7 +476,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Native supervised profile registration failed.' }
         $supervisorEnv = @{}
         foreach ($entry in $jawlEnv.GetEnumerator()) { $supervisorEnv[$entry.Key] = $entry.Value }
-        $supervisor = New-RuntimeProcess $py "-m src.instances.supervisor --root `"$source`" --interval 1" $profileHome $supervisorEnv 'supervisor.log'
+        $supervisorEntry = Join-Path $repo 'scripts\run_owned_jawl_supervisor.py'
+        $supervisor = New-RuntimeProcess $py "-B `"$supervisorEntry`" --root `"$source`" --interval 1" $profileHome $supervisorEnv 'supervisor.log'
         $supervisorDeadline = [DateTime]::UtcNow.AddSeconds(10)
         while (-not (Test-Path -LiteralPath $supervisorPidPath) -and [DateTime]::UtcNow -lt $supervisorDeadline) {
             if ($supervisor.HasExited) { throw 'Native instance supervisor exited during startup.' }
@@ -580,7 +599,7 @@ try {
         if ($BrowserVoiceExpected.Count -ne $BrowserVoiceWav.Count) {
             throw 'BrowserVoiceExpected must contain one value per BrowserVoiceWav.'
         }
-        $voiceArgs = @((Join-Path $repo 'scripts\run_browser_voice_e2e.py'), '--live', '--url', "http://127.0.0.1:$ControlPort", '--report', (Join-Path $repo 'runtime\browser-voice-e2e.json'), '--evidence-dir', (Join-Path $repo 'runtime\browser-evidence\voice'))
+        $voiceArgs = @((Join-Path $repo 'scripts\run_browser_voice_e2e.py'), '--live', '--ui', 'app', '--url', "http://127.0.0.1:$ControlPort", '--report', (Join-Path $repo 'runtime\browser-voice-e2e.json'), '--evidence-dir', (Join-Path $repo 'runtime\browser-evidence\voice'))
         for ($index = 0; $index -lt $BrowserVoiceWav.Count; $index++) {
             $voiceArgs += @('--wav', (Resolve-Path -LiteralPath $BrowserVoiceWav[$index]).Path, "--expected=$($BrowserVoiceExpected[$index])")
         }

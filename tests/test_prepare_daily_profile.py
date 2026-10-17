@@ -16,6 +16,30 @@ SPEC.loader.exec_module(MODULE)
 
 
 class PrepareDailyProfileTests(unittest.TestCase):
+    def test_managed_context_budget_relaunch_preserves_capacity_but_rejects_other_owner_edits(self):
+        from scripts.native_context_budget import BASE_BUDGET, RECEIPT_NAME, budget_for_window
+        with tempfile.TemporaryDirectory() as temporary:
+            source, config, profile = self._layout(Path(temporary))
+            baseline = {"llm": {"main_model": "baseline"}, "system": {"context_depth": {"budget": BASE_BUDGET}}}
+            (config / "settings.yaml").write_text(MODULE.yaml.safe_dump(baseline), encoding="utf-8")
+            with patch.object(MODULE, "SOURCE_ROOT", source), patch.object(MODULE, "CONFIG_ROOT", config), \
+                    patch.object(MODULE, "PROFILE_ROOT", profile), patch.dict(MODULE.os.environ, {}, clear=True):
+                MODULE.prepare()
+                target = profile / "config/settings.yaml"
+                modified = MODULE.yaml.safe_load(target.read_text(encoding="utf-8"))
+                modified["system"]["context_depth"]["budget"].update(budget_for_window(65536))
+                target.write_text(MODULE.yaml.safe_dump(modified), encoding="utf-8")
+                with self.assertRaises(MODULE.ProfileConflict):
+                    MODULE.prepare()
+                receipt = {"schema_version": 1, "context_window_tokens": 65536, "budget": budget_for_window(65536)}
+                (profile / RECEIPT_NAME).write_text(json.dumps(receipt), encoding="utf-8")
+                MODULE.prepare()
+                self.assertEqual(MODULE.yaml.safe_load(target.read_text(encoding="utf-8")), modified)
+                modified["llm"]["main_model"] = "unapproved-owner-model"
+                target.write_text(MODULE.yaml.safe_dump(modified), encoding="utf-8")
+                with self.assertRaises(MODULE.ProfileConflict):
+                    MODULE.prepare()
+
     def _layout(self, root: Path) -> tuple[Path, Path, Path]:
         source = root / "source"
         config = root / "config"

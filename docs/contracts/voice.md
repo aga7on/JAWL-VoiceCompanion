@@ -132,12 +132,36 @@ normal flush drains rather than aborting. Late cancelled transcripts produce
 no conversation event or response. Fixture transcribers must accept the
 `cancel_event` keyword, even when they do not cooperate, to test stale-drop.
 
+15Oct process teardown correction: Job accounting `ActiveProcesses=0` alone
+does not prove descendant process handles are signaled. Owned worker cleanup
+retains wait handles after verifying exact Job membership before termination,
+and waits for those handles plus empty accounting before closing the Job.
+Failed cleanup retains both Job and process wait identities for retry. The
+model-free50-run probe observed50 early returns before the fix and zero after;
+this is process-lifecycle evidence, not model cancellation latency.
+
 This does not cancel an already admitted JAWL turn or durable goal. Full
 in-flight barge-in, actual-model TTS/LLM compute release and descendant-tree containment are
 separate B1 acceptance items. Physical microphone and real inference still
 require the live checks in TODO.
 
 ### Scoped streaming partials
+
+15Oct desktop follow-up: `/app` consumes scoped drafts with generation fences.
+Gate onset begins overlap observation instead of immediately cancelling TTS.
+Explicit Russian interruption/substantive draft or550ms of voiced PCM can
+cancel only the playback owner observed at onset; silence after a short sound
+does not accumulate voiced duration. Without drafts this is an acoustic
+fallback, not semantic full duplex. Unfinished RU tails extend the silence
+window to at least2200ms; punctuation permits a380ms finish window.
+
+`POST /api/voice/end` accepts optional boolean `suppress_backchannel`. Only
+literal `true` plus a canonical GigaAM transcript matching a brief explicit
+acknowledgement yields `filtered: "user_backchannel"`, empty transcript/events/
+responses. Canonical PCM is consumed and scoped partials reset first. A draft
+alone never drops audio or creates a durable event. Ordinary non-overlapping
+acknowledgements and actual requests keep the existing final-turn path.
+Physical microphone/echo and learned turn classification remain unaccepted.
 
 The partial bridge binds one owned child to `(scope_id, session_id)` plus its
 capture cancellation token. A new capture or utterance reaps the old child

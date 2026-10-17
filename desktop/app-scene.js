@@ -121,7 +121,18 @@ function applyExpression(vrm, expression, weight) {
 }
 
 function applyLipSync(vrm, level) {
-  vrm?.expressionManager?.setValue('aa', level);
+  const manager = vrm?.expressionManager;
+  if (!manager) return;
+  const lv = Number(level) || 0;
+  manager.setValue('aa', lv);
+  const t = typeof clock !== 'undefined' && clock ? clock.elapsedTime : 0;
+  if (lv > 0.04) {
+    manager.setValue('oh', lv * (0.25 + 0.25 * Math.sin(t * 11.3)));
+    manager.setValue('ee', lv * (0.18 + 0.18 * Math.cos(t * 14.7)));
+  } else {
+    manager.setValue('oh', 0);
+    manager.setValue('ee', 0);
+  }
 }
 
 function resetLipSync(vrm) {
@@ -545,8 +556,8 @@ function setEmotion(emotionId) {
 }
 
 function setMotionState(mode) {
-  const normalized = mode === 'thinking' ? 'listening' : mode;
-  if (normalized === 'idle' || normalized === 'listening' || normalized === 'speaking') {
+  const normalized = mode === 'working' ? 'thinking' : mode;
+  if (normalized === 'idle' || normalized === 'listening' || normalized === 'thinking' || normalized === 'speaking') {
     state.motionState = normalized;
     if (normalized !== 'speaking') state.lipLevel = 0;
     motion.setState(normalized);

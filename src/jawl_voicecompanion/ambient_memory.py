@@ -89,6 +89,7 @@ class AmbientMemoryBuffer:
         triage_provider: AmbientTriageProvider | None = None,
     ) -> None:
         self.enabled = bool(enabled)
+        self.paused = False
         self.observation_ttl_seconds = max(1.0, min(float(observation_ttl_seconds), 7 * 24 * 3600.0))
         self.episode_ttl_seconds = max(60.0, min(float(episode_ttl_seconds), 30 * 24 * 3600.0))
         self.episode_window_seconds = max(1.0, min(float(episode_window_seconds), 3600.0))
@@ -107,6 +108,8 @@ class AmbientMemoryBuffer:
         """Normalize one ambient event without retaining raw media or unknown fields."""
         if not self.enabled:
             return {"status": "disabled", "reason": "ambient_capture_disabled"}
+        if self.paused:
+            return {"status": "paused", "reason": "ambient_capture_paused"}
         if not isinstance(event, dict):
             raise TypeError("ambient event must be an object")
         event_type = event.get("type")
@@ -385,6 +388,7 @@ class AmbientMemoryBuffer:
             self._prune(timestamp)
             return {
                 "enabled": self.enabled,
+                "paused": self.paused,
                 "observation_count": len(self._observations),
                 "episode_count": len(self._episodes),
                 "buffer_bytes": self._bytes,
@@ -415,6 +419,18 @@ class AmbientMemoryBuffer:
     def set_enabled(self, enabled: bool) -> dict[str, Any]:
         with self._lock:
             self.enabled = bool(enabled)
+            if not enabled:
+                self.paused = False
+        return self.state()
+
+    def pause(self) -> dict[str, Any]:
+        with self._lock:
+            self.paused = True
+        return self.state()
+
+    def resume(self) -> dict[str, Any]:
+        with self._lock:
+            self.paused = False
         return self.state()
 
     def _prune(self, now: float) -> None:

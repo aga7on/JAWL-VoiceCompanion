@@ -24,12 +24,17 @@ from .composition import build_companion_runtime
 
 
 def _default_frontend_dir() -> Path:
-    """Find source-tree or wheel-installed frontend assets."""
+    """Find source-tree or wheel-installed frontend assets.
+
+    The single-window desktop app (desktop/app.html) is the only UI since
+    ADR-046. The legacy two-window shell (frontend/index.html + avatar.html)
+    was removed; only mic-processor.js remains in frontend/.
+    """
 
     source_root = Path(__file__).resolve().parents[2] / "frontend"
     installed_root = Path(sys.prefix) / "jawl_voicecompanion" / "frontend"
     for candidate in (source_root, installed_root):
-        if (candidate / "index.html").is_file() and (candidate / "avatar.html").is_file():
+        if (candidate / "mic-processor.js").is_file():
             return candidate
     return source_root
 

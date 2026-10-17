@@ -3,8 +3,10 @@ import json
 from pathlib import Path
 import queue
 import sys
+import tempfile
 import threading
 import unittest
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -19,6 +21,56 @@ SPEC.loader.exec_module(MODULE)
 
 
 class NativeGatewayProfileUnitTests(unittest.TestCase):
+    def test_scoped_counts_exclude_history_and_reject_two_distinct_terminal_events(self):
+        args = MODULE._parser().parse_args(["--turns", "1"])
+        args.token = ""
+        profile = MODULE.NativeGatewayProfile(args)
+        profile._submitted_turns.add("current")
+
+        def packet(sequence, turn):
+            return {"events": [{"schema_version": 1, "event_seq": sequence,
+                               "turn_id": turn, "type": "turn.error", "payload": {"reason": "fixture"}}],
+                    "cursor": {"schema_version": 1, "after": sequence, "oldest_event_seq": 1,
+                               "latest_event_seq": sequence, "gap": False}}
+        profile._consume(packet(1, "historical"))
+        profile._consume(packet(2, "current"))
+        self.assertEqual(profile.report.event_counts, {"turn.error": 2})
+        self.assertEqual(profile.report.scoped_event_counts, {"turn.error": 1})
+        with self.assertRaisesRegex(MODULE.ProfileFailure, "multiple terminal events"):
+            profile._consume(packet(3, "current"))
+
+    def test_terminal_error_is_reported_without_waiting_for_a_tool_lifecycle(self):
+        args = MODULE._parser().parse_args(["--turns", "1"])
+        args.token = ""
+        profile = MODULE.NativeGatewayProfile(args)
+        profile._post = lambda url, body: {"ok": True, "turn_id": body["turn_id"]}
+        profile._wait_for_turn = lambda reader, turn_id: "turn.error"
+        profile._require_lifecycle = Mock(side_effect=AssertionError("error has no successful tool"))
+        with patch.object(MODULE, "_TURN_SETTLE_DELAY_SEC", 0):
+            _, terminal = profile._submit(None, "fixture")
+        self.assertEqual(terminal, "turn.error")
+        profile._require_lifecycle.assert_not_called()
+
+    def test_prompt_bank_rejects_wrong_count_nontext_and_oversize_before_connection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "prompts.json"
+            for values in (["one"], ["one", ""], ["one", 2], ["one", "x" * 4001]):
+                path.write_text(json.dumps(values), encoding="utf-8")
+                with self.subTest(values=str(values)[:30]), self.assertRaises(ValueError):
+                    MODULE._load_prompts(path, 2)
+            path.write_text(json.dumps(["Привет", "Как дела?"], ensure_ascii=False), encoding="utf-8")
+            self.assertEqual(MODULE._load_prompts(path, 2), ["Привет", "Как дела?"])
+            path.write_bytes(b" " * (256 * 1024 + 1))
+            with self.assertRaisesRegex(ValueError, "256KiB"):
+                MODULE._load_prompts(path, 2)
+
+    def test_native_latency_percentiles_require_twenty_completed_samples(self):
+        report = MODULE.ProfileReport("http://127.0.0.1", 20, False, False)
+        report.turn_latencies_ms = list(range(1, 20))
+        self.assertIsNone(report.as_dict()["latency_p95_ms"])
+        report.turn_latencies_ms.append(20)
+        self.assertEqual(report.as_dict()["latency_p50_ms"], 10.5)
+        self.assertEqual(report.as_dict()["latency_p95_ms"], 19)
     def test_cursor_contract_is_strict_and_rejects_gap_type(self):
         cursor = {
             "schema_version": 1,
@@ -218,6 +270,7 @@ class NativeGatewayProfileUnitTests(unittest.TestCase):
         self.assertTrue(report["cancellation_observed"])
         self.assertEqual(report["completed_turns"], 3)
         self.assertEqual(report["duplicate_events"], 0)
+        self.assertEqual(len(report["turn_latencies_ms"]), 3)
 
 
 if __name__ == "__main__":

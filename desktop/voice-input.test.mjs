@@ -4,7 +4,20 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {CaptureLease, MicInputGate, normalizeMicConfig, uploadUtteranceFor,
   completeMicFlushBoundary, detachMicState, invalidatePendingCapture,
-  requireVoiceResponseOk} from './voice-input.js';
+  requireVoiceResponseOk, decideMicTurn} from './voice-input.js';
+
+test('turn heuristic distinguishes Russian overlap, finished questions, and bounded hesitation', () => {
+  assert.equal(decideMicTurn({text: 'Угу, понятно.', overlap: true, voicedMs: 300, silenceMs: 400}).action, 'finish_backchannel');
+  for (const text of ['Стой!', 'Нет, подожди', 'Открой браузер']) {
+    assert.equal(decideMicTurn({text, overlap: true}).action, 'cancel_tts');
+  }
+  assert.equal(decideMicTurn({text: 'И что теперь?', silenceMs: 400}).action, 'commit_turn');
+  for (const text of ['я хотел чтобы', 'ну как бы', 'э-э...', 'давай напишем мод, который']) {
+    assert.equal(decideMicTurn({text, silenceMs: 1300}).action, 'hold_turn');
+    assert.equal(decideMicTurn({text, silenceMs: 2200}).action, 'commit_turn');
+  }
+  assert.equal(decideMicTurn({overlap: true, voicedMs: 100, silenceMs: 600}).action, 'hold_turn');
+});
 
 const block = (value, length = 2048) => Float32Array.from({length}, () => value);
 const rate = 48000;

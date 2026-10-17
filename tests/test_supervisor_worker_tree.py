@@ -15,11 +15,11 @@ from jawl_voicecompanion import supervisor as supervisor_module
 
 _HELPER = r'''
 import json, pathlib, sys, time
+sys.path.insert(0, sys.argv[3])
 from jawl_voicecompanion.supervisor import RuntimeSupervisor, WorkerSpec
 
 root = pathlib.Path(sys.argv[1])
 base_python = sys.argv[2]
-sys.path.insert(0, sys.argv[3])
 while not (root / 'start').exists():
     time.sleep(0.01)
 worker_program = r"""
