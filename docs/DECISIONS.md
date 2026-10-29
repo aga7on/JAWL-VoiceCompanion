@@ -859,3 +859,34 @@ selects `local-hikari` / `local-bonsai2`, and the legacy local launcher follows
 that manifest; the wrapper's visual-describer default is also still EG2. A run
 from those defaults alone is not a deployment of this canonical stack until an
 explicitly configured Gemini relay profile and Qwen visual lane are raised.
+
+## ADR-049 — JAWL = owned-ядро, patch-queue к upstream
+
+Status: Accepted (2026-10-29)
+
+Движок JAWL (th0r3nt/JAWL, MIT, снимок `runtime/jawl-sources/jawl-20260906-daily-v2`)
+продолжает жить как пиненный снимок, но становится owned-ядром: дефекты и
+capability, которые продукт сегодня чинит extension-слоями `native_*` снаружи,
+переносятся в саму поставку ядра минимальными upstream-worthy патчами
+(patch-queue к `th0r3nt/JAWL`, отчёт `docs/research/kernel-upstream-baseline-20261029.md`,
+`patches/kernel/owned-deviations.patch`).
+
+Правило среза: правка ядра + снятие хука + focused regression — одним
+изменением; двойных слоёв не копим. Конечная цель: в `src/` не остаётся
+модулей, чинящих ядро снаружи.
+
+Архитектурный курс — гибридный путь: когнитивные capability живут внутри JAWL
+через extension points ядра, GPU-инференс-воркеры и presentation остаются
+отдельными процессами/модулями за их client-API; тяжёлые стратегии (ToT, Swarm)
+подключаются по требованию, а не в основном цикле.
+
+## ADR-050 — Двухскоростной контур: «спутник» = экспедиция той же личности
+
+Status: Proposed (2026-10-29)
+
+Компаньон работает в двух скоростях: быстрый реактивный контур (голос,
+терминал, перцепция) и медленный глубокий контур (исследование, длинные
+задачи). Медленный контур — не вторая личность и не отдельный агент:
+«спутник» — это экспедиция той же личности с тем же ядром, уходящая в
+длительную задачу и возвращающая результаты в общий контекст. Детали
+контура и механика возврата — в рамках этого решения (Proposed).

@@ -2,6 +2,9 @@
 .venv/
 .wheel-smoke/
 venv/
+
+# Owned upstream checkout (th0r3nt/JAWL) for kernel deviation reports
+.kernel-upstream/
 __pycache__/
 *.py[cod]
 *.egg-info/
