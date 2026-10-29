@@ -289,7 +289,7 @@ result is:
 
 ```json
 {
-  "kind": "music|sound|mixed|speech|unknown",
+  "kind": "music|sound|speech|unknown",
   "description": "bounded text",
   "tags": ["bounded labels"],
   "mood": "optional bounded text",
@@ -299,7 +299,10 @@ result is:
 }
 ```
 
-The service keeps only normalized text metadata. `AmbientMemoryBuffer` stores
+The service keeps only normalized text metadata. `mixed` is rejected until an
+independent overlap detector is available. A detector-only music candidate is
+stored as `sound` with an allowlisted tentative sentence and zero confidence,
+never as confirmed `music`. `AmbientMemoryBuffer` stores
 it as a second `AMBIENT_AUDIO_OBSERVATION`, with `audio_kind/tags/mood`
 metadata and the same ambient-only policy. Invalid provider output, an
 overlong clip or a provider failure is dropped/degraded closed. The result is

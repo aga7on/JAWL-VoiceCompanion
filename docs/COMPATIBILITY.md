@@ -42,7 +42,7 @@ TODO.
 | demo/mock | UI и deterministic contract behavior | Не настоящий JAWL-компаньон. |
 | provider-test | Прямой LLM adapter в Companion | Non-agentic; не сохраняет native JAWL persona/tools. |
 | integrated-attended | JAWL, voice, memory, native policy, Electron VRM | Отдельные реализации/evidence существуют; целый профиль и desktop UX оцениваются по текущему STATE. |
-| integrated-unattended | Тот же JAWL, Full Access/lease без per-action prompts для разрешённых задач | 8h soak и полная unattended production acceptance OPEN. |
+| integrated-unattended | Тот же JAWL, Full Access/lease без per-action prompts для разрешённых задач | Native-owned 8h soak PASS (24Oct r29); полная integrated-unattended и 24/7 acceptance OPEN. |
 
 Profile manifest должен фиксировать версии/runtime/model/ports/data dirs,
 data-class consent и capabilities. Его наличие само по себе не является

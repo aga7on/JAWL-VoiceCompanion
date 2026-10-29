@@ -1,4 +1,134 @@
+## 2026-10-29 — Qwen visual OCR handoff
+
+- Qwen capture requests Windows OCR only on startup, pending visual changes, or
+  the static refresh interval. OCR remains a separate redaction-filtered channel
+  with a 5s live TTL and is delivered through the structured VA packet.
+- Scene invalidation and empty OCR results expire older text. Focused + wider
+  adapter/sensor/fusion/packet/native-context/web gates: 61 focused tests and
+  163 total tests + 33 subtests passed.
+- A one-shot real display-0 capture verified Windows OCR and the sensor-to-VA
+  packet handoff with a stub Qwen client; OCR text was not emitted or saved.
+- Full live-profile behavior and CPU cost remain open; launch requires
+  `--screen-ocr`.
 # Изменения
+
+## 2026-10-29 — ReAct, heartbeat и VA-контекст
+
+- Выделен источник Perception из готового VA-пакета, очищены сенсорные приложения
+  в разговорной истории; сохранены возраст и неопределённость наблюдений.
+- Исправлены Gemini JSON transport, Goal lifecycle и инструменты heartbeat.
+  Большое явно объявленное окно больше не упирается в отдельный Goal cap 18K.
+- Добавлены локальный session bootstrap консоли и CSRF для activity/логов UI.
+  Native canary подтвердил выполнение и завершение Goal по heartbeat.
+- Живой профиль перезапущен, затем отдельно мозг с capacity fix; OmniVoice не
+  менялся. Ограничения аудио и результаты: `docs/research/react-perception-audit-20261029.md`.
+
+## 2026-10-29 — Микрофонная очередь
+
+- Заполненная очередь из шести upload больше не останавливает захват. Приложение
+  буферизует уже принятый PCM, догружает его крупными пачками и сохраняет старый
+  `session_id` до завершения аудиодренажа. Node subset 125/125; live audio
+  acceptance ожидает восстановления сервиса.
+
+## 2026-10-29 — Подавление собственной речи в loopback
+
+- Frontend подключён к существующему playback marker для обычных и ранних
+  streamed WAV-сегментов. Marker завершается при done/cancel, продлевается во
+  время длинного ответа; OmniVoice и генерация не менялись.
+- Исправлено определение активной ранней речи по завершённым чанкам. Focused
+  desktop voice lifecycle: 30/30 PASS; живая loopback-проверка остаётся открытой.
+
+## 2026-10-29 — Раздельные бюджеты сенсорного текста
+
+- Убрана преждевременная 600-символьная обрезка в PerceptionFusion. Speech и
+  audio description теперь имеют отдельные bounded budgets, передаются в brain
+  через VA packet полностью в пределах этих бюджетов; legacy summary остаётся
+  короткой. Fusion/packet/native-context/web gate: 129 passed + 33 subtests.
+- Реальный prompt readback и длинная live-ASR реплика после рестарта открыты.
+
+## 2026-10-29 - System audio freshness
+
+- Loopback PCM retains capture-time through ASR and YAMNet queues; worker delay
+  no longer shifts observation time or masks old audio as fresh.
+- Ambient segmenter 6/6 and audio integration 31/31 passed; live load/freshness
+  acceptance remains open. Report: `docs/research/audio-capture-time-provenance-20261029.md`.
+
+## 2026-10-29 - Separate music evidence from audio captions
+
+- YAMNet music-presence evidence and audio-caption model results now occupy
+  independent current-context channels and retain distinct source provenance;
+  ASR remains independently available alongside both.
+- A later non-music segment invalidates an older caption, while delayed workers
+  cannot invalidate a newer observation. Focused ambient/fusion/history tests:
+  54 passed. Real loopback quality/load acceptance remains open. Report:
+  `docs/research/audio-description-channel-20261029.md`.
+
+## 2026-10-29 - Reduce live EG2 audio cost
+
+- Live PCM descriptions now use one shared whole-clip embedding for scene and
+  specialist candidates; overlapping temporal refinement remains available for
+  offline analysis. Daily composition uses four EG2 intra-op threads.
+- On the saved 5.99s system-audio WAV five fast-path replays measured 304ms wall
+  p50 / 424ms max and 969ms process CPU p50; two threads exceeded the target.
+- Raised YAMNet music score cutoff to 0.35 after a source-disjoint positive set
+  and synthetic controls: all 18 FMA clips remained positive while a two-tone
+  false music/"Singing bowl" result abstained. Threshold is not calibrated.
+  five audio suites report 86 passed, 1 skipped. Real loopback accuracy and
+  concurrent-load acceptance remain open.
+
+## 2026-10-29 - Visual freshness and history
+
+- Invalidated captions no longer render as current screen; valid late captions
+  remain in the short visual timeline, and captions beyond its TTL are dropped.
+- Qwen sensor 18/18, fusion 16/16 and now-TTL 2/2 passed. Live scene-load
+  acceptance remains open. Report: `docs/research/visual-stale-context-20261029.md`.
+
+## 2026-10-29 - Persist history-only visual captions
+
+- Scene-mismatched and stale-but-recent Qwen captions persist to the one-hour and
+  weekly text archive with capture provenance; fresh captions are not double-written.
+- Fusion/Qwen/history/TTL gate: 41 passed. Process-restart recall remains open.
+  Report: `docs/research/visual-history-archive-20261029.md`.
+
+## 2026-10-29 — conversation context compaction
+
+- Added an owned native terminal context adapter: recent 12 messages remain verbatim; every older message is retained as a short chronological excerpt before the 18K character target, with old appended live perception snapshots stripped to avoid replaying stale sensory data.
+- Registered the adapter in the owned brain startup receipt. The integrated launcher configures a 200-message history/cache; prompt compaction follows the provider character budget rather than a message-count trigger.
+- Python compilation passed. The owned runtime lacks `pytest`; live startup and prompt acceptance remain open.
+- Managed restart completed 29Oct at 01:00 MSK; Hikari, Qwen visual, JAWL, companion UI and OmniVoice are listening, and the new hook receipt is present. UI is visible. Health remains degraded due stale/scene-dropped captions and loopback waiting for samples; long-conversation compaction acceptance is still open.
+
+## 2026-10-29 — Аудит текущего Hikari-сеанса
+
+- Зафиксированы причины потери контекста, самоподмешивания TTS, устаревания
+  captions, обрезки audio transcript и отсутствия слышимой инициативы.
+- Сохранены redacted API-срезы и focused-test receipts; отделены устаревшие
+  test-harness ожидания от runtime-дефектов. Production-код и запущенный профиль
+  в этой итерации не изменялись. Отчёт: `docs/research/live-session-audit-20261029.md`.
+
+## 2026-10-26 — Audio classification candidates and L2 refinement
+
+- Replaced the EG2 broad music-vs-absence prompt competition with positive multi-class audio scenes. Added independent vocal, drum, bass, and electronic-timbre candidates, overlapping-window DSP details, and separate temporal-change summaries for L2/L3.
+- Kept all new semantic outputs uncalibrated and behind the existing safe-claim behavior; model weights and production thresholds are unchanged. Separated embedding and L2 latency accounting so overlapping window embeddings are not double-counted.
+- Added a positive-prompt CLAP probe and research report. The seven available controls showed no broad-scene top-1 improvement over the previous bank, and no manually checked interval set is available; P0 acceptance remains open. No live realtime run was performed; capture and continuity acceptance remain open.
+- Targeted validation: coarse-to-fine tests 3/3, selected EG2 runtime tests 2/2, and `py_compile` passed. See `docs/research/audio-coarse-to-fine-20261026.md`.
+
+## 2026-10-25 — Бюджет контекста для Qwen3-Omni
+
+- Уточнён текст карточки сервисов: вместо обещания «всё работает» UI объясняет, что процессы/порты скрыты, а состояния сервисов показаны здесь. Accessibility тест 4/4; browser interaction E2E 14 checks across 9 viewports passed. Артефакт: `runtime/qwen-ui-browser-check-20261025-v2.json` (mock-brain scope).
+- Исправлено масштабирование managed context budget: профиль с окном 12,288 теперь получает `max_dynamic_chars=9000` вместо базовых 12,000; для полного managed JAWL-профиля окно меньше 12,288 отклоняется.
+- Добавлена регрессия для расчёта, записи, чтения approved budget receipt и миграции старого точного receipt. `test_native_context_budget`, `test_configure_profile_native` и `test_prepare_daily_profile`: 15/15 passed.
+- Исправление не загружено в уже работающий soak; реальный запуск и brain-turn без overflow ещё нужно проверить после его завершения.
+
+## 2026-10-25 — Qwen3-Omni sensory observability
+
+- Reduced default Qwen visual static/periodic refresh to 4 s so future runs refresh within the 5 s current-screen TTL; active soak settings were left untouched. Qwen sensor 16/16 and launcher 18/18 tests pass.
+- Aligned the composition fallback cadence with the CLI and launcher defaults (4 s static and periodic), so callers that construct the argument namespace without these options do not silently revert to 5/10 s. The launcher regression now checks this fallback too.
+
+- Confirmed the active experimental brain endpoint is `local-qwen3-omni`; Hikari is not used in that profile.
+- Added bounded audio-description provider/count/error/skip/latency/freshness metadata to ambient state and `/api/shell/status`; the System panel now distinguishes Qwen Omni audio results from YAMNet soundscape tags without exposing recorded audio or transcript content.
+- Replaced the stale “Мозг (Hikari)” UI label with “Мозг JAWL”.
+- Tests: ambient audio + shell status 32/32; desktop sensor/accessibility 14/14; full gate 1,144 unit, 18 e2e, 121 Node tests passed. Live process still needs a controlled restart to load these changes.
+- The 8-hour Qwen integrated soak continues; its completed evidence and remaining acceptance are tracked in `runtime/active-goal-addendum-20261025.md`.
 
 ## 2026-10-18 — EmbeddingGemma 2 H4 implementation
 
@@ -230,3 +360,24 @@
   unfinished paused goal; целевой objective и первый шаг сохранены в DAILY_PLAN.
 
 [Прежний CHANGELOG целиком](docs/history/2026-10-14-daily-reset/CHANGELOG.md).
+
+## 2026-10-25 - Bounded sensory history
+
+- Added local one-hour text observation history and seven-day compact hourly moments for audio/video captions; no raw audio or frames are persisted.
+- Added history-aware brain prompt enrichment, a protected status/context endpoint, and clear/disable handling. Store/fusion/web regression: 25 passed, 4 subtests.
+- Ten-minute live check: 199 samples, 264 text observations, zero sensor/API errors. Current description works; unaided two-minute recall and full-run synthesis remain partial pending a restart with the new store active.
+- Report: `docs/research/sensory-history-acceptance-20261025.md`.
+
+28Oct research: isolated LFM450/LFM1.6B/Qwen0.8B CPU versus GPU1 visual-detail probe saved under runtime/lfm-detail-probe-20261028. No daily default or product source changes.
+
+## 2026-10-28 — Live LFM450 sensory probe
+
+- Live YouTube target-window capture used ScreenCaptureAdapter; 50 captions on GPU1, p50 64.8ms and p95 108.5ms. Raw images were not persisted.
+- The local Bonsai2/Hikari brain summarized caption-only input in 1.08s and declined to infer a coherent plot, but answered in English and was broad. See runtime/lfm450-story-replay-20261028/STATUS.md.
+- No daily model configuration changed.
+
+
+## 2026-10-28 - Visual resolution limitation recorded
+
+- Documented that the live LFM450/Florence comparison used 960?520 encoded frames from an adapter capped at 960?720 and JPEG quality 72; original window dimensions and scale factor were not recorded.
+- Marked fine-detail acceptance inconclusive pending a matched native/high-resolution replay with dimensions/scale metadata, followed by a separate JPEG-quality check. No daily model configuration changed.

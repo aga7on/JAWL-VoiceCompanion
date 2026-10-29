@@ -6,12 +6,13 @@
 Из `G:\AI\JAWL-VoiceCompanion`:
 
 ```powershell
-.\scripts\run_local_bonsai_integrated.ps1
+.\scripts\run_local_bonsai_integrated.ps1 -StartDesktopShell
 ```
 
 Проверить сообщения готовности нужного профиля/моделей. Открывать
-`http://127.0.0.1:2367/app`, не WebSocket URL.
-Electron при уже запущенном backend и установленных desktop dependencies:
+`http://127.0.0.1:2367/app`, не WebSocket URL. Флаг `-StartDesktopShell` открывает Electron после проверки здоровья компаньона и завершает его дерево процессов вместе с профилем. Без флага launcher работает без окна для acceptance-скриптов. Зависимости desktop должны быть установлены заранее:
+
+Для ручного подключения Electron к уже работающему backend (без владения деревом процессов launcher):
 
 ```powershell
 cd desktop
@@ -29,8 +30,13 @@ workers. Пользовательский единый launch/stop/tray буде
 Не использовать архивные скрипты как runbook и не завершать процессы по имени
 или номеру порта. Для разработчика — owned launcher/Job и его cleanup.
 
-Микрофон/экран/системный звук настраиваются явно. Начать mic проверку с наушниками.
-Ни этот документ, ни docs-only проверка не включают фактический захват устройств.
+Микрофон/экран/системный звук настраиваются явно. Для системного loopback
+machine-specific имя render-устройства задаётся в `audio.loopback_output_device_name`
+в runtime manifest; пустое значение использует WASAPI default output. Сейчас daily
+профиль настроен на `DigitalOutput (NVIDIA High Definition Audio)`, выбранное
+владельцем устройство. Capture остаётся opt-in через `-EnableAmbientAudio` и
+включение источника в UI. Ни этот документ, ни docs-only проверка не включают
+фактический захват устройств.
 
 В едином окне `Ctrl+Shift+M` переключает Studio и компактный режим; настройки
 открываются из компактного дока. Speech Stop прекращает текущую озвучку,
@@ -38,7 +44,8 @@ workers. Пользовательский единый launch/stop/tray буде
 
 Проверка15Oct после новых hooks:3 real-model WAV voice turns через `/app`
 прошли с Hikari, GigaAM и OmniVoice. Dispatch→WebAudio≈9.47–11.37с;
-физический Fifine/full duplex и8h эксплуатация ещё не приняты.
+Fifine-ввод ранее принят владельцем; повтор не нужен. Акустический full duplex
+не проверялся. Native-owned 8h r29 принят, интегрированная 8h эксплуатация OPEN.
 `-RunBrowserVoiceE2E` теперь выбирает актуальный `/app`; его WAV-захват
 не требует говорить в микрофон и не подтверждает аппаратную слышимость.
 
@@ -55,6 +62,7 @@ python -B scripts/run_owned_gateway_acceptance.py --live --mode ordinary --suite
 Voice использует три WAV по кругу, реальные ASR/brain/TTS и headless `/app`.
 Soak включает native ROOT3 только в новом disposable profile, временный unattended
 lease, Goal write/read и один контролируемый отказ owned модели с восстановлением.
-Atomic `soak-checkpoint.json` находится в run_root из отчёта. Smoke180с прошёл. Первый8h native soak16Oct остановился с FAIL на63.6мин:
+Atomic `soak-checkpoint.json` находится в run_root из отчёта. Smoke180с прошёл.
+Первый 8h native soak16Oct исторически остановился с FAIL на63.6мин:
 Goal13 false completion отвергнут native guard; cleanup PASS.
-[Итог первого прогона](../runtime/native-owned-soak-8h-20261016-r1.json).8h не принят. Старый standalone soak с cwd/cmdline sampler не используется.
+[Итог первого прогона](../runtime/native-owned-soak-8h-20261016-r1.json). Этот результат заменён для native-owned scope: 24Oct r29 завершился PASS — 8h, 476 cycles, 0 failed; один контролируемый transport fault восстановлен ([отчёт](../runtime/native-owned-soak-8h-20261023-r29.json)). Проверка охватывала native gateway/brain/Goal/Companion, не полный daily runtime, устройства захвата или integrated 24/7 acceptance; эти этапы остаются открытыми. Старый standalone soak с cwd/cmdline sampler не используется.

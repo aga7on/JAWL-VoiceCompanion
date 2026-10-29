@@ -188,5 +188,46 @@
    - **H1 (Unified Chameleon UI & Pose Graph):** полный переход на `desktop/app.html` (Compact HUD ↔ Studio Drawer + `?mode=obs`), поза `thinking/working`, многоканальный липсинк, архивация legacy-панелей.
    - **H2 (Dual-Lane JAWL Brain):** разделение на быстрый разговорный поток (System 1) и асинхронный поток глубоких задач/реверса (System 2) с голосовыми чекпоинтами.
    - **H3 (DuplexCascade + OmniVoice):** микро-тиковый цикл без VAD со спецтокенами очерёдности речи и мгновенным стримингом войсклона.
-   - **H4 (EmbeddingGemma 2 Sensory Cortex):** Zero-Decoder зрение, музыкально-эмоциональный слух для совместного просмотра фильмов/аниме/музыки, латентные рефлексы VRM и российский `eg2` reader.
-   - **H5 (Game Embodied Layer & Auto-Modding):** 30–60 Гц тактический игровой слой + создание игровых мостов силами JAWL/RE.
+    - **H4 (EmbeddingGemma 2 Sensory Cortex):** Zero-Decoder зрение, музыкально-эмоциональный слух для совместного просмотра фильмов/аниме/музыки, латентные рефлексы VRM и российский `eg2` reader.
+    - **H5 (Game Embodied Layer & Auto-Modding):** 30–60 Гц тактический игровой слой + создание игровых мостов силами JAWL/RE.
+
+---
+
+## 8. Зрение как орган управления ПК (Grounding & Affordance Lane)
+
+Тот же сенсорный проход EmbeddingGemma 2, который описывает кадр, обязан выдавать
+пригодные для действия цели. Это не вторая VLM и не второй тяжёлый проход:
+UIA-дерево, OCR-боксы и 29 пространственных токенов `last_hidden_state`
+переиспользуются совместно с описанием.
+
+**Поток одного кадра:**
+
+1. **Захват:** кадр дисплея + UIA-дерево активного окна + OCR-боксы + 29 патч-токенов EG2.
+2. **Grounding (кандидаты действия):** список
+   `{role, label, bbox, center, confidence, source, element_ref, element_sha256}`:
+   - **UIA** — авторитетный источник для доступных контролов (кнопки, поля, вкладки,
+     пункты меню); даёт `element_ref` + `element_sha256` для policy-safe действия;
+   - **OCR** — bbox текста для canvas/видео/игр, где UIA-дерева нет;
+   - **EG2** — роль аффорданса (`button`, `input`, `tab`, `menu`, `icon`, `slider`,
+     `checkbox`) и 5-зонная карта кадра; пиксельные границы уточняют bbox;
+   - **confidence-гейт:** действие разрешено только при достаточной уверенности и
+     свежем `observation_token`/`observation_digest`.
+3. **Планирование:** существующий `VisionActionPlan` (1–8 действий, strict schema,
+   postcondition). При наличии UIA запрещены слепые клики по координатам.
+4. **Исполнение:** `VisionPlanExecutor` → HostOS policy → native JAWL skills
+   (`HostOSDesktop.*`); каждое действие обязано иметь проверенный postcondition.
+5. **Реальное время:** UIA+OCR ≈ 5–30 мс, EG2 ≈ 70–130 мс; кэш по digest,
+   без записи сырых кадров. Управление и описание используют один embedding-проход.
+6. **Безопасность:** sensitive-window block, redaction, policy level, dry-run,
+   подтверждение для необратимых действий; один audio/action owner, идемпотентные
+   ключи, отмена по Stop.
+
+**Инвариант:** зрение для управления не имеет права работать по «сырым» координатам
+без confidence-гейта, свежего observation token и проверяемого postcondition.
+
+**Текущая реализация (20 Oct):** `DetailedSensoryDescriber` + `Eg2VisionDescriber`
+на CPU (0 МБ VRAM); сценарные/персональные/сюжетные/мемные банки расширены до ~158
+концептов и кэшируются в `.npz` (тёплый старт 2 мс). Лаунчер поддерживает
+`-EnableScreenWatch -Eg2Vision` без внешнего VLM; `PerceptionFusion` подмешивает
+свежий фон восприятия в каждый контекстный ход, а `AmbientAudioASRBridge` получает
+жанр/BPM/тональность/настроение через `Eg2AudioDescriptionProvider`.
