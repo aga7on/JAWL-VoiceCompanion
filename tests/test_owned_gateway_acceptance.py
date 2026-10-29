@@ -52,7 +52,6 @@ class OwnedGatewayAcceptanceTests(unittest.TestCase):
 
     def receipt(self):
         return {"schema_version": 1, "instance_id": "fixture", "bootstrap_only": False,
-                "local_json_format_installed": True,
                 "goal_protocol_repair_installed": True,
                 "hooks": {"delivery_guard": True, "terminal_context_compaction": True,
                           "goal_wakeup_backoff": True},
@@ -67,7 +66,7 @@ class OwnedGatewayAcceptanceTests(unittest.TestCase):
         snapshot = {"source": receipt["source"], "snapshot_sha256": receipt["snapshot_sha256"]}
         owner = SimpleNamespace(owns_pid=lambda pid: pid == os.getpid())
         entry.validate_brain_receipt(receipt, "fixture", snapshot, owner)
-        for changed in ({"bootstrap_only": True}, {"local_json_format_installed": False}, {"snapshot_sha256": "b" * 64},
+        for changed in ({"bootstrap_only": True}, {"snapshot_sha256": "b" * 64},
                         {"hooks": {"delivery_guard": False, "terminal_context_compaction": True,
                                    "goal_wakeup_backoff": True}},
                         {"hooks": {"delivery_guard": True, "terminal_context_compaction": True,

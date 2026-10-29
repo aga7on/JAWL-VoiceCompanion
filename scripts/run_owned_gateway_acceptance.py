@@ -26,7 +26,6 @@ from jawl_voicecompanion.supervisor import RuntimeSupervisor, WorkerSpec
 from jawl_voicecompanion.worker_readiness import model_ready
 from run_native_gateway_profile import NativeGatewayProfile, _parser as gateway_parser
 from verify_jawl_snapshot import verify
-from jawl_voicecompanion.native_jawl_json_format import install_native_json_format
 
 INSTANCES = ROOT / "runtime/instances"
 PROMPTS = (
@@ -97,7 +96,6 @@ def validate_brain_receipt(receipt, profile, snapshot, owner):
     required_hooks = ("delivery_guard", "terminal_context_compaction", "goal_wakeup_backoff")
     if (receipt.get("schema_version") != 1 or receipt.get("instance_id") != profile
             or receipt.get("bootstrap_only") is not False
-            or receipt.get("local_json_format_installed") is not True
             or receipt.get("goal_protocol_repair_installed") is not True
             or any(hooks.get(name) is not True for name in required_hooks)
             or Path(receipt.get("instance_home", "")).resolve() != (INSTANCES / profile).resolve()
@@ -178,10 +176,16 @@ def wire_probe(brain_url, model, source):
                     "max_tokens": 128, "temperature": 0, "stream": False}
 
     from types import SimpleNamespace
-    install_native_json_format(ProbeProvider)
+    # The envelope policy is native kernel behavior; drive it directly.
+    sys.path.insert(0, str(source))
+    from src.l3_agent.llm import envelope_policy
     provider = ProbeProvider()
     provider.client = SimpleNamespace(api_url=brain_url)
-    kwargs = provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope"))
+    kwargs = envelope_policy.apply_envelope_policy(
+        provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope", metadata=None)),
+        SimpleNamespace(tool_transport="json_envelope", metadata=None, model=model),
+        provider=provider,
+    )
     reply = json_request(brain_url, "/chat/completions", body=kwargs, timeout=30)
     content = reply["choices"][0]["message"]["content"]
     value = json.loads(content)

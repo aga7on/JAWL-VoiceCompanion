@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import openai
 
 from src.l3_agent.companion_gateway import current_speech_sink
+from src.l3_agent.llm import envelope_policy
 from src.l3_agent.llm.client import LLMClient
 from src.l3_agent.llm.exceptions import AllKeysExhaustedError
 from src.l3_agent.llm.providers.base import LLMProvider
@@ -193,7 +194,7 @@ class OpenAICompatibleProvider(LLMProvider):
             in {"json_object", "json_schema"}
         ):
             kwargs["response_format"] = {"type": "json_object"}
-        return kwargs
+        return envelope_policy.apply_envelope_policy(kwargs, request, provider=self)
 
     async def complete(self, request: LLMRequest) -> LLMResult:
         request = _stream_first_request(self, request)

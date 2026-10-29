@@ -46,11 +46,14 @@ from src.l3_agent.skills.registry import (
 from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
 from src.l3_agent.event_buffer import BoundedEventBuffer
 from src.l3_agent.companion_gateway import (
+    CompanionTurnState,
     SpeechDeltaSink,
+    bind_companion_turn_state,
     bind_speech_sink,
     current_companion_turn_id,
     current_speech_sink,
     reset_companion_turn_id,
+    reset_companion_turn_state,
     reset_speech_sink,
     set_companion_turn_id,
 )
@@ -363,6 +366,16 @@ class ReactLoop:
         ).strip()[:128]
         companion_turn_token = set_companion_turn_id(
             payload.get("_companion_turn_id", "")
+        )
+        # The wire-envelope policy needs the raw turn message and a durable
+        # Goal probe; bind them per run without persisting turn state.
+        turn_state_token = bind_companion_turn_state(
+            CompanionTurnState(
+                payload.get("message", ""),
+                lambda: getattr(goal_manager, "active_goal", None) is not None,
+            )
+            if current_companion_turn_id()
+            else None
         )
         speech_sink_token = bind_speech_sink(
             SpeechDeltaSink(self.event_bus, current_companion_turn_id())
@@ -855,6 +868,7 @@ class ReactLoop:
             if speech_sink is not None:
                 speech_sink.close()
             reset_speech_sink(speech_sink_token)
+            reset_companion_turn_state(turn_state_token)
             policy_completion.close_request(current_companion_turn_id())
             reset_companion_turn_id(companion_turn_token)
             self.active_companion_turn_id = ""

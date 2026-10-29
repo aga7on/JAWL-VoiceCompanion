@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, json_format=None, goal_repair=None, action_repair=None, goal_backoff=None, terminal_context=None):
+def write_startup_receipt(snapshot, delivery, goal_repair=None, action_repair=None, goal_backoff=None, terminal_context=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -68,11 +68,6 @@ def write_startup_receipt(snapshot, delivery, json_format=None, goal_repair=None
         )
     if not all(check.values()):
         raise RuntimeError("owned brain hooks were not installed on the actual native classes")
-    if json_format is not None and (
-        vars(json_format.provider_class).get("__jawl_owned_json_format_installation__") is not json_format
-        or json_format.provider_class._request_kwargs is not json_format.wrapped_kwargs
-    ):
-        raise RuntimeError("owned JSON format hook was not installed on the actual provider")
     if goal_repair is not None:
         parse_chain_valid = (
             goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
@@ -124,7 +119,6 @@ def write_startup_receipt(snapshot, delivery, json_format=None, goal_repair=None
         "instance_home": str(Path(os.environ["JAWL_INSTANCE_HOME"]).resolve()),
         "source": snapshot["source"], "snapshot_sha256": snapshot["snapshot_sha256"],
         "entrypoint": str(Path(__file__).resolve()), "hooks": check,
-        "local_json_format_installed": json_format is not None,
         "goal_protocol_repair_installed": goal_repair is not None,
         "action_repair_installed": action_repair is not None,
         "terminal_context_compaction": {
@@ -181,12 +175,9 @@ def main():
     goal_repair = goal_repair_extension.install_native_goal_completion_repair()
     action_repair_extension = load_extension("_owned_jawl_action_repair", "native_jawl_action_repair.py")
     action_repair = action_repair_extension.install_native_action_repair()
-    json_format_extension = load_extension("_owned_jawl_json_format", "native_jawl_json_format.py")
-    json_format = json_format_extension.install_native_json_format()
     write_startup_receipt(
         snapshot,
         delivery,
-        json_format,
         goal_repair=goal_repair,
         action_repair=action_repair,
         goal_backoff=goal_backoff,

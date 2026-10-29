@@ -1,28 +1,61 @@
-"""Local JSON wire correction preserves the complete native action surface."""
-import importlib.util
+"""Kernel JSON-envelope wire policy for the native JAWL provider.
+
+Spec lineage: the retired product extension ``native_jawl_json_format``
+(ADR-049 slice 4). ``apply_envelope_policy`` is invoked natively by
+``OpenAICompatibleProvider._request_kwargs``; tests drive it through a small
+harness with the per-turn companion state bound via ``chat()``.
+"""
+
+from __future__ import annotations
+
 import json
 import os
-from pathlib import Path
 import sys
-from types import SimpleNamespace
-import unittest
 import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("json_format_test_extension", ROOT / "src/jawl_voicecompanion/native_jawl_json_format.py")
-extension = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = extension
-spec.loader.exec_module(extension)
+_SNAPSHOT = (
+    Path(__file__).resolve().parents[1]
+    / "runtime"
+    / "jawl-sources"
+    / "jawl-20260906-daily-v2"
+)
+os.environ.setdefault(
+    "JAWL_LOG_DIR", tempfile.mkdtemp(prefix="jawl-test-logs-envelope-")
+)
+sys.path.insert(0, str(_SNAPSHOT))
+
+from src.l3_agent import companion_gateway  # noqa: E402
+from src.l3_agent.llm import envelope_policy as extension  # noqa: E402
+
+
+def chat(message="", *, goal_active=False):
+    """Bind the per-turn companion state the way a correlated run does."""
+    return companion_gateway.bind_companion_turn_state(
+        companion_gateway.CompanionTurnState(message, lambda: goal_active)
+    )
 
 
 class NativeJsonFormatTests(unittest.TestCase):
+    def call(self, kwargs, request, *, url="http://127.0.0.1/v1",
+             chat_turn=None, goal_active=False):
+        provider = SimpleNamespace(client=SimpleNamespace(api_url=url))
+        if chat_turn is not None:
+            token = chat(chat_turn, goal_active=goal_active)
+            try:
+                return extension.apply_envelope_policy(dict(kwargs), request, provider=provider)
+            finally:
+                companion_gateway.reset_companion_turn_state(token)
+        return extension.apply_envelope_policy(dict(kwargs), request, provider=provider)
+
     def test_gemini_relay_uses_plain_json_with_native_argument_validation(self):
         original = {"model": "gemini-3.8-flash", "response_format": {"type": "json_object"},
                     "tools": [{"function": {"name": "execute_skill", "parameters": {"type": "object"}}}],
                     "messages": [{"role": "user", "content": "full context"}]}
-        provider = self.provider("http://127.0.0.1:8045/v1", original)
-        actual = provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope"))
+        actual = self.call(original, SimpleNamespace(tool_transport="json_envelope"))
         self.assertEqual(actual["response_format"], {"type": "json_object"})
         self.assertNotIn("tools", actual)
         self.assertIn("full context", actual["messages"][-1]["content"])
@@ -35,16 +68,15 @@ class NativeJsonFormatTests(unittest.TestCase):
                 "actions": {"type": "array", "items": {"type": "object"}},
             }},
         }}], "messages": [{"role": "system", "content": "Full task policy"}]}
-        provider = self.provider("http://127.0.0.1/v1", original)
         with patch.dict(sys.modules, {
-            "_owned_jawl_delivery": SimpleNamespace(native_companion_chat_active=lambda: True),
             "src.l3_agent.skills.registry": SimpleNamespace(_REGISTRY={
                 "GoalSkills.create_goal": {"hidden": False},
                 "HostOSReader.read_file": {"hidden": False},
                 "HostTerminalMessages.send_message_to_terminal": {"hidden": False},
             }),
         }):
-            actual = provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope"))
+            actual = self.call(original, SimpleNamespace(tool_transport="json_envelope"),
+                              chat_turn="Привет!")
         schema = actual["response_format"]["json_schema"]["schema"]
         jsonschema.validate({"actions": [{"tool_name": "GoalSkills.create_goal", "parameters": {"objective": "Inspect repository"}}]}, schema)
         self.assertIn("acknowledgement alone does not start background work", actual["messages"][0]["content"])
@@ -55,9 +87,8 @@ class NativeJsonFormatTests(unittest.TestCase):
                     "tools": [{"function": {"name": "execute_skill", "parameters": {
                         "type": "object", "properties": {"actions": {"type": "array", "items": {"type": "object"}}},
                     }}}]}
-        provider = self.provider("http://127.0.0.1/v1", original)
-        with patch.dict(sys.modules, {"_owned_jawl_delivery": SimpleNamespace(native_companion_chat_active=lambda: False)}):
-            actual = provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope", metadata={"trace": {"event_name": "HEARTBEAT"}}))
+        request = SimpleNamespace(tool_transport="json_envelope", metadata={"trace": {"event_name": "HEARTBEAT"}})
+        actual = self.call(original, request)
         self.assertEqual(actual["max_tokens"], 2048)
         jsonschema.validate({"actions": [{"tool_name": "HostOSReader.read_file", "parameters": {"filepath": "fixture.txt"}}]}, actual["response_format"]["json_schema"]["schema"])
 
@@ -99,15 +130,6 @@ class NativeJsonFormatTests(unittest.TestCase):
                     extension.record_owned_context_summary(kwargs)
                 self.assertFalse((root / "foreign").exists())
 
-    def provider(self, url, kwargs):
-        class Provider:
-            def _request_kwargs(self, request):
-                return dict(kwargs)
-        extension.install_native_json_format(Provider)
-        result = Provider()
-        result.client = SimpleNamespace(api_url=url)
-        return result
-
     def test_local_envelope_constrains_only_wire_syntax_preserving_native_context_and_sampling(self):
         schema = {"type": "object", "properties": {
             "actions": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
@@ -117,8 +139,7 @@ class NativeJsonFormatTests(unittest.TestCase):
         messages = [{"role": "system", "content": "full native discovery/persona/policy/Goal Protocol v2"}]
         original = {"response_format": {"type": "json_object"}, "tools": tools,
                     "messages": messages, "temperature": .3, "stream": True}
-        provider = self.provider("http://127.0.0.1:8990/v1", original)
-        actual = provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope"))
+        actual = self.call(original, SimpleNamespace(tool_transport="json_envelope"))
         wire = actual["response_format"]["json_schema"]["schema"]
         self.assertEqual(wire["properties"], {
             name: schema["properties"][name] for name in ("actions", "calls", "v", "ledger")
@@ -135,50 +156,48 @@ class NativeJsonFormatTests(unittest.TestCase):
         for tools, choice in (([{"function": {"name": "native_file_write", "parameters": {}}}], None),
                               ([{"function": {"name": "execute_skill", "parameters": {}}}], "required")):
             original = {"response_format": {"type": "json_object"}, "tools": tools, "tool_choice": choice}
-            provider = self.provider("http://127.0.0.1/v1", original)
-            self.assertEqual(provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope")), original)
+            self.assertEqual(
+                self.call(original, SimpleNamespace(tool_transport="json_envelope")), original
+            )
 
     def test_native_action_shapes_reject_historical_outcomes_and_preserve_arbitrary_tools_goal_calls(self):
         import ast
         import jsonschema
-        source = ROOT / 'runtime/jawl-sources/jawl-20260906-daily-v2/src/l3_agent/skills/schema.py'
-        tree = ast.parse(source.read_text(encoding='utf-8'))
+        source = _SNAPSHOT / "src/l3_agent/skills/schema.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
         assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
-                          and any(isinstance(target, ast.Name) and target.id == 'ACTION_SCHEMA' for target in node.targets))
+                          and any(isinstance(target, ast.Name) and target.id == "ACTION_SCHEMA" for target in node.targets))
         native_tools = ast.literal_eval(assignment.value)
-        original = {'response_format': {'type': 'json_object'}, 'tools': native_tools}
-        provider = self.provider('http://127.0.0.1/v1', original)
-        schema = provider._request_kwargs(SimpleNamespace(tool_transport='json_envelope'))['response_format']['json_schema']['schema']
+        original = {"response_format": {"type": "json_object"}, "tools": native_tools}
+        schema = self.call(original, SimpleNamespace(tool_transport="json_envelope"))["response_format"]["json_schema"]["schema"]
         for value in [
-            {'actions': [{'tool_name': 'AnyDiscoveredSkill.operation', 'parameters': {'arbitrary_arg': {'values': [1, 2]}}, 'action_id': 'write'}]},
-            {'v': 2, 'state': 'act', 'calls': [{'tool': 'AnyDiscoveredSkill.operation', 'args': {'future_arg': True}}], 'ledger': {'pending_steps': ['next']}},
-            {'actions': [], 'reasoning': 'x' * 5000}]:
+            {"actions": [{"tool_name": "AnyDiscoveredSkill.operation", "parameters": {"arbitrary_arg": {"values": [1, 2]}}, "action_id": "write"}]},
+            {"v": 2, "state": "act", "calls": [{"tool": "AnyDiscoveredSkill.operation", "args": {"future_arg": True}}], "ledger": {"pending_steps": ["next"]}},
+            {"actions": [], "reasoning": "x" * 5000}]:
             jsonschema.validate(value, schema)
         for value in [
-            {'actions': [{'action_id': 'action_1', 'status': 'success', 'duration_ms': 7.3}]},
-            {'actions': [{'tool_name': 'AnyDiscoveredSkill.operation', 'parameters': {}, 'status': 'success'}]},
-            {'calls': [{'status': 'success', 'duration_ms': 7.3}]}]:
+            {"actions": [{"action_id": "action_1", "status": "success", "duration_ms": 7.3}]},
+            {"actions": [{"tool_name": "AnyDiscoveredSkill.operation", "parameters": {}, "status": "success"}]},
+            {"calls": [{"status": "success", "duration_ms": 7.3}]}]:
             with self.assertRaises(jsonschema.ValidationError):
                 jsonschema.validate(value, schema)
 
     def test_chat_bound_keeps_arbitrary_tool_parameters_and_goal_v2_fields_available(self):
-        provider = self.provider("http://127.0.0.1/v1", {
+        base = {
             "response_format": {"type": "json_object"},
             "tools": [{"function": {"name": "execute_skill", "parameters": {"type": "object"}}}],
-        })
-        with patch.dict(sys.modules, {"_owned_jawl_delivery": SimpleNamespace(native_companion_chat_active=lambda: True)}):
-            schema = provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope"))["response_format"]["json_schema"]["schema"]
+        }
+        schema = self.call(base, SimpleNamespace(tool_transport="json_envelope"), chat_turn="hi")["response_format"]["json_schema"]["schema"]
         import jsonschema
         jsonschema.validate({"reasoning": "brief", "actions": [{"tool_name": "AnyDiscoveredSkill.any", "parameters": {"new_native_arg": [1, 2]}}],
                              "v": 2, "state": "wait", "calls": [], "ledger": {"pending_steps": ["task"]}}, schema)
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.validate({"reasoning": "x" * 321}, schema)
-        with patch.dict(sys.modules, {"_owned_jawl_delivery": SimpleNamespace(native_companion_chat_active=lambda: False)}):
-            goal_schema = provider._request_kwargs(SimpleNamespace(tool_transport="json_envelope"))["response_format"]["json_schema"]["schema"]
+        goal_schema = self.call(base, SimpleNamespace(tool_transport="json_envelope"))["response_format"]["json_schema"]["schema"]
         jsonschema.validate({"reasoning": "x" * 5000, "v": 2, "state": "act"}, goal_schema)
 
     def test_goal_start_requires_one_valid_goal_action(self):
-        provider = self.provider("http://127.0.0.1/v1", {
+        base = {
             "response_format": {"type": "json_object"},
             "tools": [{"function": {"name": "execute_skill", "parameters": {
                 "type": "object", "properties": {
@@ -194,45 +213,47 @@ class NativeJsonFormatTests(unittest.TestCase):
             }}}],
             "messages": [{"role": "user", "content": "## ACTIVE GOAL\nDo the durable next action."}],
             "max_tokens": 2048,
-        })
+        }
         request = SimpleNamespace(
             tool_transport="json_envelope",
             metadata={"trace": {"event_name": "GOAL_OPERATOR_CONTROL"}},
         )
-        with patch.dict(sys.modules, {"_owned_jawl_delivery": SimpleNamespace(
-                native_companion_chat_active=lambda: True)}):
-            actual = provider._request_kwargs(request)
-        schema = actual["response_format"]["json_schema"]["schema"]
-        self.assertEqual(actual["max_tokens"], 2048)
-        self.assertTrue({"calls", "v", "state", "note", "ledger"}.issubset(schema["properties"]))
-        self.assertEqual(schema["required"], ["v", "state"])
-        self.assertFalse(schema["additionalProperties"])
-        self.assertEqual(len(schema["oneOf"]), 3)
-        self.assertIn("do not call GoalSkills", actual["messages"][0]["content"])
-        import jsonschema
-        jsonschema.validate({
-            "v": 2,
-            "state": "act",
-            "calls": [{"tool": "HostOSWriter.write_file", "args": {"path": "sandbox/x", "text": "ok"}}],
-            "ledger": {"phase": "completed", "next_action": "none"},
-        }, schema)
-        with self.assertRaises(jsonschema.ValidationError):
-            jsonschema.validate({"v": 2, "state": "act", "calls": []}, schema)
-        with self.assertRaises(jsonschema.ValidationError):
-            jsonschema.validate({"v": 2, "state": "act", "calls": [{"tool": "x"}]}, schema)
-        # GOAL_OPERATOR_CONTROL may cover the whole ReAct cycle; after its
-        # final verified action it must be able to emit the native terminal
-        # envelope instead of calling the legacy lifecycle tool.
-        jsonschema.validate({"v": 2, "state": "done", "summary": "Verified.", "ledger": {}}, schema)
-        # A goal may already be active when the owned brain starts. That
-        # startup event must receive the same action-required grammar.
-        request.metadata["trace"]["event_name"] = "SYSTEM_CORE_START"
-        startup_schema = provider._request_kwargs(request)["response_format"]["json_schema"]["schema"]
-        self.assertEqual(startup_schema["required"], ["v", "state"])
-        self.assertEqual(len(startup_schema["oneOf"]), 3)
+        token = chat("делай цель")
+        try:
+            actual = self.call(base, request)
+            schema = actual["response_format"]["json_schema"]["schema"]
+            self.assertEqual(actual["max_tokens"], 2048)
+            self.assertTrue({"calls", "v", "state", "note", "ledger"}.issubset(schema["properties"]))
+            self.assertEqual(schema["required"], ["v", "state"])
+            self.assertFalse(schema["additionalProperties"])
+            self.assertEqual(len(schema["oneOf"]), 3)
+            self.assertIn("do not call GoalSkills", actual["messages"][0]["content"])
+            import jsonschema
+            jsonschema.validate({
+                "v": 2,
+                "state": "act",
+                "calls": [{"tool": "HostOSWriter.write_file", "args": {"path": "sandbox/x", "text": "ok"}}],
+                "ledger": {"phase": "completed", "next_action": "none"},
+            }, schema)
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate({"v": 2, "state": "act", "calls": []}, schema)
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate({"v": 2, "state": "act", "calls": [{"tool": "x"}]}, schema)
+            # GOAL_OPERATOR_CONTROL may cover the whole ReAct cycle; after its
+            # final verified action it must be able to emit the native terminal
+            # envelope instead of calling the legacy lifecycle tool.
+            jsonschema.validate({"v": 2, "state": "done", "summary": "Verified.", "ledger": {}}, schema)
+            # A goal may already be active when the owned brain starts. That
+            # startup event must receive the same action-required grammar.
+            request.metadata["trace"]["event_name"] = "SYSTEM_CORE_START"
+            startup_schema = self.call(base, request)["response_format"]["json_schema"]["schema"]
+            self.assertEqual(startup_schema["required"], ["v", "state"])
+            self.assertEqual(len(startup_schema["oneOf"]), 3)
+        finally:
+            companion_gateway.reset_companion_turn_state(token)
 
     def test_active_goal_hides_legacy_lifecycle_skill_docs(self):
-        provider = self.provider("http://127.0.0.1/v1", {
+        base = {
             "response_format": {"type": "json_object"},
             "tools": [{"function": {"name": "execute_skill", "parameters": {
                 "type": "object", "properties": {
@@ -251,22 +272,21 @@ class NativeJsonFormatTests(unittest.TestCase):
                 )},
                 {"role": "user", "content": "## ACTIVE GOAL\nVerify the file."},
             ],
-        })
+        }
         request = SimpleNamespace(tool_transport="json_envelope", metadata={
             "trace": {"event_name": "GOAL_OPERATOR_CONTROL"},
         })
         with patch.dict(sys.modules, {
-                "_owned_jawl_delivery": SimpleNamespace(native_companion_chat_active=lambda: False),
-                "src.l3_agent.skills.registry": SimpleNamespace(_REGISTRY={
-                    "GoalSkills.get_goal": {"hidden": False},
-                    "GoalSkills.update_goal": {"hidden": False},
-                    "GoalSkills.schedule_goal_wakeup": {"hidden": False},
-                    "HostOSReader.read_file": {"hidden": False},
-                    "HostOSWriter.write_file": {"hidden": False},
-                    "Hidden.admin": {"hidden": True},
-                }),
+            "src.l3_agent.skills.registry": SimpleNamespace(_REGISTRY={
+                "GoalSkills.get_goal": {"hidden": False},
+                "GoalSkills.update_goal": {"hidden": False},
+                "GoalSkills.schedule_goal_wakeup": {"hidden": False},
+                "HostOSReader.read_file": {"hidden": False},
+                "HostOSWriter.write_file": {"hidden": False},
+                "Hidden.admin": {"hidden": True},
+            }),
         }):
-            actual = provider._request_kwargs(request)
+            actual = self.call(base, request)
         system_content = actual["messages"][0]["content"]
         self.assertIn("HostOSReader.read_file", system_content)
         self.assertNotIn("GoalSkills.update_goal(status", system_content)
@@ -281,7 +301,7 @@ class NativeJsonFormatTests(unittest.TestCase):
             }]}, actual["response_format"]["json_schema"]["schema"])
 
     def test_active_goal_heartbeat_still_accepts_terminal_state_without_calls(self):
-        provider = self.provider("http://127.0.0.1:8990/v1", {
+        base = {
             "response_format": {"type": "json_object"},
             "tools": [{"function": {"name": "execute_skill", "parameters": {"type": "object", "properties": {
                 "actions": {"type": "array"}, "calls": {"type": "array"},
@@ -291,10 +311,9 @@ class NativeJsonFormatTests(unittest.TestCase):
             }}}}],
             "messages": [{"role": "system", "content": "## ACTIVE GOAL\nDo work."}],
             "max_tokens": 2048,
-        })
+        }
         request = SimpleNamespace(tool_transport="json_envelope", metadata={"trace": {"event_name": "HEARTBEAT"}})
-        with patch.dict(sys.modules, {"_owned_jawl_delivery": SimpleNamespace(native_companion_chat_active=lambda: False)}):
-            schema = provider._request_kwargs(request)["response_format"]["json_schema"]["schema"]
+        schema = self.call(base, request)["response_format"]["json_schema"]["schema"]
         import jsonschema
         jsonschema.validate({"v": 2, "state": "done", "summary": "verified", "ledger": {}}, schema)
         with self.assertRaises(jsonschema.ValidationError):
@@ -303,7 +322,7 @@ class NativeJsonFormatTests(unittest.TestCase):
             jsonschema.validate({"actions": [{"tool_name": "GoalSkills.update_goal", "parameters": {}}]}, schema)
 
     def test_no_progress_goal_response_is_terminal_only(self):
-        provider = self.provider("http://127.0.0.1:8990/v1", {
+        base = {
             "response_format": {"type": "json_object"},
             "tools": [{"function": {"name": "execute_skill", "parameters": {
                 "type": "object", "properties": {
@@ -317,13 +336,11 @@ class NativeJsonFormatTests(unittest.TestCase):
                 "## ACTIVE GOAL\nA previously successful action repeated; "
                 "no-progress-repeat=1; next retry in 1s."
             )}],
-        })
+        }
         request = SimpleNamespace(tool_transport="json_envelope", metadata={
             "trace": {"event_name": "HEARTBEAT"},
         })
-        with patch.dict(sys.modules, {"_owned_jawl_delivery": SimpleNamespace(
-                native_companion_chat_active=lambda: False)}):
-            actual = provider._request_kwargs(request)
+        actual = self.call(base, request)
         schema = actual["response_format"]["json_schema"]["schema"]
         self.assertEqual(len(schema["oneOf"]), 1)
         terminal = schema["oneOf"][0]
@@ -339,18 +356,16 @@ class NativeJsonFormatTests(unittest.TestCase):
     def test_startup_without_goal_stays_short_and_comment_only(self):
         for event_name in ("SYSTEM_CORE_START",):
             with self.subTest(event_name=event_name):
-                provider = self.provider("http://127.0.0.1/v1", {
+                base = {
                     "response_format": {"type": "json_object"},
                     "tools": [{"function": {"name": "execute_skill", "parameters": {
                         "type": "object", "properties": {"actions": {"type": "array"}, "calls": {"type": "array"}},
                     }}}],
                     "messages": [{"role": "system", "content": "Passive perception."}],
                     "max_tokens": 2048,
-                })
+                }
                 request = SimpleNamespace(tool_transport="json_envelope", metadata={"trace": {"event_name": event_name}})
-                with patch.dict(sys.modules, {"_owned_jawl_delivery": SimpleNamespace(
-                        native_companion_chat_active=lambda: False)}):
-                    actual = provider._request_kwargs(request)
+                actual = self.call(base, request)
                 schema = actual["response_format"]["json_schema"]["schema"]
                 self.assertEqual(actual["max_tokens"], 320)
                 self.assertEqual(set(schema["properties"]), {"actions"})
@@ -365,15 +380,16 @@ class NativeJsonFormatTests(unittest.TestCase):
         ):
             with self.subTest(url=url, transport=transport, fmt=fmt):
                 original = {"tools": ["all"], **({"response_format": fmt} if fmt is not None else {})}
-                provider = self.provider(url, original)
-                self.assertEqual(provider._request_kwargs(SimpleNamespace(tool_transport=transport)), original)
+                self.assertEqual(self.call(original, SimpleNamespace(tool_transport=transport), url=url), original)
 
-    def test_install_is_idempotent_and_detects_replaced_wrapper(self):
-        class Provider:
-            def _request_kwargs(self, request):
-                return {}
-        first = extension.install_native_json_format(Provider)
-        self.assertIs(extension.install_native_json_format(Provider), first)
-        Provider._request_kwargs = lambda self, request: {}
-        with self.assertRaises(RuntimeError):
-            extension.install_native_json_format(Provider)
+    def test_provider_request_kwargs_applies_the_policy_natively(self):
+        source = (_SNAPSHOT / "src/l3_agent/llm/providers/openai_compatible.py").read_text(encoding="utf-8")
+        self.assertIn("envelope_policy.apply_envelope_policy(kwargs, request, provider=self)", source)
+        self.assertLess(
+            source.index("envelope_policy.apply_envelope_policy"),
+            source.index("async def complete("),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

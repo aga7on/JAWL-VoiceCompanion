@@ -1,4 +1,4 @@
-"""Make local JSON-envelope requests carry a nonempty object schema.
+"""Local JSON-envelope wire policy for the native JAWL provider.
 
 The pinned provider's json_object format maps to an empty schema in the local
 llama.cpp server. Some chat-template parsers treat that as no response format.
@@ -6,13 +6,15 @@ The JSON-envelope transport uses an object grammar instead of also offering
 the same envelope as an SDK function call. The native parser, discovery and
 all goal/action fields stay intact; argument validation stays in JAWL.
 Remote/native-tool requests and explicit format choices retain their behavior.
+
+``apply_envelope_policy`` is invoked natively by
+``OpenAICompatibleProvider._request_kwargs``; no product extension layer
+installs or wraps anything.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from copy import deepcopy
 from datetime import datetime, timezone
-import importlib
 import json
 import os
 from pathlib import Path
@@ -21,8 +23,8 @@ import sys
 from typing import Any
 from urllib.parse import urlsplit
 
-_INSTALL_ATTR = "__jawl_owned_json_format_installation__"
-ROOT = Path(__file__).resolve().parents[2]
+from src.l3_agent import companion_gateway
+
 _DIAGNOSTIC_NAMES = (
     "BrowserNavigation.navigate", "BrowserExtraction.extract_text",
     "BrowserInteraction.fill_text", "BrowserInteraction.click", "SkillCatalog.search_skills",
@@ -30,6 +32,16 @@ _DIAGNOSTIC_NAMES = (
     "SQLStructuredMemory.list_memories", "HostTerminalMessages.send_message_to_terminal",
     "HostOSWriter.write_file", "HostOSReader.read_file",
 )
+
+
+def _default_root() -> Path:
+    here = Path(__file__).resolve()
+    # runtime/jawl-sources/<snapshot>/src/l3_agent/llm/envelope_policy.py
+    # -> the repository root is six levels up in the owned layout.
+    return here.parents[6] if len(here.parents) > 6 else here.parents[-1]
+
+
+ROOT = _default_root()
 
 # Fast lane: a short casual turn needs the persona and the delivery contract,
 # not the full skills/browser/hostos catalogue. Capping the system prompt at
@@ -74,9 +86,8 @@ def _fast_lane_messages(messages: list[Any]) -> list[Any] | None:
     """Return messages with a slim system prompt and user context, or None."""
     if os.environ.get("JAWL_FAST_CONVERSATION") != "1":
         return None
-    delivery = sys.modules.get("_owned_jawl_delivery")
-    getter = getattr(delivery, "active_companion_message", None)
-    utterance = getter() if callable(getter) else ""
+    state = companion_gateway.current_companion_turn_state()
+    utterance = state.message if state is not None else ""
     if not utterance:
         utterance = _last_user_text(messages)
     turn_context = sys.modules.get("src.l3_agent.context.companion")
@@ -361,28 +372,8 @@ def _companion_action_items_schema(action_item: dict[str, Any], tool_names: list
     return {"oneOf": [terminal, other]}
 
 
-@dataclass(frozen=True)
-class NativeJsonFormatInstallation:
-    provider_class: type
-    original_kwargs: Any
-    wrapped_kwargs: Any
-
-
-def install_native_json_format(provider_class: type | None = None) -> NativeJsonFormatInstallation:
-    if provider_class is None:
-        provider_class = importlib.import_module(
-            "src.l3_agent.llm.providers.openai_compatible"
-        ).OpenAICompatibleProvider
-    existing = vars(provider_class).get(_INSTALL_ATTR)
-    if existing is not None:
-        if (isinstance(existing, NativeJsonFormatInstallation)
-                and provider_class._request_kwargs is existing.wrapped_kwargs):
-            return existing
-        raise RuntimeError("native JSON format is already differently installed")
-    original = provider_class._request_kwargs
-
-    def wrapped(provider, request):
-        kwargs = original(provider, request)
+def apply_envelope_policy(kwargs: dict[str, Any], request: Any, *, provider: Any) -> dict[str, Any]:
+        """Apply the local JSON-envelope wire policy to assembled request kwargs."""
         # Read the provider's effective client URL, not an environment guess.
         client = getattr(provider, "client", None)
         base_url = getattr(client, "base_url", "")
@@ -453,9 +444,8 @@ def install_native_json_format(provider_class: type | None = None) -> NativeJson
             # with private reasoning, truncating JSON before any action.
             # Chat and startup are bounded; active Goals and ordinary
             # autonomous cycles retain their budget.
-            guard = sys.modules.get("_owned_jawl_delivery")
-            ordinary = getattr(guard, "native_companion_chat_active", None)
-            companion_turn = callable(ordinary) and ordinary()
+            state = companion_gateway.current_companion_turn_state()
+            companion_turn = state is not None and not state.goal_active()
             # Startup is an uncorrelated ReAct cycle, so the companion-chat
             # flag is false there. The local 27B otherwise fills the whole
             # 2048-token completion with a single internal string, truncating
@@ -759,8 +749,3 @@ def install_native_json_format(provider_class: type | None = None) -> NativeJson
                     kwargs["messages"] = [{"role": "system", "content": reminder}] + goal_messages
         record_owned_context_summary(kwargs)
         return kwargs
-
-    installation = NativeJsonFormatInstallation(provider_class, original, wrapped)
-    provider_class._request_kwargs = wrapped
-    setattr(provider_class, _INSTALL_ATTR, installation)
-    return installation

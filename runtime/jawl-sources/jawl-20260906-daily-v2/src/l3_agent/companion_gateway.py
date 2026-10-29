@@ -10,6 +10,7 @@ from uuid import uuid4
 
 
 _TURN_ID: ContextVar[str] = ContextVar("jawl_companion_turn_id", default="")
+_TURN_STATE: ContextVar[Any] = ContextVar("jawl_companion_turn_state", default=None)
 _SPEECH_SINK: ContextVar["SpeechDeltaSink | None"] = ContextVar(
     "jawl_companion_speech_sink", default=None
 )
@@ -88,6 +89,42 @@ def reset_companion_turn_id(token: Token[str]) -> None:
 
 def current_companion_turn_id() -> str:
     return _TURN_ID.get()
+
+
+class CompanionTurnState:
+    """Per-turn companion chat state bound around a correlated ReAct run.
+
+    Carries the raw user message of the turn (for the fast-conversation lane)
+    and a probe for durable Goal activity. The state contains no model context
+    and is never published; it only guides wire-envelope decisions.
+    """
+
+    __slots__ = ("message", "_goal_active")
+
+    def __init__(self, message: Any, goal_active: Any) -> None:
+        self.message = str(message or "")[:4000]
+        self._goal_active = goal_active
+
+    def goal_active(self) -> bool:
+        probe = self._goal_active
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe())
+        except Exception:
+            return False
+
+
+def bind_companion_turn_state(state: CompanionTurnState) -> Token:
+    return _TURN_STATE.set(state)
+
+
+def reset_companion_turn_state(token: Token) -> None:
+    _TURN_STATE.reset(token)
+
+
+def current_companion_turn_state() -> "CompanionTurnState | None":
+    return _TURN_STATE.get()
 
 
 def _bounded_text(
