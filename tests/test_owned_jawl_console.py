@@ -81,7 +81,7 @@ class OwnedConsoleEntryTests(unittest.TestCase):
     def test_brain_bootstrap_probe_exits_before_native_main_import(self):
         source = (ROOT / "scripts/run_owned_jawl_brain.py").read_text(encoding="utf-8")
         self.assertIn('JAWL_BRAIN_BOOTSTRAP_ONLY") == "1"', source)
-        self.assertLess(source.index("install_native_jawl_turn_context()"),
+        self.assertLess(source.index("write_startup_receipt("),
                         source.index("Owned brain bootstrap probe complete."))
         self.assertLess(source.index("Owned brain bootstrap probe complete."),
                         source.index("from src import main as jawl_main"))
@@ -96,10 +96,9 @@ class OwnedConsoleEntryTests(unittest.TestCase):
         self.assertEqual(Path(extension.__file__), ROOT / "src/jawl_voicecompanion/native_jawl_delivery.py")
         self.assertTrue(callable(extension.install_native_delivery_guard))
 
-    def test_turn_context_extension_loads_without_importing_native_runtime(self):
-        extension = entry.load_turn_context_extension()
-        self.assertEqual(Path(extension.__file__), ROOT / "src/jawl_voicecompanion/native_jawl_turn_context.py")
-        self.assertTrue(callable(extension.install_native_jawl_turn_context))
+    def test_turn_context_extension_is_retired_into_the_kernel(self):
+        with self.assertRaisesRegex(RuntimeError, "kernel"):
+            entry.load_turn_context_extension()
 
     def test_main_checks_isolation_and_snapshot_before_native_import(self):
         actions = []
@@ -109,7 +108,6 @@ class OwnedConsoleEntryTests(unittest.TestCase):
         server.main = lambda: self.assertIs(server.make_app("fixture"), app)
         extension = SimpleNamespace(install_native_admission=lambda a, b: actions.append(("extension", a, b)))
         delivery = SimpleNamespace(install_native_delivery_guard=lambda: actions.append(("delivery",)))
-        turn_context = SimpleNamespace(install_native_jawl_turn_context=lambda: actions.append(("turn-context",)))
         fake_manager_cls = type("FakeInstanceManager", (), {"supervisor_status": lambda self: {"running": False, "pid": None}})
         modules = {"verify_jawl_snapshot": SimpleNamespace(verify=lambda source: actions.append(("verify", source))),
                    "src.web": SimpleNamespace(server=server, agent=SimpleNamespace(ROOT_DIR=ROOT)),
@@ -118,7 +116,6 @@ class OwnedConsoleEntryTests(unittest.TestCase):
         with patch.object(entry, "check_isolation", side_effect=lambda: actions.append(("isolation",))), \
                 patch.object(entry, "load_extension", return_value=extension), patch.dict(sys.modules, modules), \
                 patch.object(entry, "load_delivery_extension", return_value=delivery), \
-                patch.object(entry, "load_turn_context_extension", return_value=turn_context), \
                 patch.dict(os.environ), patch.object(sys, "path", list(sys.path)), patch.object(sys, "dont_write_bytecode", False):
             self.assertEqual(entry.main(), 0)
             self.assertTrue(sys.dont_write_bytecode)
@@ -126,9 +123,8 @@ class OwnedConsoleEntryTests(unittest.TestCase):
         self.assertEqual(actions[0], ("isolation",))
         self.assertEqual(actions[1], ("verify", entry.resolve_source()))
         self.assertEqual(actions[2], ("delivery",))
-        self.assertEqual(actions[3], ("turn-context",))
-        self.assertEqual(actions[4], ("native", "fixture"))
-        self.assertEqual(actions[5], ("extension", app, server.chatsrc.bridge))
+        self.assertEqual(actions[3], ("native", "fixture"))
+        self.assertEqual(actions[4], ("extension", app, server.chatsrc.bridge))
 
     def test_failed_snapshot_never_starts_native_console(self):
         server = SimpleNamespace(main=lambda: self.fail("native main called"))

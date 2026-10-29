@@ -235,7 +235,9 @@
     "src/l2_interfaces/web/search/skills/trafilatura_read.py": "c00e3820ffb69af6b10696e6d23a2824787b6f1260fb3d9be6a97e566d1e9db4",
     "src/l2_interfaces/web/search/state.py": "deae30c0ae58074be463e90218f04216f699abe8879a0cf783f0f7ac2aa9b614",
     "src/l3_agent/companion_gateway.py": "e42620a3c2986044702ab84bac50fe03801b80e16a8713f5774666607b378d80",
-    "src/l3_agent/context/builder.py": "838489ab68d3cd244524dc0b16be9a43c1957ee8365249a16d8b0aa50e4d5df8",
+    "src/l3_agent/context/builder.py": "a5a771b00f36fbabfe02ccda17a34dd27f176caba0f84baebbeba8ba8e2a202d",
+    "src/l3_agent/context/companion.py": "2b13fd6651e64fec51da62b545f81e6ee173e5df285b84e0017875a8546ed9d3",
+    "src/l3_agent/context/perception_packet.py": "240007bc41c3fae75d685301cedbb186043ed409f3879d3743fb383df8bf32da",
     "src/l3_agent/context/rag/entity_extractor.py": "4b31637e8e450d597152067e91e71a48bd965903a5bd475e32f33098453f1735",
     "src/l3_agent/context/rag/memories.py": "ec7e71f5a1e513b1d12b04cedd4bdcf66f3181eb9c703b1a7c27233533ab2065",
     "src/l3_agent/context/rag/orchestrator.py": "3c8297fbf238d499600a0c6deee66c46a4cef5dc60a2a8738510275182d3ba7e",
@@ -353,5 +355,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "c022041efa65fdffcf7966a5f3e19ccc5546d8e9481e2bce3d2e4cf06c529223"
+  "snapshot_sha256": "21c59a66933c10c3c303e88fbd2279edc9517fd2eb0ee9a38fcf174830836ff6"
 }

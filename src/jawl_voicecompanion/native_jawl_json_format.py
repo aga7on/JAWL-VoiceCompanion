@@ -79,7 +79,12 @@ def _fast_lane_messages(messages: list[Any]) -> list[Any] | None:
     utterance = getter() if callable(getter) else ""
     if not utterance:
         utterance = _last_user_text(messages)
-    turn_context = sys.modules.get("_owned_jawl_turn_context")
+    turn_context = sys.modules.get("src.l3_agent.context.companion")
+    if turn_context is None:
+        try:
+            from src.l3_agent.context import companion as turn_context
+        except Exception:
+            turn_context = None
     conversational = getattr(turn_context, "is_conversational_text", None)
     if not callable(conversational) or not conversational(utterance):
         return None

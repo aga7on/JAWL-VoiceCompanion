@@ -29,7 +29,12 @@ _PERCEIVED_TYPES: dict[type, type] = {}
 
 
 def _with_perception(parsed):
-    context = sys.modules.get("_owned_jawl_turn_context")
+    context = sys.modules.get("src.l3_agent.context.companion")
+    if context is None:
+        try:
+            from src.l3_agent.context import companion as context
+        except Exception:
+            context = None
     getter = getattr(context, "current_perception", None)
     perception = getter() if callable(getter) else ""
     if parsed is None or not perception or not hasattr(parsed, "model_dump"):

@@ -150,7 +150,7 @@ def main() -> int:
     state_clear = profile not in registry_payload().get("profiles", {}) and not (INSTANCES / profile).exists()
     hooks_verified = bool(brain_receipt and brain_receipt.get("instance_id") == profile
                           and brain_receipt.get("bootstrap_only") is False
-                          and brain_receipt.get("hooks") == {"delivery_guard": True, "turn_context": True, "policy_completion": True})
+                          and brain_receipt.get("hooks") == {"delivery_guard": True, "terminal_context_compaction": True, "goal_wakeup_backoff": True})
     passed = bool(exit_code == 0 and supervisor_ready and hooks_verified and ports_clear and markers_clear and state_clear and not cleanup_error)
     report = {
         "schema_version": 1,

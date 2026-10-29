@@ -94,7 +94,7 @@ def logged_command(log, command):
 def validate_brain_receipt(receipt, profile, snapshot, owner):
     import psutil
     hooks = receipt.get("hooks") if isinstance(receipt.get("hooks"), dict) else {}
-    required_hooks = ("delivery_guard", "turn_context", "policy_completion", "goal_wakeup_backoff")
+    required_hooks = ("delivery_guard", "terminal_context_compaction", "goal_wakeup_backoff")
     if (receipt.get("schema_version") != 1 or receipt.get("instance_id") != profile
             or receipt.get("bootstrap_only") is not False
             or receipt.get("local_json_format_installed") is not True

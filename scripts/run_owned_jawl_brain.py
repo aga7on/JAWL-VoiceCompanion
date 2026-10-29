@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_repair=None, action_repair=None, goal_backoff=None, terminal_context=None):
+def write_startup_receipt(snapshot, delivery, json_format=None, goal_repair=None, action_repair=None, goal_backoff=None, terminal_context=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -56,10 +56,6 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_re
         "delivery_guard": all(
             vars(cls).get("__jawl_native_delivery_guard_installation__") is delivery
             for cls in (delivery.react_loop_class, delivery.terminal_client_class, delivery.event_bus_class)
-        ),
-        "turn_context": (
-            vars(context.context_builder_class).get("__jawl_native_turn_context_installation__") is context
-            and context.context_builder_class.build is context.wrapped_build
         ),
     }
     if terminal_context is not None:
@@ -115,6 +111,9 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_re
             raise RuntimeError("owned Goal wakeup backoff hook is not installed")
     # Recheck immediately before writing: receipt destinations are owned paths.
     check_isolation(require_clean_import=False)
+    # Kernel imports stay after hook validation: importing the kernel touches
+    # JAWL_LOG_DIR through its logger, which must not mask a missing hook.
+    from src.l3_agent.context import companion as companion_context
     log_dir = Path(os.environ["JAWL_LOG_DIR"]).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
     receipt = {
@@ -135,8 +134,8 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_re
             "target_chars": getattr(terminal_context, "target_chars", 18000),
         },
         "context_capacity": {
-            "dynamic_chars": getattr(context, "capacity_chars", 0),
-            "goal_fixed_compaction_disabled": bool(getattr(context, "capacity_chars", 0)),
+            "dynamic_chars": companion_context.declared_capacity_chars(),
+            "goal_fixed_compaction_disabled": bool(companion_context.declared_capacity_chars()),
         },
         "bootstrap_only": os.environ.get("JAWL_BRAIN_BOOTSTRAP_ONLY") == "1",
     }
@@ -174,8 +173,6 @@ def main():
     goal_backoff_extension = load_extension("_owned_jawl_goal_wakeup_backoff", "native_goal_wakeup_backoff.py")
     goal_backoff = goal_backoff_extension.install_native_goal_wakeup_backoff()
 
-    turn_context_extension = load_extension("_owned_jawl_turn_context", "native_jawl_turn_context.py")
-    context = turn_context_extension.install_native_jawl_turn_context()
     terminal_context_extension = load_extension(
         "_owned_terminal_context_compaction", "native_terminal_context_compaction.py"
     )
@@ -189,7 +186,6 @@ def main():
     write_startup_receipt(
         snapshot,
         delivery,
-        context,
         json_format,
         goal_repair=goal_repair,
         action_repair=action_repair,

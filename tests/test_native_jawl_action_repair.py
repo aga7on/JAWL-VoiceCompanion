@@ -52,7 +52,7 @@ class ActionRepairTests(unittest.TestCase):
             @property
             def thoughts(self):
                 return "[Observation]: " + self.observation
-        with patch.dict(sys.modules, {"_owned_jawl_turn_context": NS(current_perception=lambda: "Video: two cars; audio: music")}):
+        with patch.dict(sys.modules, {"src.l3_agent.context.companion": NS(current_perception=lambda: "Video: two cars; audio: music")}):
             response = _with_perception(Response())
         self.assertEqual(response.perception, "Video: two cars; audio: music")
         self.assertIn("[Perception]", response.thoughts)

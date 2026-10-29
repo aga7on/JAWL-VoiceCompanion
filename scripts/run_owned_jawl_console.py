@@ -81,8 +81,8 @@ def load_delivery_extension():
     return load_owned_extension("_owned_jawl_delivery", "native_jawl_delivery.py")
 
 
-def load_turn_context_extension():
-    return load_owned_extension("_owned_jawl_turn_context", "native_jawl_turn_context.py")
+def load_turn_context_extension():  # retired with ADR-049 slice 3 (native turn context)
+    raise RuntimeError("native turn context is installed in the kernel")
 
 
 def load_owned_extension(name, filename):
@@ -228,7 +228,6 @@ def main() -> int:
         extension = load_extension()
         delivery_extension = load_delivery_extension()
         delivery_extension.install_native_delivery_guard()
-        load_turn_context_extension().install_native_jawl_turn_context()
         original_make_app = server.make_app
 
         def owned_app(token=None):
