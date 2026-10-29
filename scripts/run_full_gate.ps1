@@ -92,7 +92,7 @@ try {
     # no physical microphone or external profile: not hardware/live acceptance.
     Invoke-CheckedPython @('scripts/run_desktop_voice_e2e.py')
     Invoke-CheckedNode @('scripts/check_mic_gate.mjs')
-    Invoke-CheckedNode @('--test', 'desktop/app-settings-regression.test.js', 'desktop/tests/main-startup.test.js', 'desktop/tests/runtime-config.test.js', 'desktop/tests/app-voice-lifecycle.test.mjs', 'desktop/tests/avatar-scene-lifecycle.test.mjs', 'desktop/speech-stream.test.mjs', 'desktop/voice-input.test.mjs', 'desktop/voice-draft.test.mjs', 'desktop/avatar-motion.test.mjs', 'desktop/avatar-physics.test.mjs', 'tests/test_desktop_speech_cancel.mjs')
+    Invoke-CheckedNode @('--test', 'desktop/app-settings-regression.test.js', 'desktop/tests/main-startup.test.js', 'desktop/tests/runtime-config.test.js', 'desktop/tests/app-accessibility.test.mjs', 'desktop/tests/app-voice-lifecycle.test.mjs', 'desktop/tests/avatar-scene-lifecycle.test.mjs', 'desktop/speech-stream.test.mjs', 'desktop/voice-input.test.mjs', 'desktop/voice-draft.test.mjs', 'desktop/avatar-motion.test.mjs', 'desktop/avatar-physics.test.mjs', 'tests/test_desktop_speech_cancel.mjs')
     Invoke-CheckedPowerShellParse 'scripts/run_integrated_profile.ps1'
     Invoke-CheckedPowerShellParse 'scripts/run_daily_profile.ps1'
     Invoke-CheckedPowerShellParse 'scripts/run_local_bonsai_integrated.ps1'

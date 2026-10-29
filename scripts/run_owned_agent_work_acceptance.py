@@ -24,6 +24,26 @@ from jawl_voicecompanion.native_jawl_delivery import NATIVE_POLICY_DENIAL_REASON
 ROOT = Path(__file__).resolve().parents[1]
 TERMINAL_TOOL = "HostTerminalMessages.send_message_to_terminal"
 
+# r7 evidence: the model reread the file through read_file_range and reported
+# the correct SHA, while the acceptance expected only read_file. Both native
+# tools are read-only views of the same file and satisfy a fresh-read request.
+_TOOL_ALIASES = {
+    "HostOSReader.read_file": {
+        "HostOSReader.read_file",
+        "HostOSReader.read_file_range",
+    },
+}
+
+
+def _missing_required_tools(required_tools, completed_tools):
+    completed = set(completed_tools)
+    return {
+        required
+        for required in required_tools
+        if not (_TOOL_ALIASES.get(required, {required}) & completed)
+    }
+
+
 
 def read_journal(path):
     with path.open("rb") as stream:
@@ -45,7 +65,7 @@ def journal_proof(events, turn_id, required_tools):
     boundary = terminals[0]
     completed = [event for event in selected[:boundary]
                  if event.get("event") == "action_finished" and event.get("is_success") is True]
-    missing = set(required_tools) - {event.get("tool_name") for event in completed}
+    missing = _missing_required_tools(required_tools, (event.get("tool_name") for event in completed))
     if missing:
         raise ValueError("native required actions did not succeed before terminal delivery: " + ", ".join(sorted(missing)))
     return {"required_tools_completed_before_terminal": sorted(required_tools),
@@ -349,7 +369,8 @@ def run_agent_work(base, control_base, token, profile, run_root, validate_brain)
         with fixture:
             case = execute("file_write_read_sha",
                            f"Создай файл {marker} в своей песочнице с точным содержимым {content} без перевода строки. "
-                           "Затем заново прочитай файл и сообщи его точный SHA-256 после проверки результата.",
+                           "Сначала выполни только запись и дождись её результата. Затем отдельным шагом заново прочитай файл "
+                           "и дождись результата чтения. Только после этого сообщи точный SHA-256 из результата чтения; не угадывай его.",
                            {"HostOSWriter.write_file", "HostOSReader.read_file"}, digest)
             if not marker.is_file() or marker.read_bytes() != content.encode():
                 raise ValueError("native file postcondition differs")
@@ -359,8 +380,10 @@ def run_agent_work(base, control_base, token, profile, run_root, validate_brain)
                 raise ValueError("file task did not execute exactly one successful native write")
             case.update({"pass": True, "sha256": digest, "disk_match": True})
 
-            case = execute("browser_open_read", f"Открой в своём браузере локальную тестовую страницу {fixture.url} "
-                           "и сообщи точный видимый заголовок страницы после загрузки.", {"BrowserNavigation.navigate"}, title)
+            case = execute("browser_open_read", f"Открой в своём браузере локальную тестовую страницу {fixture.url} через BrowserNavigation.navigate. "
+                           "Сначала выполни только навигацию и дождись загрузки. Затем отдельным шагом вызови BrowserExtraction.extract_text. "
+                           "Не закрывай браузер до ответа и сообщи точный видимый заголовок страницы.",
+                           {"BrowserNavigation.navigate", "BrowserExtraction.extract_text"}, title)
             case["pass"] = True
             marker_file = home / "logs/acceptance-context-markers.json"
             marker_tmp = marker_file.with_suffix(".tmp")

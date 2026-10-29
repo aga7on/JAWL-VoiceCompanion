@@ -40,7 +40,9 @@ def queue_counters(status):
 def project_cycle(item):
     """Keep observable outcomes; native thought/Goal payloads stay native."""
     result = {key: item[key] for key in ("cycle", "goal_id", "status", "duration_seconds", "journal",
-              "postcondition", "cleanup", "unexpected_tools", "forbidden_goal_actions") if key in item}
+              "postcondition", "cleanup", "unexpected_tools", "forbidden_goal_actions",
+              "goal_last_cycle_status", "goal_continuation_count", "goal_pending_work",
+              "no_progress_guard_triggered") if key in item}
     if item.get("failure"):
         result["failure"] = item["failure"][:400]
     ledger = item.get("terminal_ledger", {})

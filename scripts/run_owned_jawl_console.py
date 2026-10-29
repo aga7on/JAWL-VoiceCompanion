@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = (ROOT / "runtime/jawl-sources").resolve()
@@ -93,6 +94,105 @@ def load_owned_extension(name, filename):
     return module
 
 
+def install_companion_console_entry(app, token):
+    """Send a plain browser entry through Companion's session bootstrap."""
+    from aiohttp import web
+    raw = os.environ.get("JAWL_COMPANION_UI_URL", "")
+    parsed = urlsplit(raw)
+    if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or parsed.path not in {"", "/"}):
+        return
+
+    @web.middleware
+    async def entry(request, handler):
+        given = request.headers.get("X-Console-Token") or request.query.get("token")
+        if request.method == "GET" and request.path == "/" and token and given != token:
+            raise web.HTTPFound(raw.rstrip("/") + "/app?openConsole=1")
+        return await handler(request)
+
+    app.middlewares.append(entry)
+
+
+def _repair_model_json(raw: str) -> str:
+    """Repair the local model's escaped key quote and /dev/null tail."""
+    text = raw.replace("**/dev/null**", "")
+    return re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)\\*"(\s*:)', r'"\1"\2', text)
+
+
+def _escape_json_controls(raw: str) -> tuple[str, bool]:
+    """Escape literal control characters inside JSON strings."""
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    changed = False
+    for char in raw:
+        if in_string:
+            if escaped:
+                out.append(char)
+                escaped = False
+            elif char == "\\":
+                out.append(char)
+                escaped = True
+            elif char == '"':
+                out.append(char)
+                in_string = False
+            elif char == "\n":
+                out.append("\\n")
+                changed = True
+            elif char == "\r":
+                out.append("\\r")
+                changed = True
+            elif char == "\t":
+                out.append("\\t")
+                changed = True
+            elif ord(char) < 0x20:
+                out.append(f"\\u{ord(char):04x}")
+                changed = True
+            else:
+                out.append(char)
+        else:
+            if char == '"':
+                in_string = True
+            out.append(char)
+    return "".join(out), changed
+
+
+def install_json_repair() -> None:
+    """Repair raw control characters before the pinned ReAct JSON parser."""
+    from src.l3_agent.skills import schema as skills_schema
+    from src.l3_agent.react import loop as react_loop
+
+    original = skills_schema.parse_llm_json
+
+    def repaired(raw_answer, _depth=0):
+        if not isinstance(raw_answer, str):
+            return original(raw_answer, _depth)
+        cleaned, changed = _escape_json_controls(raw_answer)
+        cleaned = _repair_model_json(cleaned)
+        changed = changed or cleaned != raw_answer
+        if not changed:
+            return original(raw_answer, _depth)
+        parsed, error = original(cleaned, _depth)
+        if parsed is not None:
+            try:
+                log_dir = Path(os.environ.get("JAWL_LOG_DIR", str(ROOT / "runtime/instances/daily/logs")))
+                log_dir.mkdir(parents=True, exist_ok=True)
+                with (log_dir / "json-repair.log").open("a", encoding="utf-8") as stream:
+                    stream.write(f"{len(raw_answer)} bytes; repaired=true; parsed=true\n")
+            except Exception:
+                pass
+            return parsed, error
+        return original(raw_answer, _depth)
+
+    skills_schema.parse_llm_json = repaired
+    react_loop.parse_llm_json = repaired
+    for module_name in ("src.l3_agent.swarm.loop", "src.l3_agent.subconscious.runner"):
+        module = sys.modules.get(module_name)
+        if module is not None and hasattr(module, "parse_llm_json"):
+            module.parse_llm_json = repaired
+
+
 def main() -> int:
     check_isolation()
     sys.dont_write_bytecode = True
@@ -116,6 +216,7 @@ def main() -> int:
         from src.web import server
         from src.web import agent
         from src.instances.manager import InstanceManager
+        install_json_repair()
         owned_brain_script = (ROOT / "scripts" / "run_owned_jawl_brain.py").resolve()
         agent.MAIN_SCRIPT = owned_brain_script
         load_owned_extension("_owned_supervisor_identity", "native_supervisor_identity.py").install_native_supervisor_identity(InstanceManager)
@@ -132,6 +233,7 @@ def main() -> int:
 
         def owned_app(token=None):
             app = original_make_app(token)
+            install_companion_console_entry(app, token)
             extension.install_native_admission(app, server.chatsrc.bridge)
             return app
 

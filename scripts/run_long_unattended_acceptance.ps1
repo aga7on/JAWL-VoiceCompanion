@@ -37,6 +37,9 @@ $runDir = Join-Path $repo (Join-Path 'runtime\long-soak' $ProfileName)
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $profileStdout = Join-Path $runDir 'integrated-profile.stdout.log'
 $profileStderr = Join-Path $runDir 'integrated-profile.stderr.log'
+$resourceTelemetryPath = Join-Path $runDir 'process-tree.jsonl'
+$resourceTelemetryStopPath = "$resourceTelemetryPath.stop"
+$resourceTelemetryReadyPath = "$resourceTelemetryPath.ready"
 $soakStdout = Join-Path $runDir 'soak.stdout.log'
 $soakStderr = Join-Path $runDir 'soak.stderr.log'
 $summaryPath = Join-Path $runDir 'orchestrator-summary.json'
@@ -116,7 +119,9 @@ try {
         '-JawlModelOverride', $Model,
         '-JawlTemperatureOverride', $JawlTemperatureOverride,
         '-JawlChatTimeoutSeconds', [string]$GoalTimeoutSeconds,
-        '-JawlRequestTimeoutSeconds', [string]$GoalTimeoutSeconds
+        '-JawlRequestTimeoutSeconds', [string]$GoalTimeoutSeconds,
+        '-ResourceTelemetryPath', $resourceTelemetryPath,
+        '-ResourceTelemetryIntervalSeconds', '0.25'
     )
     $profileProcess = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') `
         -ArgumentList $profileArgs -WorkingDirectory $repo -WindowStyle Hidden `
@@ -128,11 +133,11 @@ try {
         if ($profileProcess.HasExited) { throw "Integrated profile exited during startup; inspect $profileStderr" }
         try {
             $health = Invoke-RestMethod "http://127.0.0.1:$ControlPort/api/health" -TimeoutSec 3
-            if ($health.status -in @('ok', 'degraded')) { break }
+            if ($health.status -in @('ready', 'degraded', 'ok')) { break }
         } catch { }
         Start-Sleep -Seconds 1
     }
-    if (-not $health -or $health.status -notin @('ok', 'degraded')) {
+    if (-not $health -or $health.status -notin @('ready', 'degraded', 'ok')) {
         throw "Companion health did not become available within $StartupTimeoutSeconds seconds."
     }
 
@@ -169,7 +174,20 @@ catch {
 }
 finally {
     if ($profileProcess -and -not $profileProcess.HasExited) {
+        # If the exact-run monitor reached readiness, let it flush and exit
+        # before the existing profile-tree cleanup. Do not leave a stale stop
+        # request that a not-yet-started monitor could consume after this point.
+        if (Test-Path -LiteralPath $resourceTelemetryReadyPath -PathType Leaf) {
+            try { [IO.File]::WriteAllText($resourceTelemetryStopPath, "stop`n", [Text.UTF8Encoding]::new($false)) } catch { }
+            $monitorStopDeadline = [DateTime]::UtcNow.AddSeconds(8)
+            while ((Test-Path -LiteralPath $resourceTelemetryReadyPath -PathType Leaf) -and
+                [DateTime]::UtcNow -lt $monitorStopDeadline) {
+                Start-Sleep -Milliseconds 100
+            }
+        }
         Stop-OwnedProfileTree $profileProcess.Id
+        Remove-Item -LiteralPath $resourceTelemetryStopPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $resourceTelemetryReadyPath -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 2
     $openProfilePorts = @($JawlConsolePort, $ControlPort, $PresentationPort) |
@@ -195,6 +213,7 @@ finally {
         finished_at = [DateTime]::UtcNow.ToString('o')
         profile_stdout = $profileStdout
         profile_stderr = $profileStderr
+        resource_telemetry = $resourceTelemetryPath
         soak_stdout = $soakStdout
         soak_stderr = $soakStderr
     }

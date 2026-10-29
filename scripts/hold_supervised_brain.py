@@ -1,4 +1,4 @@
-"""Standalone supervised brain holder (ADR-041 stage 2).
+﻿"""Standalone supervised brain holder (ADR-041 stage 2).
 
 Raises one llama-server worker (the local brain) through RuntimeSupervisor and
 holds it alive until terminated. Used by the local-brain wrapper when the JAWL
@@ -77,6 +77,28 @@ def _is_valid_api_url(value: str, port: int) -> bool:
         return False
 
 
+def _worker_command(args: argparse.Namespace, *, mmproj: str = "") -> list[str]:
+    """Build the exact llama-server argv, including the enforced output cap."""
+    if args.transformers_server_script:
+        if not args.transformers_python:
+            raise ValueError("--transformers-python is required with --transformers-server-script")
+        return [
+            args.transformers_python, args.transformers_server_script,
+            "--model-dir", args.model, "--alias", args.alias,
+            "--host", "127.0.0.1", "--port", str(args.port),
+            "--device", args.device, "--max-new-tokens", str(args.max_tokens),
+        ]
+    vision_flags = ["--mmproj", mmproj] if mmproj else []
+    return [
+        args.llm_exe, "--model", args.model, "--alias", args.alias,
+        "--host", "127.0.0.1", "--port", str(args.port),
+        "--threads", str(args.threads), "--ctx-size", str(args.ctx_size),
+        "--n-predict", str(args.max_tokens), "--parallel", "1",
+        "--gpu-layers", str(args.gpu_layers), "--device", args.device,
+        *vision_flags, "--reasoning", args.reasoning, "--no-webui",
+    ]
+
+
 def main() -> int:
     manifest_parser = argparse.ArgumentParser(add_help=False)
     manifest_parser.add_argument("--manifest", type=Path, default=None)
@@ -88,6 +110,10 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=defaults["port"])
     parser.add_argument("--llm-exe", default=defaults["llm_exe"])
     parser.add_argument("--model", default=defaults["model"])
+    parser.add_argument("--transformers-server-script", default="",
+                        help="serve this model with a local Transformers OpenAI-compatible adapter")
+    parser.add_argument("--transformers-python", default="",
+                        help="Python executable containing the Transformers model dependencies")
     parser.add_argument("--alias", default=defaults["alias"])
     parser.add_argument("--threads", type=int, default=defaults["threads"])
     # 64k context (owner decision 2026-10-01): 16k was cramped for the JAWL
@@ -100,6 +126,9 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=defaults["max_tokens"])
     parser.add_argument("--gpu-layers", type=int, default=defaults["gpu_layers"])
     parser.add_argument("--device", default=defaults["device"])
+    parser.add_argument("--reasoning", choices=("on", "off", "auto"), default="off")
+    parser.add_argument("--mmproj", default="",
+                        help="optional multimodal projector GGUF; enables image input when the model ships a separate projector")
     parser.add_argument("--url", default=None, help="OpenAI-compatible base URL; defaults to the manifest URL")
     parser.add_argument("--seconds", type=float, default=0.0, help="0 = hold until terminated")
     parser.add_argument("--startup-timeout", type=float, default=240.0)
@@ -138,8 +167,22 @@ def main() -> int:
     args.model = str(_repo_path(args.model))
     if not Path(args.llm_exe).is_file():
         parser.error("brain server executable does not exist")
-    if not Path(args.model).is_file():
+    model_path = Path(args.model)
+    if args.transformers_server_script:
+        if not model_path.is_dir():
+            parser.error("Transformers brain checkpoint directory does not exist")
+    elif not model_path.is_file():
         parser.error("brain model file does not exist")
+    mmproj = str(_repo_path(args.mmproj)) if args.mmproj else ""
+    if mmproj and not Path(mmproj).is_file():
+        parser.error("multimodal projector file does not exist")
+    if args.transformers_server_script:
+        args.transformers_server_script = str(_repo_path(args.transformers_server_script))
+        args.transformers_python = str(_repo_path(args.transformers_python)) if args.transformers_python else ""
+        if not Path(args.transformers_server_script).is_file():
+            parser.error("Transformers brain adapter does not exist")
+        if not args.transformers_python or not Path(args.transformers_python).is_file():
+            parser.error("Transformers brain Python executable does not exist")
 
     def probe() -> bool:
         return model_ready(args.port, args.alias)
@@ -148,11 +191,7 @@ def main() -> int:
 
     spec = WorkerSpec(
         name="brain",
-        command=[args.llm_exe, "--model", args.model, "--alias", args.alias,
-                 "--host", "127.0.0.1", "--port", str(args.port),
-                 "--threads", str(args.threads), "--ctx-size", str(args.ctx_size),
-                 "--parallel", "1", "--gpu-layers", str(args.gpu_layers), "--device", args.device,
-                 "--reasoning", "off", "--no-webui"],
+        command=_worker_command(args, mmproj=mmproj),
         probe=probe,
         startup_timeout_seconds=args.startup_timeout,
         max_restarts=1,

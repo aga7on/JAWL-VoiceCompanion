@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, context, json_format=None, policy=None, goal_repair=None):
+def write_startup_receipt(snapshot, delivery, context, json_format=None, policy=None, goal_repair=None, action_repair=None, streaming=None, goal_backoff=None, terminal_context=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -62,6 +62,14 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, policy=
             and context.context_builder_class.build is context.wrapped_build
         ),
     }
+    if terminal_context is not None:
+        check["terminal_context_compaction"] = (
+            vars(terminal_context.client_class).get(
+                "__jawl_terminal_context_compaction_installation__"
+            ) is terminal_context
+            and terminal_context.client_class.get_context_block
+            is terminal_context.wrapped_get_context_block
+        )
     if not all(check.values()):
         raise RuntimeError("owned brain hooks were not installed on the actual native classes")
     if policy is not None:
@@ -77,12 +85,47 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, policy=
         or json_format.provider_class._request_kwargs is not json_format.wrapped_kwargs
     ):
         raise RuntimeError("owned JSON format hook was not installed on the actual provider")
-    if goal_repair is not None and (
-        goal_repair.loop_class._parse_response is not goal_repair.wrapped_parse
-        or goal_repair.loop_class._handle_protocol_error is not goal_repair.wrapped_error
-        or vars(goal_repair.loop_class).get("__jawl_owned_goal_completion_repair__") is not goal_repair
+    if goal_repair is not None:
+        parse_chain_valid = (
+            goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
+        )
+        if not parse_chain_valid and action_repair is not None:
+            # The action repair hook wraps the Goal repair parser: its saved
+            # original must still be the Goal repair wrapper, so the Goal
+            # completion path remains reachable in the chain.
+            parse_chain_valid = (
+                action_repair.original_parse is goal_repair.wrapped_parse
+                and goal_repair.loop_class._handle_protocol_error is goal_repair.wrapped_error
+            )
+        if not (
+            parse_chain_valid
+            or (
+                goal_repair.loop_class._handle_protocol_error is goal_repair.wrapped_error
+                and vars(goal_repair.loop_class).get("__jawl_owned_goal_completion_repair__") is goal_repair
+                and goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
+            )
+        ):
+            raise RuntimeError("native Goal completion repair hook is not installed")
+    if action_repair is not None and (
+        action_repair.loop_class._parse_response is not action_repair.wrapped_parse
+        or vars(action_repair.loop_class).get("__jawl_owned_action_repair_installation__") is not action_repair
     ):
-        raise RuntimeError("native Goal completion repair hook is not installed")
+        raise RuntimeError("native action repair hook is not installed")
+    if streaming is not None and (
+        streaming.provider_class.complete is not streaming.wrapped_complete
+        or streaming.provider_class._consume_stream is not streaming.wrapped_consume
+    ):
+        raise RuntimeError("native streaming hook is not installed")
+    if goal_backoff is not None:
+        check["goal_wakeup_backoff"] = (
+            goal_backoff.manager_class.should_run_heartbeat is goal_backoff.wrapped_should_run
+            and goal_backoff.manager_class.seconds_until_wakeup is goal_backoff.wrapped_seconds_until
+            and goal_backoff.manager_class.mark_event_pending is goal_backoff.wrapped_mark_event
+            and goal_backoff.manager_class.finish_cycle is goal_backoff.wrapped_finish_cycle
+            and vars(goal_backoff.manager_class).get("__jawl_owned_goal_wakeup_backoff__") is goal_backoff
+        )
+        if not check["goal_wakeup_backoff"]:
+            raise RuntimeError("owned Goal wakeup backoff hook is not installed")
     # Recheck immediately before writing: receipt destinations are owned paths.
     check_isolation(require_clean_import=False)
     log_dir = Path(os.environ["JAWL_LOG_DIR"]).resolve()
@@ -97,6 +140,18 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, policy=
         "entrypoint": str(Path(__file__).resolve()), "hooks": check,
         "local_json_format_installed": json_format is not None,
         "goal_protocol_repair_installed": goal_repair is not None,
+        "action_repair_installed": action_repair is not None,
+        "streaming_installed": streaming is not None,
+        "terminal_context_compaction": {
+            "installed": terminal_context is not None,
+            "keep_recent_messages": 12,
+            "compact_when_source_chars_exceed": getattr(terminal_context, "target_chars", 18000),
+            "target_chars": getattr(terminal_context, "target_chars", 18000),
+        },
+        "context_capacity": {
+            "dynamic_chars": getattr(context, "capacity_chars", 0),
+            "goal_fixed_compaction_disabled": bool(getattr(context, "capacity_chars", 0)),
+        },
         "bootstrap_only": os.environ.get("JAWL_BRAIN_BOOTSTRAP_ONLY") == "1",
     }
     temporary = None
@@ -132,11 +187,35 @@ def main():
     goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
     goal_repair = goal_repair_extension.install_native_goal_completion_repair()
 
+    goal_backoff_extension = load_extension("_owned_jawl_goal_wakeup_backoff", "native_goal_wakeup_backoff.py")
+    goal_backoff = goal_backoff_extension.install_native_goal_wakeup_backoff()
+
     turn_context_extension = load_extension("_owned_jawl_turn_context", "native_jawl_turn_context.py")
     context = turn_context_extension.install_native_jawl_turn_context()
+    terminal_context_extension = load_extension(
+        "_owned_terminal_context_compaction", "native_terminal_context_compaction.py"
+    )
+    terminal_context = terminal_context_extension.install_native_terminal_context_compaction()
+    goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
+    goal_repair = goal_repair_extension.install_native_goal_completion_repair()
+    action_repair_extension = load_extension("_owned_jawl_action_repair", "native_jawl_action_repair.py")
+    action_repair = action_repair_extension.install_native_action_repair()
     json_format_extension = load_extension("_owned_jawl_json_format", "native_jawl_json_format.py")
     json_format = json_format_extension.install_native_json_format()
-    write_startup_receipt(snapshot, delivery, context, json_format, policy, goal_repair=goal_repair)
+    streaming_extension = load_extension("_owned_jawl_streaming", "native_jawl_streaming.py")
+    streaming = streaming_extension.install_native_streaming()
+    write_startup_receipt(
+        snapshot,
+        delivery,
+        context,
+        json_format,
+        policy,
+        goal_repair=goal_repair,
+        action_repair=action_repair,
+        streaming=streaming,
+        goal_backoff=goal_backoff,
+        terminal_context=terminal_context,
+    )
 
     print("Owned brain entrypoint initialized.", flush=True)
 

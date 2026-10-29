@@ -10,6 +10,7 @@
     [ValidateRange(30,900)]
     [int]$JawlRequestTimeoutSeconds = 0,
     [switch]$NoBrowser,
+    [switch]$StartDesktopShell,
     [switch]$StartLocalAudio,
     [switch]$UseVoiceMem,
     [switch]$RunBrowserVoiceE2E,
@@ -35,13 +36,42 @@
 [string]$ProsodyUrl = 'http://127.0.0.1:8987/v1',
 [string]$SensoryFile = '',
 [switch]$EnableScreenWatch,
+[switch]$EnableScreenOcr,
+[switch]$Eg2Vision,
+[switch]$EnableAmbientAudio,
+[switch]$StartAmbientAudio,
+[string]$AmbientAudioDevice = '',
+[ValidateSet('eg2', 'qwen-omni')]
+[string]$AudioDescriber = 'eg2',
+[string]$AudioDescriberUrl = '',
+[string]$AudioDescriberModel = 'local-qwen3-omni',
 [switch]$EnableSensoryWorker,
 [string]$VisionUrl,
 [string]$VisionModel,
 [int]$ScreenWatchInterval = 30,
+[ValidateSet('eg2', 'qwen')]
+[string]$VisualDescriber = 'eg2',
+[string]$VisualDescriberUrl = '',
+[string]$VisualDescriberModel = 'qwen3.5-0.8b',
+[switch]$ManageVisualQwenServer,
+[int]$VisualDescriberPort = 8994,
+[ValidateRange(1,64)]
+[int]$VisualDescriberThreads = 4,
+[string]$VisualDescriberServerPath = 'runtime\gemma4-e4b-cpu\llama.cpp\llama-server.exe',
+[string]$VisualDescriberModelPath = 'runtime\vlm-cpu-bench\models\qwen3.5-0.8b\Qwen3.5-0.8B-Q4_K_M.gguf',
+[string]$VisualDescriberMmprojPath = 'runtime\vlm-cpu-bench\models\qwen3.5-0.8b\mmproj-F16.gguf',
+[string]$VisualDescriberRoi = '0,0,1,1',
+[int]$VisualDescriberDisplayIndex = 0,
+[double]$VisualDescriberActiveInterval = 1.0,
+[double]$VisualDescriberStaticInterval = 4.0,
+[double]$VisualDescriberPeriodic = 4.0,
+[double]$VisualDescriberMaxAge = 6.0,
 [int]$HostosLevel = -1,
 [int]$AmbientTriageSeconds = 0,
 [string]$JawlEventDir = '',
+    [string]$ResourceTelemetryPath = '',
+    [ValidateRange(0.05,60)]
+    [double]$ResourceTelemetryIntervalSeconds = 0.25,
 [switch]$UseOpenCodeRelay,
     [ValidateRange(0,3)]
     [int]$NativeAccessLevel = 0,
@@ -62,6 +92,7 @@
 )
 
 $ErrorActionPreference = 'Stop'
+if ($StartAmbientAudio -and -not $EnableAmbientAudio) { throw '-StartAmbientAudio requires -EnableAmbientAudio.' }
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $env:JAWL_TEMPERATURE_OVERRIDE = $JawlTemperatureOverride.Trim()
 $env:JAWL_NATIVE_BROWSER_ENABLED = $(if ($EnableNativeBrowser) { '1' } else { '0' })
@@ -72,6 +103,9 @@ if ($PSBoundParameters.ContainsKey('ManifestPath')) { $manifestArgs += @('--mani
 $manifestJson = & python -X utf8 (Join-Path $repo 'scripts\resolve_runtime_manifest.py') @manifestArgs
 if ($LASTEXITCODE -ne 0) { throw 'Runtime manifest resolution failed.' }
 $runtimeManifest = $manifestJson | ConvertFrom-Json
+if (-not $PSBoundParameters.ContainsKey('AmbientAudioDevice')) {
+    $AmbientAudioDevice = [string]$runtimeManifest.audio.loopback_output_device_name
+}
 
 function Resolve-LauncherRuntimeDefaults {
     param([object]$Manifest, [System.Collections.IDictionary]$Bound)
@@ -111,12 +145,14 @@ function Assert-EffectivePorts([object[]]$Ports, [int[]]$ReservedPorts) {
 }
 if ($RunSeconds -lt 0) { throw 'RunSeconds cannot be negative.' }
 $effectiveTtsPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } elseif ($TtsProvider -eq 'omnivoice') { $OmniVoicePort } else { $TtsPort }
-Assert-EffectivePorts @(
+$effectivePorts = @(
     @{ Name = 'JAWL console'; Port = $JawlConsolePort },
     @{ Name = 'Companion control'; Port = $ControlPort },
     @{ Name = 'Companion presentation'; Port = $PresentationPort },
     @{ Name = 'TTS'; Port = $effectiveTtsPort }
-) (@(8765) + @($runtimeManifest.ports.reserved))
+)
+if ($ManageVisualQwenServer) { $effectivePorts += @{ Name = 'Visual Qwen'; Port = $VisualDescriberPort } }
+Assert-EffectivePorts $effectivePorts (@(8765) + @($runtimeManifest.ports.reserved))
 $env:JAWL_MODEL_OVERRIDE = $JawlModelOverride.Trim()
 $sourceRoot = [IO.Path]::GetFullPath((Join-Path $repo 'runtime\jawl-sources'))
 $sourceCandidate = if ($JawlSourceRoot) { [IO.Path]::GetFullPath($JawlSourceRoot) } else { Join-Path $sourceRoot 'jawl-20260906-daily-v2' }
@@ -136,12 +172,17 @@ $profileLockPath = Join-Path $profileHome 'run.lock'
 $supervisorStopPath = Join-Path (Join-Path $repo 'runtime\instances') 'supervisor.stop'
 $supervisorPidPath = Join-Path (Join-Path $repo 'runtime\instances') 'supervisor.pid'
 $portFile = Join-Path $profileHome 'data\interfaces\host\terminal\terminal.port'
+$launcherStopRequestPath = Join-Path $profileHome 'data\interfaces\launcher-stop.request'
+$launcherStopStatusPath = Join-Path $profileHome 'data\interfaces\launcher-stop.status'
 function Resolve-RepoPath([string]$PathValue) {
     if ([IO.Path]::IsPathRooted($PathValue)) { return $PathValue }
     return Join-Path $repo $PathValue
 }
 $teraPy = Resolve-RepoPath $TeraPython
 $teraRelease = Resolve-RepoPath $TeraRelease
+$visualQwenExe = Resolve-RepoPath $VisualDescriberServerPath
+$visualQwenModel = Resolve-RepoPath $VisualDescriberModelPath
+$visualQwenMmproj = Resolve-RepoPath $VisualDescriberMmprojPath
 $voxcpmPy = 'G:\AI\VoxCPM\.venv\Scripts\python.exe'
 $voxcpmModelDir = 'G:\AI\VoxCPM\models\models--openbmb--VoxCPM2\snapshots\32279effe8c19989596f05d353d1447f51d9e915'
 $omniPy = 'G:\AI\OmniVoice\venv\Scripts\python.exe'
@@ -172,6 +213,9 @@ try {
     $profileLock.SetLength(0)
     $profileLock.Write($lockBytes, 0, $lockBytes.Length)
     $profileLock.Flush()
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $launcherStopRequestPath) | Out-Null
+    Remove-Item -LiteralPath $launcherStopRequestPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $launcherStopStatusPath -Force -ErrorAction SilentlyContinue
 & $browserPy (Join-Path $repo 'scripts\verify_jawl_snapshot.py') --source $source | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'Pinned JAWL source verification failed; refusing to start.' }
 $env:JAWL_PROFILE_NAME = $ProfileName
@@ -179,7 +223,12 @@ $prepareArgs = @()
 if ($SyncProfile) { $prepareArgs += '--sync' }
 & $py (Join-Path $repo 'scripts\prepare_daily_profile.py') @prepareArgs | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'Owned JAWL profile preparation failed; refusing to start.' }
-$nativeProfileArgs = @('--profile', $ProfileName, '--access-level', [string]$NativeAccessLevel)
+$nativeProfileArgs = @(
+    '--profile', $ProfileName,
+    '--access-level', [string]$NativeAccessLevel,
+    '--terminal-history-limit', '200',
+    '--terminal-context-limit', '200'
+)
 if ($EnableNativeBrowser) { $nativeProfileArgs += '--enable-browser' }
 if ($NativeContextWindowTokens -gt 0) { $nativeProfileArgs += @('--context-window-tokens', [string]$NativeContextWindowTokens) }
 if ($env:JAWL_MODEL_OVERRIDE) { $nativeProfileArgs += @('--model-override', $env:JAWL_MODEL_OVERRIDE) }
@@ -196,6 +245,24 @@ if ($JawlRequestTimeoutSeconds -gt 0) {
         ('${1}' + $JawlRequestTimeoutSeconds + '${2}')
     )
     [IO.File]::WriteAllText($settingsPath, $settingsText, [Text.UTF8Encoding]::new($false))
+}
+$dynamicContextBudgetChars = 0
+if (-not [string]::IsNullOrWhiteSpace($env:JAWL_DYNAMIC_CONTEXT_BUDGET_CHARS)) {
+    if (-not [int]::TryParse($env:JAWL_DYNAMIC_CONTEXT_BUDGET_CHARS, [ref]$dynamicContextBudgetChars) -or
+        $dynamicContextBudgetChars -lt 2000 -or $dynamicContextBudgetChars -gt 100000) {
+        throw 'JAWL_DYNAMIC_CONTEXT_BUDGET_CHARS must be an integer from 2000 to 100000.'
+    }
+    $settingsPath = Join-Path $profileHome 'config\settings.yaml'
+    $settingsText = [IO.File]::ReadAllText($settingsPath, [Text.UTF8Encoding]::new($false))
+    $updatedSettingsText = [regex]::Replace(
+        $settingsText,
+        '(?m)^(\s+max_dynamic_chars:\s*)\d+(\s*)$',
+        ('${1}' + $dynamicContextBudgetChars + '${2}'),
+        [Text.RegularExpressions.RegexOptions]::None
+    )
+    if ($updatedSettingsText -eq $settingsText) { throw 'Could not apply the requested dynamic context budget.' }
+    [IO.File]::WriteAllText($settingsPath, $updatedSettingsText, [Text.UTF8Encoding]::new($false))
+    Write-Host ("Applied per-run dynamic context budget: {0} chars." -f $dynamicContextBudgetChars)
 }
 & $py (Join-Path $repo 'scripts\preflight_jawl_runtime.py') | Out-Host
 if ($LASTEXITCODE -ne 0) { throw 'Owned JAWL profile preflight failed.' }
@@ -308,12 +375,30 @@ function Assert-PortAvailable([int]$Port, [string]$Name) {
 function Stop-OwnedProcessTree($process) {
     if (-not $process) { return }
     $rootId = $process.Id
+    try { $expectedStartTicks = $process.StartTime.ToUniversalTime().Ticks } catch { return }
+    $current = Get-Process -Id $rootId -ErrorAction SilentlyContinue
+    if (-not $current) { return }
+    try {
+        if ($current.StartTime.ToUniversalTime().Ticks -ne $expectedStartTicks) { return }
+    } catch { return }
     $children = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ParentProcessId -eq $rootId })
     foreach ($child in $children) {
-        Stop-OwnedProcessTree (Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue)
+        $childProcess = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+        if (-not $childProcess) { continue }
+        try {
+            $childCreatedAt = [Management.ManagementDateTimeConverter]::ToDateTime([string]$child.CreationDate)
+            if ([Math]::Abs(($childProcess.StartTime.ToUniversalTime() - $childCreatedAt.ToUniversalTime()).TotalSeconds) -gt 2) { continue }
+        } catch { continue }
+        Stop-OwnedProcessTree $childProcess
     }
     $current = Get-Process -Id $rootId -ErrorAction SilentlyContinue
-    if ($current) { Stop-Process -Id $rootId -Force -ErrorAction SilentlyContinue }
+    if ($current) {
+        try {
+            if ($current.StartTime.ToUniversalTime().Ticks -eq $expectedStartTicks) {
+                Stop-Process -Id $rootId -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
 }
 
 function Wait-JawlHeartbeatReady([string]$LogPath, [datetime]$StartedAt, [int]$TimeoutSeconds, $Process, [switch]$AllowBusy) {
@@ -336,6 +421,12 @@ function Wait-JawlHeartbeatReady([string]$LogPath, [datetime]$StartedAt, [int]$T
                 if ($cycleStarted -and $line -match '\[ReAct\] (Empty actions list received|Duplicate successful action batch)\..*Concluding cycle') {
                     return
                 }
+                if ($cycleStarted -and (Test-Path -LiteralPath $portFile) -and $line -match '\[Agent Action Result\].*\(Success\):') {
+                    # A working/resumed Goal need not become idle before the
+                    # UI can attach. A validated native action plus the live
+                    # terminal channel proves startup progress.
+                    return
+                }
             }
         }
         Start-Sleep -Milliseconds 500
@@ -346,6 +437,31 @@ function Wait-JawlHeartbeatReady([string]$LogPath, [datetime]$StartedAt, [int]$T
 Assert-PortAvailable $JawlConsolePort 'JAWL console'
 Assert-PortAvailable $ControlPort 'Companion control'
 Assert-PortAvailable $PresentationPort 'Companion presentation'
+if ($VisualDescriber -eq 'qwen') {
+    if ($ManageVisualQwenServer -and [string]::IsNullOrWhiteSpace($VisualDescriberUrl)) {
+        $VisualDescriberUrl = "http://127.0.0.1:$VisualDescriberPort/v1"
+    }
+    if ([string]::IsNullOrWhiteSpace($VisualDescriberUrl)) {
+        throw 'VisualDescriber=qwen requires a local server URL or -ManageVisualQwenServer.'
+    }
+    $visualUri = [Uri]$VisualDescriberUrl
+    if ($visualUri.Scheme -ne 'http' -or $visualUri.DnsSafeHost -notin @('127.0.0.1', 'localhost', '::1') -or
+        $visualUri.AbsolutePath.TrimEnd('/') -ne '/v1' -or $visualUri.Query -or $visualUri.Fragment -or $visualUri.UserInfo) {
+        throw 'Visual Qwen URL must be a loopback /v1 URL.'
+    }
+    if ($ManageVisualQwenServer) {
+        if ($VisualDescriberPort -lt 1 -or $VisualDescriberPort -gt 65535) { throw 'VisualDescriberPort is invalid.' }
+        if ($visualUri.Port -ne $VisualDescriberPort) {
+            throw 'Managed Visual Qwen URL port must match VisualDescriberPort.'
+        }
+        foreach ($path in @($visualQwenExe, $visualQwenModel, $visualQwenMmproj)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Visual Qwen resource is missing: $path" }
+        }
+        Assert-PortAvailable $VisualDescriberPort 'Visual Qwen'
+    }
+} elseif ($ManageVisualQwenServer) {
+    throw '-ManageVisualQwenServer requires -VisualDescriber qwen.'
+}
 if ($StartLocalAudio) {
     # Idempotent audio worker startup: if a healthy worker already owns the
     # port (leftover from a previous run or manual boot), reuse it instead of
@@ -362,9 +478,14 @@ if ($UseVoiceMem -and -not (Test-Path -LiteralPath $voicememPy -PathType Leaf)) 
 
 $jawl = $null
 $companion = $null
+$desktopShell = $null
+$visualQwenServer = $null
 $tera = $null
 $sensory = $null
 $supervisor = $null
+$resourceMonitor = $null
+$resourceTelemetryStopPath = $null
+$resourceReadyPath = $null
 try {
     $audioArgs = ''
     if ($StartLocalAudio) {
@@ -441,7 +562,16 @@ try {
             $audioArgs += " --streaming-asr --streaming-asr-exe `"$StreamingAsrExe`" --streaming-asr-model `"$StreamingAsrModel`" --streaming-asr-backend gigaam"
         }
     }
+    # Ambient loopback ASR can run without a TTS worker. Validate and pass its
+    # per-utterance GigaAM executable/model independently of StartLocalAudio.
+    if ($EnableStreamingAsr -and -not $StartLocalAudio) {
+        foreach ($path in @($StreamingAsrExe, $StreamingAsrModel)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Streaming ASR resource is missing: $path" }
+        }
+        $audioArgs += " --streaming-asr --streaming-asr-exe `"$StreamingAsrExe`" --streaming-asr-model `"$StreamingAsrModel`" --streaming-asr-backend gigaam"
+    }
 $jawlEnv = @{}
+    $jawlEnv['JAWL_COMPANION_UI_URL'] = "http://127.0.0.1:$ControlPort"
     foreach ($name in 'JAWL_INSTANCE_ID','JAWL_INSTANCE_HOME','JAWL_DATA_DIR','JAWL_CONFIG_DIR','JAWL_LOG_DIR','JAWL_CACHE_DIR','JAWL_PROMPT_DIR','JAWL_SANDBOX_DIR','JAWL_ENV_FILE','JAWL_INSTANCES_ROOT','PYTHONIOENCODING','LLM_API_URL','LLM_MAX_OUTPUT_TOKENS','CONSOLE_TOKEN') {
         # Optional provider tuning variables may be absent. Do not turn an
         # unset value into a launcher failure; required credentials are
@@ -527,10 +657,13 @@ $jawlEnv = @{}
         PYTHONPATH = Join-Path $repo 'src'
         PYTHONIOENCODING = 'utf-8'
         JAWL_WEB_TOKEN = $env:CONSOLE_TOKEN
+        JAWL_LAUNCHER_STOP_REQUEST = $launcherStopRequestPath
+        JAWL_LAUNCHER_STOP_STATUS = $launcherStopStatusPath
     }
     if ($env:JAWL_CONFIG_DIR) { $companionEnv.JAWL_CONFIG_DIR = $env:JAWL_CONFIG_DIR }
     if ($env:JAWL_ENV_FILE) { $companionEnv.JAWL_ENV_FILE = $env:JAWL_ENV_FILE }
     if ($env:JAWL_LOG_DIR) { $companionEnv.JAWL_LOG_DIR = $env:JAWL_LOG_DIR }
+    if ($env:JAWL_SCREEN_TARGET_TITLE) { $companionEnv.JAWL_SCREEN_TARGET_TITLE = $env:JAWL_SCREEN_TARGET_TITLE }
     $companionArgs = "-u -m jawl_voicecompanion --host 127.0.0.1 --port $ControlPort --presentation-host 127.0.0.1 --presentation-port $PresentationPort --jawl-port-file `"$portFile`" --jawl-web-url $consoleUrl --jawl-chat-timeout $JawlChatTimeoutSeconds --jawl-hostos-control$audioArgs"
     # Unified config hub: the companion edits the profile config in place with
     # revision semantics; both paths are optional so tests without a profile pass.
@@ -554,16 +687,88 @@ $jawlEnv = @{}
         $companionArgs += " --ambient-memory --sensory-file `"$SensoryFile`""
         if ($AmbientTriageSeconds -gt 0) { $companionArgs += " --ambient-triage-interval $AmbientTriageSeconds" }
     }
+    if ($EnableAmbientAudio) {
+        # Explicit opt-in for bounded Windows system-audio loopback. Capture
+        # stays stopped for browser-controlled profiles unless StartAmbientAudio
+        # is also requested. Ambient memory owns the bounded evidence store.
+        $companionArgs += " --ambient-audio --ambient-memory"
+        if (-not [string]::IsNullOrWhiteSpace($AmbientAudioDevice)) {
+            $companionArgs += " --ambient-audio-device `"$AmbientAudioDevice`""
+        }
+        if ($AudioDescriber -eq 'qwen-omni') {
+            if ([string]::IsNullOrWhiteSpace($AudioDescriberUrl)) { throw 'AudioDescriberUrl is required for qwen-omni.' }
+            $companionArgs += " --audio-describer qwen-omni --audio-describer-url `"$AudioDescriberUrl`" --audio-describer-model `"$AudioDescriberModel`""
+        }
+        if ($StartAmbientAudio) { $companionArgs += ' --ambient-audio-autostart' }
+    }
     if ($EnableScreenWatch) {
-        # Screen capture remains explicit opt-in. The launcher connects to the
-        # configured vision endpoint and never chooses a model or GPU worker.
+        # Screen capture remains explicit opt-in. By default the launcher
+        # connects to the configured external vision endpoint; -Eg2Vision
+        # keeps the same capture/watch loop on the local EmbeddingGemma 2
+        # describer without starting any VLM worker.
         if (-not $JawlEventDir) { $JawlEventDir = Join-Path $profileHome "sandbox\_system\instances\$ProfileName\.jawl_events" }
         New-Item -ItemType Directory -Force -Path $JawlEventDir | Out-Null
-        $companionArgs += " --hostos-live --screen-enabled --vision-url $VisionUrl --vision-model $VisionModel --screen-watch --screen-watch-interval $ScreenWatchInterval --jawl-event-dir `"$JawlEventDir`""
+        $screenArgs = " --hostos-live --screen-enabled"
+        if (-not $Eg2Vision) { $screenArgs += " --vision-url $VisionUrl --vision-model $VisionModel" }
+        if ($EnableScreenOcr) { $screenArgs += ' --screen-ocr' }
+        $screenArgs += " --screen-watch --screen-watch-interval $ScreenWatchInterval --jawl-event-dir `"$JawlEventDir`""
+        $companionArgs += $screenArgs
         if ($HostosLevel -ge 0) { $companionArgs += " --hostos-level $HostosLevel" }
         else { $companionArgs += " --hostos-level 1" }
     } elseif ($HostosLevel -ge 0) {
         $companionArgs += " --hostos-level $HostosLevel"
+    }
+    if ($VisualDescriber -eq 'qwen') {
+        $visualUrl = $VisualDescriberUrl
+        $companionArgs += " --visual-describer qwen --visual-describer-url `"$visualUrl`" --visual-describer-model `"$VisualDescriberModel`" --visual-describer-roi `"$VisualDescriberRoi`" --visual-describer-display-index $VisualDescriberDisplayIndex --visual-describer-active-interval $VisualDescriberActiveInterval --visual-describer-static-interval $VisualDescriberStaticInterval --visual-describer-periodic $VisualDescriberPeriodic --visual-describer-max-age $VisualDescriberMaxAge"
+    }
+    if ($VisualDescriber -eq 'qwen') {
+        $visualOrigin = $visualUri.GetLeftPart([UriPartial]::Authority)
+        $visualHealthUrl = "$visualOrigin/health"
+        $visualModelsUrl = "$visualOrigin/v1/models"
+        if ($ManageVisualQwenServer) {
+            # Recheck immediately before launch; the earlier preflight can be
+            # separated from this point by a lengthy TTS startup.
+            Assert-PortAvailable $VisualDescriberPort 'Visual Qwen launch'
+            $visualQwenArgs = '-m "{0}" --mmproj "{1}" --alias "{2}" --host 127.0.0.1 --port {3} -c 4096 -np 1 -ngl 0 --no-mmproj-offload --jinja --reasoning off -t {4} -tb {4} --cache-ram 0 --no-cache-prompt --no-cache-idle-slots --metrics --no-webui' -f `
+                $visualQwenModel, $visualQwenMmproj, $VisualDescriberModel, $VisualDescriberPort, $VisualDescriberThreads
+            $visualQwenServer = New-RuntimeProcess $visualQwenExe $visualQwenArgs $repo @{} 'visual-qwen.log'
+        }
+        $visualDeadline = [DateTime]::UtcNow.AddSeconds(240)
+        $visualReady = $false
+        while ([DateTime]::UtcNow -lt $visualDeadline) {
+            if ($visualQwenServer -and $visualQwenServer.HasExited) { throw "Visual Qwen exited during startup (exit $($visualQwenServer.ExitCode))." }
+            try {
+                $visualHealth = Invoke-RestMethod $visualHealthUrl -TimeoutSec 2
+                $visualServed = Invoke-RestMethod $visualModelsUrl -TimeoutSec 2
+                $visualReady = $visualHealth.status -eq 'ok' -and @($visualServed.data | Where-Object { $_.id -eq $VisualDescriberModel }).Count -gt 0
+            } catch { $visualReady = $false }
+            if ($visualReady) { break }
+            Start-Sleep -Seconds 1
+        }
+        if (-not $visualReady) { throw "Visual Qwen did not become healthy and serve model $VisualDescriberModel." }
+        if ($ManageVisualQwenServer) {
+            $probeImage = Join-Path $repo 'runtime\vlm-cpu-bench\video\frame-01.jpg'
+            if (-not (Test-Path -LiteralPath $probeImage -PathType Leaf)) { throw "Visual Qwen probe image is missing: $probeImage" }
+            $imageData = [Convert]::ToBase64String([IO.File]::ReadAllBytes($probeImage))
+            $probePayload = @{
+                model = $VisualDescriberModel
+                messages = @(@{ role = 'user'; content = @(
+                    @{ type = 'text'; text = 'Describe the visible scene briefly.' },
+                    @{ type = 'image_url'; image_url = @{ url = "data:image/jpeg;base64,$imageData" } }
+                ) })
+                max_tokens = 16
+                temperature = 0
+                stream = $false
+            } | ConvertTo-Json -Depth 10 -Compress
+            $probeResponse = Invoke-RestMethod "$visualOrigin/v1/chat/completions" -Method Post -ContentType 'application/json' -Body $probePayload -TimeoutSec 90
+            if ([string]::IsNullOrWhiteSpace([string]$probeResponse.choices[0].message.content)) {
+                throw 'Visual Qwen image probe returned an empty caption.'
+            }
+            Write-Host "Visual Qwen ready on CPU (port $VisualDescriberPort, threads $VisualDescriberThreads); image probe passed."
+        } else {
+            Write-Host "External Visual Qwen ready at $VisualDescriberUrl serving $VisualDescriberModel."
+        }
     }
     # Arguments contain local paths/options and loopback URLs; environment
     # values, including credentials, are represented only by configured state.
@@ -573,10 +778,43 @@ $jawlEnv = @{}
     $companionReady = $false
     for ($i = 0; $i -lt 30; $i++) {
         if ($companion.HasExited) { throw 'Companion exited during startup; inspect companion.log.' }
-        try { $health = Invoke-RestMethod "http://127.0.0.1:$ControlPort/api/health" -TimeoutSec 2; if ($health.status -in @('ok', 'degraded')) { $companionReady = $true; break } } catch { }
+        try { $health = Invoke-RestMethod "http://127.0.0.1:$ControlPort/api/health" -TimeoutSec 2; if ($health.status -in @('ready', 'degraded', 'ok')) { $companionReady = $true; break } } catch { }
         Start-Sleep -Seconds 1
     }
     if (-not $companionReady) { throw "Companion health did not become available on port $ControlPort." }
+    $companionRuntimeInstanceId = [string]$health.runtime_instance_id
+    if ([string]::IsNullOrWhiteSpace($companionRuntimeInstanceId)) {
+        throw 'Companion health did not include a runtime instance id.'
+    }
+    if ($StartDesktopShell) {
+        $desktopDir = Join-Path $repo 'desktop'
+        $electronExe = Join-Path $desktopDir 'node_modules\electron\dist\electron.exe'
+        if (-not (Test-Path -LiteralPath $electronExe -PathType Leaf)) {
+            throw "Desktop shell dependencies are missing: $electronExe. Run npm ci in desktop/ first."
+        }
+        $desktopStdout = Join-Path $logDir 'desktop.log'
+        $desktopStderr = Join-Path $logDir 'desktop-error.log'
+        # A Node tooling process can export ELECTRON_RUN_AS_NODE=1 into the
+        # launcher environment. Electron inherits it and executes main.js as
+        # plain Node, where Electron APIs such as ipcMain are unavailable.
+        # Clear it only for this child launch, then restore this process state.
+        $electronRunAsNode = [Environment]::GetEnvironmentVariable('ELECTRON_RUN_AS_NODE', 'Process')
+        try {
+            Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+            $desktopShell = Start-Process -FilePath $electronExe -ArgumentList @('"' + $desktopDir + '"') `
+                -WorkingDirectory $desktopDir -PassThru `
+                -RedirectStandardOutput $desktopStdout -RedirectStandardError $desktopStderr
+        } finally {
+            if ($null -ne $electronRunAsNode) {
+                [Environment]::SetEnvironmentVariable('ELECTRON_RUN_AS_NODE', $electronRunAsNode, 'Process')
+            }
+        }
+        Start-Sleep -Milliseconds 1500
+        if ($desktopShell.HasExited) {
+            throw "Desktop shell exited during startup (exit $($desktopShell.ExitCode)); inspect $desktopStderr."
+        }
+        Write-Host "Desktop shell started (pid $($desktopShell.Id))."
+    }
     $supervisorText = if ($EnableSupervisor) { " supervisor=$($supervisor.Id)" } else { '' }
     Write-Host "Integrated profile ready: control=$ControlPort presentation=$PresentationPort jawl_console=$JawlConsolePort$supervisorText"
     if ($RunBrowserVoiceE2E) {
@@ -606,23 +844,100 @@ $jawlEnv = @{}
         & $browserPy @voiceArgs
         if ($LASTEXITCODE -ne 0) { throw "Browser voice E2E failed with exit code $LASTEXITCODE." }
     }
+    if (-not [string]::IsNullOrWhiteSpace($ResourceTelemetryPath)) {
+        $resourceOutput = [IO.Path]::GetFullPath((Resolve-RepoPath $ResourceTelemetryPath))
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $resourceOutput) | Out-Null
+        $resourceTelemetryStopPath = "$resourceOutput.stop"
+        $resourceReadyPath = "$resourceOutput.ready"
+        Remove-Item -LiteralPath $resourceTelemetryStopPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $resourceReadyPath -Force -ErrorAction SilentlyContinue
+        $launcherProcess = Get-Process -Id $PID -ErrorAction Stop
+        $launcherCreatedAt = ($launcherProcess.StartTime.ToUniversalTime().Ticks - 621355968000000000) / 10000000.0
+        $monitorScript = Join-Path $PSScriptRoot 'run_process_tree_monitor.py'
+        $monitorArgs = '-B "{0}" --root-pid {1} --root-created-at {2} --root-label "integrated-profile:{3}" --creation-tolerance-seconds 0.005 --output "{4}" --ready-file "{5}" --stop-file "{6}" --interval-seconds {7}' -f `
+            $monitorScript, $PID, $launcherCreatedAt.ToString('R', [Globalization.CultureInfo]::InvariantCulture), $ProfileName, $resourceOutput, $resourceReadyPath, $resourceTelemetryStopPath, $ResourceTelemetryIntervalSeconds.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+        $resourceMonitor = New-RuntimeProcess $py $monitorArgs $repo @{} 'process-tree-monitor.log'
+        $monitorDeadline = [DateTime]::UtcNow.AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $resourceReadyPath -PathType Leaf) -and
+            [DateTime]::UtcNow -lt $monitorDeadline -and -not $resourceMonitor.HasExited) {
+            Start-Sleep -Milliseconds 100
+        }
+        if ($resourceMonitor.HasExited -or -not (Test-Path -LiteralPath $resourceReadyPath -PathType Leaf)) {
+            throw 'Process-tree resource telemetry did not start; inspect process-tree-monitor.log.'
+        }
+        Write-Host "Process-tree telemetry sampling exact launcher tree to $resourceOutput every $ResourceTelemetryIntervalSeconds s."
+    }
     Write-Host 'Press Ctrl+C to stop the complete profile.'
     $startedAt = Get-Date
-    while (-not $companion.HasExited -and -not $jawl.HasExited -and (-not $EnableSupervisor -or -not $supervisor.HasExited)) {
+    while (-not $companion.HasExited -and -not $jawl.HasExited -and
+        (-not $EnableSupervisor -or -not $supervisor.HasExited) -and
+        (-not $visualQwenServer -or -not $visualQwenServer.HasExited) -and
+        (-not $desktopShell -or -not $desktopShell.HasExited) -and
+        (-not $resourceMonitor -or -not $resourceMonitor.HasExited)) {
+        if (Test-Path -LiteralPath $launcherStopRequestPath -PathType Leaf) {
+            try {
+                $stopRequest = Get-Content -LiteralPath $launcherStopRequestPath -Raw | ConvertFrom-Json
+                if ($stopRequest.schema_version -eq 1 -and
+                    [string]$stopRequest.runtime_instance_id -ceq $companionRuntimeInstanceId) {
+                    $stopStatus = @{
+                        schema_version = 1
+                        runtime_instance_id = $companionRuntimeInstanceId
+                        request_id = [string]$stopRequest.request_id
+                        status = 'stopping'
+                        acknowledged_at = [DateTime]::UtcNow.ToString('o')
+                    }
+                    if ([string]::IsNullOrWhiteSpace($stopStatus.request_id)) { throw 'Managed stop request has no request id.' }
+                    $statusTempPath = "$launcherStopStatusPath.$([guid]::NewGuid().ToString('N')).tmp"
+                    [IO.File]::WriteAllText($statusTempPath, ($stopStatus | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+                    Move-Item -LiteralPath $statusTempPath -Destination $launcherStopStatusPath -Force
+                    Write-Host 'Managed profile stop requested by the companion UI.'
+                    break
+                }
+            } catch { }
+        }
         if ($RunSeconds -gt 0 -and ((Get-Date) - $startedAt).TotalSeconds -ge $RunSeconds) { break }
         Start-Sleep -Seconds 1
     }
     if ($companion.HasExited) { throw 'Companion process exited unexpectedly.' }
+    if ($visualQwenServer -and $visualQwenServer.HasExited) { throw 'Visual Qwen exited unexpectedly; the integrated profile is stopping.' }
+    if ($desktopShell -and $desktopShell.HasExited) { throw 'Desktop shell exited unexpectedly; the integrated profile is stopping.' }
+    if ($resourceMonitor -and $resourceMonitor.HasExited) { throw 'Process-tree resource telemetry exited unexpectedly; the integrated profile is stopping.' }
 } finally {
+    if ($resourceMonitor) {
+        if (-not $resourceMonitor.HasExited -and $resourceTelemetryStopPath) {
+            try { [IO.File]::WriteAllText($resourceTelemetryStopPath, "stop`n", [Text.UTF8Encoding]::new($false)) } catch { }
+            $resourceMonitor.WaitForExit(5000) | Out-Null
+            if (-not $resourceMonitor.HasExited) {
+                # The monitor is this launcher’s exact child process; retain the
+                # ownership/time check before any bounded forced cleanup.
+                Stop-OwnedProcessTree $resourceMonitor
+                $resourceMonitor.WaitForExit(5000) | Out-Null
+            }
+        }
+        Save-RuntimeLog $resourceMonitor
+        if ($resourceTelemetryStopPath) { Remove-Item -LiteralPath $resourceTelemetryStopPath -Force -ErrorAction SilentlyContinue }
+        if ($resourceReadyPath) { Remove-Item -LiteralPath $resourceReadyPath -Force -ErrorAction SilentlyContinue }
+    }
     try { Invoke-RestMethod "http://127.0.0.1:$JawlConsolePort/api/agent/stop" -Method Post -Headers $consoleHeaders -TimeoutSec 20 | Out-Null } catch { }
     if ($EnableSupervisor) {
         try { [IO.File]::WriteAllText($supervisorStopPath, "stop`n", [Text.UTF8Encoding]::new($false)) } catch { }
     }
-    foreach ($process in @($companion, $jawl, $tera, $sensory, $supervisor)) {
-        if ($process -and -not $process.HasExited) { $process.WaitForExit(25000) | Out-Null }
+    if ($desktopShell -and -not $desktopShell.HasExited) {
+        Stop-OwnedProcessTree $desktopShell
+        $desktopShell.WaitForExit(10000) | Out-Null
+    }
+    $ownedProcesses = @($companion, $visualQwenServer, $jawl, $tera, $sensory, $supervisor) | Where-Object { $_ }
+    $shutdownDeadline = [DateTime]::UtcNow.AddSeconds(25)
+    while (@($ownedProcesses | Where-Object { -not $_.HasExited }).Count -gt 0 -and
+        [DateTime]::UtcNow -lt $shutdownDeadline) {
+        Start-Sleep -Milliseconds 250
+    }
+    foreach ($process in $ownedProcesses) {
         if ($process -and -not $process.HasExited) { Stop-OwnedProcessTree $process; $process.WaitForExit(5000) | Out-Null }
         Save-RuntimeLog $process
     }
+    Remove-Item -LiteralPath $launcherStopRequestPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $launcherStopStatusPath -Force -ErrorAction SilentlyContinue
     if ($relayOwned -and $relayProc -and -not $relayProc.HasExited) {
         # The relay belongs to this launch only when this launch started it;
         # an externally started relay is deliberately left running.

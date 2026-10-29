@@ -356,19 +356,16 @@ def run_cycle(
                 f"this text: {marker}, then use HostOSReader.read_file to verify "
                 "the marker. Do not access any path outside the profile sandbox, "
                 "do not send messages, do not use terminal or other tools. "
-                "After the read succeeds, first apply the canonical Goal Protocol "
-                "v2 terminal ledger patch: phase=completed, "
+                "After the fresh read succeeds, do not call any more tools. "
+                "Return exactly one native Goal Protocol v2 terminal JSON "
+                "envelope with v=2, state=done, a concise evidence summary, "
+                "and this ledger in that same envelope: phase=completed, "
                 "completed_add=[\"file created and verified\"], "
-                "pending_steps=[], next_action=none, blockers=[]. Then emit "
-                "exactly one compact Goal Protocol v2 state=done envelope with "
-                "a concise evidence summary; the ledger patch is mandatory "
-                "evidence. This acceptance task deliberately tests the direct "
-                "Goal-v2 terminal envelope, not the legacy GoalSkills lifecycle: "
-                "do not call execute_skill as a native tool, do not call "
-                "GoalSkills.update_goal, and do not call set_current_goal. If a "
-                "generic prompt suggests update_goal, that instruction does not "
-                "apply to this explicitly scoped acceptance objective; emit the "
-                "direct state=done envelope after the verified read instead."
+                "pending_steps=[], next_action=none, blockers=[]. The ledger "
+                "is a field in the done response, not a separate action. "
+                "Do not call execute_skill, GoalSkills.update_goal, or "
+                "set_current_goal; do not use the legacy lifecycle tools. "
+                "The successful fresh read is the evidence for completion."
             ),
             "verification_policy": "none",
             "wake": True,
@@ -389,6 +386,17 @@ def run_cycle(
             poll_seconds=poll_seconds,
         )
         item["goal_terminal"] = terminal
+        item["goal_status"] = terminal.get("status")
+        item["goal_last_cycle_status"] = terminal.get("last_cycle_status")
+        count = terminal.get("continuation_count")
+        item["goal_continuation_count"] = count if isinstance(count, int) and not isinstance(count, bool) else None
+        item["goal_pending_work"] = terminal.get("pending_work") if isinstance(terminal.get("pending_work"), bool) else None
+        summary = terminal.get("last_summary")
+        item["no_progress_guard_triggered"] = bool(
+            terminal.get("status") == "blocked"
+            and isinstance(summary, str)
+            and "repeated identical successful native action batch" in summary.casefold()
+        )
         item["resource_after_goal"] = sample()
         item["terminal_ledger"] = terminal_ledger_evidence(terminal)
         item["forbidden_goal_actions"] = forbidden_goal_actions(terminal)

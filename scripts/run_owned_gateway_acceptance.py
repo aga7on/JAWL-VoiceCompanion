@@ -45,7 +45,6 @@ PROMPTS = (
     "Скажи короткое пожелание хорошего вечера.", "Спасибо за разговор. Ответь коротко по-русски.",
 )
 
-
 def json_request(base, path, token="", body=None, timeout=3):
     headers = {"X-Console-Token": token} if token else {}
     data = None if body is None else json.dumps(body).encode("utf-8")
@@ -94,11 +93,13 @@ def logged_command(log, command):
 
 def validate_brain_receipt(receipt, profile, snapshot, owner):
     import psutil
+    hooks = receipt.get("hooks") if isinstance(receipt.get("hooks"), dict) else {}
+    required_hooks = ("delivery_guard", "turn_context", "policy_completion", "goal_wakeup_backoff")
     if (receipt.get("schema_version") != 1 or receipt.get("instance_id") != profile
             or receipt.get("bootstrap_only") is not False
             or receipt.get("local_json_format_installed") is not True
             or receipt.get("goal_protocol_repair_installed") is not True
-            or receipt.get("hooks") != {"delivery_guard": True, "turn_context": True, "policy_completion": True}
+            or any(hooks.get(name) is not True for name in required_hooks)
             or Path(receipt.get("instance_home", "")).resolve() != (INSTANCES / profile).resolve()
             or Path(receipt.get("entrypoint", "")).resolve() != ROOT / "scripts/run_owned_jawl_brain.py"
             or receipt.get("snapshot_sha256") != snapshot["snapshot_sha256"]
@@ -114,7 +115,7 @@ def validate_brain_receipt(receipt, profile, snapshot, owner):
 def gateway(base, token, turns, prompts_file=None, *, probes=True, failure=False):
     args = gateway_parser().parse_args([
         "--url", base, "--turns", str(turns), "--timeout", "30", "--turn-timeout", "120",
-        "--prompt-template", "Ответь одной короткой фразой по-русски: связь работает.",
+        "--prompt-template", "Р С›РЎвЂљР Р†Р ВµРЎвЂљРЎРЉ Р С•Р Т‘Р Р…Р С•Р в„– Р С”Р С•РЎР‚Р С•РЎвЂљР С”Р С•Р в„– РЎвЂћРЎР‚Р В°Р В·Р С•Р в„– Р С—Р С•-РЎР‚РЎС“РЎРѓРЎРѓР С”Р С‘: РЎРѓР Р†РЎРЏР В·РЎРЉ РЎР‚Р В°Р В±Р С•РЎвЂљР В°Р ВµРЎвЂљ.",
         *(["--prompts-file", str(prompts_file)] if prompts_file else []),
         *([] if probes else ["--skip-cancel", "--skip-reconnect"]),
         *(["--allow-missing-tool-lifecycle"] if failure else []),
@@ -207,6 +208,9 @@ def run_mode(mode, run_root, env, snapshot, model, brain, *, suite="chat", soak_
     environment = dict(env, CONSOLE_TOKEN=token)
     if suite == "agent-work":
         environment["JAWL_ACCEPTANCE_CONTEXT_DIAGNOSTICS"] = "1"
+    if suite == "soak":
+        environment["JAWL_ACCEPTANCE_GOAL_PROTOCOL_DIAGNOSTICS"] = "1"
+        environment["JAWL_ACCEPTANCE_CONTEXT_DIAGNOSTICS"] = "1"
     command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "scripts/run_integrated_profile.ps1"), "-ProfileName", profile,
                "-JawlConsolePort", str(console), "-ControlPort", str(control),
@@ -226,7 +230,7 @@ def run_mode(mode, run_root, env, snapshot, model, brain, *, suite="chat", soak_
 
     def ready():
         try:
-            return json_request(control_base, "/api/health").get("status") in {"ok", "degraded"}
+            return json_request(control_base, "/api/health").get("status") in {"ready", "degraded", "ok"}
         except Exception:
             return False
 

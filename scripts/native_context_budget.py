@@ -3,9 +3,13 @@ import json
 from pathlib import Path
 
 BASE_WINDOW = 16384
+MIN_WINDOW = 12288
 BASE_BUDGET = {"skills_max_chars": 8000, "max_dynamic_chars": 12000,
                "recent_ticks_max_chars": 8000, "hypotheses_max_chars": 2500,
                "provider_max_chars": 5000}
+MIN_BUDGET = {"skills_max_chars": 2000, "max_dynamic_chars": 8000,
+              "recent_ticks_max_chars": 2000, "hypotheses_max_chars": 500,
+              "provider_max_chars": 1000}
 RECEIPT_NAME = ".native-context-budget.json"
 
 
@@ -14,9 +18,22 @@ def budget_for_window(tokens):
         raise ValueError("native context window must be an integer from0 to1048576")
     if tokens == 0:
         return {}
-    # Keep the established16k baseline; larger managed servers need not discard
-    # native discovery/results to satisfy the smallest supported local window.
-    # Scaling chars at most8x stays conservative relative to the declared tokens.
+    if tokens < MIN_WINDOW:
+        raise ValueError(f"managed native context budgeting requires at least {MIN_WINDOW} tokens")
+    # Scale down as well as up. A sub-16k server must leave room for native
+    # system/tool context and output instead of inheriting the full 16k budget.
+    # The floors match ContextBudgetConfig validation in the pinned JAWL source.
+    scale = min(8.0, tokens / BASE_WINDOW)
+    return {
+        key: max(MIN_BUDGET[key], int(value * scale))
+        for key, value in BASE_BUDGET.items()
+    }
+
+
+def _legacy_budget_for_window(tokens):
+    """Return the exact deterministic budget generated before down-scaling."""
+    if isinstance(tokens, bool) or not isinstance(tokens, int) or not 0 < tokens <= 1048576:
+        return {}
     scale = max(1, min(8, tokens // BASE_WINDOW))
     return {key: value * scale for key, value in BASE_BUDGET.items()}
 
@@ -34,9 +51,17 @@ def approved_profile_budget(profile_root):
         value = json.loads(raw)
         if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 1:
             return {}
-        expected = budget_for_window(value.get("context_window_tokens"))
-        if expected and value.get("budget") == expected:
+        window = value.get("context_window_tokens")
+        expected = budget_for_window(window)
+        recorded_budget = value.get("budget")
+        if expected and recorded_budget == expected:
             return expected
+        # Accept a receipt created by the previous deterministic algorithm so
+        # profile preparation can migrate it. Arbitrary hand-edited budgets
+        # still fail closed; configure_profile_native writes the new receipt.
+        legacy = _legacy_budget_for_window(window)
+        if legacy and recorded_budget == legacy:
+            return legacy
     except (ValueError, TypeError):
         pass
     return {}
