@@ -17,6 +17,7 @@ import shutil
 from typing import Union, Dict, Any
 
 from src.utils.logger import main_logger
+from src.utils.policy_denial import observe_native_policy_deny
 from src.utils.settings import HostOSConfig
 from src.l2_interfaces.host.os.state import HostOSState
 
@@ -346,7 +347,20 @@ class HostOSClient:
         return (self.framework_dir / path_str).resolve()
 
     def _check_security_policies(self, resolved_path: Path, is_write: bool) -> None:
-        """Strictly validates access rights. Raises PermissionError on violations."""
+        """Strictly validates access rights. Raises PermissionError on violations.
+
+        The denial is marked at this raise point so owned policy completion
+        observes it even when a skill swallows the exception.
+        """
+
+        try:
+            self._evaluate_security_policies(resolved_path, is_write)
+        except PermissionError:
+            observe_native_policy_deny()
+            raise
+
+    def _evaluate_security_policies(self, resolved_path: Path, is_write: bool) -> None:
+        """Native policy body behind the observable denial point."""
 
         # 1. API Keys protection
         if not self.config.env_access and ".env" in resolved_path.name.lower():

@@ -23934,6 +23934,97 @@
 +                projection += self._bounded(section, remaining)
 +            break
 +        return projection
+--- a/src/l3_agent/goals/policy_completion.py
++++ b/src/l3_agent/goals/policy_completion.py
+@@ -0,0 +1,88 @@
++"""End a correlated request after native HostOS authority denies an action.
++
++Observe the native security check, never reimplement its policy or interpret
++tool output text. Native journals still record the failed attempt. Remaining
++actions in the same batch cannot run after the denial. Durable goals and
++uncorrelated autonomous cycles retain native behavior.
++"""
++
++from __future__ import annotations
++
++from typing import Any, Set
++
++from src.l3_agent.companion_gateway import current_companion_turn_id
++from src.utils.event.registry import Events
++from src.utils.policy_denial import (
++    attempt_denied,
++    observe_native_policy_deny,
++    skill_attempt,
++)
++
++NATIVE_POLICY_DENIAL_REASON = (
++    "Native HostOS policy denied the action; the request was stopped."
++)
++STOPPED_MESSAGE = "Request stopped after native HostOS policy denial."
++
++# Per-request latch keyed by companion turn id: parallel turns never inherit
++# each other's denials, and uncorrelated autonomous cycles have no latch at
++# all (they retain native failure behavior and keep their next actions).
++_DENIED_REQUESTS: Set[str] = set()
++
++
++def native_policy_denied() -> bool:
++    """Whether the active correlated request already recorded a denial."""
++
++    turn_id = current_companion_turn_id()
++    return bool(turn_id) and turn_id in _DENIED_REQUESTS
++
++
++def record_native_policy_denial() -> bool:
++    """Record a native denial for the active correlated request.
++
++    Called only where native authority raises (via the attempt mark).
++    Returns whether the request must stop; uncorrelated autonomous cycles
++    retain native failure behavior.
++    """
++
++    turn_id = current_companion_turn_id()
++    if not turn_id:
++        return False
++    _DENIED_REQUESTS.add(turn_id)
++    return True
++
++
++def close_request(turn_id: str) -> None:
++    """Release the latch when the correlated request finishes."""
++
++    _DENIED_REQUESTS.discard(str(turn_id or "").strip())
++
++
++async def publish_request_stopped(event_bus: Any, turn_id: str) -> None:
++    """Emit the single safe terminal error for a denial-stopped request.
++
++    The reason is a fixed constant: native denial detail (paths, sentinels,
++    exception text) never reaches the correlated client.
++    """
++
++    await event_bus.publish(
++        Events.REACT_TICK_SAVED,
++        companion_turn_id=turn_id,
++        companion_gateway_type="turn.error",
++        companion_gateway_reason=NATIVE_POLICY_DENIAL_REASON,
++    )
++    flush = getattr(event_bus, "flush", None)
++    if flush is not None:
++        await flush(timeout=3.0)
++
++
++__all__ = [
++    "NATIVE_POLICY_DENIAL_REASON",
++    "STOPPED_MESSAGE",
++    "attempt_denied",
++    "close_request",
++    "native_policy_denied",
++    "observe_native_policy_deny",
++    "publish_request_stopped",
++    "record_native_policy_denial",
++    "skill_attempt",
++]
 --- a/src/l3_agent/goals/skills.py
 +++ b/src/l3_agent/goals/skills.py
 @@ -0,0 +1,90 @@
@@ -28665,6 +28756,53 @@
 +                raise ValueError("No active goal.")
 +            return manager.view(goal.goal_id)
 +        raise ValueError(f"Unsupported control action '{action}'.")
+--- a/src/utils/policy_denial.py
++++ b/src/utils/policy_denial.py
+@@ -0,0 +1,44 @@
++"""Attempt-scoped observation of native security-policy denials.
++
++L2 native authority marks the in-flight skill attempt at the exact point it
++raises ``PermissionError``, because a skill may swallow the exception before
++any higher layer observes it.  The mark itself carries no policy: it only
++records that native authority denied something during the current attempt.
++"""
++
++from __future__ import annotations
++
++from contextlib import contextmanager
++from contextvars import ContextVar
++from typing import Iterator, List, Optional
++
++_ATTEMPT: ContextVar[Optional[List[bool]]] = ContextVar(
++    "jawl_native_policy_attempt", default=None
++)
++
++
++def observe_native_policy_deny() -> None:
++    """Mark the current skill attempt as denied (call at the raise site)."""
++
++    attempt = _ATTEMPT.get()
++    if attempt is not None:
++        attempt[0] = True
++
++
++def attempt_denied() -> bool:
++    """Whether native authority denied anything during the current attempt."""
++
++    attempt = _ATTEMPT.get()
++    return bool(attempt and attempt[0])
++
++
++@contextmanager
++def skill_attempt() -> Iterator[None]:
++    """Attempt scope for one skill invocation."""
++
++    attempt = [False]
++    token = _ATTEMPT.set(attempt)
++    try:
++        yield
++    finally:
++        _ATTEMPT.reset(token)
 --- a/src/utils/tracing.py
 +++ b/src/utils/tracing.py
 @@ -0,0 +1,52 @@
@@ -30827,7 +30965,7 @@
  
 --- a/src/l2_interfaces/host/os/client.py
 +++ b/src/l2_interfaces/host/os/client.py
-@@ -8,6 +8,9 @@
+@@ -8,16 +8,21 @@
  
  import sys
  import json
@@ -30837,7 +30975,11 @@
  from enum import IntEnum
  from pathlib import Path
  import shutil
-@@ -18,6 +21,7 @@
+ from typing import Union, Dict, Any
+ 
+ from src.utils.logger import main_logger
++from src.utils.policy_denial import observe_native_policy_deny
+ from src.utils.settings import HostOSConfig
  from src.l2_interfaces.host.os.state import HostOSState
  
  from src.l2_interfaces.host.os.deploy_manager import HostOSDeployManager
@@ -30845,7 +30987,7 @@
  
  
  class HostOSAccessLevel(IntEnum):
-@@ -40,6 +44,11 @@
+@@ -40,6 +45,11 @@
          config: HostOSConfig,
          state: HostOSState,
          timezone: int,
@@ -30857,7 +30999,7 @@
      ) -> None:
          """
          Initializes the OS client and prepares system folders.
-@@ -62,18 +71,41 @@
+@@ -62,18 +72,41 @@
              )
              self.access_level = HostOSAccessLevel.SANDBOX
  
@@ -30901,7 +31043,7 @@
  
          main_logger.info(
              f"[Host OS] Client initialized (OS: {self.os_platform}, Access Level: {self.access_level})."
-@@ -82,11 +114,7 @@
+@@ -82,11 +115,7 @@
  
          # File metadata registry file
          self.metadata_file = (
@@ -30914,7 +31056,7 @@
              / "interfaces"
              / "host"
              / "os"
-@@ -98,11 +126,7 @@
+@@ -98,11 +127,7 @@
  
          # Daemon registry file
          self.daemons_file = (
@@ -30927,7 +31069,7 @@
              / "interfaces"
              / "host"
              / "os"
-@@ -116,8 +140,153 @@
+@@ -116,8 +141,153 @@
  
          # Deploy manager initialization
          self.deploy_manager = HostOSDeployManager(
@@ -31083,11 +31225,10 @@
  
      # =================================================================================
      # GATEKEEPER (Path resolution and security checks)
-@@ -163,6 +332,15 @@
-             path_str = path_str[len(fw_name) + 1 :]
+@@ -164,11 +334,33 @@
          elif path_str == fw_name:
              return self.framework_dir.resolve()
-+
+ 
 +        # ``sandbox/`` is a logical JAWL path, not a directory below the
 +        # immutable framework source.  Named Companion profiles provide their
 +        # own sandbox_dir, so resolve this prefix against that injected path.
@@ -31096,10 +31237,30 @@
 +        if path_str == "sandbox" or path_str.startswith("sandbox/"):
 +            relative = path_str.removeprefix("sandbox/")
 +            return (self.sandbox_dir / relative).resolve()
- 
++
          # Append the passed path directly to the framework root
          return (self.framework_dir / path_str).resolve()
-@@ -199,7 +377,10 @@
+ 
+     def _check_security_policies(self, resolved_path: Path, is_write: bool) -> None:
+-        """Strictly validates access rights. Raises PermissionError on violations."""
++        """Strictly validates access rights. Raises PermissionError on violations.
++
++        The denial is marked at this raise point so owned policy completion
++        observes it even when a skill swallows the exception.
++        """
++
++        try:
++            self._evaluate_security_policies(resolved_path, is_write)
++        except PermissionError:
++            observe_native_policy_deny()
++            raise
++
++    def _evaluate_security_policies(self, resolved_path: Path, is_write: bool) -> None:
++        """Native policy body behind the observable denial point."""
+ 
+         # 1. API Keys protection
+         if not self.config.env_access and ".env" in resolved_path.name.lower():
+@@ -199,7 +391,10 @@
          if self.access_level == HostOSAccessLevel.ROOT:
              pass
          elif self.access_level == HostOSAccessLevel.OPERATOR:
@@ -31111,7 +31272,7 @@
                  raise PermissionError(
                      "OPERATOR: Access (read and write) is permitted strictly within the JAWL directory."
                  )
-@@ -208,7 +389,10 @@
+@@ -208,7 +403,10 @@
                  raise PermissionError(
                      "OBSERVER: Writing is permitted strictly inside the sandbox/ folder."
                  )
@@ -31123,7 +31284,7 @@
                  raise PermissionError(
                      "OBSERVER: Reading is permitted strictly within JAWL limits."
                  )
-@@ -221,10 +405,8 @@
+@@ -221,10 +419,8 @@
          is_framework_code = (
              resolved_path.is_relative_to(self.framework_dir)
              and not resolved_path.is_relative_to(self.sandbox_dir)
@@ -37103,10 +37264,11 @@
  
  from src.l0_state.agent.state import AgentState, AgentStatus
  
-@@ -27,14 +31,119 @@
+@@ -27,14 +31,120 @@
  from src.l1_databases.vector.manager import VectorManager
  
  from src.l3_agent.llm.executor import LLMExecutor
++from src.l3_agent.goals import policy_completion
 +from src.l3_agent.llm.providers.contracts import normalize_tool_transport
  from src.l3_agent.prompt.builder import PromptBuilder
  from src.l3_agent.context.builder import ContextBuilder
@@ -37225,7 +37387,7 @@
  
  class ReactLoop:
      """
-@@ -50,11 +159,23 @@
+@@ -50,11 +160,23 @@
          agent_state: AgentState,
          sql_ticks: SQLTicks,
          vector_manager: VectorManager,
@@ -37250,7 +37412,7 @@
      ) -> None:
          """
          Initializes the ReAct loop.
-@@ -84,14 +205,112 @@
+@@ -84,14 +206,112 @@
          self.vector_manager = vector_manager
  
          self.tools = tools
@@ -37365,7 +37527,7 @@
  
      async def run(
          self, event_name: str, payload: Dict[str, Any], missed_events: List[Dict[str, Any]]
-@@ -105,21 +324,75 @@
+@@ -105,21 +325,75 @@
              missed_events: List of missed background events.
          """
  
@@ -37442,7 +37604,7 @@
                  self.agent_state.update_state(AgentStatus.THINKING)
  
                  # --------------------------------------------------------------
-@@ -146,11 +419,21 @@
+@@ -146,11 +420,21 @@
                          if tree_md:
                              self.agent_state.current_thoughts_tree = tree_md
  
@@ -37464,7 +37626,7 @@
  
                  # --------------------------------------------------------------
                  # LLM execution call
-@@ -162,11 +445,90 @@
+@@ -162,11 +446,90 @@
                      temperature=self.agent_state.temperature,
                      logger=agent_logger,
                      log_prefix="[LLM]",
@@ -37557,7 +37719,7 @@
                      break
  
                  # --------------------------------------------------------------
-@@ -175,59 +537,310 @@
+@@ -175,59 +538,318 @@
  
                  parsed_response, error_msg = self._parse_response(raw_answer)
                  if error_msg:
@@ -37843,6 +38005,13 @@
 +                    agent_logger.info(
 +                        "[ReAct] Skill requested early cycle termination."
 +                    )
++                    if policy_completion.native_policy_denied():
++                        # Owned policy completion: one safe terminal error for
++                        # a denial-stopped request. Native denial detail never
++                        # reaches the correlated client.
++                        await policy_completion.publish_request_stopped(
++                            self.event_bus, current_companion_turn_id()
++                        )
 +                    cycle_concluded = True
                      break
  
@@ -37881,6 +38050,7 @@
 +            await asyncio.shield(self._handle_cycle_cancelled())
 +            raise
          finally:
++            policy_completion.close_request(current_companion_turn_id())
 +            reset_companion_turn_id(companion_turn_token)
 +            self.active_companion_turn_id = ""
              self.agent_state.update_state(AgentStatus.IDLE)
@@ -37891,7 +38061,7 @@
  
      # -------------------------------------------------------------------------
      # Private Helpers
-@@ -248,10 +861,12 @@
+@@ -248,10 +870,12 @@
              List[Dict[str, Any]]: Messages list in OpenAI format.
          """
  
@@ -37906,7 +38076,7 @@
  
          messages = [
              {"role": "system", "content": prompt},
-@@ -260,7 +875,12 @@
+@@ -260,7 +884,12 @@
  
          messages = copy.deepcopy(messages)
  
@@ -37920,7 +38090,7 @@
  
          self.agent_state.last_input_tokens = self.executor.tracker.count_messages_tokens(
              messages
-@@ -286,10 +906,37 @@
+@@ -286,10 +915,37 @@
          """
  
          self.agent_state.update_state(AgentStatus.ACTING)
@@ -37959,7 +38129,7 @@
  
          args_to_rag = []
          for act in actions:
-@@ -305,11 +952,98 @@
+@@ -305,11 +961,98 @@
                  "execution_report": results_str,
                  "step": self.agent_state.current_step,
                  "max_steps": self.agent_state.max_react_steps,
@@ -38061,7 +38231,7 @@
          """
          Logic for graceful completion (absence of actions).
  
-@@ -317,19 +1051,182 @@
+@@ -317,19 +1060,182 @@
              thoughts: Final thoughts of the agent prior to sleep.
          """
  
@@ -38246,7 +38416,7 @@
  
      def _parse_response(
          self, raw_answer: str
-@@ -337,7 +1234,15 @@
+@@ -337,7 +1243,15 @@
          """
          Parses the agent's JSON response.
          """
@@ -38263,7 +38433,7 @@
  
      def add_realtime_event(self, event_data: Dict[str, Any]) -> None:
          """
-@@ -347,7 +1252,21 @@
+@@ -347,7 +1261,21 @@
              event_data: Event payload dict.
          """
  
@@ -38286,7 +38456,7 @@
  
      def _dump_context_to_file(self, messages: List[Dict[str, Any]]) -> None:
          """
-@@ -366,11 +1285,44 @@
+@@ -366,11 +1294,44 @@
          with open(image_path, "rb") as image_file:
              return base64.b64encode(image_file.read()).decode("utf-8")
  
@@ -38333,7 +38503,7 @@
  
          Args:
              messages: Messages list.
-@@ -379,39 +1331,103 @@
+@@ -379,39 +1340,103 @@
              List[Dict[str, Any]]: Messages list with Base64 payloads injected.
          """
  
@@ -38474,9 +38644,11 @@
  import logging
  
  from pydantic import create_model, BaseModel, ValidationError
-@@ -19,6 +21,9 @@
+@@ -18,7 +20,11 @@
+ from src.utils._tools import truncate_text
  from src.utils.settings import SubconsciousConfig
  
++from src.l3_agent.goals import policy_completion
  from src.l3_agent.skills.schema import ActionCall
 +from src.l3_agent.skills.execution import ActionExecutionEngine
 +from src.l3_agent.hooks.lifecycle import LifecycleHooks
@@ -38484,7 +38656,7 @@
  from src.l3_agent.swarm.roles import SubagentRole
  from src.l3_agent.subconscious.schema import Pattern
  
-@@ -35,7 +40,11 @@
+@@ -35,7 +41,11 @@
  
      @classmethod
      def ok(cls, message: str, terminate_loop: bool = False) -> "SkillResult":
@@ -38497,7 +38669,7 @@
  
      @classmethod
      def fail(cls, message: str) -> "SkillResult":
-@@ -43,53 +52,86 @@
+@@ -43,53 +53,86 @@
  
  
  class ExecutionResult(str):
@@ -38621,7 +38793,7 @@
  
  
  def unregister_skill(skill_name: str) -> None:
-@@ -124,15 +166,21 @@
+@@ -124,15 +167,21 @@
      Provides Type Coercion and protects against junk parameters.
      """
  
@@ -38646,7 +38818,7 @@
          )
          default = param.default if param.default is not inspect.Parameter.empty else ...
          fields[name] = (annotation, default)
-@@ -277,76 +325,341 @@
+@@ -277,76 +326,341 @@
              )
  
  
@@ -39028,7 +39200,19 @@
  
  
  async def call_skill(
-@@ -359,17 +672,25 @@
+@@ -355,21 +669,37 @@
+     """
+     Low-level call of an individual skill passing parameters through the Pydantic Guard Layer.
+     """
++    if policy_completion.native_policy_denied():
++        # Owned policy completion: the active correlated request already
++        # recorded a native HostOS denial; remaining actions cannot run.
++        logger.warning("[Agent Action Result] %s", policy_completion.STOPPED_MESSAGE)
++        stopped = SkillResult.fail(policy_completion.STOPPED_MESSAGE)
++        stopped.terminate_loop = True
++        return stopped
++
+     params_str = truncate_text(str(params), max_chars=250, suffix="... [Params truncated]")
  
      logger.info(f"[Agent Action] {name}({params_str})")
  
@@ -39056,17 +39240,46 @@
          clean_kwargs = validated_params.model_dump()
      except ValidationError as e:
          errors = [
-@@ -379,6 +700,10 @@
+@@ -379,16 +709,32 @@
          err_msg = "Parameter validation error:\n" + "\n".join(errors)
          logger.warning(f"[Guard] Rejected call {name}: Type error.")
          return SkillResult.fail(err_msg)
+-
+-    try:
+-        result = await func(**clean_kwargs)
 +    except Exception as e:
 +        err_msg = f"Parameter schema error for skill '{name}': {e}"
 +        logger.error(f"[Guard] {err_msg}")
 +        return SkillResult.fail(err_msg)
++
++    invocation_failed = False
++    with policy_completion.skill_attempt():
++        try:
++            result = await func(**clean_kwargs)
++        except Exception as e:
++            logger.error(f"[Agent Action Result] Error in skill {name}: {str(e)}")
++            result = SkillResult.fail(f"Internal skill error: {str(e)}")
++            invocation_failed = True
++        if (
++            policy_completion.attempt_denied()
++            and policy_completion.record_native_policy_denial()
++        ):
++            # Native authority denied during this attempt (even if the skill
++            # swallowed the exception): the correlated request must stop.
++            result.terminate_loop = True
++
++    if not invocation_failed:
+         res_msg = truncate_text(
+             str(result.message), max_chars=200, suffix="... [Result truncated for logs]"
+         )
+         status = "Success" if result.is_success else "Fail"
  
-     try:
-         result = await func(**clean_kwargs)
+         logger.info(f"[Agent Action Result] {name} ({status}): {res_msg}")
+-        return result
+-    except Exception as e:
+-        logger.error(f"[Agent Action Result] Error in skill {name}: {str(e)}")
+-        return SkillResult.fail(f"Internal skill error: {str(e)}")
++    return result
 --- a/src/l3_agent/skills/schema.py
 +++ b/src/l3_agent/skills/schema.py
 @@ -8,13 +8,30 @@

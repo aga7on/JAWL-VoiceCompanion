@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, context, json_format=None, policy=None, goal_repair=None, action_repair=None, streaming=None, goal_backoff=None, terminal_context=None):
+def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_repair=None, action_repair=None, streaming=None, goal_backoff=None, terminal_context=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -72,14 +72,6 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, policy=
         )
     if not all(check.values()):
         raise RuntimeError("owned brain hooks were not installed on the actual native classes")
-    if policy is not None:
-        check["policy_completion"] = (
-            policy.host_class._check_security_policies is policy.wrapped_check
-            and policy.registry.call_skill is policy.wrapped_call
-            and vars(policy.host_class).get("__jawl_owned_policy_completion__") is policy
-        )
-        if not check["policy_completion"]:
-            raise RuntimeError("owned policy completion hook is not installed")
     if json_format is not None and (
         vars(json_format.provider_class).get("__jawl_owned_json_format_installation__") is not json_format
         or json_format.provider_class._request_kwargs is not json_format.wrapped_kwargs
@@ -182,8 +174,6 @@ def main():
     sys.path.insert(0, str(source))
     delivery_extension = load_extension("_owned_jawl_delivery", "native_jawl_delivery.py")
     delivery = delivery_extension.install_native_delivery_guard()
-    policy_extension = load_extension("_owned_jawl_policy_completion", "native_policy_completion.py")
-    policy = policy_extension.install_native_policy_completion(delivery_extension)
     goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
     goal_repair = goal_repair_extension.install_native_goal_completion_repair()
 
@@ -209,7 +199,6 @@ def main():
         delivery,
         context,
         json_format,
-        policy,
         goal_repair=goal_repair,
         action_repair=action_repair,
         streaming=streaming,

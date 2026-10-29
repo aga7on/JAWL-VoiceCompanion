@@ -31,6 +31,7 @@ from src.l1_databases.sql.management.ticks import SQLTicks
 from src.l1_databases.vector.manager import VectorManager
 
 from src.l3_agent.llm.executor import LLMExecutor
+from src.l3_agent.goals import policy_completion
 from src.l3_agent.llm.providers.contracts import normalize_tool_transport
 from src.l3_agent.prompt.builder import PromptBuilder
 from src.l3_agent.context.builder import ContextBuilder
@@ -796,6 +797,13 @@ class ReactLoop:
                     agent_logger.info(
                         "[ReAct] Skill requested early cycle termination."
                     )
+                    if policy_completion.native_policy_denied():
+                        # Owned policy completion: one safe terminal error for
+                        # a denial-stopped request. Native denial detail never
+                        # reaches the correlated client.
+                        await policy_completion.publish_request_stopped(
+                            self.event_bus, current_companion_turn_id()
+                        )
                     cycle_concluded = True
                     break
 
@@ -834,6 +842,7 @@ class ReactLoop:
             await asyncio.shield(self._handle_cycle_cancelled())
             raise
         finally:
+            policy_completion.close_request(current_companion_turn_id())
             reset_companion_turn_id(companion_turn_token)
             self.active_companion_turn_id = ""
             self.agent_state.update_state(AgentStatus.IDLE)
