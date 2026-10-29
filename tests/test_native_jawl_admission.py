@@ -14,6 +14,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime/jawl-sources/jawl-20260906-daily-v2"))
 
 
 class FakeBridge:
@@ -70,7 +71,7 @@ class FakeBridge:
 
 class NativeJawlAdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from jawl_voicecompanion.native_jawl_admission import install_native_admission
+        from src.web.admission import install_native_admission
 
         self.install_native_admission = install_native_admission
         self.bridge = FakeBridge()

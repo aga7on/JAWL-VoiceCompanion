@@ -88,7 +88,8 @@ class OwnedConsoleEntryTests(unittest.TestCase):
 
     def test_extension_loads_directly_from_owned_file(self):
         extension = entry.load_extension()
-        self.assertEqual(Path(extension.__file__), ROOT / "src/jawl_voicecompanion/native_jawl_admission.py")
+        self.assertEqual(Path(extension.__file__).resolve(),
+                         (entry.resolve_source() / "src/web/admission.py").resolve())
         self.assertTrue(callable(extension.install_native_admission))
 
     def test_delivery_extension_loads_without_importing_native_runtime(self):

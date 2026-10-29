@@ -346,6 +346,7 @@
     "src/utils/tracing.py": "2c693927ded3017256eb29d86f1ed9ab67ea62601f7ae05aeb60bb0b6908dd9a",
     "src/web/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "src/web/__main__.py": "76b81734f22cc06b5a1f02e29625585bf3aa246c706f32f6b4c4d477c50eb012",
+    "src/web/admission.py": "0d4b6a6c2221429e4a8b4c878dad346d2b29313239b2f77f047b508d452382dd",
     "src/web/agent.py": "f9f4256fcd1caa5aefe25db47805f3e9562443a347137c5fba380661560cd3e1",
     "src/web/chat.py": "2379462cfe3b3eae746268d3fc86f4e9c030e79fd9b68479cfb171fca8dbc593",
     "src/web/config_io.py": "09911a06bff26d522b6dd54483a9084d07a00c1c28b210e87880a4f5e830eb34",
@@ -360,5 +361,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "1534f2cd26736b5ad8b9ccc7867a1c78200bbf729c01b5e187235b9ff4b19152"
+  "snapshot_sha256": "69c180178ea585bc5a2d9095e7b2a3fcb27945c198dc0b134d627998e9813b76"
 }

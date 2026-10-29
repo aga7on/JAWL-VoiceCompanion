@@ -74,20 +74,22 @@ def check_isolation() -> None:
 
 
 def load_extension():
-    return load_owned_extension("_owned_jawl_http_admission", "native_jawl_admission.py")
+    # Native HTTP admission lives in the owned kernel source; load it by
+    # confined path without importing the companion package graph.
+    return load_owned_extension("_owned_jawl_http_admission", resolve_source() / "src/web/admission.py")
 
 
 def load_delivery_extension():
-    return load_owned_extension("_owned_jawl_delivery", "native_jawl_delivery.py")
+    return load_owned_extension("_owned_jawl_delivery", ROOT / "src/jawl_voicecompanion/native_jawl_delivery.py")
 
 
 def load_turn_context_extension():  # retired with ADR-049 slice 3 (native turn context)
     raise RuntimeError("native turn context is installed in the kernel")
 
 
-def load_owned_extension(name, filename):
+def load_owned_extension(name, path):
     # Do not import Companion's full package graph into the native console.
-    spec = importlib.util.spec_from_file_location(name, ROOT / "src/jawl_voicecompanion" / filename)
+    spec = importlib.util.spec_from_file_location(name, Path(path))
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
@@ -219,7 +221,7 @@ def main() -> int:
         install_json_repair()
         owned_brain_script = (ROOT / "scripts" / "run_owned_jawl_brain.py").resolve()
         agent.MAIN_SCRIPT = owned_brain_script
-        load_owned_extension("_owned_supervisor_identity", "native_supervisor_identity.py").install_native_supervisor_identity(InstanceManager)
+        load_owned_extension("_owned_supervisor_identity", ROOT / "src/jawl_voicecompanion/native_supervisor_identity.py").install_native_supervisor_identity(InstanceManager)
         agent._supervised_manager = lambda: InstanceManager(
             agent.ROOT_DIR, entrypoint=owned_brain_script
         )

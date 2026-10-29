@@ -9,7 +9,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from jawl_voicecompanion.native_jawl_admission import NativeAdmission, install_native_admission, _Rejected
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime/jawl-sources/jawl-20260906-daily-v2"))
+from src.web.admission import NativeAdmission, install_native_admission, _Rejected
 
 
 class _Bridge:
@@ -67,7 +68,7 @@ class NativeAdmissionBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 awaitable = asyncio.create_task(awaitable)
             return await original_wait(awaitable, timeout)
 
-        with patch("jawl_voicecompanion.native_jawl_admission.asyncio.wait_for", scheduled_wait):
+        with patch("src.web.admission.asyncio.wait_for", scheduled_wait):
             response = await self.client.post("/api/companion/turn", json={"turn_id": "schedule-race", "text": "never"})
         self.assertEqual(response.status, 409)
         self.assertEqual(self.bridge.sent, [])
