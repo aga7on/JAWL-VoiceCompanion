@@ -52,6 +52,30 @@ class PerceptionFusionTests(unittest.TestCase):
         self.assertNotIn("speech", fusion.state(now=120.1)["fresh"])
         self.assertFalse(fusion.current_state("speech", now=120.1)["fresh"])
 
+    def test_yamnet_event_hypotheses_are_independent_and_expire_quickly(self):
+        fusion = PerceptionFusion()
+        fusion.note(
+            "audio_event_candidates",
+            "Possible YAMNet sound-event class matches, unverified: Explosion (score 0.16; 2/3 windows)",
+            now=10.0,
+            metadata={
+                "source": "system_audio_loopback",
+                "detector": "yamnet-onnx-cpu",
+                "segment_started_monotonic": 6.0,
+                "segment_ended_monotonic": 10.0,
+                "verified": False,
+                "audio_kind": "sound",
+            },
+        )
+        fusion.note("speech", "Transcript: incoming fire", now=10.0)
+
+        snapshot = fusion.compose_snapshot(now=10.5)
+        self.assertIn("Explosion", snapshot["text"])
+        self.assertIn("incoming fire", snapshot["text"])
+        self.assertTrue(snapshot["channels"]["audio_event_candidates"]["fresh"])
+        self.assertEqual(snapshot["channels"]["audio_event_candidates"]["metadata"]["detector"], "yamnet-onnx-cpu")
+        self.assertNotIn("audio_event_candidates", fusion.state(now=22.1)["fresh"])
+
     def test_live_music_context_expires_after_twenty_seconds(self):
         fusion = PerceptionFusion()
         fusion.note("music", "Music detected by independent YAMNet.", now=100.0)
@@ -59,6 +83,28 @@ class PerceptionFusionTests(unittest.TestCase):
         self.assertTrue(fusion.current_state("music", now=119.9)["fresh"])
         self.assertFalse(fusion.current_state("music", now=120.1)["fresh"])
         self.assertNotIn("independent YAMNet", fusion.compose(now=120.1))
+
+    def test_weak_music_signal_is_a_short_lived_separate_hypothesis(self):
+        fusion = PerceptionFusion()
+        fusion.note(
+            "music",
+            "YAMNet не подтвердил присутствие музыки.",
+            now=100.0,
+            metadata={"music_state": "unknown"},
+        )
+        fusion.note(
+            "music_candidate",
+            "Слабый отклик YAMNet на класс Music; возможен музыкальный или тональный фон, не подтверждено.",
+            now=100.0,
+            metadata={"verified": False, "music_score_max": 0.34},
+        )
+
+        current = fusion.compose(now=101.0)
+        self.assertIn("Слабый аудиосигнал", current)
+        self.assertIn("не подтверждено", current)
+        self.assertNotIn("Музыка:", current)
+        self.assertTrue(fusion.current_state("music_candidate", now=111.9)["fresh"])
+        self.assertFalse(fusion.current_state("music_candidate", now=112.1)["fresh"])
 
     def test_audio_hypotheses_require_overlapping_yamnet_music_confirmation(self):
         fusion = PerceptionFusion()

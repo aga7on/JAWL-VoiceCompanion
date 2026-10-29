@@ -37,12 +37,97 @@ class PerceptionPacketTests(unittest.TestCase):
         self.assertIn("QUEST: Find the red key", rendered)
         self.assertIn("OCR", rendered)
 
+    def test_yamnet_sound_events_reach_brain_as_unverified_hypotheses(self):
+        packet = make_packet({"channels": {"audio_event_candidates": {
+            "text": "Possible YAMNet sound-event class matches, unverified: Explosion (score 0.16; 2/3 windows)",
+            "age_ms": 1000,
+            "ttl_ms": 12000,
+            "metadata": {"verified": False, "source": "system_audio_loopback"},
+        }}})
+
+        self.assertTrue(packet["channels"]["audio_event_candidates"]["hypothesis"])
+        self.assertIn("Explosion", render_packet(packet, now=packet["generated_at"]))
+
+    def test_full_av_channels_survive_fusion_and_brain_packet_serialization(self):
+        fusion = PerceptionFusion()
+        fusion.note("screen", "A character runs through a game corridor", now=10.0)
+        fusion.note(
+            "ocr", "Quest: Find the exit", now=10.0,
+            metadata={"source": "windows_ocr", "verified": False},
+        )
+        fusion.note("speech", "Player says: watch the door", now=10.0, metadata={"verified": False})
+        fusion.note(
+            "audio_description", "A tense orchestral cue rises under the dialogue", now=10.0,
+            metadata={"source": "eg2-audio", "audio_kind": "music", "verified": False},
+        )
+        fusion.note(
+            "audio_candidates", "Possible style: cinematic orchestral", now=10.0,
+            metadata={
+                "source": "eg2-audio", "audio_kind": "music", "verified": False,
+                "segment_started_monotonic": 2.0, "segment_ended_monotonic": 10.0,
+            },
+        )
+        fusion.note(
+            "music", "Music detected by independent YAMNet", now=10.0,
+            metadata={
+                "source": "system_audio_loopback", "music_state": "music",
+                "segment_started_monotonic": 8.0, "segment_ended_monotonic": 10.0,
+            },
+        )
+        fusion.note(
+            "audio_event_candidates", "Possible sound event: door impact", now=10.0,
+            metadata={"source": "yamnet-onnx-cpu", "verified": False},
+        )
+
+        packet = make_packet(fusion.compose_snapshot(now=10.0))
+        rendered = render_packet(packet, now=packet["generated_at"])
+
+        expected = {
+            "screen", "ocr", "speech", "audio_description", "audio_candidates",
+            "music", "audio_event_candidates",
+        }
+        self.assertEqual(set(packet["channels"]), expected)
+        for evidence in (
+            "game corridor", "Quest: Find the exit", "watch the door",
+            "orchestral cue", "cinematic orchestral", "independent YAMNet",
+            "door impact",
+        ):
+            self.assertIn(evidence, rendered)
+        self.assertIn("гипотеза модели", rendered)
+
     def test_unknown_music_state_is_not_repeated_as_a_description(self):
         packet = make_packet({"channels": {"music": {
             "text": "detector did not confirm music", "age_ms": 0, "ttl_ms": 20000,
             "metadata": {"music_state": "unknown"},
         }}}, fallback="detector did not confirm music")
         self.assertEqual(render_packet(packet), "")
+
+    def test_weak_music_candidate_reaches_brain_as_an_uncalibrated_hypothesis(self):
+        fusion = PerceptionFusion()
+        fusion.note(
+            "music",
+            "YAMNet did not confirm music.",
+            now=10.0,
+            metadata={"music_state": "unknown"},
+        )
+        fusion.note(
+            "music_candidate",
+            "Possible musical or tonal background; YAMNet Music in 1/3 windows (raw max=0.3822, not a probability); multi-window gate not passed.",
+            now=10.0,
+            metadata={
+                "verified": False,
+                "confidence_calibrated": False,
+                "score_type": "uncalibrated_raw_model_score",
+            },
+        )
+        packet = make_packet(fusion.compose_snapshot(now=10.0))
+
+        self.assertNotIn("music", packet["channels"])
+        self.assertTrue(packet["channels"]["music_candidate"]["hypothesis"])
+        rendered = render_packet(packet, now=packet["generated_at"])
+        self.assertIn("Possible musical or tonal background", rendered)
+        self.assertIn("1/3 windows", rendered)
+        self.assertIn("not a probability", rendered)
 
     def test_text_is_separate_and_diagnostics_do_not_enter_packet(self):
         snapshot = {"channels": {

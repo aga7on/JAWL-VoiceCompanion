@@ -136,6 +136,31 @@ class _IndependentMusicDetector:
         }
 
 
+class _WeakMusicDetector(_IndependentMusicDetector):
+    def describe(self, pcm16, *, sample_rate, channels, clip_id):
+        self.calls.append((len(pcm16), sample_rate, channels, clip_id))
+        return {
+            "kind": "unknown",
+            "description": "No reliable audio event detected.",
+            "tags": [],
+            "confidence": 0.0,
+            "duration_seconds": 4.0,
+            "windows": 3,
+            "music_windows": 0,
+            "music_score_max": 0.34,
+            "music_score_median": 0.33,
+            "music_hypothesis": {
+                "raw_score_max": 0.34,
+                "raw_score_median": 0.33,
+                "windows": 3,
+                "music_windows": 0,
+                "required_windows": 2,
+                "verified": False,
+                "calibrated": False,
+            },
+        }
+
+
 class _BlockingMusicDetector(_IndependentMusicDetector):
     def __init__(self, *, block_calls=1):
         super().__init__()
@@ -330,6 +355,35 @@ class AmbientAudioTests(unittest.TestCase):
         self.assertFalse(voice_mem.calls)
         self.assertEqual(bridge.state()["suppressed_self_tts"], 1)
 
+    def test_self_tts_suppresses_asr_but_keeps_independent_music_lane(self):
+        memory = AmbientMemoryBuffer(enabled=True)
+        suppression = PlaybackSuppression()
+        final_asr = _FakeFinalASR()
+        captioner = _FakeAudioDescription()
+        detector = _IndependentMusicDetector()
+        bridge = AmbientAudioASRBridge(
+            _FakeVoiceMem(), memory,
+            playback_suppression=suppression,
+            final_asr=final_asr,
+            audio_describer=AudioDescriptionService(captioner),
+            soundscape_detector=detector,
+        )
+        suppression.begin(30)
+
+        result = bridge.consume(b"\x10\x00" * (16000 * 4), 16000, 1, "tts-mixed-with-game")
+        self.assertEqual(result["mode"], "soundscape_only_self_tts")
+        self.assertTrue(result["asr_suppressed"])
+        bridge.flush("tts-mixed-with-game")
+
+        self.assertFalse(final_asr.calls)
+        self.assertFalse(captioner.calls)
+        self.assertEqual(len(detector.calls), 1)
+        self.assertTrue(any(
+            item["payload"].get("source_app") == "yamnet-onnx-cpu"
+            and item["payload"].get("audio_kind") == "music"
+            for item in memory.observations()
+        ))
+
     def test_loopback_pcm_is_resampled_and_final_only_enters_ambient_memory(self):
         voice_mem = _FakeVoiceMem()
         memory = AmbientMemoryBuffer(enabled=True)
@@ -449,6 +503,36 @@ class AmbientAudioTests(unittest.TestCase):
         self.assertIsNotNone(state["audio_description_last_age_ms"])
         self.assertIsNotNone(state["audio_description_latency_ms_last"])
         self.assertIsNotNone(state["audio_description_latency_ms_p50"])
+
+    def test_weak_music_score_reaches_brain_without_becoming_music_fact(self):
+        fusion = PerceptionFusion()
+        detector = _WeakMusicDetector()
+        bridge = AmbientAudioASRBridge(
+            _FakeVoiceMem(),
+            AmbientMemoryBuffer(enabled=True),
+            final_asr=_FakeFinalASR(),
+            soundscape_detector=detector,
+            perception_fusion=fusion,
+        )
+        bridge.consume(b"\x10\x00" * (16000 * 4), 16000, 1, "weak-music")
+        bridge.flush("weak-music")
+
+        candidate = fusion.current_state("music_candidate")
+        self.assertTrue(candidate["fresh"])
+        self.assertEqual(candidate["metadata"]["score_type"], "uncalibrated_raw_model_score")
+        self.assertFalse(candidate["metadata"]["verified"])
+        candidate_text = fusion.compose_snapshot()["channels"]["music_candidate"]["text"]
+        self.assertIn("raw max=0.3400", candidate_text)
+        self.assertIn("0/3 окнах", candidate_text)
+        self.assertIn("не вероятность", candidate_text)
+        self.assertFalse(fusion.current_state("music")["metadata"].get("music_state") == "music")
+        self.assertIn("Слабый аудиосигнал", fusion.compose())
+        self.assertIn("System-audio transcript:", fusion.compose())
+        self.assertFalse(any(
+            item["payload"].get("audio_kind") == "music"
+            for item in bridge.memory.observations()
+        ))
+        self.assertEqual(bridge.state()["soundscape_last_kind"], "unknown")
 
     def test_independent_music_detector_preserves_music_alongside_asr(self):
         memory = AmbientMemoryBuffer(enabled=True)
@@ -570,8 +654,8 @@ class AmbientAudioTests(unittest.TestCase):
             b"\x00\x00" * 1600,
             16000,
             1,
-            started_at + 0.5,
-            started_at + 1.0,
+            started_at - 0.5,
+            started_at,
         )
 
         bridge._ingest_soundscape(
@@ -583,6 +667,10 @@ class AmbientAudioTests(unittest.TestCase):
                 "duration_seconds": 1.0,
                 "windows": 2,
                 "music_windows": 0,
+                "event_candidates": [{
+                    "label": "Explosion", "score": 0.16, "window_hits": 2,
+                    "windows": 3, "calibrated": False,
+                }],
             },
             segment,
             "music-to-sound",
@@ -595,8 +683,13 @@ class AmbientAudioTests(unittest.TestCase):
         current = fusion.compose(now=started_at + 1.1)
         self.assertNotIn("possible guitar music", current)
         self.assertNotIn("jazz_smooth", current)
+        self.assertIn("Explosion", current)
+        self.assertTrue(fusion.current_state("audio_event_candidates", now=started_at + 1.1)["fresh"])
         self.assertIn("не подтвердил присутствие музыки", current)
         bridge.stop("music-to-sound", flush=False)
+        self.assertFalse(fusion.current_state("audio_description")["fresh"])
+        self.assertFalse(fusion.current_state("audio_candidates")["fresh"])
+        self.assertFalse(fusion.current_state("audio_event_candidates")["fresh"])
 
     def test_soundscape_worker_emits_music_while_asr_is_blocked(self):
         memory = AmbientMemoryBuffer(enabled=True)

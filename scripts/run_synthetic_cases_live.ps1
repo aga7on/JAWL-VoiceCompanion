@@ -3,7 +3,7 @@
 # then runs make_synthetic_audio_cases.py to build slow/paused/quiet/noisy/
 # phrase-end/consecutive variants and transcribes every generated case with the
 # canonical GigaAM harness (crispasr file mode is the only ASR engine).
-param([string]$SourceWav = '')
+param([string]$SourceWav = '', [string]$ExpectedTranscript = '')
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -15,12 +15,14 @@ $runDir = Join-Path $repo 'runtime\synthetic-cases'
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
 $tera = $null
+$referenceText = $ExpectedTranscript
 try {
     if (-not $SourceWav) {
         # Windows PowerShell 5.1 may decode UTF-8 source as ANSI; synthesize the
         # authoritative Russian utterance from Unicode code points so the fixture
         # is language-correct. Sentence: "Какой сегодня статус моего проекта?"
         $sourceText = -join ([char[]](0x041A,0x0430,0x043A,0x043E,0x0439,0x0020,0x0441,0x0435,0x0433,0x043E,0x0434,0x043D,0x044F,0x0020,0x0441,0x0442,0x0430,0x0442,0x0443,0x0441,0x0020,0x043C,0x043E,0x0435,0x0433,0x043E,0x0020,0x043F,0x0440,0x043E,0x0435,0x043A,0x0442,0x0430,0x003F))
+        if (-not $referenceText) { $referenceText = $sourceText }
         $teraOut = Join-Path $runDir 'tera.log'
         $teraErr = Join-Path $runDir 'tera.err'
         $tera = Start-Process -FilePath $teraPy -WorkingDirectory $repo -ArgumentList @('scripts\teratts_server.py','--release-dir','G:\AI\tts_models\TeraSpace__TeraTTSv2','--voice','ru_f1','--model','distilled','--threads','24','--host','127.0.0.1','--port','9889') -PassThru -WindowStyle Hidden -RedirectStandardOutput $teraOut -RedirectStandardError $teraErr
@@ -41,7 +43,9 @@ try {
 } finally { if($null -ne $tera -and -not $tera.HasExited){Stop-Process -Id $tera.Id -Force -ErrorAction SilentlyContinue;$tera.WaitForExit(5000)|Out-Null} }
 
 $casesDir = Join-Path $runDir 'cases'
-& python -X utf8 (Join-Path $repo 'scripts\make_synthetic_audio_cases.py') --wav $sourceWavPath --out $casesDir --seed 7
+$caseArgs = @('--wav', $sourceWavPath, '--out', $casesDir, '--seed', '7')
+if ($referenceText) { $caseArgs += @('--reference-text', $referenceText) }
+& python -X utf8 (Join-Path $repo 'scripts\make_synthetic_audio_cases.py') @caseArgs
 if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
 
 $casesManifest = Join-Path $casesDir 'cases.json'
@@ -50,7 +54,8 @@ $wav=@(Get-ChildItem $casesDir -Filter '*.wav' -File | Sort-Object Name | Select
 $asrLog = Join-Path $runDir 'asr.log'
 $asrReport = Join-Path $runDir 'asr-gate.json'
 # --expects turns the harness into the quality gate: every case marked
-# must_transcribe must yield min_chars characters, otherwise the run fails.
+# must_transcribe cases use WER against the source text when known; pure noise
+# must abstain. Custom WAVs without ExpectedTranscript retain the presence gate.
 $asrOutput = & python -X utf8 (Join-Path $repo 'scripts\gigaam_baseline_fixtures.py') --expects $casesManifest --json-report $asrReport @wav
 $asrCode = $LASTEXITCODE
 $asrOutput | Set-Content -LiteralPath $asrLog -Encoding UTF8

@@ -573,6 +573,7 @@ def build_companion_runtime(
         lan_mode=args.lan,
         lan_access_token=lan_access_token,
         lan_auth_user=args.lan_auth_user,
+        voice_delivery_enabled=bool(getattr(args, "voice_delivery_cues", False)),
         tls_cert_file=args.tls_cert,
         tls_key_file=args.tls_key,
     )

@@ -61,6 +61,8 @@ class SensoryHistoryStore:
         self._hours: dict[str, dict[str, Any]] = {}
         self._last_flush = 0.0
         self._last_error: str | None = None
+        self._last_error_stage: str | None = None
+        self._load_blocked = False
         self._load()
 
     def _is_enabled(self) -> bool:
@@ -102,9 +104,20 @@ class SensoryHistoryStore:
         if modality == "speech" and _SALIENT.search(body):
             importance += 2
             reasons.append("salient_speech")
+        elif modality == "speech" and meta.get("recognition_type") == "ambient_asr_transcript":
+            transcript = body.partition(": ")[2] if body.startswith("System-audio transcript: ") else body
+            if len(transcript.strip()) >= 16:
+                importance = max(importance, 2)
+                reasons.append("ambient_asr_sample")
         if modality == "music" and meta.get("music_state") == "music":
             importance += 1
             reasons.append("music_detected")
+        elif modality == "music" and meta.get("audio_kind") == "music" and meta.get("verified") is False:
+            importance = max(importance, 2)
+            reasons.append("unverified_music_description")
+        if modality == "sound" and isinstance(meta.get("event_candidates"), list) and meta["event_candidates"]:
+            importance = max(importance, 2)
+            reasons.append("unverified_sound_event_candidate")
         if meta.get("user_marked_important") is True:
             importance += 3
             reasons.append("user_marked")
@@ -153,8 +166,40 @@ class SensoryHistoryStore:
             existing.update(candidate)
         else:
             moments.append(candidate)
-        moments.sort(key=lambda entry: (int(entry.get("importance", 0)), entry.get("observed_at", "")), reverse=True)
-        del moments[self.max_moments_per_hour:]
+        self._compact_hour_moments(moments)
+
+    def _compact_hour_moments(self, moments: list[dict[str, Any]]) -> None:
+        """Keep salient moments while preserving the hour's temporal span."""
+        moments[:] = self._select_timeline(moments, self.max_moments_per_hour)
+
+    @staticmethod
+    def _select_timeline(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+        """Select salient points across time and return them in source-time order."""
+        if limit <= 0 or not items:
+            return []
+        ordered = sorted(items, key=lambda entry: (_timestamp(entry.get("timestamp") or entry.get("observed_at")) or 0.0,
+                                                   str(entry.get("event_id") or "")))
+        if len(ordered) <= limit:
+            return ordered
+        if limit == 1:
+            return [ordered[-1]]
+
+        selected = [ordered[0], ordered[-1]]
+        remaining = ordered[1:-1]
+        while len(selected) < limit and remaining:
+            selected_times = [_timestamp(entry.get("timestamp") or entry.get("observed_at")) or 0.0
+                              for entry in selected]
+
+            def priority(entry: dict[str, Any]) -> tuple[int, float, float, str]:
+                stamp = _timestamp(entry.get("timestamp") or entry.get("observed_at")) or 0.0
+                distance = min(abs(stamp - chosen) for chosen in selected_times)
+                return (int(entry.get("importance", 0)), distance, stamp,
+                        str(entry.get("event_id") or ""))
+
+            chosen_index = max(range(len(remaining)), key=lambda index: priority(remaining[index]))
+            selected.append(remaining.pop(chosen_index))
+        return sorted(selected, key=lambda entry: (_timestamp(entry.get("timestamp") or entry.get("observed_at")) or 0.0,
+                                                   str(entry.get("event_id") or "")))
 
     def _prune(self, now: float) -> None:
         cutoff = now - self.recent_seconds
@@ -168,10 +213,18 @@ class SensoryHistoryStore:
 
     def _load(self) -> None:
         try:
-            if not self.path.is_file() or self.path.stat().st_size > 8 * 1024 * 1024:
+            if not self.path.is_file():
+                return
+            if self.path.stat().st_size > 8 * 1024 * 1024:
+                self._load_blocked = True
+                self._last_error = "history_file_too_large"
+                self._last_error_stage = "load"
                 return
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+                self._load_blocked = True
+                self._last_error = "history_schema_unsupported"
+                self._last_error_stage = "load"
                 return
             for event in payload.get("recent_events", [])[-self.max_recent_events:]:
                 if not isinstance(event, dict) or event.get("modality") not in {"visual", "speech", "music", "sound"}:
@@ -189,7 +242,11 @@ class SensoryHistoryStore:
                                     if isinstance(moment, dict) and _clean(moment.get("text"))]}
             self._prune(self._clock())
         except (OSError, ValueError, TypeError):
+            self._recent.clear()
+            self._hours.clear()
+            self._load_blocked = True
             self._last_error = "history_file_unreadable"
+            self._last_error_stage = "load"
 
     def _payload(self, now: float) -> dict[str, Any]:
         self._prune(now)
@@ -204,6 +261,8 @@ class SensoryHistoryStore:
                 "hourly_summaries": sorted(self._hours.values(), key=lambda bucket: bucket["hour_start"])}
 
     def _flush(self, now: float) -> None:
+        if self._load_blocked:
+            return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", delete=False,
@@ -212,9 +271,10 @@ class SensoryHistoryStore:
                 json.dump(self._payload(now), stream, ensure_ascii=False, separators=(",", ":"))
                 stream.flush(); os.fsync(stream.fileno())
             os.replace(temp, self.path)
-            self._last_flush = now; self._last_error = None
+            self._last_flush = now; self._last_error = None; self._last_error_stage = None
         except OSError as exc:
             self._last_error = f"history_write_failed:{type(exc).__name__}"
+            self._last_error_stage = "flush"
             try:
                 if "temp" in locals(): temp.unlink(missing_ok=True)
             except OSError:
@@ -227,13 +287,18 @@ class SensoryHistoryStore:
 
     def state(self) -> dict[str, Any]:
         with self._lock:
-            self._prune(self._clock())
+            now = self._clock()
+            self._prune(now)
             return {"enabled": self._is_enabled(), "path": str(self.path),
                     "recent_window_seconds": self.recent_seconds, "recent_event_count": len(self._recent),
                     "hour_bucket_count": len(self._hours),
                     "compact_moment_count": sum(len(bucket.get("moments", [])) for bucket in self._hours.values()),
+                    "last_flush_age_seconds": round(max(0.0, now - self._last_flush), 1)
+                    if self._last_flush > 0 else None,
                     "raw_audio_persisted": False, "raw_video_persisted": False,
-                    "last_error": self._last_error}
+                    "last_error": self._last_error,
+                    "last_error_stage": self._last_error_stage,
+                    "load_blocked": self._load_blocked}
 
     def context_text(self, *, seconds: float = _HOUR, include_week: bool = False,
                      focus_seconds_ago: float | None = None, focus_window_seconds: float = 60.0,
@@ -250,6 +315,8 @@ class SensoryHistoryStore:
         radius = max(10.0, min(float(focus_window_seconds), 15 * 60.0)) / 2.0
         with self._lock:
             self._prune(now)
+            load_blocked = self._load_blocked
+            load_error = self._last_error if load_blocked else None
             if focus is not None and focus + radius <= self.recent_seconds:
                 start = now - focus - radius
                 end = now - focus + radius
@@ -268,35 +335,64 @@ class SensoryHistoryStore:
             else:
                 selected = [dict(event) for event in self._recent if event.get("timestamp", 0) >= cutoff]
         if not selected:
+            if load_blocked:
+                return (
+                    f"SENSORY HISTORY WARNING: saved archive unavailable ({load_error}); "
+                    "no observations from before this process can be recalled. "
+                    "No sensory observations are available in the selected period."
+                )[:max_chars]
             return "No sensory observations in the selected period."
-        lines = []
-        for item in selected:
+
+        selected.sort(key=lambda item: (_timestamp(item.get("timestamp") or item.get("observed_at")) or 0.0,
+                                        str(item.get("event_id") or "")))
+
+        def format_line(item: dict[str, Any]) -> str:
             parts = [str(item.get("scene_id") or ""), str(item.get("source") or "")]
             if item.get("verified") is False: parts.append("unverified model observation")
             details = ", ".join(part for part in parts if part)
-            lines.append(f"{item.get('observed_at', '')} {str(item.get('modality', 'unknown')).upper()} "
-                         f"{f'({details}) ' if details else ''}{item.get('text', '')}")
+            return (f"{item.get('observed_at', '')} {str(item.get('modality', 'unknown')).upper()} "
+                    f"{f'({details}) ' if details else ''}{item.get('text', '')}")
         if focus is None:
             header = f"SENSORY HISTORY: last {int(lookback // 60)} min; text only, no stored raw audio/video.\n"
         else:
             header = (f"SENSORY HISTORY: observations around {focus / 60:g} min ago "
                       f"(±{radius:g}s); text only, no stored raw audio/video.\n")
+        if load_blocked:
+            header = (
+                f"SENSORY HISTORY WARNING: saved archive unavailable ({load_error}); "
+                "listed observations are from this process only and prior history is unavailable.\n"
+                + header
+            )
+        lines = [format_line(item) for item in selected]
         output = header + "\n".join(lines)
         if len(output) <= max_chars: return output
-        keep = max(1, min(len(lines), int(max_chars / max(180, len(output) / len(lines)))))
-        if keep < len(lines):
-            half = max(1, keep // 2); tail = max(0, keep - half)
-            middle = ["... intermediate observations compacted ..."] if keep > 2 else []
-            lines = lines[:half] + middle + (lines[-tail:] if tail else [])
-        return (header + "\n".join(lines))[:max_chars]
+        average = max(80.0, sum(len(line) for line in lines) / len(lines))
+        keep = max(2, min(len(selected), int(max(1, max_chars - len(header) - 100) / average)))
+        while keep >= 2:
+            sampled = self._select_timeline(selected, keep)
+            compacted = [format_line(item) for item in sampled]
+            notice = f"... {len(selected) - len(sampled)} observations compacted across the timeline ...\n"
+            output = header + notice + "\n".join(compacted)
+            if len(output) <= max_chars:
+                return output
+            keep -= 1
+        return (header + format_line(selected[-1]))[:max_chars]
 
     def clear(self) -> dict[str, Any]:
         with self._lock:
             events, hours = len(self._recent), len(self._hours)
-            self._recent.clear(); self._hours.clear(); self._flush(self._clock())
-            if self.path.exists():
-                try: self.path.unlink()
-                except OSError: self._last_error = "history_clear_failed"
+            self._recent.clear(); self._hours.clear()
+            try:
+                self.path.unlink(missing_ok=True)
+            except OSError:
+                self._load_blocked = True
+                self._last_error = "history_clear_failed"
+                self._last_error_stage = "clear"
+            else:
+                self._load_blocked = False
+                self._last_error = None
+                self._last_error_stage = None
+                self._last_flush = 0.0
             return {"status": "cleared", "recent_events": events, "hour_buckets": hours}
 
 

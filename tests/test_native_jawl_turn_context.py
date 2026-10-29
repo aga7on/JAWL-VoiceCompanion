@@ -114,7 +114,20 @@ def install(current_turn_id):
 class NativeJawlTurnContextTests(unittest.IsolatedAsyncioTestCase):
     async def test_va_packet_becomes_separate_native_section_and_message_stays_clean(self):
         from jawl_voicecompanion.perception_packet import attach_packet, make_packet
-        packet = make_packet({"channels": {"screen": {"text": "car on road", "age_ms": 1000, "ttl_ms": 5000}}})
+        packet = make_packet({"channels": {
+            "screen": {"text": "character in a game corridor", "age_ms": 1000, "ttl_ms": 5000},
+            "ocr": {"text": "Quest: find the exit", "age_ms": 500, "ttl_ms": 5000,
+                    "metadata": {"verified": False}},
+            "speech": {"text": "Player says: watch the door", "age_ms": 700, "ttl_ms": 20000},
+            "audio_description": {"text": "A tense orchestral cue rises", "age_ms": 800, "ttl_ms": 20000,
+                                  "metadata": {"verified": False}},
+            "audio_candidates": {"text": "Possible style: cinematic orchestral", "age_ms": 900,
+                                 "ttl_ms": 20000, "metadata": {"verified": False}},
+            "music": {"text": "Music detected", "age_ms": 1000, "ttl_ms": 20000,
+                      "metadata": {"music_state": "music"}},
+            "audio_event_candidates": {"text": "Possible sound event: impact", "age_ms": 600,
+                                        "ttl_ms": 12000, "metadata": {"verified": False}},
+        }})
         registry = Registry()
         async def user_event(**kwargs):
             return "USER: " + kwargs["payload"]["message"]
@@ -123,7 +136,11 @@ class NativeJawlTurnContextTests(unittest.IsolatedAsyncioTestCase):
         payload = {"message": attach_packet("Describe it", packet)}
         result = await builder.build("HOST_TERMINAL_MESSAGE", payload, [])
         self.assertIn("PERCEPTION / VA", result)
-        self.assertIn("car on road", result)
+        for evidence in (
+            "game corridor", "Quest: find the exit", "watch the door",
+            "orchestral cue", "cinematic orchestral", "Music detected", "impact",
+        ):
+            self.assertIn(evidence, result)
         self.assertIn("USER: Describe it", result)
         self.assertNotIn("<va_perception>", result)
         self.assertIn("<va_perception>", payload["message"])  # input identity is not mutated

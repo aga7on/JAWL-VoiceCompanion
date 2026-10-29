@@ -53,6 +53,7 @@ from .stream_chat import StreamChatIngestor
 from .voice_capture import (
     CaptureLeaseError, VoiceCaptureLease, VoiceCaptureSettings, capture_config_error, read_config_hub_settings,
 )
+from .transcript_quality import is_meaningful_transcript
 
 
 MAX_BODY_BYTES = 64 * 1024
@@ -113,56 +114,6 @@ def is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(value).is_loopback
     except ValueError:
         return False
-
-
-# ASR hallucination on noise/silence must never become a user turn: the model
-# can emit single filler characters, switch to a foreign script (keyboard noise
-# turns into CJK filler characters) or just stutter one character many times.
-# These are technical artifacts, not user speech.
-_MIN_MEANINGFUL_TRANSCRIPT_CHARS = 2
-
-# CJK/Hangul ranges: a Russian transcription should never contain these. When an
-# ASR engine receives non-speech noise it can switch languages and emit CJK
-# filler characters ("嗯嗯嗯"), which is a hard technical-artifact signal.
-_ASR_FOREIGN_SCRIPT_RANGES = (
-    (0x2E80, 0x2EFF),  # CJK Radicals Supplement
-    (0x3040, 0x309F),  # Hiragana
-    (0x30A0, 0x30FF),  # Katakana
-    (0x31F0, 0x31FF),  # Katakana Phonetic Extensions
-    (0x3400, 0x4DBF),  # CJK Unified Ideographs Extension A
-    (0x4E00, 0x9FFF),  # CJK Unified Ideographs
-    (0xF900, 0xFAFF),  # CJK Compatibility Ideographs
-    (0xFF00, 0xFF5F),  # Fullwidth Forms
-    (0xAC00, 0xD7AF),  # Hangul Syllables
-)
-
-
-def _contains_foreign_script(text: str) -> bool:
-    for char in text:
-        code = ord(char)
-        for start, end in _ASR_FOREIGN_SCRIPT_RANGES:
-            if start <= code <= end:
-                return True
-    return False
-
-
-def is_meaningful_transcript(text: str) -> bool:
-    """Keep real utterances (including short ones like «Ок»), drop ASR noise."""
-    cleaned = re.sub(r"[\W_]+", "", str(text or ""), flags=re.UNICODE)
-    if not cleaned:
-        return False
-    if len(cleaned) < _MIN_MEANINGFUL_TRANSCRIPT_CHARS:
-        return False
-    lowered = cleaned.casefold()
-    if _contains_foreign_script(cleaned):
-        # Russian speech never contains CJK/Hangul; this is an ASR language
-        # switch on noise (throat clearing, keyboard, silence).
-        return False
-    if len(set(lowered)) == 1:
-        # Single repeated character is a filler/stutter ("嗯嗯嗯", "ммм", "ааа"),
-        # not an utterance. Real short words use more than one character.
-        return False
-    return True
 
 
 def voice_memory_block(memory_context: str, *, limit: int = 800) -> str:
@@ -349,6 +300,7 @@ class CompanionServer(ThreadingHTTPServer):
         lan_access_token: str | None = None,
         lan_auth_user: str = "tablet",
         tls_context: ssl.SSLContext | None = None,
+        voice_delivery_enabled: bool = False,
     ):
         bind_host = str(server_address[0])
         if not is_loopback_host(bind_host) and not lan_mode:
@@ -413,6 +365,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.helper_urls = dict(helper_urls or {})
         self.proactive_feed = proactive_feed
         self.perception_fusion = perception_fusion
+        self.voice_delivery_enabled = bool(voice_delivery_enabled)
         self.streaming_perception = streaming_perception
         self.visual_sensor = visual_sensor
         self.config_hub = config_hub
@@ -710,22 +663,41 @@ class CompanionServer(ThreadingHTTPServer):
         except Exception:
             pass
         history_text = ""
+        history_warning = ""
         sensory_history = getattr(self, "sensory_history", None)
-        if history_requested and sensory_history is not None:
-            try:
-                focus = _history_focus_seconds_ago(clean)
-                lookback = 7 * 24 * 3600 if week_requested else min(7 * 24 * 3600, max(300, focus + 30)) if focus is not None else 3600
-                history_text = sensory_history.context_text(
-                    seconds=lookback, include_week=week_requested, focus_seconds_ago=focus,
-                    focus_window_seconds=60.0, max_chars=5600 if week_requested else 4200,
+        if history_requested:
+            if sensory_history is None:
+                history_warning = (
+                    "SENSORY HISTORY UNAVAILABLE: durable audiovisual history is not configured. "
+                    "Do not infer that unlisted events did not happen."
                 )
-            except Exception:
-                pass
+            else:
+                try:
+                    focus = _history_focus_seconds_ago(clean)
+                    lookback = 7 * 24 * 3600 if week_requested else min(7 * 24 * 3600, max(300, focus + 30)) if focus is not None else 3600
+                    history_text = sensory_history.context_text(
+                        seconds=lookback, include_week=week_requested, focus_seconds_ago=focus,
+                        focus_window_seconds=60.0, max_chars=5600 if week_requested else 4200,
+                    )
+                except Exception:  # noqa: BLE001 - disclose missing history to the brain
+                    history_warning = (
+                        "SENSORY HISTORY UNAVAILABLE: durable history retrieval failed. "
+                        "Do not infer that unlisted events did not happen."
+                    )
         if history_requested and not history_text:
-            history_text = "\n".join(
+            visual_fallback = "\n".join(
                 f"{event.get('age_s', 0):.1f} с назад: {event.get('text', '')}"
                 for event in snapshot.get("recent_visual_events", []) if isinstance(event, dict)
             )
+            if visual_fallback:
+                history_text = (
+                    (history_warning + " ") if history_warning else ""
+                ) + (
+                    "Fallback includes only short-lived visual events, not a complete "
+                    "audio/video history:\n" + visual_fallback
+                )
+            elif history_warning:
+                history_text = history_warning
         packet = make_packet(snapshot, fallback=observation, history=history_text)
         if not render_packet(packet):
             if not self._SCREEN_QUERY.search(clean):
@@ -979,6 +951,12 @@ class CompanionServer(ThreadingHTTPServer):
                 "lines": sensory_state.get("counters", {}).get("lines", 0) if sensory_state else 0,
             },
             "capture": {
+                "sensory_history": (
+                    self.perception_fusion.history_health()
+                    if self.perception_fusion is not None
+                    and callable(getattr(self.perception_fusion, "history_health", None))
+                    else None
+                ),
                 "microphone_owner": capture_state.get("owner") if capture_state else None,
                 "microphone_expires_in_ms": capture_state.get("expires_in_ms", 0) if capture_state else 0,
                 "loopback_configured": bool(ambient_audio_state and ambient_audio_state.get("configured")),
@@ -1039,6 +1017,11 @@ class CompanionServer(ThreadingHTTPServer):
                     if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
                     else 0
                 ),
+                "ambient_asr_mode": ambient_audio_bridge_state.get("mode"),
+                "ambient_asr_transcripts": int(ambient_audio_bridge_state.get("transcripts", 0) or 0),
+                "ambient_asr_noise_filtered": int(ambient_audio_bridge_state.get("asr_noise_filtered", 0) or 0),
+                "ambient_asr_last_age_ms": ambient_audio_bridge_state.get("transcript_last_age_ms"),
+                "ambient_asr_last_fresh": bool(ambient_audio_bridge_state.get("transcript_last_fresh")),
                 "soundscape_configured": bool(ambient_audio_bridge_state.get("soundscape_configured")),
                 "soundscape_count": int(ambient_audio_bridge_state.get("soundscape_count", 0) or 0),
                 "soundscape_errors": int(ambient_audio_bridge_state.get("soundscape_errors", 0) or 0),
@@ -2803,7 +2786,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             # the buffered utterance goes straight to it, and a failure is
             # reported instead of being masked by a second engine.
             try:
-                transcription = self.server.asr.finish(session_id, scope_id=self._voice_asr_scope(payload))
+                finish_microphone = (
+                    getattr(self.server.asr, "finish_microphone", None)
+                    if getattr(self.server, "voice_delivery_enabled", False) else None
+                )
+                if callable(finish_microphone):
+                    transcription = finish_microphone(
+                        session_id, scope_id=self._voice_asr_scope(payload),
+                    )
+                else:
+                    # Keep injected ASR adapters compatible; the production
+                    # UtteranceBuffer uses finish_microphone above.
+                    transcription = self.server.asr.finish(session_id, scope_id=self._voice_asr_scope(payload))
             except Exception as exc:  # noqa: BLE001 - bounded failure report
                 return {"ok": False, "error": f"ASR unavailable: {type(exc).__name__}"}
             asr_source = "gigaam"
@@ -2844,6 +2838,39 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     "transcript": "", "events": [], "responses": [],
                     "filtered": "user_backchannel",
                 }
+            delivery = transcription.get("voice_delivery")
+            fusion = self.server.perception_fusion
+            if isinstance(delivery, dict) and fusion is not None:
+                parts = ["Измеренные акустические признаки микрофонной речи; это не распознавание эмоций"]
+                median = delivery.get("pitch_median_hz")
+                low = delivery.get("pitch_p10_hz")
+                high = delivery.get("pitch_p90_hz")
+                if all(isinstance(value, (int, float)) for value in (median, low, high)):
+                    parts.append(f"оценка высоты голоса: медиана {median:.0f} Гц, диапазон p10–p90 {low:.0f}–{high:.0f} Гц")
+                level_low = delivery.get("signal_level_p10_dbfs")
+                level_high = delivery.get("signal_level_p90_dbfs")
+                if all(isinstance(value, (int, float)) for value in (level_low, level_high)):
+                    parts.append(f"уровень сигнала p10–p90 {level_low:.1f}–{level_high:.1f} dBFS")
+                voiced_ratio = delivery.get("voiced_frame_ratio")
+                if isinstance(voiced_ratio, (int, float)):
+                    parts.append(f"периодические голосовые кадры {voiced_ratio * 100:.0f}%")
+                fusion.note(
+                    "voice_delivery",
+                    "; ".join(parts),
+                    now=(
+                        float(delivery["observed_monotonic"])
+                        if isinstance(delivery.get("observed_monotonic"), (int, float))
+                        else None
+                    ),
+                    metadata={
+                        "source": "direct_microphone",
+                        "verified": False,
+                        "emotion_inferred": False,
+                        "raw_audio_persisted": False,
+                        "duration_ms": delivery.get("duration_ms"),
+                        "pitch_estimate_method": delivery.get("pitch_estimate_method"),
+                    },
+                )
             log_event("asr_final", text=text, session=session_id[:40], source=asr_source)
             if self.server.timeline is not None:
                 self.server.timeline.record("conversation", f"user_voice:{asr_source}", text[:120])
@@ -3416,6 +3443,7 @@ def create_server(
     tls_context: ssl.SSLContext | None = None,
     tls_cert_file: str | os.PathLike[str] | None = None,
     tls_key_file: str | os.PathLike[str] | None = None,
+    voice_delivery_enabled: bool = False,
 ) -> CompanionServer:
     host = require_bind_host(host, lan_mode=lan_mode)
     if lan_mode:
@@ -3520,6 +3548,7 @@ def create_server(
         lan_access_token=lan_access_token,
         lan_auth_user=lan_auth_user,
         tls_context=tls_context,
+        voice_delivery_enabled=voice_delivery_enabled,
     )
     if watcher is not None:
         watcher.start()

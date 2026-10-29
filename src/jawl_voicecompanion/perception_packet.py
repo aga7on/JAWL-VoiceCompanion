@@ -17,7 +17,13 @@ _LEGACY = re.compile(
 )
 _LABELS = {"screen": "Видео", "window": "Окно/UIA", "speech": "Речь из медиа",
            "music": "Музыка", "sound": "Звуки", "media": "Описание AV", "ocr": "OCR",
+           "music_candidate": "Возможный музыкальный/тональный фон",
+           "audio_description": "Описание аудио", "audio_candidates": "Аудиотеги-кандидаты",
            "eg2": "AV-теги", "eg2_media": "AV-теги"}
+
+
+_LABELS["audio_event_candidates"] = "YAMNet sound-event hypotheses"
+_LABELS["voice_delivery"] = "\u0410\u043a\u0443\u0441\u0442\u0438\u0447\u0435\u0441\u043a\u0438\u0435 \u043f\u0440\u0438\u0437\u043d\u0430\u043a\u0438 \u0433\u043e\u043b\u043e\u0441\u0430"
 
 
 def strip_appendix(text: str) -> str:

@@ -22,6 +22,10 @@ DEFAULT_YAMNET_DIR = (
 # all 18 source-disjoint FMA positives while rejecting the checked synthetic
 # noise/tone controls; this is an operating threshold, not calibrated confidence.
 MUSIC_THRESHOLD = 0.35
+# Weak Music-class scores may be surfaced as an explicitly unverified
+# music-like/tonal hypothesis. This is a routing cutoff, not a confidence and
+# never changes the confirmation gate above.
+MUSIC_HYPOTHESIS_THRESHOLD = 0.20
 MIN_MUSIC_WINDOWS = 2
 MIN_RMS_DBFS = -55.0
 WINDOW_SAMPLES = 2 * 16000
@@ -29,6 +33,23 @@ HOP_SAMPLES = 16000
 _IGNORED_TAGS = frozenset({
     "Music", "Speech", "Silence", "Background music", "Musical instrument",
 })
+# Keep this first event lane deliberately narrow. YAMNet has hundreds of
+# mutually competing labels, and weak argmax labels are not useful evidence
+# for a conversational brain. These broad action/sound classes are emitted
+# only as unverified candidates after repeated threshold crossings.
+_EVENT_LABELS = frozenset({
+    "Screaming", "Laughter", "Walk, footsteps", "Applause", "Door", "Knock",
+    "Crying, sobbing", "Baby cry, infant cry",
+    # Keep specific machine/event classes; generic source-family labels such as
+    # Vehicle, Engine, and Aircraft caused repeated cross-class false cues.
+    "Vehicle horn, car horn, honking", "Fire engine, fire truck (siren)",
+    "Helicopter", "Aircraft engine", "Jet engine",
+    "Engine knocking", "Engine starting", "Explosion", "Gunshot, gunfire",
+    "Fireworks", "Boom", "Arrow", "Whoosh, swoosh, swish", "Thump, thud",
+    "Smash, crash", "Chainsaw", "Dog", "Crowing, cock-a-doodle-doo", "Waves, surf",
+    "Ocean", "Sneeze", "Fire", "Rain", "Rain on surface", "Clock", "Tick-tock",
+})
+EVENT_THRESHOLD = 0.15
 
 
 class YamnetSoundscapeDetector:
@@ -121,6 +142,8 @@ class YamnetSoundscapeDetector:
             "music_windows": 0,
             "music_score_max": None,
             "music_score_median": None,
+            "music_hypothesis": None,
+            "event_candidates": [],
         }
         if duration <= 0 or duration > 30.0 or rms_dbfs < MIN_RMS_DBFS or duration < 2.0:
             return base
@@ -149,13 +172,27 @@ class YamnetSoundscapeDetector:
         required_hits = MIN_MUSIC_WINDOWS if len(rows) < 8 else max(
             MIN_MUSIC_WINDOWS, ceil(len(rows) * 0.25)
         )
+        event_candidates = self._event_candidates(rows, required_hits)
         if music_hits < required_hits:
+            music_hypothesis = None
+            if music_score_max >= MUSIC_HYPOTHESIS_THRESHOLD:
+                music_hypothesis = {
+                    "raw_score_max": music_score_max,
+                    "raw_score_median": music_score_median,
+                    "windows": len(rows),
+                    "music_windows": music_hits,
+                    "required_windows": required_hits,
+                    "verified": False,
+                    "calibrated": False,
+                }
             return {
                 **base,
                 "windows": len(rows),
                 "music_windows": music_hits,
                 "music_score_max": music_score_max,
                 "music_score_median": music_score_median,
+                "music_hypothesis": music_hypothesis,
+                "event_candidates": event_candidates,
             }
 
         # Emit only stable, sufficiently strong non-generic tags; YAMNet scores
@@ -193,7 +230,32 @@ class YamnetSoundscapeDetector:
             "music_windows": music_hits,
             "music_score_max": music_score_max,
             "music_score_median": music_score_median,
+            "music_hypothesis": None,
+            "event_candidates": event_candidates,
         }
 
+    def _event_candidates(
+        self, rows: list[np.ndarray], required_hits: int,
+    ) -> list[dict[str, Any]]:
+        indices = [
+            (index, label) for index, label in enumerate(self.labels)
+            if label in _EVENT_LABELS
+        ]
+        candidates: list[dict[str, Any]] = []
+        for index, label in indices:
+            hits = [float(row[index]) for row in rows if float(row[index]) >= EVENT_THRESHOLD]
+            if len(hits) < required_hits:
+                continue
+            candidates.append({
+                "label": label,
+                # These are model scores, not calibrated probabilities.
+                "score": round(float(np.median(hits)), 4),
+                "window_hits": len(hits),
+                "windows": len(rows),
+                "calibrated": False,
+            })
+        candidates.sort(key=lambda item: (-item["window_hits"], -item["score"], item["label"]))
+        return candidates[:3]
 
-__all__ = ["DEFAULT_YAMNET_DIR", "YamnetSoundscapeDetector"]
+
+__all__ = ["DEFAULT_YAMNET_DIR", "EVENT_THRESHOLD", "YamnetSoundscapeDetector"]

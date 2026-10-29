@@ -147,6 +147,12 @@ class AmbientMemoryBuffer:
             "stream": stream,
             text_key: text,
             "confidence": _confidence(payload.get("confidence")),
+            # Ambient captions and loopback ASR are model outputs, not
+            # independently confirmed facts. Preserve that provenance through
+            # delayed triage and history retrieval.
+            "verified": False,
+            "evidence_type": _bounded_text(payload.get("evidence_type"), 40),
+            "confidence_calibrated": payload.get("confidence_calibrated") is True,
             "observed_at": observed_at,
             "raw_audio_persisted": False,
             "raw_frame_persisted": False,
@@ -228,7 +234,7 @@ class AmbientMemoryBuffer:
         self,
         text: str,
         *,
-        confidence: float = 0.5,
+        confidence: float = 0.0,
         source_app: str | None = None,
         event_id: str | None = None,
         session_id: str = "ambient-audio",
@@ -240,7 +246,13 @@ class AmbientMemoryBuffer:
                 "event_id": event_id or str(uuid4()),
                 "session_id": session_id,
                 "type": _AUDIO_EVENT,
-                "payload": {"text": text, "confidence": confidence, "source_app": source_app},
+                "payload": {
+                    "text": text,
+                    "confidence": confidence,
+                    "confidence_calibrated": False,
+                    "evidence_type": "asr_transcript",
+                    "source_app": source_app,
+                },
             },
             now=now,
         )
@@ -274,6 +286,8 @@ class AmbientMemoryBuffer:
                 "payload": {
                     "text": normalized["description"],
                     "confidence": normalized["confidence"],
+                    "confidence_calibrated": False,
+                    "evidence_type": "audio_description",
                     "source_app": source_app,
                     "audio_kind": normalized["kind"],
                     "tags": normalized["tags"],
@@ -300,7 +314,13 @@ class AmbientMemoryBuffer:
                 "event_id": event_id or str(uuid4()),
                 "session_id": session_id,
                 "type": _VISUAL_EVENT,
-                "payload": {"summary": summary, "confidence": confidence, "source_app": source_app},
+                "payload": {
+                    "summary": summary,
+                    "confidence": confidence,
+                    "confidence_calibrated": False,
+                    "evidence_type": "visual_caption",
+                    "source_app": source_app,
+                },
             },
             now=now,
         )
@@ -507,6 +527,17 @@ class AmbientMemoryBuffer:
         provider_name: str,
     ) -> dict[str, Any]:
         observed = [str(item.event["payload"].get("observed_at")) for item in group]
+        source_payloads = [item.event["payload"] for item in group]
+        verified = all(item.get("verified") is True for item in source_payloads)
+        has_unscored_asr = any(
+            item.get("evidence_type") == "asr_transcript"
+            and item.get("confidence_calibrated") is False
+            for item in source_payloads
+        )
+        episode_payload = dict(payload)
+        summary = _bounded_text(episode_payload.get("summary"), 600)
+        if has_unscored_asr and summary and not summary.startswith("Непроверенная ASR-расшифровка:"):
+            episode_payload["summary"] = f"Непроверенная ASR-расшифровка: {summary}"[:600]
         return {
             "schema_version": 1,
             "event_id": str(uuid4()),
@@ -516,7 +547,8 @@ class AmbientMemoryBuffer:
             "type": _EPISODE_EVENT,
             "priority": 4,
             "payload": {
-                **payload,
+                **episode_payload,
+                "verified": verified,
                 "triage_provider": provider_name,
                 "observed_from": min(observed) if observed else _iso(group[0].received_at),
                 "observed_until": max(observed) if observed else _iso(group[-1].received_at),
@@ -531,10 +563,16 @@ class AmbientMemoryBuffer:
         confidence = round(sum(float(item.get("confidence", 0.5)) for item in payloads) / len(payloads), 3)
         texts = [str(item.get("text") or item.get("summary") or "").strip() for item in payloads]
         combined = " ".join(text for text in texts if text)[:600]
-        if confidence < 0.35 or len(combined) < 8:
+        has_unscored_asr = any(
+            item.get("evidence_type") == "asr_transcript"
+            and item.get("confidence_calibrated") is False
+            for item in payloads
+        )
+        if len(combined) < 8 or (confidence < 0.35 and not has_unscored_asr):
             return None
         salient = bool(_SALIENT.search(combined))
-        importance = "promote_candidate" if salient and confidence >= 0.7 else "retain"
+        importance = "promote_candidate" if salient and confidence >= 0.7 and not has_unscored_asr else "retain"
+        summary = f"Непроверенная ASR-расшифровка: {combined}" if has_unscored_asr else combined
         topics = [name for name, pattern in _TOPICS if pattern.search(combined)][:5]
         streams = {str(item.get("stream")) for item in payloads}
         source = next(iter(streams)) if len(streams) == 1 else "mixed"
@@ -550,9 +588,10 @@ class AmbientMemoryBuffer:
             "priority": 4,
             "payload": {
                 "importance": importance,
-                "summary": combined,
+                "summary": summary[:600],
                 "topics": topics,
                 "confidence": confidence,
+                "verified": all(item.get("verified") is True for item in payloads),
                 "source": source,
                 "source_event_ids": [item.event["event_id"] for item in group[:32]],
                 "observed_from": min(observed) if observed else _iso(group[0].received_at),
@@ -571,9 +610,14 @@ class AmbientMemoryBuffer:
         combined = " ".join(
             str(item.get("text") or item.get("summary") or "").strip() for item in payloads
         )[:600]
-        if confidence < 0.35 or len(combined) < 8:
+        unscored_asr = any(
+            item.get("evidence_type") == "asr_transcript"
+            and item.get("confidence_calibrated") is False
+            for item in payloads
+        )
+        if len(combined) < 8 or (confidence < 0.35 and not unscored_asr):
             return "ignore"
-        return "promote_candidate" if _SALIENT.search(combined) and confidence >= 0.7 else "retain"
+        return "promote_candidate" if _SALIENT.search(combined) and confidence >= 0.7 and not unscored_asr else "retain"
 
 
 class AmbientTriageScheduler:

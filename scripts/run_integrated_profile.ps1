@@ -39,6 +39,7 @@
 [switch]$EnableScreenOcr,
 [switch]$Eg2Vision,
 [switch]$EnableAmbientAudio,
+[switch]$EnableVoiceDeliveryCues,
 [switch]$StartAmbientAudio,
 [string]$AmbientAudioDevice = '',
 [ValidateSet('eg2', 'qwen-omni')]
@@ -93,6 +94,9 @@
 
 $ErrorActionPreference = 'Stop'
 if ($StartAmbientAudio -and -not $EnableAmbientAudio) { throw '-StartAmbientAudio requires -EnableAmbientAudio.' }
+if ($EnableScreenOcr -and -not $EnableScreenWatch -and $VisualDescriber -ne 'qwen') {
+    throw '-EnableScreenOcr requires -EnableScreenWatch or -VisualDescriber qwen.'
+}
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $env:JAWL_TEMPERATURE_OVERRIDE = $JawlTemperatureOverride.Trim()
 $env:JAWL_NATIVE_BROWSER_ENABLED = $(if ($EnableNativeBrowser) { '1' } else { '0' })
@@ -701,6 +705,9 @@ $jawlEnv = @{}
         }
         if ($StartAmbientAudio) { $companionArgs += ' --ambient-audio-autostart' }
     }
+    if ($EnableVoiceDeliveryCues) {
+        $companionArgs += ' --voice-delivery-cues'
+    }
     if ($EnableScreenWatch) {
         # Screen capture remains explicit opt-in. By default the launcher
         # connects to the configured external vision endpoint; -Eg2Vision
@@ -719,6 +726,11 @@ $jawlEnv = @{}
         $companionArgs += " --hostos-level $HostosLevel"
     }
     if ($VisualDescriber -eq 'qwen') {
+        # Selecting the Qwen visual sensor is the explicit screen-capture
+        # opt-in. Avoid requiring the legacy ScreenWatch worker, which would
+        # start another perception loop against the same display.
+        if (-not $EnableScreenWatch) { $companionArgs += ' --hostos-live --screen-enabled' }
+        if ($EnableScreenOcr -and -not $EnableScreenWatch) { $companionArgs += ' --screen-ocr' }
         $visualUrl = $VisualDescriberUrl
         $companionArgs += " --visual-describer qwen --visual-describer-url `"$visualUrl`" --visual-describer-model `"$VisualDescriberModel`" --visual-describer-roi `"$VisualDescriberRoi`" --visual-describer-display-index $VisualDescriberDisplayIndex --visual-describer-active-interval $VisualDescriberActiveInterval --visual-describer-static-interval $VisualDescriberStaticInterval --visual-describer-periodic $VisualDescriberPeriodic --visual-describer-max-age $VisualDescriberMaxAge"
     }

@@ -281,6 +281,16 @@ function renderSensoryHealth(shell) {
     }
     const loopbackDeviceElement = document.querySelector('#sensor-loopback-device');
     if (loopbackDeviceElement) loopbackDeviceElement.textContent = 'Статус источника недоступен';
+    const ambientAsrElement = document.querySelector('#sensor-asr-status');
+    if (ambientAsrElement) {
+      ambientAsrElement.textContent = 'Статус ASR системного звука недоступен';
+      ambientAsrElement.dataset.state = 'error';
+    }
+    const historyElement = document.querySelector('#sensor-history-status');
+    if (historyElement) {
+      historyElement.textContent = 'Статус сенсорной истории недоступен';
+      historyElement.dataset.state = 'error';
+    }
     const soundscapeElement = document.querySelector('#sensor-soundscape-status');
     if (soundscapeElement) soundscapeElement.textContent = 'Статус музыкального анализатора недоступен';
     const audioDescriptionElement = document.querySelector('#sensor-audio-description-status');
@@ -390,6 +400,72 @@ function renderSensoryHealth(shell) {
   }
   const loopbackDeviceElement = document.querySelector('#sensor-loopback-device');
   if (loopbackDeviceElement) loopbackDeviceElement.textContent = loopbackSource;
+  const ambientAsrElement = document.querySelector('#sensor-asr-status');
+  if (ambientAsrElement) {
+    const mode = String(capture.ambient_asr_mode || '');
+    const transcriptCount = Number.isFinite(capture.ambient_asr_transcripts)
+      ? Math.max(0, Math.round(capture.ambient_asr_transcripts)) : 0;
+    const filteredCount = Number.isFinite(capture.ambient_asr_noise_filtered)
+      ? Math.max(0, Math.round(capture.ambient_asr_noise_filtered)) : 0;
+    const transcriptAge = Number.isFinite(capture.ambient_asr_last_age_ms)
+      ? Math.max(0, Math.round(capture.ambient_asr_last_age_ms)) : null;
+    const transcriptFresh = capture.ambient_asr_last_fresh === true
+      && transcriptAge !== null && transcriptAge <= 120000;
+    const asrName = mode === 'external_final_utterance' ? 'GigaAM ASR'
+      : mode === 'voicemem_streaming' ? 'VoiceMem stream' : 'Loopback ASR';
+    const asrStatus = !mode ? 'не подключён'
+      : capture.loopback_paused ? 'захват приостановлен'
+        : !capture.loopback_running ? 'ожидает запуска захвата'
+          : transcriptFresh ? `есть результат · ${Math.round(transcriptAge / 1000)} с назад`
+            : transcriptAge !== null ? `последняя расшифровка ${Math.round(transcriptAge / 1000)} с назад`
+              : transcriptCount > 0 ? 'ожидает следующую речевую реплику'
+                : 'ожидает первую речевую реплику';
+    const stats = [`${transcriptCount} фрагм.`, filteredCount ? `отфильтровано ${filteredCount}` : '']
+      .filter(Boolean).join(' · ');
+    ambientAsrElement.textContent = `${asrName}: ${asrStatus} · ${stats}`;
+    ambientAsrElement.dataset.state = !mode || capture.loopback_paused || !capture.loopback_running
+      ? 'off' : transcriptFresh ? 'ok' : transcriptAge !== null ? 'warn' : 'off';
+  }
+  const historyElement = document.querySelector('#sensor-history-status');
+  if (historyElement) {
+    const history = capture.sensory_history && typeof capture.sensory_history === 'object'
+      ? capture.sensory_history : null;
+    const writes = history?.writes && typeof history.writes === 'object' ? history.writes : {};
+    const countStatus = (suffix) => Object.entries(writes)
+      .filter(([key]) => key.endsWith(`:${suffix}`))
+      .reduce((sum, [, value]) => sum + (Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0), 0);
+    const recorded = countStatus('recorded');
+    const coalesced = countStatus('coalesced');
+    const writeErrors = Number.isFinite(history?.write_errors) ? Math.max(0, Math.round(history.write_errors)) : 0;
+    const lastStatus = String(history?.last_status || '');
+    const lastModality = String(history?.last_modality || '');
+    const persistence = history?.persistence && typeof history.persistence === 'object'
+      ? history.persistence : null;
+    const flushAge = Number.isFinite(persistence?.last_flush_age_seconds)
+      ? Math.max(0, Math.round(persistence.last_flush_age_seconds)) : null;
+    const persistenceError = String(persistence?.last_error || '');
+    const errorStage = String(persistence?.last_error_stage || '');
+    const persistenceErrorLabel = errorStage === 'load' ? 'архив не загружен'
+      : errorStage === 'clear' ? 'ошибка очистки'
+        : errorStage === 'telemetry' ? 'ошибка телеметрии'
+          : 'ошибка записи';
+    const flushText = persistenceError
+      ? `${persistenceErrorLabel}: ${persistenceError}`
+      : flushAge !== null ? `flush ${flushAge} с назад`
+        : recorded + coalesced > 0 ? 'ожидает первого flush' : 'flush ещё не выполнялся';
+    const historyText = !history || history.configured !== true
+      ? 'сенсорный архив не подключён'
+      : history.persistence?.enabled === false || lastStatus === 'disabled'
+        ? 'сенсорный архив выключен'
+        : `${recorded} записано · ${coalesced} объединено · ${writeErrors} ошибок`
+          + (lastStatus ? ` · последнее: ${lastModality || 'сенсор'} ${lastStatus}` : ' · ожидает наблюдения')
+          + ` · ${flushText}`;
+    historyElement.textContent = `История: ${historyText}`;
+    historyElement.dataset.state = !history || history.configured !== true || lastStatus === 'disabled'
+      || history.persistence?.enabled === false
+      ? 'off' : persistenceError || lastStatus === 'error' ? 'error'
+        : writeErrors > 0 || (recorded + coalesced > 0 && flushAge === null) ? 'warn' : 'ok';
+  }
   const soundscapeElement = document.querySelector('#sensor-soundscape-status');
   if (soundscapeElement) {
     const soundscapeCount = Number.isFinite(capture.soundscape_count) ? Math.max(0, Math.round(capture.soundscape_count)) : 0;

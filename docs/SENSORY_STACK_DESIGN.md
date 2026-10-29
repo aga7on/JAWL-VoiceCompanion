@@ -12,6 +12,21 @@ promotion exists and durable automatic consolidation remains OPEN. See
 The architecture below is a target/research design. Historical model names,
 cadences and measurements must not be read as current defaults or acceptance.
 
+## Current canonical model roles — 2026-10-29
+
+The adopted daily role set is recorded in [ADR-048](DECISIONS.md#adr-048--canonical-daily-model-roles):
+Gemini 3.8 Flash via the local relay for the brain; Qwen3.5-0.8B Q4 on CPU for
+scene descriptions; Windows OCR/UIA for visible text and UI structure; GigaAM
+v3 q8 on CPU for ASR; EmbeddingGemma 2 ONNX and YAMNet ONNX on CPU for audio
+features, descriptions and sound-event hypotheses; multilingual MiniLM ONNX on
+CPU for semantic-memory vectors; and OmniVoice 0.6B on CUDA 1 for speech output.
+
+This is the project model canon, not a claim that all lanes have passed live
+acceptance. In the latest recorded profile, ambient loopback was waiting for
+audio samples. Music style, grounded sound-event descriptions, live brain
+uptake, sustained resources, and integrated-duration acceptance remain open.
+The historical proposals below are retained as research history only.
+
 Historical research principle (not an adopted full-duplex capability): **fast
 specialized models run constantly, heavy VLM runs periodically, the LLM never
 sees raw media** — it reads compact `MusicState` / `VisualState` /

@@ -78,7 +78,8 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(len(result["episodes"]), 1)
         episode = result["episodes"][0]
         self.assertEqual(episode["type"], "AMBIENT_EPISODE_CANDIDATE")
-        self.assertEqual(episode["payload"]["importance"], "promote_candidate")
+        self.assertEqual(episode["payload"]["importance"], "retain")
+        self.assertFalse(episode["payload"]["verified"])
         self.assertEqual(episode["payload"]["source"], "mixed")
         self.assertEqual(episode["payload"]["source_event_ids"], ["audio-1", "screen-1"])
         self.assertFalse(episode["payload"]["raw_audio_persisted"])
@@ -199,7 +200,7 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(memory.state(now=20)["episode_count"], 0)
         self.assertEqual(memory.triage(now=21)["status"], "provider_error")
 
-    def test_provider_cannot_suppress_deterministically_salient_observation(self):
+    def test_unscored_asr_remains_unverified_even_when_salient(self):
         memory = AmbientMemoryBuffer(enabled=True, triage_provider=_IgnoreTriage())
         memory.ingest_system_audio(
             "Важный error: deadline сегодня, запомни.",
@@ -209,7 +210,10 @@ class AmbientMemoryTests(unittest.TestCase):
         )
         result = memory.triage(now=20)
         self.assertEqual(result["status"], "processed")
-        self.assertEqual(result["episodes"][0]["payload"]["importance"], "promote_candidate")
+        payload = result["episodes"][0]["payload"]
+        self.assertEqual(payload["importance"], "retain")
+        self.assertFalse(payload["verified"])
+        self.assertTrue(payload["summary"].startswith("Непроверенная ASR-расшифровка:"))
 
     def test_ollama_provider_uses_cpu_and_structured_output(self):
         requests = []

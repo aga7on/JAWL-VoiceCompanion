@@ -598,9 +598,24 @@
             },
             {
               "file": "tests/test_giga_final.py"
+            },
+            {
+              "file": "scripts/gigaam_baseline_fixtures.py"
+            },
+            {
+              "file": "scripts/make_synthetic_audio_cases.py"
+            },
+            {
+              "file": "scripts/run_synthetic_cases_live.ps1"
+            },
+            {
+              "file": "tests/test_gigaam_baseline_fixtures.py"
+            },
+            {
+              "file": "tests/test_synthetic_audio_cases.py"
             }
           ],
-          "note": "Canonical GigaAM file mode: scoped cancellation и bounded JSON/PCM. Cleanup ждёт signaled exact-member process handles плюс Job active=0 до удаления WAV; retry сохраняет identities.39 focused process tests PASS;50-run race probe устранён. Не ASR/mic SLA."
+          "note": "Canonical GigaAM file mode: scoped cancellation и bounded JSON/PCM. Cleanup ждёт signaled exact-member process handles плюс Job active=0 до удаления WAV; retry сохраняет identities. Synthetic ASR gate scores known speech against source text (WER ≤0.20), checks repeated phrases, and requires abstention on pure noise; current 12-case CPU replay passed. Independent-speaker and live mixed-media ASR quality remain open; fixture gate is not an ASR/mic SLA."
         },
         {
           "id": "asr-fail",
@@ -830,6 +845,41 @@
               "file": "desktop/tests/app-voice-lifecycle.test.mjs"
             }
           ]
+        },
+        {
+          "id": "voice-cues",
+          "name": "????????",
+          "role": "compute",
+          "note": "????????????????? ????? --voice-delivery-cues; ????? ??????????? ??????????? ???????????? ????????? ?????? pitch/level ???????? ?? ?????????? PCM. ?? ????????? ?????????; ??? ?????? ? ?????????? ?????. ?????????? ? live acceptance ???????.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/voice_delivery.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_packet.py"
+            },
+            {
+              "file": "docs/research/voice-delivery-cues-20261029.md"
+            },
+            {
+              "file": "src/jawl_voicecompanion/composition.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/__main__.py"
+            },
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            }
+          ]
         }
       ],
       "flow": [
@@ -864,12 +914,6 @@
           "to": "asr-fail",
           "kind": "error",
           "condition": "движок недоступен или расшифровка сорвалась"
-        },
-        {
-          "from": "final-asr",
-          "to": "turn",
-          "kind": "conditional",
-          "condition": "распознавание успешно и capture не отменён"
         },
         {
           "from": "turn",
@@ -909,11 +953,22 @@
           "to": "final-asr",
           "kind": "next",
           "condition": "????? PCM ? ?????????? ???????? ??????? ?????????? ?? /voice/end"
+        },
+        {
+          "from": "final-asr",
+          "to": "voice-cues",
+          "kind": "conditional",
+          "condition": "??????????? ??????????? ????????????; ????????? ????? abstain"
+        },
+        {
+          "from": "voice-cues",
+          "to": "turn",
+          "kind": "next"
         }
       ],
       "confidence": 0.9,
       "provenance": "ai",
-      "updated_at": "2026-10-29T00:40:00Z"
+      "updated_at": "2026-10-29T00:00:00Z"
     },
     {
       "id": "f-streaming-asr",
@@ -2817,7 +2872,7 @@
           "id": "sensory-timeline",
           "name": "История",
           "role": "transform",
-          "note": "The bounded text-only store keeps a one-hour rolling timeline and seven-day hourly moments; brain history questions can request current, recent, or weekly context. Raw PCM and screen frames are excluded.",
+          "note": "The bounded text-only store keeps a one-hour rolling timeline and seven-day hourly moments; summaries preserve first/last observations and salient, temporally spread middle moments. Context compaction samples across source time, including late results, and renders chronologically. Store flush/reopen regression covers 20 scene changes across an hour. Ambient ASR samples with at least 16 transcript characters, unverified music descriptions and YAMNet sound-event candidates qualify for bounded hourly moments while retaining verification provenance. Brain history questions can request current, recent, or weekly context. History write outcomes/errors are exposed as text-free telemetry in the sensor card; record-call status does not prove disk flush or brain retrieval. Raw PCM and screen frames are excluded. Flush freshness and failure are exposed separately from record calls; process status does not prove reopen or retrieval. Unreadable, oversized or unsupported-schema archives block automatic overwrite until explicit clear. History-query context warns the brain when saved history is unavailable and labels any listed events as current-process-only. Persistence telemetry labels load, write, clear, and telemetry errors separately. Missing or failed durable history is disclosed in VA; a visual-only fallback is explicitly marked incomplete.",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/sensory_history.py"
@@ -2833,6 +2888,18 @@
             },
             {
               "file": "tests/test_web.py"
+            },
+            {
+              "file": "docs/research/sensory-history-acceptance-20261025.md"
+            },
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "docs/research/sensory-history-write-telemetry-20261029.md"
             }
           ]
         },
@@ -2855,9 +2922,9 @@
         },
         {
           "id": "va-packet",
-          "name": "???????? ??????? VA-??????????",
+          "name": "Передать VA-пакет",
           "role": "transform",
-          "note": "?????????? ????? ??????? ?? ???????; Perception ??????????? ??????????, ???????/???????? ?????????, ??????????????? ??? ?? ??????????? ? ???????.",
+          "note": "Мозг получает отдельные свежие каналы экрана/OCR, ASR, аудиоописания, подтверждённой музыки и слабых музыкальных сигналов-гипотез с возрастом и неопределённостью; неподтверждённое состояние music остаётся скрытым.",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/perception_packet.py"
@@ -2873,6 +2940,86 @@
             },
             {
               "file": "tests/test_perception_packet.py"
+            },
+            {
+              "file": "tests/test_web.py"
+            },
+            {
+              "file": "tests/test_native_jawl_turn_context.py"
+            },
+            {
+              "file": "docs/research/va-audio-channel-handoff-20261029.md"
+            },
+            {
+              "file": "scripts/live_qwen_visual_sensor_smoke.py"
+            },
+            {
+              "file": "docs/research/qwen-screen-ocr-cpu-smoke-20261029.md"
+            }
+          ]
+        },
+        {
+          "id": "audio-events",
+          "name": "Выделить звуковые события",
+          "role": "compute",
+          "note": "YAMNet CPU подтверждает музыку при raw score ≥ 0.35 и пороге по окнам. raw max ≥ 0.20 ниже шлюза идёт в краткую гипотезу музыкального/тонального фона с сырым максимумом и частотой окон (не вероятность): скрининг дал 0/181 ESC-10 немуз. клипов, 0/3 речевых контролей, 1/5 реальных медиаклипов и 11/54 смесей; данные исследовательские, без человеческой разметки. Сигнал некалиброван, не факт и не сохраняется как музыка; live loopback и SFX остаются OPEN. Ambient GigaAM/VoiceMem transcripts share a narrow artifact filter (filler/repeated/CJK-Hangul), and absent ASR confidence remains 0.0; ambient audio/screen entries retain verified=false through VA, triage and episodes, with triage instructed to preserve uncertainty; unscored GigaAM transcripts of at least eight characters can enter the seven-day archive as retain-only unverified hypotheses and are not auto-promoted. This is provenance, not accuracy validation. The system-sensor card exposes loopback ASR mode/count/filter/freshness without transcript text. Plausible hallucination and live mixed-loopback accuracy remain open.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/yamnet_soundscape.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_audio.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_packet.py"
+            },
+            {
+              "file": "tests/test_yamnet_soundscape.py"
+            },
+            {
+              "file": "tests/test_ambient_audio.py"
+            },
+            {
+              "file": "scripts/probe_yamnet_esc10.py"
+            },
+            {
+              "file": "scripts/fetch_esc10_fold.py"
+            },
+            {
+              "file": "docs/research/yamnet-sound-event-candidates-20261029.md"
+            },
+            {
+              "file": "scripts/probe_yamnet_weak_music.py"
+            },
+            {
+              "file": "docs/research/audio-speech-music-overlap-20261029.md"
+            },
+            {
+              "file": "src/jawl_voicecompanion/transcript_quality.py"
+            },
+            {
+              "file": "docs/research/ambient-asr-artifact-gate-20261029.md"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_memory.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_triage.py"
+            },
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "docs/research/ambient-asr-status-20261029.md"
             }
           ]
         }
@@ -2945,11 +3092,26 @@
           "from": "audio-detail",
           "to": "va-packet",
           "kind": "next"
+        },
+        {
+          "from": "note",
+          "to": "audio-events",
+          "kind": "async"
+        },
+        {
+          "from": "audio-events",
+          "to": "compose",
+          "kind": "next"
+        },
+        {
+          "from": "audio-events",
+          "to": "va-packet",
+          "kind": "next"
         }
       ],
       "confidence": 0.85,
       "provenance": "ai",
-      "updated_at": "2026-10-29T00:20:00Z"
+      "updated_at": "2026-10-29T00:00:00Z"
     },
     {
       "id": "f-ws-transport",
@@ -4497,6 +4659,13 @@
       "kind": "flow",
       "mode": "sync",
       "note": "Проверенный файл VRM становится отдельным элементом гардероба; не меняет текущий выбор автоматически"
+    },
+    {
+      "from": "f-sensory-ingest",
+      "to": "f-perception-fusion",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Распознанные аудиособытия и кадры постепенно пополняют общий контекст"
     }
   ],
   "epic_flow": [

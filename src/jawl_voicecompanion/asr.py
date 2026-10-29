@@ -120,7 +120,9 @@ class UtteranceBuffer:
                 "raw_audio_persisted": False,
             }
 
-    def finish(self, session_id: str, *, scope_id: str = "") -> dict[str, Any]:
+    def finish(
+        self, session_id: str, *, scope_id: str = "", analyze_delivery: bool = False,
+    ) -> dict[str, Any]:
         """Transcribe the buffered utterance with GigaAM and clear the session.
 
         Explicit by design: a missing transcriber or a transcriber failure is
@@ -158,12 +160,31 @@ class UtteranceBuffer:
                 self._inflight.pop(session, None)
         if not text:
             return {"status": "no_speech", "text": "", "bytes": len(current.data), "raw_audio_persisted": False}
-        return {
+        result = {
             "status": "transcribed",
             "text": text[:MAX_ASR_TEXT_CHARS],
             "bytes": len(current.data),
             "raw_audio_persisted": False,
         }
+        if analyze_delivery:
+            # Ambient loopback callers keep the default off; only the direct
+            # microphone turn opts in, so external media is not attributed to
+            # the user's vocal delivery.
+            try:
+                from .voice_delivery import analyze_voice_delivery
+                delivery = analyze_voice_delivery(
+                    bytes(current.data), current.sample_rate, current.channels,
+                    observed_monotonic=current.touched_at,
+                )
+            except Exception:  # noqa: BLE001 - optional measurements cannot break ASR
+                delivery = None
+            if delivery is not None:
+                result["voice_delivery"] = delivery
+        return result
+
+    def finish_microphone(self, session_id: str, *, scope_id: str = "") -> dict[str, Any]:
+        """Finish a direct-mic turn and attach optional objective voice cues."""
+        return self.finish(session_id, scope_id=scope_id, analyze_delivery=True)
 
     @staticmethod
     def _cancelled(current: _AudioSession) -> dict[str, Any]:

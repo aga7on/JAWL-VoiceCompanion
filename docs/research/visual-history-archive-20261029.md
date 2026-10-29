@@ -18,4 +18,19 @@ Fresh Qwen captions entered `SensoryHistoryStore` through `PerceptionFusion.note
 - Perception fusion + Qwen visual sensor + sensory history + current-screen TTL suites: **41 passed**.
 - `py_compile` and scoped `git diff --check` passed.
 
+## Hourly compaction follow-up
+
+The first compactor ranked moments by importance and then kept the first ten;
+equal-scored scene changes therefore retained only the newest part of a busy
+hour. It now keeps the earliest and latest observation and fills the remaining
+slots by salience plus temporal distance from the already selected moments,
+returning them in chronological order. A regression writes 20 scene changes over
+57 minutes, flushes and reopens the store, then verifies ten moments still span the
+hour, including its first and last scenes. `tests/test_sensory_history.py`: **5
+passed**. The rolling-hour prompt budget also samples by salience and time instead
+of retaining only the head and tail; late results render by original capture time.
+Tests cover dense 60-event context and out-of-order completion. The expanded
+`tests/test_sensory_history.py` suite is **7 passed**. This verifies store-level
+compaction/reopen, not a live Companion restart or brain-generated narrative quality.
+
 Live process-restart recall and week-long retention remain operational acceptance checks; this change verifies storage, serialization, and re-open behavior through the existing history-store suite.

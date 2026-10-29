@@ -626,7 +626,7 @@ class WebTests(unittest.TestCase):
         native = _FakeJawlMemory()
         self.server.gateway.jawl_web = native
         self.server.ambient_memory.set_enabled(True)
-        self.server.ambient_memory.ingest_system_audio(
+        self.server.ambient_memory.ingest_visual(
             "Важный дедлайн, запомни эту цель.",
             confidence=0.95,
             event_id="episode-promote",
@@ -1214,6 +1214,10 @@ class CurrentPerceptionEnrichmentTests(unittest.TestCase):
             scene_id="scene-4",
         )
         fusion.note(
+            "ocr", "Quest: enter the observatory", now=captured - 0.1,
+            metadata={"source": "windows_ocr", "verified": False, "frame_id": "frame-17"},
+        )
+        fusion.note(
             "speech",
             "System-audio transcript: The sun is dying.",
             now=captured - 0.4,
@@ -1228,6 +1232,12 @@ class CurrentPerceptionEnrichmentTests(unittest.TestCase):
             },
         )
         fusion.note(
+            "audio_description",
+            "A tense orchestral cue rises under the narration.",
+            now=captured - 0.8,
+            metadata={"source": "eg2-audio", "audio_kind": "music", "verified": False},
+        )
+        fusion.note(
             "music",
             "Music detected by YAMNet.",
             now=captured - 1.2,
@@ -1239,6 +1249,8 @@ class CurrentPerceptionEnrichmentTests(unittest.TestCase):
                 "model_score": 0.34,
                 "calibrated": False,
                 "music_state": "music",
+                "segment_started_monotonic": captured - 16.0,
+                "segment_ended_monotonic": captured - 1.2,
                 "candidate_tags": ["Saxophone", "Electronic music"],
                 "candidate_tags_calibrated": False,
                 "music_windows": 3,
@@ -1246,6 +1258,22 @@ class CurrentPerceptionEnrichmentTests(unittest.TestCase):
                 "rms_dbfs": -24.5,
                 "energy_trend": "rising",
             },
+        )
+        fusion.note(
+            "audio_candidates",
+            "Possible music style: cinematic orchestral.",
+            now=captured - 1.1,
+            metadata={
+                "source": "eg2-audio", "audio_kind": "music", "verified": False,
+                "segment_started_monotonic": captured - 8.0,
+                "segment_ended_monotonic": captured - 1.1,
+            },
+        )
+        fusion.note(
+            "audio_event_candidates",
+            "Possible YAMNet sound event: impact.",
+            now=captured - 0.7,
+            metadata={"source": "yamnet-onnx-cpu", "verified": False},
         )
         ServerContext.perception_fusion = fusion
 
@@ -1255,14 +1283,22 @@ class CurrentPerceptionEnrichmentTests(unittest.TestCase):
         self.assertEqual(clean, "What is happening now?")
         channels = packet["channels"]
         self.assertIn("teacher in a classroom", channels["screen"]["text"])
+        self.assertIn("quest", channels["ocr"]["text"].lower())
         self.assertIn("The sun is dying", channels["speech"]["text"])
         self.assertEqual(channels["speech"]["duration_s"], 15)
         self.assertGreaterEqual(channels["speech"]["age_s"], 1)
+        self.assertIn("orchestral cue", channels["audio_description"]["text"])
+        self.assertTrue(channels["audio_description"]["hypothesis"])
+        self.assertIn("cinematic orchestral", channels["audio_candidates"]["text"])
+        self.assertIn("Possible YAMNet", channels["audio_event_candidates"]["text"])
         self.assertTrue(channels["music"]["hypothesis"])
         self.assertEqual(channels["music"]["candidate_tags"], ["Saxophone", "Electronic music"])
         for diagnostic in ("frame-17", "scene-4", "audio-segment-9", "rms_dbfs", "music_windows", "model_score"):
             self.assertNotIn(diagnostic, enriched)
         self.assertIn("Saxophone", render_packet(packet))
+        self.assertIn("orchestral cue", render_packet(packet))
+        self.assertIn("cinematic orchestral", render_packet(packet))
+        self.assertIn("impact", render_packet(packet))
 
     def test_unverified_audio_tag_warning_requires_fresh_uncalibrated_candidates(self):
         class Arbiter:
@@ -1384,6 +1420,30 @@ class SensoryHistoryEnrichmentTests(unittest.TestCase):
         self.assertEqual(ServerContext.sensory_history.calls[2]["seconds"], 7 * 24 * 3600)
         self.assertEqual(ServerContext.sensory_history.calls[2]["focus_seconds_ago"], None)
         self.assertTrue(ServerContext.sensory_history.calls[2]["include_week"])
+
+    def test_history_failure_is_disclosed_to_brain_instead_of_silent_visual_fallback(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class BrokenHistory:
+            @staticmethod
+            def context_text(**kwargs):
+                raise OSError("unavailable")
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+            _PERCEPTION_HISTORY_QUERY = CompanionServer._PERCEPTION_HISTORY_QUERY
+            _SENSORY_HISTORY_QUERY = CompanionServer._SENSORY_HISTORY_QUERY
+            perception_fusion = PerceptionFusion()
+            sensory_history = BrokenHistory()
+
+        enriched = CompanionServer.enrich_turn_text(ServerContext, "What happened two minutes ago?")
+
+        self.assertIn("SENSORY HISTORY UNAVAILABLE: durable history retrieval failed", enriched)
+        self.assertIn("Do not infer that unlisted events did not happen", enriched)
 
 
 class VoicePrefaceTests(unittest.TestCase):

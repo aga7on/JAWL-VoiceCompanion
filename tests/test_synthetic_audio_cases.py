@@ -69,7 +69,10 @@ class SyntheticAudioCasesTests(unittest.TestCase):
         self._src = self._dir / "source.wav"
         _make_source_wav(self._src, 16000, 1.0)
         self._out = self._dir / "cases"
-        self._manifest = make_cases(self._src, self._out, seed=7)
+        self._manifest = make_cases(
+            self._src, self._out, seed=7,
+            reference_text="Какой сегодня статус моего проекта?",
+        )
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -129,6 +132,21 @@ class SyntheticAudioCasesTests(unittest.TestCase):
         case = next(item for item in self._manifest["cases"] if item["file"] == "consecutive_two.wav")
         self.assertTrue(case["must_transcribe"])
         self.assertGreaterEqual(case["min_chars"], 2)
+        self.assertEqual(
+            case["reference_text"],
+            "Какой сегодня статус моего проекта? Какой сегодня статус моего проекта?",
+        )
+        self.assertEqual(case["max_wer"], 0.2)
+
+    def test_noise_only_must_abstain(self) -> None:
+        case = next(item for item in self._manifest["cases"] if item["file"] == "noise_only.wav")
+        self.assertTrue(case["must_be_empty"])
+
+    def test_all_required_transcripts_have_reference_when_provided(self) -> None:
+        for case in self._manifest["cases"]:
+            if case["must_transcribe"]:
+                self.assertTrue(case["reference_text"])
+                self.assertIn("max_wer", case)
 
     def test_same_seed_is_bit_identical(self) -> None:
         out2 = self._dir / "cases2"

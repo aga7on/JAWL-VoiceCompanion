@@ -23,14 +23,17 @@ _TTL_SECONDS = {
     "screen": 90.0,
     "window": 120.0,
     "music": 240.0,
+    "music_candidate": 30.0,
     "speech": 300.0,
     "eg2": 60.0,
     "media": 300.0,
     "sound": 120.0,
     "audio_description": 60.0,
     "audio_candidates": 60.0,
+    "audio_event_candidates": 30.0,
     "eg2_media": 120.0,
     "ocr": 120.0,
+    "voice_delivery": 20.0,
 }
 _NOW_TTL = {
     "screen": 5.0,
@@ -39,14 +42,17 @@ _NOW_TTL = {
     # Live music events are refreshed by the rolling loopback detector; don't
     # let a stopped track remain in the current-scene prompt for four minutes.
     "music": 20.0,
+    "music_candidate": 12.0,
     # Captions are independent of the music-presence detector and expire on
     # the same short live horizon as the underlying audio clip.
     "audio_description": 20.0,
     "audio_candidates": 20.0,
+    "audio_event_candidates": 12.0,
     # System-audio transcript is useful to a live co-watching turn, but must
     # disappear quickly once its segment is no longer current.
     "speech": 20.0,
     "ocr": 5.0,
+    "voice_delivery": 12.0,
 }
 # Live turns carry evidence per channel, separate from the legacy 1200-char
 # text summary. Keep useful transcript/detail without allowing unbounded text.
@@ -54,14 +60,17 @@ _CHANNEL_TEXT_LIMITS = {
     "screen": 1000,
     "window": 2000,
     "music": 800,
+    "music_candidate": 320,
     "speech": 2400,
     "eg2": 1000,
     "media": 1200,
     "sound": 800,
     "audio_description": 1600,
     "audio_candidates": 1200,
+    "audio_event_candidates": 900,
     "eg2_media": 1000,
     "ocr": 2400,
+    "voice_delivery": 500,
 }
 _VISUAL_EVENT_TTL_SECONDS = 15.0
 _MAX_VISUAL_EVENTS = 5
@@ -69,6 +78,7 @@ _MAX_RENDERED_VISUAL_EVENTS = 4
 _LABELS = {
     "window": "Окно",
     "music": "Звук",
+    "music_candidate": "Слабый аудиосигнал",
     "speech": "Слышно",
     "eg2": "EG2",
     "media": "Медиа",
@@ -76,7 +86,9 @@ _LABELS = {
     "audio_candidates": "Гипотезы аудио",
     "ocr": "OCR",
 }
+_LABELS["audio_event_candidates"] = "YAMNet event hypotheses (unverified)"
 _LABELS["sound"] = "Звук"
+_LABELS["voice_delivery"] = "\u041f\u043e\u0434\u0430\u0447\u0430 \u0433\u043e\u043b\u043e\u0441\u0430"
 
 
 def _bounded_channel_text(kind: str, value: Any) -> str:
@@ -129,6 +141,62 @@ class PerceptionFusion:
     history_store: Any | None = field(default=None, init=True, repr=False)
     prompt_snapshot_path: Path | None = field(default=None, init=True, repr=False)
     _export_lock: RLock = field(default_factory=RLock, init=False, repr=False)
+    _history_status_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _history_write_errors: int = field(default=0, init=False, repr=False)
+    _history_last_status: str | None = field(default=None, init=False, repr=False)
+    _history_last_modality: str | None = field(default=None, init=False, repr=False)
+
+    def _record_history(self, modality: str, text: str, **kwargs: Any) -> None:
+        store = self.history_store
+        if store is None:
+            return
+        try:
+            result = store.record(modality, text, **kwargs)
+            status = str(result.get("status") or "unknown") if isinstance(result, dict) else "unknown"
+        except Exception:  # noqa: BLE001 - durable history must not block current perception
+            status = "error"
+        with self._lock:
+            key = f"{modality}:{status}"[:64]
+            self._history_status_counts[key] = min(2_147_483_647, self._history_status_counts.get(key, 0) + 1)
+            if status == "error":
+                self._history_write_errors = min(2_147_483_647, self._history_write_errors + 1)
+            self._history_last_status = status
+            self._history_last_modality = str(modality)[:20]
+
+    def history_health(self) -> dict[str, Any]:
+        """Return text-free persistence telemetry for the optional sensory archive."""
+        store = self.history_store
+        persistence: dict[str, Any] = {
+            "enabled": None,
+            "last_flush_age_seconds": None,
+            "last_error": None,
+            "last_error_stage": None,
+            "load_blocked": None,
+        }
+        state_fn = getattr(store, "state", None) if store is not None else None
+        if callable(state_fn):
+            try:
+                state = state_fn()
+                if isinstance(state, dict):
+                    persistence = {
+                        "enabled": state.get("enabled") is True,
+                        "last_flush_age_seconds": state.get("last_flush_age_seconds"),
+                        "last_error": state.get("last_error"),
+                        "last_error_stage": state.get("last_error_stage"),
+                        "load_blocked": state.get("load_blocked") is True,
+                    }
+            except Exception:  # noqa: BLE001 - telemetry must not affect perception
+                persistence["last_error"] = "telemetry_unavailable"
+                persistence["last_error_stage"] = "telemetry"
+        with self._lock:
+            return {
+                "configured": store is not None,
+                "writes": dict(self._history_status_counts),
+                "write_errors": self._history_write_errors,
+                "last_status": self._history_last_status,
+                "last_modality": self._history_last_modality,
+                "persistence": persistence,
+            }
 
     def _export_prompt_snapshot(self) -> None:
         if self.prompt_snapshot_path is None:
@@ -148,7 +216,7 @@ class PerceptionFusion:
         now: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        channel = str(kind)[:20]
+        channel = str(kind)[:40]
         clean = _bounded_channel_text(channel, text)
         if not clean:
             return
@@ -158,29 +226,26 @@ class PerceptionFusion:
             self._items[channel] = (clean, moment, meta)
         self._export_prompt_snapshot()
         if self.history_store is not None:
-            modality = {"screen": "visual", "speech": "speech", "music": "music", "sound": "sound"}.get(channel)
-            if channel in {"audio_description", "audio_candidates"}:
+            modality = {"screen": "visual", "speech": "speech", "music": "music", "music_candidate": "sound", "sound": "sound"}.get(channel)
+            if channel in {"audio_description", "audio_candidates", "audio_event_candidates"}:
                 modality = "music" if meta.get("audio_kind") == "music" else "sound"
             if modality:
-                try:
-                    observed_at = (
-                        meta.get("observed_at")
-                        or meta.get("captured_at")
-                        or meta.get("observed_at_wall")
-                    )
-                    self.history_store.record(
-                        modality,
-                        clean,
-                        observed_at=observed_at,
-                        source=str(meta.get("source") or ""),
-                        scene_id=str(meta.get("scene_id") or ""),
-                        frame_id=str(meta.get("frame_id") or ""),
-                        confidence=meta.get("confidence"),
-                        verified=meta.get("verified"),
-                        metadata=meta,
-                    )
-                except Exception:  # noqa: BLE001 - history is best-effort, never blocks perception
-                    pass
+                observed_at = (
+                    meta.get("observed_at")
+                    or meta.get("captured_at")
+                    or meta.get("observed_at_wall")
+                )
+                self._record_history(
+                    modality,
+                    clean,
+                    observed_at=observed_at,
+                    source=str(meta.get("source") or ""),
+                    scene_id=str(meta.get("scene_id") or ""),
+                    frame_id=str(meta.get("frame_id") or ""),
+                    confidence=meta.get("confidence"),
+                    verified=meta.get("verified"),
+                    metadata=meta,
+                )
 
     def compose(self, screen_summary: str = "", *, now: float | None = None) -> str:
         """Render fresh channels, recent screen history, and the current caption.
@@ -280,7 +345,7 @@ class PerceptionFusion:
                 for event in recent_events[-_MAX_RENDERED_VISUAL_EVENTS:]
             ]
             parts.append("Недавняя последовательность экрана (история, не текущий кадр; модельные гипотезы могут быть ошибочны): " + " -> ".join(rendered))
-        for kind in ("eg2_media", "eg2", "ocr", "sound", "window", "music", "audio_candidates", "audio_description", "speech"):
+        for kind in ("eg2_media", "eg2", "ocr", "sound", "window", "music", "music_candidate", "audio_candidates", "audio_event_candidates", "audio_description", "speech", "voice_delivery"):
             if kind == "eg2_media" and not self.include_eg2_media_in_scene:
                 continue
             entry = items.get(kind)
@@ -389,19 +454,16 @@ class PerceptionFusion:
             self._visual_events.clear()
             self._visual_events.extend(events[-_MAX_VISUAL_EVENTS:])
         if persist_history and self.history_store is not None:
-            try:
-                self.history_store.record(
-                    "visual",
-                    clean,
-                    observed_at=float(captured_at_wall),
-                    source=str(source or "")[:100],
-                    scene_id=str(scene_id or "")[:64],
-                    frame_id=str(frame_id or "")[:64],
-                    verified=False,
-                    metadata={"history_only": True, "roi": list(roi) if roi is not None else None},
-                )
-            except Exception:  # noqa: BLE001 - durable history must not block perception
-                pass
+            self._record_history(
+                "visual",
+                clean,
+                observed_at=float(captured_at_wall),
+                source=str(source or "")[:100],
+                scene_id=str(scene_id or "")[:64],
+                frame_id=str(frame_id or "")[:64],
+                verified=False,
+                metadata={"history_only": True, "roi": list(roi) if roi is not None else None},
+            )
         return True
 
     def observe_screen(self, caption: str) -> str:
@@ -411,7 +473,7 @@ class PerceptionFusion:
 
     def current_state(self, kind: str, *, now: float | None = None) -> dict[str, Any]:
         """Report whether a channel is present in the current-context view."""
-        channel = str(kind)[:20]
+        channel = str(kind)[:40]
         moment = time.monotonic() if now is None else float(now)
         ttl = _NOW_TTL.get(channel, _TTL_SECONDS.get(channel, 120.0))
         with self._lock:
@@ -464,9 +526,10 @@ class PerceptionFusion:
         """Mark a channel as potentially outdated without losing its timestamped value."""
         moment = time.monotonic() if now is None else float(now)
         with self._lock:
-            channel = str(kind)[:20]
+            channel = str(kind)[:40]
             channels = (
                 ("screen", "ocr") if channel == "screen"
+                else ("speech", "voice_delivery") if channel == "speech"
                 else (channel, "audio_candidates") if channel == "music"
                 else (channel,)
             )

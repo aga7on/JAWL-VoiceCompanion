@@ -102,6 +102,8 @@ class OllamaTriageProvider:
         event_ids = {item["event_id"] for item in safe}
         prompt = (
             "Сожми наблюдения в один кандидат вторичной памяти. Не выдумывай факты. "
+            "verified=false означает непроверенную гипотезу сенсора или ASR: сохрани эту неопределённость "
+            "в summary и не превращай распознанные слова в подтверждённые факты. "
             "Если данных недостаточно, importance=ignore. Верни только JSON по схеме.\n"
             + json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
         )
@@ -151,6 +153,9 @@ class OllamaTriageProvider:
             "stream": str(payload.get("stream") or "")[:32],
             "text": str(payload.get("text") or payload.get("summary") or "").replace("\x00", "")[:1200],
             "confidence": payload.get("confidence", 0.5),
+            "verified": payload.get("verified") is True,
+            "confidence_calibrated": payload.get("confidence_calibrated") is True,
+            "evidence_type": str(payload.get("evidence_type") or "")[:40],
             "source_app": str(payload.get("source_app") or "")[:80],
             "observed_at": str(payload.get("observed_at") or "")[:80],
         }
@@ -192,6 +197,8 @@ class OpenAICompatibleTriageProvider:
         event_ids = {item["event_id"] for item in safe}
         prompt = (
             "Summarize these ambient observations into one secondary-memory candidate. "
+            "verified=false means an unverified sensor or ASR hypothesis: preserve that uncertainty "
+            "in the summary and do not turn recognized words into confirmed facts. "
             "Do not invent facts. If evidence is insufficient, use importance=ignore. "
             "Return only JSON matching the supplied schema.\n"
             + json.dumps(safe, ensure_ascii=False, separators=(",", ":"))

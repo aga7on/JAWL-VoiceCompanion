@@ -12,6 +12,13 @@ OmniVoice не менялся. Health degraded из-за ожидания ambien
 весь live audio path этой проверкой не принят. Подробности и доказательства:
 [аудит ReAct/VA](research/react-perception-audit-20261029.md).
 
+ADR-048 now fixes the permanent model-role canon: Gemini 3.8 Flash brain via
+relay; Qwen3.5-0.8B Q4 CPU vision; Windows OCR/UIA; GigaAM q8 CPU ASR;
+EmbeddingGemma 2 ONNX and YAMNet ONNX CPU audio lanes; MiniLM ONNX CPU memory
+vectors; OmniVoice 0.6B on CUDA 1. This is a role decision, not live acceptance.
+The legacy runtime manifest still defaults to Hikari/local-bonsai2 and must not
+be used alone to claim a canonical Gemini launch.
+
 ## Микрофонная backpressure — 29 октября 2026
 
 Заполненная очередь из шести audio uploads больше не выключает capture:
@@ -42,6 +49,31 @@ false positive; three other synthetic controls abstained. Five audio suites:
 Live loopback quality, false-positive rate and shared-load behavior remain
 unverified: [audio channel report](research/audio-description-channel-20261029.md).
 
+29Oct Russian speaker-affect candidate probe: Aniemore XLS-R int4 loaded in the
+CPU-only vision environment after an isolated `compressed-tensors` dependency
+was supplied. On three real WAVs, inference took 16.1–24.4s for 6.5–10.0s
+inputs; peak RSS was 1.69 GiB. It emitted near-certain enthusiasm on both
+neutral instruction fixtures, so reject it for always-on affect. There is no
+accepted learned voice-affect classifier; see
+[candidate probe](research/russian-speech-emotion-cpu-candidate-20261029.md).
+
+29Oct follow-up adds an experimental, non-neural direct-microphone delivery
+measurement lane: coarse pitch percentiles, signal-level range and periodic
+frame ratio flow from a successful GigaAM mic turn into a separate, 12-second
+VA channel. It does not classify emotion, analyze system loopback, or persist raw
+audio/history. It is disabled by default; `--voice-delivery-cues` opts in. The CPU path is source-integrated but **not accepted**: calibration,
+latency/RSS, owner-reviewed speech, and live brain uptake remain open. Details:
+[voice delivery cues](research/voice-delivery-cues-20261029.md).
+
+29Oct VA audit found the packet serializer omitted the existing
+`audio_description` and `audio_candidates` channels from its fixed label list.
+Both now survive packet creation. Combined regression gates verify screen, OCR,
+ASR, audio caption, music evidence and YAMNet event hypotheses through web
+enrichment and native `PERCEPTION / VA`: packet 9/9, web 85/85, native 17/17,
+fusion 23/23, ambient audio 32/32 and YAMNet 10/10. Live audio delivery and
+real-model uptake remain to be observed:
+[VA audio handoff](research/va-audio-channel-handoff-20261029.md).
+
 Real-content audio follow-up on five local 10s clips: YAMNet music presence was
 4/10 windows in a Russian trailer, 1/10 anime, and 10/10 in gameplay, coding UI
 and the song. EG2 marked both speech and music likely in all five, with competing
@@ -51,6 +83,55 @@ scored. This confirms music presence plus ASR can coexist, while reliable style
 and sound-effect description are not accepted. Details:
 [real-content replay](research/realclip-audio-describer-20261029.md).
 
+29Oct ambient ASR now shares the narrow noise-artifact predicate already used
+for microphone transcripts. Empty/filler, repeated-character and CJK/Hangul
+outputs are dropped before ambient memory or current VA context; filtered count
+is exposed as `asr_noise_filtered`, and missing ASR confidence is no longer
+filled with an invented 0.7. YAMNet still sees all audio independently. This is
+not speech detection or transcript accuracy acceptance; plausible hallucinations
+and live mixed-loopback quality remain open:
+[ambient ASR artifact gate](research/ambient-asr-artifact-gate-20261029.md).
+Ambient screen/audio observations now retain `verified=false` through current VA,
+delayed-triage inputs and generated episodes; triage is instructed to preserve
+that uncertainty. Unscored GigaAM text of at least eight characters may now enter
+the seven-day archive as retain-only `Непроверенная ASR-расшифровка`; it is
+not auto-promoted. This is provenance labeling, not ASR accuracy validation.
+The system-sensor card now reports loopback ASR mode, accepted-fragment and
+artifact-filter counts, plus age/freshness of its last transcript without
+showing transcript contents. This is status plumbing, not live ASR acceptance:
+[loopback ASR status](research/ambient-asr-status-20261029.md).
+
+ASR fixture acceptance now compares known synthetic speech with its source text
+(WER ≤0.20) and requires an empty result for pure noise. Current GigaAM CPU replay
+passed all nine speech variants, including both copies in the consecutive-phrase
+case, and abstained on noise-only. A separate Russian SAPI-generated prompt with
+its recorded reference also scored WER 0.000. Faint speech and 0 dB SNR remain
+tolerant controls without an accuracy assertion. This does not establish accuracy
+on independently recorded speech or live mixed-media audio. On the same SAPI
+speech-only WAV, YAMNet emitted no event tags and Music peaked at 0.0002 over six
+windows; this is one controlled negative for music presence, not a broad false
+positive estimate.
+
+The CPU YAMNet sound-event candidate lane now travels separately from music and
+ASR through the brain packet, with explicit unverified status and rapid
+stop/pause invalidation. Source-deduplicated ESC-10 folds 4/5 were used to
+remove generic Vehicle/Engine/Aircraft labels and select a raw-score cutoff of
+0.15. Untouched fold 3 produced 58/64 exact-category labels (90.6%) and 40/65
+clips with an exact class candidate; pooled across three folds, 171/189 labels
+matched the single ESC-10 class and the separate music gate fired on 0/181
+environmental clips. This remains corpus-specific, uncalibrated evidence, not
+full audio acceptance. Silence/noise controls, live loopback and brain uptake
+remain open:
+[SFX candidate report](research/yamnet-sound-event-candidates-20261029.md).
+
+29Oct output-route check: WASAPI selected the current default
+`DigitalOutput (2- NVIDIA High Definition Audio)` loopback at 48kHz stereo and
+started/stopped without error. A 10s scalar-only idle probe received zero
+callbacks/chunks (no playback stimulus), so it proves endpoint opening only;
+the JAWL/Companion service ports were also stopped. No live audio content or
+PCM was stored. Signal delivery and brain uptake still require a live profile
+with playback.
+
 Visual context now separates invalidated/current captions from short history.
 Late Qwen results can be historical within the event TTL; older ones are dropped.
 Qwen sensor 18/18, fusion 16/16, now-TTL 2/2 passed. Live scene-change latency
@@ -58,8 +139,32 @@ acceptance remains open: [visual stale-context report](research/visual-stale-con
 
 History-only Qwen captions now also reach the durable one-hour/weekly text archive
 with original provenance, without duplicating fresh-screen writes. Fusion/Qwen/
-history/TTL suites: 41 passed. Process-restart recall remains open:
+history/TTL suites: 41 passed. Hourly compaction now preserves both boundaries and
+temporally spread salient moments; rolling-hour prompt compaction also preserves
+source-time order and samples the middle under its character budget. Seven history
+tests pass, including dense 60-event context and late-result ordering. Integrated-
+profile restart and live recall remain open:
 [visual history archive report](research/visual-history-archive-20261029.md).
+The hourly archive now also samples meaningful ambient-ASR phrases (≥16 transcript
+characters), unverified music descriptions and sound-event candidates; all remain
+marked unverified, and the timeline's hourly compaction keeps the record bounded.
+The new selection rule has not yet been regression-tested or observed in a live run.
+`PerceptionFusion` now counts history-store outcomes/errors and the sensor card
+shows these counters without text content. This verifies only record-call status,
+not disk flush/reopen or brain retrieval:
+[history-write telemetry](research/sensory-history-write-telemetry-20261029.md).
+The sensor card now separately reports last successful flush age and identifies
+whether persistence errors came from loading, writing, clearing, or telemetry;
+this remains process-reported status and does not verify reopen
+or recall by the brain. An unreadable, oversized, or unsupported-schema archive
+is now protected from an automatic empty/partial overwrite until explicit clear.
+The focused sensory-history suite passed 8/8, including preservation of the
+original file for all three invalid-archive cases and successful writes after
+explicit clear. History-query context now warns the brain when saved history is
+unavailable and labels remaining observations as current-process-only; live
+retrieval by the brain remains unverified. Missing or failed history retrieval
+is also disclosed in the VA packet instead of silently presenting visual-only
+fallback as the complete audiovisual timeline.
 
 Windows OCR now follows the selected Qwen capture source, including display-index
 captures. It runs on initial capture, a pending visual change, or the static
@@ -70,6 +175,19 @@ tests plus 33 subtests. One live capture on display 0 verified Windows OCR throu
 the sensor and VA packet using a stub Qwen client. Live-profile acceptance and
 CPU cost remain open; launch must explicitly enable `--screen-ocr`.
 Details: [Qwen OCR channel](research/qwen-ocr-channel-20261029.md).
+
+29Oct standalone live CPU smoke then ran the real Qwen3.5-0.8B Q4 server with
+GPU layers/projector offload disabled and Windows OCR on display 0. Eleven
+transient captures produced one Qwen delivery with separate `screen` and `ocr`
+channels in the VA packet and zero capture errors; confirmation age was 31ms,
+caption age 6.25s. No raw frame or OCR/caption text was persisted. Broad scene
+transport passed, but small text was corrupted; full-profile uptake, visual
+accuracy, scene-change continuity and sustained resource use remain open:
+[CPU screen/OCR smoke](research/qwen-screen-ocr-cpu-smoke-20261029.md).
+The launcher now enables `--hostos-live --screen-enabled` when Qwen is selected,
+without requiring the separate legacy ScreenWatch worker; `-EnableScreenOcr`
+adds OCR, and an OCR-only configuration without a capture path fails early.
+Focused launcher regression passed.
 
 ## Аудит живого Hikari-профиля 29 октября 2026
 
@@ -85,6 +203,12 @@ TTS playback через ephemeral playback marker; аренда обновляе
 длинного ответа и завершается при Stop/done. Desktop voice lifecycle: 30/30
 PASS. Это не доказывает, что активный loopback не транскрибирует собственную
 речь в живом профиле; managed live recheck открыт.
+
+Loopback во время этой аренды теперь продолжает только независимый YAMNet
+music/SFX lane: ASR и текстовый EG2-caption не получают собственный голос JAWL.
+Focused regression подтверждает, что музыка остаётся в ambient memory, а final
+ASR и captioner не вызываются. Реальный loopback с музыкой поверх речи и точность
+SFX во время TTS пока не проверены.
 
 Дополнительный VA follow-up: `PerceptionFusion.note()` и snapshot теперь дают
 ASR отдельный лимит 2400 символов, audio description — 1600; короткая legacy
@@ -178,3 +302,61 @@ A one-hour rolling text timeline plus seven-day compact hourly store is implemen
 - Managed restart completed at 2026-10-29 01:00 MSK. The active profile has `history_limit: 200` and `context_limit: 200`; startup receipt confirms the terminal compaction hook is installed. It preserves the full transcript until 18K characters, then keeps the latest 12 messages verbatim and compacts older messages into chronological excerpts. The provider budget is 20K characters.
 - All six profile endpoints are listening and the desktop window is visible. Health is `degraded`: screen captures run with zero capture errors, but recent captions age out amid scene-change drops; loopback capture is running on the NVIDIA output and is waiting for samples. No long-conversation threshold exercise has been done yet.
 - Static Python/Powershell syntax checks succeeded. The owned runtime lacks `pytest`, so focused pytest execution could not start.
+
+## Production ambient audio bridge replay: 29 October 2026
+
+Paced 10.01-second Aqua clip through the real `AmbientAudioASRBridge` with
+GigaAM q8, EG2 ONNX, YAMNet ONNX, in-memory ambient retention and
+`PerceptionFusion`; no Companion, capture device or network service started.
+The 11.16-second replay flushed cleanly: one GigaAM final was retained, YAMNet
+reported music (raw score max 0.9834), EG2 abstained as unknown, and
+`speech`/`music`/`audio_candidates` were fresh in fusion. No transcript text or
+PCM was persisted; transcript correctness was not scored. This is a local bridge
+replay, not live loopback or brain-turn acceptance. Follow-up replay of Russian trailer + Aqua
+song passed actual `speech`, `music`, and `audio_candidates` through
+`make_packet`/`attach_packet`/`split_packet`/`render_packet`; packet round-trip
+was valid and all three channels were fresh. No caption/SFX event appeared on
+those samples, and no live brain request was made. [Report](research/ambient-audio-bridge-paced-replay-20261029.md).
+
+Self-TTS mixed-audio follow-up: a 4 s in-memory Tera speech + Aqua mix, paced as
+eight 0.5 s loopback chunks with `PlaybackSuppression` active, ran through the
+production bridge and real YAMNet `CPUExecutionProvider`. YAMNet reported music
+on 2/3 windows with no drops/errors/stale results; the ASR client received zero
+calls. Neither PCM nor transcript was persisted. This verifies bridge routing
+and music presence on one local mixed clip, not physical TTS/WASAPI capture or
+general sound-event precision. [Live-session audit](research/live-session-audit-20261029.md).
+
+Speech/music masking scout: six opening 4 s FMA clips (one per broad genre) were
+mixed in memory with repeated Tera speech at music/speech RMS SNR −12, −8, −4,
+and 0 dB. YAMNet CPU detected 2/6, 2/6, 3/6, and 4/6; matched music-only
+baseline detected 4/6, while speech-only abstained. Detected track identities
+changed under overlap, so this is exploratory sensitivity evidence, not a
+calibrated recall figure; the 0.35 production cutoff was not changed. The EG2
+safe-claim adapter drops its detailed music claim when transcript text is
+present, while independent YAMNet remains active. [Overlap report](research/audio-speech-music-overlap-20261029.md).
+
+## LFM3-Audio-2B candidate ? 29 October 2026
+
+Official Q4_K_M GGUF is 1.1 GB plus a 338 MB audio mmproj, but project llama.cpp
+commit `1a07bfa` has no LFM3-Audio runtime support; upstream PR #31257 is pending.
+Official Q4 CPU ONNX bundle is 2.71 GB and requires a decoder/cache runtime, so it
+is not a drop-in classifier. No daily-profile change. An isolated benchmark remains
+a candidate only after a compatible runtime is available.
+[Research note](research/lfm3-audio-cpu-candidate-20261029.md).
+
+29Oct follow-up: the 0.35 confirmed-music gate and multi-window requirement are unchanged. Weak unconfirmed YAMNet Music scores (raw max ≥0.20) now pass to a separate `music_candidate` hypothesis channel with 12s current-context TTL; they are not stored as confirmed music and are invalidated by the next confirmed/no-candidate segment. This preserves a clue for the brain when speech masks music without relabeling tones as music. The 0.20 routing cutoff is exploratory and still needs source-disjoint real negatives; focused bridge, fusion, packet, and YAMNet suites pass. Details: `docs/research/audio-speech-music-overlap-20261029.md`.
+
+29Oct CPU route evaluation: 181 source-disjoint ESC-10 non-music clips, three
+recorded speech-query fixtures, and four synthetic speech/noise controls emitted
+zero weak Music candidates. Eighteen four-second FMA music openings yielded 16
+confirmed, one weak candidate, and one with no Music cue. Across 54 in-memory
+speech+music mixtures (three speech fixtures × six tracks × three SNRs), the
+bridge decision emitted 11 weak candidates and 34 confirmed music detections.
+Five existing real-media excerpts yielded four confirmed detections and one
+weak anime candidate (raw max 0.3819, one of ten windows).
+This supports the separated hypothesis route but is exploratory: mixtures reuse
+the same small set, labels are not listener-verified, and there was no live
+loopback. Confirmed threshold remains 0.35. Raw-free artifact:
+`runtime/audio-path-replay/out/yamnet-weak-music-candidate-20261029.json`;
+reproducer/report: `scripts/probe_yamnet_weak_music.py` and
+`docs/research/audio-speech-music-overlap-20261029.md`.

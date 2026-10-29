@@ -23,6 +23,7 @@ from .ambient_segments import AmbientSegment, AmbientSegmenter
 from .music_frame import build_music_frame
 from .system_audio import SystemAudioLoopback
 from .voicemem_client import VoiceMemUnavailable
+from .transcript_quality import is_meaningful_transcript
 
 
 class AmbientAudioDisabled(RuntimeError):
@@ -157,6 +158,8 @@ class AmbientAudioASRBridge:
         self._soundscape_generation: str | None = None
         self._chunks = 0
         self._transcripts = 0
+        self._asr_noise_filtered = 0
+        self._last_transcript_observed_at: float | None = None
         self._dropped_events = 0
         self._suppressed_self_tts = 0
         self._segment_events = 0
@@ -196,10 +199,15 @@ class AmbientAudioASRBridge:
         self._last_error: str | None = None
 
     def consume(self, pcm16: bytes, sample_rate: int, channels: int, session_id: str) -> dict[str, Any]:
-        if self.playback_suppression is not None and self.playback_suppression.active():
+        self_tts_active = self.playback_suppression is not None and self.playback_suppression.active()
+        if self_tts_active:
             with self._lock:
                 self._suppressed_self_tts += 1
-            return {"status": "suppressed", "reason": "self_tts_playback"}
+            # Without an independent soundscape lane, preserve the old complete
+            # suppression behavior. When YAMNet is available, continue only that
+            # non-ASR lane so game/music evidence is not lost during JAWL speech.
+            if self._soundscape_segmenter is None:
+                return {"status": "suppressed", "reason": "self_tts_playback"}
         try:
             capture_end = time.monotonic()
             converted = self._to_target_pcm(pcm16, sample_rate, channels, self.target_sample_rate)
@@ -210,7 +218,7 @@ class AmbientAudioASRBridge:
                     if self._stopping:
                         return {"status": "degraded", "error": "ambient_stopping"}
                     active_session = self._session_id
-                    tap = None if self._stream_tap_paused else self.stream_tap
+                    tap = None if self_tts_active or self._stream_tap_paused else self.stream_tap
                 if tap is not None:
                     try:
                         tap(converted, self.target_sample_rate, 1, session_id)
@@ -223,21 +231,25 @@ class AmbientAudioASRBridge:
                     return {"status": "degraded", "error": "ambient_session_changed"}
                 accepted = 0
                 dropped = 0
+                soundscape_accepted = 0
                 bytes_per_second = self.target_sample_rate * 2
                 for start in range(0, len(converted), self.max_feed_bytes):
                     chunk = converted[start : start + self.max_feed_bytes]
                     chunk_end = capture_end - (len(converted) - start - len(chunk)) / bytes_per_second
-                    result = self._segmenter.submit(
-                        chunk, self.target_sample_rate, 1, captured_at=chunk_end
-                    )
-                    if result.get("status") == "accepted":
-                        accepted += 1
-                    elif result.get("status") == "dropped":
-                        dropped += 1
+                    if not self_tts_active:
+                        result = self._segmenter.submit(
+                            chunk, self.target_sample_rate, 1, captured_at=chunk_end
+                        )
+                        if result.get("status") == "accepted":
+                            accepted += 1
+                        elif result.get("status") == "dropped":
+                            dropped += 1
                     if self._soundscape_segmenter is not None:
                         soundscape_result = self._soundscape_segmenter.submit(
                             chunk, self.target_sample_rate, 1, captured_at=chunk_end
                         )
+                        if soundscape_result.get("status") == "accepted":
+                            soundscape_accepted += 1
                         if soundscape_result.get("status") == "dropped":
                             with self._lock:
                                 self._soundscape_dropped += 1
@@ -245,6 +257,17 @@ class AmbientAudioASRBridge:
                     self._chunks += 1
                     self._segment_dropped += dropped
                     self._last_error = None
+            if self_tts_active:
+                if not soundscape_accepted:
+                    return {"status": "dropped", "reason": "ambient_soundscape_queue_full"}
+                return {
+                    "status": "accepted",
+                    "events": 0,
+                    "ingested": 0,
+                    "queued_chunks": soundscape_accepted,
+                    "mode": "soundscape_only_self_tts",
+                    "asr_suppressed": True,
+                }
             if not accepted:
                 return {"status": "dropped", "reason": "ambient_segment_queue_full", "dropped_chunks": dropped}
             result = {
@@ -505,6 +528,11 @@ class AmbientAudioASRBridge:
                 else None
             )
             description_freshness_ms = max(20_000, round(self.segment_max_seconds * 2_000))
+            transcript_age_ms = (
+                max(0, round((time.monotonic() - self._last_transcript_observed_at) * 1000.0))
+                if self._last_transcript_observed_at is not None
+                else None
+            )
             description_provider = getattr(
                 getattr(self.audio_describer, "provider", None), "name", None
             ) if self.audio_describer is not None else None
@@ -513,6 +541,9 @@ class AmbientAudioASRBridge:
                 "max_feed_bytes": self.max_feed_bytes,
                 "chunks": self._chunks,
                 "transcripts": self._transcripts,
+                "asr_noise_filtered": self._asr_noise_filtered,
+                "transcript_last_age_ms": transcript_age_ms,
+                "transcript_last_fresh": transcript_age_ms is not None and transcript_age_ms <= 120_000,
                 "dropped_events": self._dropped_events,
                 "suppressed_self_tts": self._suppressed_self_tts,
                 "last_error": self._last_error,
@@ -631,6 +662,22 @@ class AmbientAudioASRBridge:
             "Модельные аудиогипотезы (не факты; сходство, не вероятность): "
             + "; ".join(groups)
         )[:520]
+
+    @staticmethod
+    def _render_sound_event_candidates(candidates: list[Any]) -> str:
+        rendered: list[str] = []
+        for item in candidates[:3]:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()[:48]
+            score = AmbientAudioASRBridge._optional_score(item.get("score"))
+            hits = AmbientAudioASRBridge._optional_int(item.get("window_hits"))
+            windows = AmbientAudioASRBridge._optional_int(item.get("windows"))
+            if label and score is not None and hits is not None and windows:
+                rendered.append(f"{label} (score {score:.2f}; {hits}/{windows} windows)")
+        if not rendered:
+            return ""
+        return "Possible YAMNet sound-event class matches, unverified: " + "; ".join(rendered)
 
     @staticmethod
     def _wall_time_for_monotonic(observed_monotonic: float) -> float:
@@ -867,9 +914,13 @@ class AmbientAudioASRBridge:
                 except Exception:
                     self._discard_asr_session(session_id)
                     raise
-                transcript = str(transcription.get("text") or "").strip()
-                if transcript:
-                    self._commit_transcript(segment, transcript, confidence=0.7, event_id=segment.segment_id)
+                candidate = str(transcription.get("text") or "").strip()
+                if candidate:
+                    stored = self._commit_transcript(
+                        segment, candidate, confidence=0.0, event_id=segment.segment_id,
+                    )
+                    if stored is not None and stored.get("status") == "retained":
+                        transcript = candidate
             else:
                 feed_error: Exception | None = None
                 for start in range(0, len(segment.pcm16), self.max_feed_bytes):
@@ -898,6 +949,7 @@ class AmbientAudioASRBridge:
                         and event.get("type") == "VOICE_TURN"
                         and isinstance(event.get("payload"), dict)
                         and str(event.get("payload", {}).get("text") or "").strip()
+                        and is_meaningful_transcript(str(event.get("payload", {}).get("text") or ""))
                     ), "")
                 elif events:
                     with self._lock:
@@ -1149,6 +1201,32 @@ class AmbientAudioASRBridge:
                 stored_music = stored.get("status") == "retained"
             if self.perception_fusion is not None:
                 self.perception_fusion.invalidate("sound", now=segment.ended_at)
+                raw_event_candidates = soundscape.get("event_candidates")
+                raw_event_candidates = raw_event_candidates if isinstance(raw_event_candidates, list) else []
+                event_text = self._render_sound_event_candidates(raw_event_candidates)
+                if event_text:
+                    self.perception_fusion.note(
+                        "audio_event_candidates",
+                        event_text,
+                        now=segment.ended_at,
+                        metadata={
+                            "source": self.soundscape_source,
+                            "detector": "yamnet-onnx-cpu",
+                            "observed_at": self._wall_time_for_monotonic(segment.ended_at),
+                            "segment_id": segment.segment_id,
+                            "observed_at_monotonic": segment.ended_at,
+                            "segment_started_monotonic": segment.started_at,
+                            "segment_ended_monotonic": segment.ended_at,
+                            "window_count": int(soundscape.get("windows", 0) or 0),
+                            "event_candidates": [dict(item) for item in raw_event_candidates[:3] if isinstance(item, dict)],
+                            "audio_kind": "sound",
+                            "verified": False,
+                            "confidence_calibrated": False,
+                            "independent_of_asr": True,
+                        },
+                    )
+                else:
+                    self.perception_fusion.invalidate("audio_event_candidates", now=segment.ended_at)
                 if not is_music:
                     self.perception_fusion.invalidate("audio_description", now=segment.ended_at)
                     self.perception_fusion.invalidate("audio_candidates", now=segment.ended_at)
@@ -1192,6 +1270,40 @@ class AmbientAudioASRBridge:
                         "independent_of_asr": True,
                     },
                 )
+                weak_music = soundscape.get("music_hypothesis")
+                if is_music or not isinstance(weak_music, dict):
+                    self.perception_fusion.invalidate("music_candidate", now=segment.ended_at)
+                else:
+                    raw_max = self._optional_score(weak_music.get("raw_score_max"))
+                    raw_median = self._optional_score(weak_music.get("raw_score_median"))
+                    music_windows = int(weak_music.get("music_windows", 0) or 0)
+                    windows = int(weak_music.get("windows", soundscape.get("windows", 0)) or 0)
+                    score_text = f"raw max={raw_max:.4f}" if raw_max is not None else "raw score unavailable"
+                    self.perception_fusion.note(
+                        "music_candidate",
+                        f"Гипотеза YAMNet: возможен музыкальный или тональный фон; Music "
+                        f"отмечен в {music_windows}/{windows} окнах ({score_text}, не вероятность). "
+                        "Многокадровое подтверждение не пройдено.",
+                        now=segment.ended_at,
+                        metadata={
+                            "source": self.soundscape_source,
+                            "detector": "yamnet-onnx-cpu",
+                            "segment_id": segment.segment_id,
+                            "observed_at": self._wall_time_for_monotonic(segment.ended_at),
+                            "observed_at_monotonic": segment.ended_at,
+                            "segment_started_monotonic": segment.started_at,
+                            "segment_ended_monotonic": segment.ended_at,
+                            "duration_ms": round(max(0.0, segment.ended_at - segment.started_at) * 1000.0, 1),
+                            "music_score_max": raw_max,
+                            "music_score_median": raw_median,
+                            "music_windows": music_windows,
+                            "required_windows": int(weak_music.get("required_windows", 0) or 0),
+                            "score_type": "uncalibrated_raw_model_score",
+                            "verified": False,
+                            "confidence_calibrated": False,
+                            "independent_of_asr": True,
+                        },
+                    )
         return stored_music
 
     def _ingest_final_events(self, events: list[dict[str, Any]], segment: AmbientSegment) -> int:
@@ -1205,7 +1317,7 @@ class AmbientAudioASRBridge:
             result = self._commit_transcript(
                 segment,
                 str(payload["text"]),
-                confidence=payload.get("confidence", 0.7),
+                confidence=payload.get("confidence", 0.0),
                 event_id=str(event.get("event_id") or "") or None,
             )
             if result is None:
@@ -1227,6 +1339,10 @@ class AmbientAudioASRBridge:
             if not self._is_current_locked(segment):
                 self._stale_segments += 1
                 return None
+            if not is_meaningful_transcript(text):
+                self._asr_noise_filtered += 1
+                self._last_transcript = ""
+                return {"status": "ignored", "reason": "asr_noise_hallucination"}
             result = self.memory.ingest_system_audio(
                 text,
                 confidence=confidence,
@@ -1240,6 +1356,7 @@ class AmbientAudioASRBridge:
             if result.get("status") == "retained":
                 self._transcripts += 1
                 self._segment_ingested += 1
+                self._last_transcript_observed_at = segment.ended_at
             elif result.get("status") not in {"duplicate", "disabled"}:
                 self._dropped_events += 1
                 self._segment_dropped += 1
@@ -1263,6 +1380,8 @@ class AmbientAudioASRBridge:
                             "duration_ms": round(max(0.0, segment.ended_at - segment.started_at) * 1000.0, 1),
                             "confidence": confidence,
                             "confidence_calibrated": False,
+                            "verified": False,
+                            "recognition_type": "ambient_asr_transcript",
                         },
                     )
                 except Exception:  # noqa: BLE001 - a failed context hint must not break capture
@@ -1288,6 +1407,9 @@ class AmbientAudioASRBridge:
             fusion.invalidate("speech")
             fusion.invalidate("sound")
             fusion.invalidate("music")
+            fusion.invalidate("audio_description")
+            fusion.invalidate("audio_candidates")
+            fusion.invalidate("audio_event_candidates")
         except Exception:  # noqa: BLE001 - context invalidation must not break lifecycle cleanup
             pass
 

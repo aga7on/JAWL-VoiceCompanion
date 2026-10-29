@@ -81,11 +81,13 @@ compose ещё 38 passed. Эти последние изменения fusion п
 штатного перезапуска Companion; мозг уже работает с исправлением capacity.
 
 После последующих правок Qwen/fusion named mismatches по устаревшим caption
-контрактам закрыты: Qwen sensor 18/18, fusion 16/16, now-TTL 2/2. По отчёту
-остаются два Python launcher mismatch: fixture ожидает `--n-predict 512`, а
-launcher test привязан к старой строке PowerShell. Полную Python gate после
-правок не перезапускали; исходный результат ниже исторический, а эти два
-launcher расхождения не объявлены успешными.
+контрактам закрыты: Qwen sensor 18/18, fusion 16/16, now-TTL 2/2. Два
+launcher mismatch из исходной gate перепроверены отдельно и закрыты: тест
+`--n-predict 512` теперь явно задаёт пустые Transformers-поля в `Mock`, а тест
+профиля проверяет фактический `$nativeProfileArgs` + splatting вместо старой
+inline-формы. Оба точечных теста прошли. Полную Python gate после этих правок
+не перезапускали; исходный результат ниже исторический, оставшиеся падения
+полной gate по-прежнему не считаются принятыми.
 
 Node общая gate: 124 tests, 118 passed, 6 failed в `app-voice-lifecycle`:
 flush/finalization/overlap/409. Эти сценарии не принимались данной проверкой.

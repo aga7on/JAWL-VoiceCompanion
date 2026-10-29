@@ -3,6 +3,14 @@
 Это существующий путь запуска для Windows, не заявление о готовом daily release.
 Модели и зависимости должны уже быть установлены; состояние — [STATE](STATE.md).
 
+Канонические роли моделей для постоянной работы зафиксированы в
+[ADR-048](DECISIONS.md#adr-048--canonical-daily-model-roles). Важно: нижняя
+команда `run_local_bonsai_integrated.ps1` поднимает brain из
+`config/runtime.manifest.json`, где пока выбран `local-hikari` /
+`local-bonsai2`; её visual default также EG2. Без явных Gemini relay и Qwen
+visual settings она не запускает канонический набор. Не считать запуск этой
+команды proof, что весь канонический набор поднят.
+
 Из `G:\AI\JAWL-VoiceCompanion`:
 
 ```powershell

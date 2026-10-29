@@ -195,6 +195,29 @@ Frontend включает существующий `/api/ambient-audio/playback`
 loopback после managed restart всё ещё нужен, чтобы доказать подавление echo
 и убедиться, что внешний звук во время речи компаньона не подавляется надолго.
 
+### YAMNet во время собственного TTS
+
+Ambient capture теперь при активном playback marker пропускает ASR segmenter,
+VoiceMem stream tap и текстовый audio-caption worker, но продолжает подавать PCM
+в независимый YAMNet soundscape segmenter. Это позволяет сохранять возможную
+музыку/SFX во время голоса JAWL без транскрибации собственного TTS. Regression
+`test_self_tts_suppresses_asr_but_keeps_independent_music_lane` подтвердила, что
+YAMNet music observation остаётся в ambient memory, а ASR и captioner не вызваны.
+Дополнительный offline negative control: известный локальный Tera TTS WAV (2.76 s)
+через production `YamnetSoundscapeDetector` дал `unknown`, 0/2 music windows,
+Music max 0.0001 и пустые `event_candidates`. Это подтверждает отбой на одном
+чистом TTS-примере, но не оценивает смесь внешнего звука с речью JAWL.
+Проверка смеси в том же production bridge: 4.0 s локального Aqua-фрагмента и
+Tera WAV сведены в PCM16 mono/16 kHz в памяти, голос выставлен примерно на 8 dB
+выше музыки (общий RMS −15.9 dBFS, peak −0.7 dBFS); восемь 0.5-секундных блоков
+поданы с реальным темпом при активном `PlaybackSuppression`. Все блоки прошли в
+режиме `soundscape_only_self_tts`; настоящий YAMNet `CPUExecutionProvider` дал
+`music` (2/3 окон), без ошибок/потерь/stale; ASR-вызовов — 0. PCM и текст не
+сохранялись. Это проверяет mixed-frame ingestion и модель на локальном миксе,
+но suppression marker задавался напрямую, а не через живой TTS/WASAPI.
+Mixed loopback во время реальной речи JAWL и ложные sound-event tags на других
+голосах/сценах всё ещё требуют проверки.
+
 ## Follow-up: передача полного текста аудио в мозг
 
 Предыдущий аудит зафиксировал, что общий observation summary (1200 символов) и

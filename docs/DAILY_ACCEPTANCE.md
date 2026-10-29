@@ -2,6 +2,8 @@
 
 Цель — пригодность для личного использования, не универсальная сертификация.
 Это сценарии для TODO D1–D6, не ещё одна очередь. Дата плана:14Oct2026.
+Канонический набор ролей моделей зафиксирован в [ADR-048](DECISIONS.md#adr-048--canonical-daily-model-roles);
+принятие набора не заменяет аудио-, визуальную и integrated live-приёмку.
 Ни одна строка ниже пока не означает самостоятельный acceptance PASS; строка
 «Микрофон» фиксирует только принятие владельцем прежней Fifine-проверки.
 
@@ -11,6 +13,13 @@ profile, физический ввод или screen/audio capture. Поэтом
 остаётся открытой как integrated full-stack acceptance. Владелец сообщил, что
 ранее проверил Fifine и доволен; повторная физическая микрофонная проверка не
 планируется.
+
+29Oct ASR fixture gate: known synthetic speech is now checked against its exact
+source phrase with WER ≤0.20; the repeated-phrase case must retain both copies,
+and pure noise must yield no transcript. Current GigaAM CPU replay passed nine
+speech variants and the noise-only abstention control. This is fixture-level
+evidence, not acceptance for independent speakers, external-media speech, or the
+integrated live profile.
 
 24Oct live audio update: the configured NVIDIA DigitalOutput loopback (device 39)
 delivered fresh nonzero signal; the integrated ambient bridge and GigaAM returned
@@ -141,6 +150,7 @@ results. Reports: `docs/research/qwen25-omni-full50-joint-20261024.md`,
 | UI/UX | HUD и Studio проверены при 320×420, 360×540, 720 px breakpoint и обычном desktop размере; нет горизонтального overflow, все вкладки доступны клавиатурой с видимым focus, интерактивные поля озвучиваются по имени; screenshots и axe/contrast review относятся к актуальному renderer |
 | Sensor UX / continuity | На минимальном HUD без DevTools понятны активные источники, freshness и DND; при совместном просмотре DND подавляет речь, но не захват; вопрос о смене сцены/текущем звуке получает grounded ответ и correction учитывается; при потере/возврате источника UI честно показывает unavailable→fresh, gap, Stop и erase не возвращают stale observations |
 | Микрофон |Владелец ранее проверил Fifine и доволен; повторная физическая проверка не требуется. Это owner-confirmed, а не независимая проверка Codex. Отдельно не заявлять акустический barge-in/full duplex без его специальной проверки |
+| Интонация речи | На размеченных RU примерах отдельно проверить акустические признаки подачи (темп, громкость/энергия, высота и вариативность тона) и эмоцию; не выводить эмоциональное состояние из ASR-текста. На спонтанной речи classifier обязан уверенно abstain при слабом сигнале; считать precision/recall и ложные эмоциональные срабатывания, прежде чем передавать метку мозгу как факт |
 | Присутствие | Персонаж остаётся видимым, окно не мешает ПК, позиция сохраняется; текст над головой совпадает с ответом, один audio owner |
 | Контекст | Три смены тестового окна/видео и размеченный soundtrack: свежие description/transcript/music observations с provenance; ASR и музыка сосуществуют поверх речи; проверены broad style/genre, audible instrument/timbre families, vocal/instrumental changes, energy/tempo and soundtrack transitions, плюс grounded short music description; жанр/инструмент/настроение заявляются только при устойчивой подтверждённой метке, иначе abstain; музыка-only, речь+музыка, speech-only/noise/silence и transitions проверены; stale/TTL/pause видны, собственная TTS не команда |
 | Инициатива | Самостоятельный уместный комментарий; пользователь и DND подавляют инициативу, нет повторяющейся болтовни |
@@ -239,3 +249,32 @@ Before the next run, restart Qwen with one slot and exact 12,288 context; prove 
 The five-clip direct-Qwen quality matrix, human-labeling requirements, and claim-level scorecard are specified in `docs/research/qwen3-omni-realclip-scorecard-20261025.md`. Existing audio labels are provisional, so audio semantics and cross-modal accuracy remain unscored until human annotation is complete.
 
 For the post-soak 30–60-minute run, treat freshness as a continuity gate, not a point-in-time health check: require at least 95% fresh visual observations, age p95 ≤3s, and no stale gap longer than 5s; report capture-to-submit and submit-to-delivery latency separately. Track the Qwen audio lane independently (successful descriptions, errors, silence skips, last-result age/freshness and p95 latency); `ambient_audio_running=true` alone proves device/service availability, not that audio was described. Label speech, music-only, speech+music, game/SFX, transitions, silence and noise against human-reviewed ground truth. Score transcript WER/CER only where a reference exists, and score audio claims for supported/unsupported events and correct abstention on silence/noise. Do not count lyrics, genre, mood or narrative as accepted without matching reference labels. Include source loss/recovery and Pause/Stop, and prove stale audio is not replayed into a later turn. Keep CPU/RSS and both GPU memory readings alongside quality and freshness.
+
+29Oct exploratory speech/music overlap probe: six FMA track openings mixed in memory
+with repeated local Tera TTS speech at music-to-speech RMS ratios −12/−8/−4/0 dB.
+YAMNet CPU music detections were 2/6, 2/6, 3/6 and 4/6 respectively; a matched
+music-only baseline detected 4/6, and speech-only abstained. Track identities
+changed between baseline and mixed conditions. This small synthetic set is not
+acceptance, but it confirms the need for labeled speech+music/SNR cases; the
+production threshold stays unchanged. See
+`docs/research/audio-speech-music-overlap-20261029.md`.
+
+29Oct follow-up YAMNet subthreshold Music candidate screen (CPU, one thread):
+zero weak candidates on 181 source-disjoint ESC-10 non-music clips, three
+spoken-query fixtures, and four synthetic speech/noise controls. On 54 in-memory
+speech/music mixtures (three speech fixtures, six artist-disjoint FMA tracks,
+three SNRs), 11 fell into the weak-candidate lane and 34 passed the confirmed
+music gate; 18 FMA four-second positive openings produced 16 confirmed, one
+candidate, one abstention. Raw scores are uncalibrated and the clips were not
+human-labeled, so this is a screening result only. Five real-media excerpts
+produced four confirmed music results and one weak anime candidate. No live
+loopback acceptance.
+Artifact and limits: `runtime/audio-path-replay/out/yamnet-weak-music-candidate-20261029.json`;
+`docs/research/audio-speech-music-overlap-20261029.md`.
+
+29Oct weak-music routing follow-up: YAMNet’s confirmed music gate remains 0.35 plus the existing window quorum. Raw Music max ≥0.20 is routed separately as an unverified/uncalibrated music-like-or-tonal hypothesis with 12s TTL; it is excluded from confirmed music memory. Focused unit suites verify gate preservation and delivery to the brain packet. Source-disjoint real-negative evaluation of the candidate cutoff remains OPEN.
+
+The VA hypothesis text also includes YAMNet's raw Music maximum and hit/total
+windows, explicitly labeled as a non-probability, so the brain can reason about
+recurrence without treating the raw score as confidence. Focused bridge and
+packet tests verify these details survive delivery.

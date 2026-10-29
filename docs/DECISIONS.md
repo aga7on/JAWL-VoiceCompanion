@@ -823,3 +823,39 @@ attempt7 proved the owned Job holds 9890 and the owner confirmed hearing the voi
 TeraTTSv2 remains a selectable provider (`-TtsProvider tera`); OmniVoice paths stay
 launcher-side until the manifest carries them. Prosody/emotion alignment and voice
 cloning remain separate work (B2-06, A-04 lip-sync).
+
+## ADR-048 — Canonical daily model roles
+
+Status: Accepted
+Date: 2026-10-29
+Owner decision: use the model set listed below as the canonical target for
+permanent JAWL Companion work. This selects roles and defaults for future work;
+it does not claim that every lane passed live quality or 24/7 acceptance.
+
+| Role | Canonical component | Placement / boundary |
+|---|---|---|
+| Brain, planning, dialogue | Gemini 3.8 Flash | Local relay endpoint; the relay/provider owns model execution. The last recorded profile declared a 1,048,576-token window. |
+| Visual scene description | Qwen3.5-0.8B Q4 | Separate CPU-only local describer. |
+| Screen text and UI structure | Windows OCR + UIA | OS services, not learned models; OCR is a separate evidence channel. |
+| Speech transcription | GigaAM v3 e2e RNNT q8 via CrispASR | CPU. Preserve transcript uncertainty when confidence is unavailable. |
+| Audio description / embeddings | EmbeddingGemma 2 ONNX | CPU; provide bounded candidate descriptions/embeddings, not authoritative genre, mood, or emotion claims. |
+| Music presence and sound-event hypotheses | YAMNet ONNX | CPU; confirmed music and unverified event candidates remain separate channels. |
+| Semantic memory retrieval | paraphrase-multilingual-MiniLM-L12-v2 ONNX | CPU vector embeddings. |
+| Speech output | OmniVoice 0.6B | CUDA 1, unchanged from ADR-047. |
+
+No dedicated voice-emotion classifier is adopted. Aniemore was rejected for
+always-on use; direct-mic delivery cues remain an opt-in experiment and must not
+be labeled as emotion recognition. VoiceMem is a sidecar service, not another
+canonical LLM. Hikari and Qwen-Omni are not defaults under this decision.
+
+The model-role decision supersedes the historical stack proposals in
+`docs/SENSORY_STACK_DESIGN.md` and any stale daily-profile name. Actual live
+capture remains opt-in at the device boundary, and audio/visual quality,
+freshness, recovery, resource use, and integrated-duration gates remain tracked
+in `docs/DAILY_ACCEPTANCE.md`.
+
+Deployment parity is still required: `config/runtime.manifest.json` currently
+selects `local-hikari` / `local-bonsai2`, and the legacy local launcher follows
+that manifest; the wrapper's visual-describer default is also still EG2. A run
+from those defaults alone is not a deployment of this canonical stack until an
+explicitly configured Gemini relay profile and Qwen visual lane are raised.

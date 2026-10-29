@@ -72,6 +72,40 @@ FIXTURE = {
 
 
 class LauncherManifestTests(unittest.TestCase):
+    def test_qwen_visual_option_enables_screen_source_and_ocr_without_legacy_watcher(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell required")
+        path = str(ROOT / "scripts" / "run_integrated_profile.ps1").replace("'", "''")
+        command = f"""
+$errors = $null; $tokens = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile('{path}', [ref]$tokens, [ref]$errors)
+if ($errors.Count) {{ throw 'Invalid launcher syntax' }}
+$EnableScreenWatch=$false; $EnableScreenOcr=$true; $VisualDescriber='qwen'
+$VisualDescriberUrl='http://127.0.0.1:8994/v1'; $VisualDescriberModel='qwen3.5-0.8b'
+$VisualDescriberRoi='0,0,1,1'; $VisualDescriberDisplayIndex=0
+$VisualDescriberActiveInterval=1.0; $VisualDescriberStaticInterval=4.0
+$VisualDescriberPeriodic=4.0; $VisualDescriberMaxAge=6.0; $companionArgs=''
+$qwenArgs = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like '*--visual-describer qwen*'}}, $true))[0]
+Invoke-Expression $qwenArgs.Extent.Text
+$assembledArgs = $companionArgs
+$invalidOcr = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like 'if ($EnableScreenOcr -and -not $EnableScreenWatch*'}}, $true))[0]
+$EnableScreenOcr=$true; $EnableScreenWatch=$false; $VisualDescriber='eg2'; $rejected=$false
+try {{ Invoke-Expression $invalidOcr.Extent.Text }} catch {{ $rejected=$true }}
+[Console]::Out.WriteLine((ConvertTo-Json -Compress @{{args=$assembledArgs; rejected=$rejected}}))
+"""
+        encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            capture_output=True, text=True, errors="replace", timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.strip())
+        self.assertIn("--hostos-live --screen-enabled", payload["args"])
+        self.assertIn("--screen-ocr", payload["args"])
+        self.assertIn("--visual-describer qwen", payload["args"])
+        self.assertTrue(payload["rejected"], "OCR without any screen sensor must fail clearly")
+
     def test_qwen_refresh_defaults_stay_inside_screen_caption_ttl(self) -> None:
         for relative in (
             "scripts/run_integrated_profile.ps1",
@@ -181,11 +215,14 @@ Invoke-Expression $block.Extent.Text
         source = (ROOT / "scripts" / "run_integrated_profile.ps1").read_text(encoding="utf-8")
         lock = source.index("$profileLock = [IO.File]::Open")
         prepare = source.index("scripts\\prepare_daily_profile.py")
+        native_args = source.index("$nativeProfileArgs = @(")
         configure = source.index("scripts\\configure_profile_native.py")
         self.assertLess(lock, prepare)
         self.assertLess(prepare, configure)
+        self.assertLess(native_args, configure)
         self.assertIn("$env:JAWL_PROFILE_NAME = $ProfileName", source[:prepare])
-        self.assertIn("@('--profile', $ProfileName", source)
+        self.assertIn("'--profile', $ProfileName", source)
+        self.assertIn(") @nativeProfileArgs", source)
         self.assertIn('instances\\$ProfileName\\.jawl_events', source)
         self.assertNotIn("instances\\daily\\.jawl_events", source)
 
@@ -611,6 +648,7 @@ try {{ Get-BrainProbeUrls 'http://127.0.0.1:8991/v1' 8990 | Out-Null }} catch {{
             llm_exe="llama-server.exe", model="brain.gguf", alias="local-qwen3-omni",
             port=8990, threads=12, ctx_size=12288, max_tokens=512,
             gpu_layers=99, device="CUDA0,CUDA1", reasoning="auto",
+            transformers_server_script="", transformers_python="",
         )
         command = hold_supervised_brain._worker_command(args, mmproj="projector.gguf")
         self.assertEqual(command[command.index("--n-predict") + 1], "512")

@@ -3,8 +3,9 @@
 Runs the project's own CrispASRFileTranscriber so the comparison uses the
 canonical code path, not a reimplementation. With --expects the harness becomes
 a quality gate: every case whose manifest entry demands speech
-(``must_transcribe``) must produce at least ``min_chars`` characters, and a
-failure is a non-zero exit.
+(``must_transcribe``) must produce at least ``min_chars`` characters. When an
+expectation includes ``reference_text`` and ``max_wer``, the transcript is also
+scored; ``must_be_empty`` cases enforce abstention. A gate failure exits non-zero.
 
 Usage:
   python -X utf8 scripts/gigaam_baseline_fixtures.py [wav ...]
@@ -14,8 +15,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 REPO = Path(r"G:\AI\JAWL-VoiceCompanion")
@@ -49,6 +52,34 @@ def load_expectations(path: Path) -> dict[str, dict]:
     if not table:
         raise ValueError(f"expectations manifest is empty: {path}")
     return table
+
+
+def _normalize_for_scoring(text: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
+
+
+def _edit_distance(left: list[str], right: list[str]) -> int:
+    previous = list(range(len(right) + 1))
+    for i, left_item in enumerate(left, start=1):
+        current = [i]
+        for j, right_item in enumerate(right, start=1):
+            current.append(min(
+                current[-1] + 1,
+                previous[j] + 1,
+                previous[j - 1] + (left_item != right_item),
+            ))
+        previous = current
+    return previous[-1]
+
+
+def word_error_rate(reference: str, hypothesis: str) -> float:
+    """Return WER after Unicode normalization and punctuation-insensitive tokenization."""
+    ref = _normalize_for_scoring(reference)
+    hyp = _normalize_for_scoring(hypothesis)
+    if not ref:
+        raise ValueError("WER reference must contain at least one word")
+    return _edit_distance(ref, hyp) / len(ref)
 
 
 def main() -> int:
@@ -110,11 +141,30 @@ def main() -> int:
             else:
                 must = bool(expectation.get("must_transcribe"))
                 minimum = int(expectation.get("min_chars") or 0)
+                reference = expectation.get("reference_text")
+                max_wer = expectation.get("max_wer")
                 if must and (error or len(text) < max(1, minimum)):
                     detail = f"must_transcribe but got {len(text)} chars" + (
                         f" (error: {error})" if error else "")
                     failures.append(f"{wav.name}: {detail}")
                     entry["gate"] = "failed"
+                elif must and reference is not None and max_wer is not None:
+                    measured_wer = word_error_rate(str(reference), text)
+                    entry["reference_text"] = str(reference)
+                    entry["wer"] = round(measured_wer, 4)
+                    entry["max_wer"] = float(max_wer)
+                    if measured_wer > float(max_wer):
+                        failures.append(
+                            f"{wav.name}: WER {measured_wer:.3f} exceeds {float(max_wer):.3f}"
+                        )
+                        entry["gate"] = "failed_wer"
+                    else:
+                        entry["gate"] = "ok_wer"
+                elif bool(expectation.get("must_be_empty")) and (error is None and text.strip()):
+                    failures.append(f"{wav.name}: expected empty transcript, got {len(text)} chars")
+                    entry["gate"] = "failed_nonempty"
+                elif bool(expectation.get("must_be_empty")):
+                    entry["gate"] = "ok_empty"
                 elif not must and error is None and not text:
                     # Tolerated no-speech case that stayed empty: correct.
                     entry["gate"] = "ok_empty"
@@ -124,10 +174,18 @@ def main() -> int:
                 else:
                     entry["gate"] = "ok"
                 entry["expected_min_chars"] = max(1, minimum) if must else 0
+                if must and reference is None:
+                    entry["quality_gate"] = "presence_only"
+                elif must and max_wer is None:
+                    entry["quality_gate"] = "presence_only"
+                elif must:
+                    entry["quality_gate"] = "wer"
         results.append(entry)
         status_line = f"== {wav.name} ({dt:.1f}s)"
         if entry.get("gate"):
             status_line += f" [{entry['gate']}]"
+        if entry.get("wer") is not None:
+            status_line += f" WER={entry['wer']:.3f}"
         print(status_line)
         print(f"   {text}" if text else (f"   ERROR: {error}" if error else "   (empty)"))
 

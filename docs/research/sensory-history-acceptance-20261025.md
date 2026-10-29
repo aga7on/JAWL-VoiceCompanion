@@ -29,3 +29,12 @@
 - Live ledger: `runtime/sensory-history-acceptance-20261025.json` (text observations/counters/model responses only).
 - Implementation: `src/jawl_voicecompanion/sensory_history.py`.
 - Live harness: `scripts/live_history_acceptance.py`.
+
+## 2026-10-29 audio retention follow-up
+
+The store now assigns hourly-moment importance to ambient GigaAM transcript
+samples with at least 16 transcript characters, unverified music descriptions,
+and YAMNet sound-event candidates. These entries retain their `verified=false`
+provenance; selection only makes them eligible for bounded hourly compaction and
+does not validate or promote their content. This rule is source-integrated but
+has not yet had a regression run or live-profile confirmation.

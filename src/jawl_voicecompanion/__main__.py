@@ -330,6 +330,11 @@ def main() -> None:
         help="Model alias for --audio-describer qwen-omni",
     )
     parser.add_argument(
+        "--voice-delivery-cues",
+        action="store_true",
+        help="Opt in to experimental CPU pitch/level measurements from direct microphone turns",
+    )
+    parser.add_argument(
         "--voicemem-python",
         type=Path,
         default=None,
