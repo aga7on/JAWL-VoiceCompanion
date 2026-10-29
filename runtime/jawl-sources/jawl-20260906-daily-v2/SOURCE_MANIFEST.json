@@ -249,9 +249,10 @@
     "src/l3_agent/event_buffer.py": "6a8b7703725b37106f3767780cf0f07537534888bba041bc5453313738d53f55",
     "src/l3_agent/goals/__init__.py": "8ad617aeeefa82ddd1a6d43a6f31947b7be40131cf5fd01b11cc036bab69ffe3",
     "src/l3_agent/goals/ledger.py": "de252f5ea52741ec0881f86a35df3250c3d67d138c06fdd2bf4074e588597166",
-    "src/l3_agent/goals/manager.py": "b9d3f0287b7e9803dc30a286715071b511085cdd27623796bb2918f6ca5446b3",
+    "src/l3_agent/goals/manager.py": "d28add85413a64a8d9877784e1d4cc29566afc24cef5c39895a99cf4b5f59fdd",
     "src/l3_agent/goals/policy_completion.py": "ec5ee44e4689c5b5b8244588ce85566fb9980bd50faa88a1a4f747c8c3392c37",
     "src/l3_agent/goals/skills.py": "836db647bd31235754974132e41b708b18a28d768d791825bc03e6195c95035e",
+    "src/l3_agent/goals/wakeup_backoff.py": "c92c11b35b8178be04a22545e26d39145506a3e38dda1a9cf0ec18657d15c0e3",
     "src/l3_agent/heartbeat.py": "3874e09eb9db12d020854a7cc264e6f3a01a45f3d0edd5b3ff91f2a14655a817",
     "src/l3_agent/hooks/__init__.py": "d1a4bb1696d869aba4aebfff31fc7d8b8bf13600ba216be5f46d5fff2569d6dc",
     "src/l3_agent/hooks/commands.py": "07d8436bf48c0bc58e8d6c44e597e8cf615cea9a3542b17858e70633fd187f76",
@@ -358,5 +359,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "1359f966aea749477c4490c0b5f2fb2af6c1d2908a1a05b168760be1e25dc4b6"
+  "snapshot_sha256": "6033eadf6570938a0ef23f4f672c8829d44b273a7bcd77d368450b5ff52f7fa5"
 }

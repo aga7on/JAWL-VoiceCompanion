@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, goal_repair=None, goal_backoff=None):
+def write_startup_receipt(snapshot, delivery, goal_repair=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -67,16 +67,6 @@ def write_startup_receipt(snapshot, delivery, goal_repair=None, goal_backoff=Non
             and goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
         ):
             raise RuntimeError("native Goal completion repair hook is not installed")
-    if goal_backoff is not None:
-        check["goal_wakeup_backoff"] = (
-            goal_backoff.manager_class.should_run_heartbeat is goal_backoff.wrapped_should_run
-            and goal_backoff.manager_class.seconds_until_wakeup is goal_backoff.wrapped_seconds_until
-            and goal_backoff.manager_class.mark_event_pending is goal_backoff.wrapped_mark_event
-            and goal_backoff.manager_class.finish_cycle is goal_backoff.wrapped_finish_cycle
-            and vars(goal_backoff.manager_class).get("__jawl_owned_goal_wakeup_backoff__") is goal_backoff
-        )
-        if not check["goal_wakeup_backoff"]:
-            raise RuntimeError("owned Goal wakeup backoff hook is not installed")
     # Recheck immediately before writing: receipt destinations are owned paths.
     check_isolation(require_clean_import=False)
     # Kernel imports stay after hook validation: importing the kernel touches
@@ -130,16 +120,10 @@ def main():
     goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
     goal_repair = goal_repair_extension.install_native_goal_completion_repair()
 
-    goal_backoff_extension = load_extension("_owned_jawl_goal_wakeup_backoff", "native_goal_wakeup_backoff.py")
-    goal_backoff = goal_backoff_extension.install_native_goal_wakeup_backoff()
-
-    goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
-    goal_repair = goal_repair_extension.install_native_goal_completion_repair()
     write_startup_receipt(
         snapshot,
         delivery,
         goal_repair=goal_repair,
-        goal_backoff=goal_backoff,
     )
 
     print("Owned brain entrypoint initialized.", flush=True)

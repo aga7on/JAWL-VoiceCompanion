@@ -15,6 +15,7 @@ from typing import Any, Dict, Literal, Optional
 from pydantic import BaseModel, Field
 
 from src.l0_state.agent.state import AgentState
+from src.l3_agent.goals import wakeup_backoff
 from src.l3_agent.goals.ledger import (
     LedgerActionOutcome,
     LedgerFailurePatch,
@@ -780,6 +781,11 @@ class GoalManager:
         summary: str = "",
         wake_after_seconds: Optional[int] = None,
     ) -> Optional[GoalRecord]:
+        # A repeated identical successful action batch gets bounded backoff
+        # and then blocks for operator review.
+        state, summary, wake_after_seconds = wakeup_backoff.apply_duplicate_backoff(
+            self, state=state, summary=summary, wake_after_seconds=wake_after_seconds
+        )
         async with self._lock:
             goal = self.active_goal
             if goal is None:
@@ -1058,26 +1064,15 @@ class GoalManager:
     def should_run_heartbeat(self, now: Optional[float] = None) -> bool:
         """Return false only for an active goal that is deterministically waiting."""
 
-        goal = self.active_goal
-        if goal is None or not self.suppress_waiting_heartbeats:
-            return True
-        current = time.time() if now is None else float(now)
-        if goal.pending_work:
-            return True
-        return goal.next_wakeup_at is not None and goal.next_wakeup_at <= current
+        return wakeup_backoff.should_run(self, now)
 
     def seconds_until_wakeup(self, now: Optional[float] = None) -> Optional[float]:
-        goal = self.active_goal
-        if goal is None:
-            return None
-        current = time.time() if now is None else float(now)
-        if goal.pending_work:
-            return 0.0
-        if goal.next_wakeup_at is None:
-            return None
-        return max(0.0, goal.next_wakeup_at - current)
+        return wakeup_backoff.seconds_until(self, now)
 
     async def mark_event_pending(self, event_name: str) -> None:
+        # External events clear the persisted wake deadline early; HEARTBEAT
+        # leaves the backoff intact.
+        wakeup_backoff.clear_backoff_for_event(self, event_name)
         if event_name == "HEARTBEAT":
             return
         async with self._lock:
