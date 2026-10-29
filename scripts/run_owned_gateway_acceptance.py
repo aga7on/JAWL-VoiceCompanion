@@ -96,7 +96,6 @@ def validate_brain_receipt(receipt, profile, snapshot, owner):
     required_hooks = ("delivery_guard",)
     if (receipt.get("schema_version") != 1 or receipt.get("instance_id") != profile
             or receipt.get("bootstrap_only") is not False
-            or receipt.get("goal_protocol_repair_installed") is not True
             or any(hooks.get(name) is not True for name in required_hooks)
             or Path(receipt.get("instance_home", "")).resolve() != (INSTANCES / profile).resolve()
             or Path(receipt.get("entrypoint", "")).resolve() != ROOT / "scripts/run_owned_jawl_brain.py"

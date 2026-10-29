@@ -22900,6 +22900,235 @@
 +
 +        return GoalSkills
 +    raise AttributeError(name)
+--- a/src/l3_agent/goals/completion_repair.py
++++ b/src/l3_agent/goals/completion_repair.py
+@@ -0,0 +1,226 @@
++"""Offer one native protocol repair before rejecting a false Goal completion.
++
++Use the pinned validator and ledger patcher on an in-memory copy. Never change
++durable Goal state, accept an ineligible completion, or replay native actions.
++An exhausted native repair budget or repeated assertion follows the original
++native rejection path. ``ReactLoop._parse_response`` and
++``ReactLoop._handle_protocol_error`` invoke this module natively; no product
++extension layer installs anything.
++"""
++
++from __future__ import annotations
++
++from copy import deepcopy
++from dataclasses import dataclass
++import json
++import os
++from pathlib import Path
++import re
++from typing import Any, Callable, Optional
++
++_TRACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
++_STATE_ATTR = "__jawl_goal_protocol_state__"
++REPAIR_REASON = (
++    "Goal completion is not eligible for the exact active Goal. Earlier Goals "
++    "are history, not completion evidence. Use this Goal's native ledger, "
++    "complete and verify missing work, preserve confirmed effects, and only "
++    "then return state=done."
++)
++_GOAL_V2_DIAGNOSTIC_LIMIT = 128 * 1024
++_GOAL_V2_DIAGNOSTIC_RECORD_LIMIT = 32
++_GOAL_V2_DIAGNOSTIC_SEEN: set[str] = set()
++
++
++def _default_root() -> Path:
++    here = Path(__file__).resolve()
++    # runtime/jawl-sources/<snapshot>/src/l3_agent/goals/completion_repair.py
++    # -> the repository root is six levels up in the owned layout.
++    return here.parents[6] if len(here.parents) > 6 else here.parents[-1]
++
++
++ROOT = _default_root()
++
++
++def goal_v2_structure_diagnostic(raw_answer, parse_error=None):
++    """Describe why a compact Goal payload is invalid without retaining values."""
++    text = str(raw_answer or "")[:60_000]
++    start = text.find('{"observation"')
++    if start < 0:
++        start = text.find("{")
++    end = text.rfind("}")
++    candidate = text[start:end + 1] if start >= 0 and end > start else ""
++    try:
++        json.loads(candidate, strict=False)
++        return {"issue": "valid_json_structure_unavailable", "raw_length": len(text)}
++    except json.JSONDecodeError as exc:
++        known_keys = sorted(set(re.findall(
++            r'"(v|state|calls|ledger|actions|goal_state)"\s*:', candidate)
++        ))
++        return {
++            "issue": "json_syntax_error",
++            "error_kind": str(exc.msg)[:80],
++            "error_position": int(exc.pos),
++            "raw_length": len(text),
++            "known_protocol_keys_seen": known_keys,
++            "parse_error_has_invalid_json_prefix": "Invalid JSON format" in str(parse_error or ""),
++        }
++    except (TypeError, ValueError):
++        pass
++    return {"issue": "json_syntax_error", "raw_length": len(text), "parse_error_present": bool(parse_error)}
++
++
++def goal_v2_payload_diagnostic(payload):
++    """Summarize the exact dict rejected by the pinned native v2 validator."""
++    fixed = {"v", "state", "calls", "ledger", "note", "summary", "wake_after_seconds"}
++    result = {
++        "issue": "v2_validation_failure",
++        "unknown_field_count": sum(key not in fixed for key in payload),
++        "state": payload.get("state") if payload.get("state") in {"act", "continue", "wait", "done", "blocked"} else "invalid_or_missing",
++        "calls_type": type(payload.get("calls", [])).__name__,
++        "calls_count": len(payload.get("calls", [])) if isinstance(payload.get("calls", []), list) else None,
++        "ledger_type": type(payload.get("ledger")).__name__ if "ledger" in payload else "omitted",
++        "summary_type": type(payload.get("summary", "")).__name__,
++        "note_type": type(payload.get("note", "")).__name__,
++    }
++    calls = payload.get("calls", [])
++    if payload.get("state") == "act" and isinstance(calls, list) and not calls:
++        result["issue"] = "act_requires_call"
++    elif payload.get("state") in {"done", "wait", "blocked"} and isinstance(calls, list) and calls:
++        result["issue"] = "terminal_state_has_calls"
++    elif payload.get("state") in {"done", "wait", "blocked"} and not isinstance(payload.get("summary"), str):
++        result["issue"] = "terminal_summary_not_string"
++    elif not isinstance(calls, list):
++        result["issue"] = "calls_not_list"
++    elif isinstance(payload.get("ledger"), dict):
++        try:
++            from src.l3_agent.goals.ledger import TaskLedgerPatch
++            TaskLedgerPatch.model_validate(payload["ledger"])
++        except Exception as exc:  # noqa: BLE001
++            result["issue"] = "ledger_validation_" + type(exc).__name__
++    return result
++
++
++def _instances_root() -> Path:
++    return (ROOT / "runtime/instances").resolve()
++
++
++def _record_goal_v2_diagnostic(raw_answer, parse_error=None):
++    if os.environ.get("JAWL_ACCEPTANCE_GOAL_PROTOCOL_DIAGNOSTICS") != "1":
++        return
++    raw_home = os.environ.get("JAWL_INSTANCE_HOME", "")
++    raw_log = os.environ.get("JAWL_LOG_DIR", "")
++    if not raw_home or not raw_log or not Path(raw_home).is_absolute() or not Path(raw_log).is_absolute():
++        return
++    home, logs = Path(raw_home).resolve(), Path(raw_log).resolve()
++    instances = _instances_root()
++    if home == instances or not home.is_relative_to(instances) or not logs.is_relative_to(home):
++        return
++    path = logs / "goal-protocol-diagnostics.jsonl"
++    if path.is_symlink() or (path.exists() and path.stat().st_size >= _GOAL_V2_DIAGNOSTIC_LIMIT):
++        return
++    try:
++        record = goal_v2_structure_diagnostic(raw_answer, parse_error=parse_error)
++        signature = json.dumps(record, sort_keys=True)
++        if signature in _GOAL_V2_DIAGNOSTIC_SEEN or len(_GOAL_V2_DIAGNOSTIC_SEEN) >= _GOAL_V2_DIAGNOSTIC_RECORD_LIMIT:
++            return
++        _GOAL_V2_DIAGNOSTIC_SEEN.add(signature)
++        line = json.dumps(record, ensure_ascii=True) + "\n"
++        if (path.stat().st_size if path.exists() else 0) + len(line.encode("utf-8")) > _GOAL_V2_DIAGNOSTIC_LIMIT:
++            return
++        logs.mkdir(parents=True, exist_ok=True)
++        with path.open("a", encoding="utf-8") as stream:
++            stream.write(line)
++    except Exception:
++        return
++
++
++def record_goal_v2_payload_diagnostic(payload):
++    if os.environ.get("JAWL_ACCEPTANCE_GOAL_PROTOCOL_DIAGNOSTICS") != "1":
++        return
++    raw_home, raw_log = os.environ.get("JAWL_INSTANCE_HOME", ""), os.environ.get("JAWL_LOG_DIR", "")
++    if not raw_home or not raw_log or not Path(raw_home).is_absolute() or not Path(raw_log).is_absolute():
++        return
++    home, logs = Path(raw_home).resolve(), Path(raw_log).resolve()
++    instances = _instances_root()
++    if home == instances or not home.is_relative_to(instances) or not logs.is_relative_to(home):
++        return
++    path = logs / "goal-protocol-diagnostics.jsonl"
++    try:
++        record = goal_v2_payload_diagnostic(payload)
++        signature = json.dumps(record, sort_keys=True)
++        if signature in _GOAL_V2_DIAGNOSTIC_SEEN or len(_GOAL_V2_DIAGNOSTIC_SEEN) >= _GOAL_V2_DIAGNOSTIC_RECORD_LIMIT:
++            return
++        if path.is_symlink() or (path.exists() and path.stat().st_size >= _GOAL_V2_DIAGNOSTIC_LIMIT):
++            return
++        _GOAL_V2_DIAGNOSTIC_SEEN.add(signature)
++        line = json.dumps(record, ensure_ascii=True) + "\n"
++        if (path.stat().st_size if path.exists() else 0) + len(line.encode("utf-8")) > _GOAL_V2_DIAGNOSTIC_LIMIT:
++            return
++        logs.mkdir(parents=True, exist_ok=True)
++        with path.open("a", encoding="utf-8") as stream:
++            stream.write(line)
++    except Exception:
++        return
++
++
++@dataclass
++class _Cycle:
++    trace: str
++    errors: int = 0
++    offered: bool = False
++
++
++def _cycle(loop) -> Optional[_Cycle]:
++    trace = getattr(getattr(loop, "agent_state", None), "current_trace_id", "")
++    if not isinstance(trace, str) or _TRACE.fullmatch(trace) is None:
++        return None
++    state = getattr(loop, _STATE_ATTR, None)
++    if not isinstance(state, _Cycle) or state.trace != trace:
++        state = _Cycle(trace)
++        setattr(loop, _STATE_ATTR, state)
++    return state
++
++
++def consider_completion_repair(
++    loop: Any,
++    parsed: Any,
++    error: Optional[str],
++    raw_answer: str,
++    *,
++    eligible: Callable[[Any], bool],
++    patch_ledger: Callable[[Any, Any], Any],
++):
++    """One bounded repair preview before the native rejection path."""
++    if isinstance(error, str) and "Invalid JSON format" in error:
++        _record_goal_v2_diagnostic(raw_answer, parse_error=error)
++    manager = getattr(loop, "goal_manager", None)
++    goal = getattr(manager, "active_goal", None)
++    if (error or parsed is None or goal is None or not getattr(manager, "task_ledger_enabled", True)
++            or getattr(parsed, "goal_state", "") != "done" or getattr(parsed, "actions", None)):
++        return parsed, error
++    state = _cycle(loop)
++    limit = getattr(getattr(getattr(loop, "executor", None), "retry_policy", None), "tool_protocol_retries", 1)
++    limit = limit if isinstance(limit, int) else 1
++    if state is None or state.offered or state.errors >= limit:
++        return parsed, error
++    # This is a preview only. Native record_ledger_patch and the final
++    # completion guard retain authority and run on the original path.
++    try:
++        candidate = deepcopy(goal)
++        patch = getattr(parsed, "ledger", None)
++        if patch is not None:
++            patch_ledger(candidate.task_ledger, patch)
++        ready = eligible(candidate)
++    except Exception:
++        return parsed, error  # preserve the original native error semantics
++    if ready:
++        return parsed, error
++    state.offered = True
++    return None, REPAIR_REASON
++
++
++def note_protocol_error(loop: Any) -> None:
++    """Count a native protocol error against the one-repair budget."""
++    state = _cycle(loop)
++    if state is not None:
++        state.errors += 1
 --- a/src/l3_agent/goals/ledger.py
 +++ b/src/l3_agent/goals/ledger.py
 @@ -0,0 +1,423 @@
@@ -39340,7 +39569,7 @@
  
  from src.l0_state.agent.state import AgentState, AgentStatus
  
-@@ -27,13 +31,142 @@
+@@ -27,13 +31,144 @@
  from src.l1_databases.vector.manager import VectorManager
  
  from src.l3_agent.llm.executor import LLMExecutor
@@ -39359,6 +39588,8 @@
 +)
  from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
 +from src.l3_agent.react import action_repair
++from src.l3_agent.goals import completion_repair
++from src.l3_agent.goals.ledger import apply_ledger_patch as _apply_ledger_patch
 +from src.l3_agent.event_buffer import BoundedEventBuffer
 +from src.l3_agent.companion_gateway import (
 +    CompanionTurnState,
@@ -39484,7 +39715,7 @@
  
  
  class ReactLoop:
-@@ -50,11 +183,23 @@
+@@ -50,11 +185,23 @@
          agent_state: AgentState,
          sql_ticks: SQLTicks,
          vector_manager: VectorManager,
@@ -39509,7 +39740,7 @@
      ) -> None:
          """
          Initializes the ReAct loop.
-@@ -84,14 +229,112 @@
+@@ -84,14 +231,112 @@
          self.vector_manager = vector_manager
  
          self.tools = tools
@@ -39624,7 +39855,7 @@
  
      async def run(
          self, event_name: str, payload: Dict[str, Any], missed_events: List[Dict[str, Any]]
-@@ -105,21 +348,90 @@
+@@ -105,21 +350,90 @@
              missed_events: List of missed background events.
          """
  
@@ -39716,7 +39947,7 @@
                  self.agent_state.update_state(AgentStatus.THINKING)
  
                  # --------------------------------------------------------------
-@@ -146,11 +458,21 @@
+@@ -146,11 +460,21 @@
                          if tree_md:
                              self.agent_state.current_thoughts_tree = tree_md
  
@@ -39738,7 +39969,7 @@
  
                  # --------------------------------------------------------------
                  # LLM execution call
-@@ -162,11 +484,90 @@
+@@ -162,11 +486,90 @@
                      temperature=self.agent_state.temperature,
                      logger=agent_logger,
                      log_prefix="[LLM]",
@@ -39831,7 +40062,7 @@
                      break
  
                  # --------------------------------------------------------------
-@@ -175,59 +576,323 @@
+@@ -175,59 +578,323 @@
  
                  parsed_response, error_msg = self._parse_response(raw_answer)
                  if error_msg:
@@ -40178,7 +40409,7 @@
  
      # -------------------------------------------------------------------------
      # Private Helpers
-@@ -248,10 +913,12 @@
+@@ -248,10 +915,12 @@
              List[Dict[str, Any]]: Messages list in OpenAI format.
          """
  
@@ -40193,7 +40424,7 @@
  
          messages = [
              {"role": "system", "content": prompt},
-@@ -260,7 +927,12 @@
+@@ -260,7 +929,12 @@
  
          messages = copy.deepcopy(messages)
  
@@ -40207,7 +40438,7 @@
  
          self.agent_state.last_input_tokens = self.executor.tracker.count_messages_tokens(
              messages
-@@ -286,10 +958,37 @@
+@@ -286,10 +960,37 @@
          """
  
          self.agent_state.update_state(AgentStatus.ACTING)
@@ -40246,7 +40477,7 @@
  
          args_to_rag = []
          for act in actions:
-@@ -305,11 +1004,98 @@
+@@ -305,11 +1006,98 @@
                  "execution_report": results_str,
                  "step": self.agent_state.current_step,
                  "max_steps": self.agent_state.max_react_steps,
@@ -40348,7 +40579,7 @@
          """
          Logic for graceful completion (absence of actions).
  
-@@ -317,27 +1103,191 @@
+@@ -317,27 +1105,197 @@
              thoughts: Final thoughts of the agent prior to sleep.
          """
  
@@ -40393,6 +40624,7 @@
 +    async def _handle_protocol_error(self, raw_answer: str, error_msg: str) -> None:
 +        """Persist invalid provider output so the next step can self-correct."""
 +
++        completion_repair.note_protocol_error(self)
 +        safe_error = truncate_text(
 +            redact_sensitive_text(error_msg), max_chars=2000
 +        )
@@ -40539,13 +40771,18 @@
 -        """
 -        return parse_llm_json(raw_answer)
 +        Parses the agent's JSON response (native parsing with the top-level
-+        action repair fallback).
++        action repair fallback and the one bounded Goal completion repair).
 +        """
-+        return action_repair.parse_with_repair(self, raw_answer, _parse_response_native)
++        parsed, error = action_repair.parse_with_repair(self, raw_answer, _parse_response_native)
++        return completion_repair.consider_completion_repair(
++            self, parsed, error, raw_answer,
++            eligible=_ledger_completion_eligible,
++            patch_ledger=_apply_ledger_patch,
++        )
  
      def add_realtime_event(self, event_data: Dict[str, Any]) -> None:
          """
-@@ -347,7 +1297,21 @@
+@@ -347,7 +1305,21 @@
              event_data: Event payload dict.
          """
  
@@ -40568,7 +40805,7 @@
  
      def _dump_context_to_file(self, messages: List[Dict[str, Any]]) -> None:
          """
-@@ -366,11 +1330,44 @@
+@@ -366,11 +1338,44 @@
          with open(image_path, "rb") as image_file:
              return base64.b64encode(image_file.read()).decode("utf-8")
  
@@ -40615,7 +40852,7 @@
  
          Args:
              messages: Messages list.
-@@ -379,39 +1376,103 @@
+@@ -379,39 +1384,103 @@
              List[Dict[str, Any]]: Messages list with Base64 payloads injected.
          """
  
@@ -41439,7 +41676,7 @@
  
      @property
      def thoughts(self) -> str:
-@@ -80,18 +102,472 @@
+@@ -80,18 +102,481 @@
                                      "description": "Dictionary containing the arguments.",
                                      "additionalProperties": True,
                                  },
@@ -41838,7 +42075,16 @@
 +
 +def _goal_v2_payload(data: Any) -> Optional[AgentResponse]:
 +    """Normalize the compact discriminated Goal protocol into AgentResponse."""
++    parsed = _goal_v2_payload_impl(data)
++    if parsed is None and isinstance(data, dict) and data.get("v") == 2:
++        # Instrument the exact object received by the pinned native validator:
++        # structure-only diagnostics, no retained values.
++        from src.l3_agent.goals import completion_repair
++        completion_repair.record_goal_v2_payload_diagnostic(data)
++    return parsed
 +
++
++def _goal_v2_payload_impl(data: Any) -> Optional[AgentResponse]:
 +    if not isinstance(data, dict) or data.get("v") != 2:
 +        return None
 +    state = data.get("state")
@@ -41913,7 +42159,7 @@
  
  
  def _extract_json_array(text: str) -> Optional[str]:
-@@ -135,19 +611,20 @@
+@@ -135,19 +620,20 @@
      raw_answer: str, _depth: int = 0
  ) -> Tuple[Optional[AgentResponse], Optional[str]]:
      clean_answer = raw_answer.strip()
@@ -41941,7 +42187,7 @@
      else:
          # Attempt 2: Looking for outer boundaries of JSON object
          start_idx = clean_answer.find('{"observation"')
-@@ -157,6 +634,7 @@
+@@ -157,6 +643,7 @@
          end_idx = clean_answer.rfind("}")
          if start_idx != -1 and end_idx > start_idx:
              json_str = clean_answer[start_idx : end_idx + 1]
@@ -41949,7 +42195,7 @@
  
      parsed_response = None
      error_msg = None
-@@ -164,40 +642,63 @@
+@@ -164,40 +651,63 @@
      if json_str:
          try:
              data = json.loads(json_str, strict=False)

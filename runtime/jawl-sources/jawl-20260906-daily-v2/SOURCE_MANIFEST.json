@@ -248,6 +248,7 @@
     "src/l3_agent/context/registry.py": "d93157725ef972a4afe2f67fc2bd67fd3aa354e2c87ca78a13e6a8144f117e0a",
     "src/l3_agent/event_buffer.py": "6a8b7703725b37106f3767780cf0f07537534888bba041bc5453313738d53f55",
     "src/l3_agent/goals/__init__.py": "8ad617aeeefa82ddd1a6d43a6f31947b7be40131cf5fd01b11cc036bab69ffe3",
+    "src/l3_agent/goals/completion_repair.py": "109fefc563cee746d2f0cc86273e88b1d61474390822d70d29ee1c8b3764a794",
     "src/l3_agent/goals/ledger.py": "de252f5ea52741ec0881f86a35df3250c3d67d138c06fdd2bf4074e588597166",
     "src/l3_agent/goals/manager.py": "d28add85413a64a8d9877784e1d4cc29566afc24cef5c39895a99cf4b5f59fdd",
     "src/l3_agent/goals/policy_completion.py": "ec5ee44e4689c5b5b8244588ce85566fb9980bd50faa88a1a4f747c8c3392c37",
@@ -289,7 +290,7 @@
     "src/l3_agent/prompt/system/optional/TASKS.md": "3f0acb25483911752290a375932c6c0a77cc6d09fce25205c0a75bc55503bf2d",
     "src/l3_agent/prompt/system/optional/TREE_OF_THOUGHTS.md": "2294c5a2d122879b85ca41703fa0c16f26482c0063994fdfe95a70f566163dd3",
     "src/l3_agent/react/action_repair.py": "e67d57236bad3a8fa3bea10c6b844237b3fa76b297280b3364f5ae384e3ddf03",
-    "src/l3_agent/react/loop.py": "c1d7838cfca99323bf06d5bf7f2230d60a1cc297bf1c8b0e3f482f34a21c507e",
+    "src/l3_agent/react/loop.py": "e22d1fbf3e6a5097291aaf08378c288033ec990f0423ad3d4c8702a2e643696f",
     "src/l3_agent/skills/catalog.py": "7af7ee46e14d9c0c370e5ecd5526be39a15f8aebb6135039e2e93a108a1f404d",
     "src/l3_agent/skills/coding_reconciliation.py": "e88e4a545a6495b8e2a4d93b8b36ad75ad5e08f9c1600835bad26ac3ad42af1f",
     "src/l3_agent/skills/coding_telemetry.py": "860d3ac2552419f21b5eb1bfee30bb6241eb9225d04e9620343c8183d75c0f46",
@@ -299,7 +300,7 @@
     "src/l3_agent/skills/journal.py": "55379f6118eddc426abce0301edecc8949afd984b4d007f794bee3b278950233",
     "src/l3_agent/skills/journal_skills.py": "0b5af42081588fe5a69fbd3733ad7aa39917972408b307dc78478a67c76e8cfb",
     "src/l3_agent/skills/registry.py": "d9608d48758a82aa57324393edb92941422dc16734274c4ef761f3cb542df86f",
-    "src/l3_agent/skills/schema.py": "45c63006bca453cf60e606f9c7b1c931b3cc9ed551591a732160242afdd63e72",
+    "src/l3_agent/skills/schema.py": "891c8b068f581298eb91130443acc9736f02f6fa0e5424f02a6d8475612c6dbb",
     "src/l3_agent/subconscious/orchestrator.py": "6481a6fbb68a90f84408c79cc74076aa470f6633d2db25254a6ce2f40d297d20",
     "src/l3_agent/subconscious/poller.py": "8f9cbbf9fc32d8f205a29099eadaefdf1db975d81938aa06ce631573ef01a742",
     "src/l3_agent/subconscious/prompt/CONSOLIDATION.md": "7ff4c9cd02f4b638e277f173821f273eece90c150d381051221b950fcc3cb128",
@@ -359,5 +360,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "6033eadf6570938a0ef23f4f672c8829d44b273a7bcd77d368450b5ff52f7fa5"
+  "snapshot_sha256": "1534f2cd26736b5ad8b9ccc7867a1c78200bbf729c01b5e187235b9ff4b19152"
 }

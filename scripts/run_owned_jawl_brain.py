@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, goal_repair=None):
+def write_startup_receipt(snapshot, delivery):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -60,13 +60,6 @@ def write_startup_receipt(snapshot, delivery, goal_repair=None):
     }
     if not all(check.values()):
         raise RuntimeError("owned brain hooks were not installed on the actual native classes")
-    if goal_repair is not None:
-        if not (
-            goal_repair.loop_class._handle_protocol_error is goal_repair.wrapped_error
-            and vars(goal_repair.loop_class).get("__jawl_owned_goal_completion_repair__") is goal_repair
-            and goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
-        ):
-            raise RuntimeError("native Goal completion repair hook is not installed")
     # Recheck immediately before writing: receipt destinations are owned paths.
     check_isolation(require_clean_import=False)
     # Kernel imports stay after hook validation: importing the kernel touches
@@ -82,7 +75,6 @@ def write_startup_receipt(snapshot, delivery, goal_repair=None):
         "instance_home": str(Path(os.environ["JAWL_INSTANCE_HOME"]).resolve()),
         "source": snapshot["source"], "snapshot_sha256": snapshot["snapshot_sha256"],
         "entrypoint": str(Path(__file__).resolve()), "hooks": check,
-        "goal_protocol_repair_installed": goal_repair is not None,
         "context_capacity": {
             "dynamic_chars": companion_context.declared_capacity_chars(),
             "goal_fixed_compaction_disabled": bool(companion_context.declared_capacity_chars()),
@@ -117,13 +109,10 @@ def main():
     sys.path.insert(0, str(source))
     delivery_extension = load_extension("_owned_jawl_delivery", "native_jawl_delivery.py")
     delivery = delivery_extension.install_native_delivery_guard()
-    goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
-    goal_repair = goal_repair_extension.install_native_goal_completion_repair()
 
     write_startup_receipt(
         snapshot,
         delivery,
-        goal_repair=goal_repair,
     )
 
     print("Owned brain entrypoint initialized.", flush=True)

@@ -45,6 +45,8 @@ from src.l3_agent.skills.registry import (
 )
 from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
 from src.l3_agent.react import action_repair
+from src.l3_agent.goals import completion_repair
+from src.l3_agent.goals.ledger import apply_ledger_patch as _apply_ledger_patch
 from src.l3_agent.event_buffer import BoundedEventBuffer
 from src.l3_agent.companion_gateway import (
     CompanionTurnState,
@@ -1142,6 +1144,7 @@ class ReactLoop:
     async def _handle_protocol_error(self, raw_answer: str, error_msg: str) -> None:
         """Persist invalid provider output so the next step can self-correct."""
 
+        completion_repair.note_protocol_error(self)
         safe_error = truncate_text(
             redact_sensitive_text(error_msg), max_chars=2000
         )
@@ -1285,9 +1288,14 @@ class ReactLoop:
     ) -> Tuple[Optional[AgentResponse], Optional[str]]:
         """
         Parses the agent's JSON response (native parsing with the top-level
-        action repair fallback).
+        action repair fallback and the one bounded Goal completion repair).
         """
-        return action_repair.parse_with_repair(self, raw_answer, _parse_response_native)
+        parsed, error = action_repair.parse_with_repair(self, raw_answer, _parse_response_native)
+        return completion_repair.consider_completion_repair(
+            self, parsed, error, raw_answer,
+            eligible=_ledger_completion_eligible,
+            patch_ledger=_apply_ledger_patch,
+        )
 
     def add_realtime_event(self, event_data: Dict[str, Any]) -> None:
         """

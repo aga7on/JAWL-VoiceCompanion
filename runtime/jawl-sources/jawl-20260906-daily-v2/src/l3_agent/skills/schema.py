@@ -496,7 +496,16 @@ def _agent_payload(data: Any, allow_empty: bool = False) -> Optional[AgentRespon
 
 def _goal_v2_payload(data: Any) -> Optional[AgentResponse]:
     """Normalize the compact discriminated Goal protocol into AgentResponse."""
+    parsed = _goal_v2_payload_impl(data)
+    if parsed is None and isinstance(data, dict) and data.get("v") == 2:
+        # Instrument the exact object received by the pinned native validator:
+        # structure-only diagnostics, no retained values.
+        from src.l3_agent.goals import completion_repair
+        completion_repair.record_goal_v2_payload_diagnostic(data)
+    return parsed
 
+
+def _goal_v2_payload_impl(data: Any) -> Optional[AgentResponse]:
     if not isinstance(data, dict) or data.get("v") != 2:
         return None
     state = data.get("state")

@@ -52,7 +52,6 @@ class OwnedGatewayAcceptanceTests(unittest.TestCase):
 
     def receipt(self):
         return {"schema_version": 1, "instance_id": "fixture", "bootstrap_only": False,
-                "goal_protocol_repair_installed": True,
                 "hooks": {"delivery_guard": True},
                 "instance_home": str(entry.INSTANCES / "fixture"),
                 "entrypoint": str(ROOT / "scripts/run_owned_jawl_brain.py"),
