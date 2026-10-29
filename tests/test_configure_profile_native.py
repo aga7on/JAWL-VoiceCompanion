@@ -17,6 +17,34 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ConfigureProfileNativeTests(unittest.TestCase):
+    def test_small_managed_context_receives_scaled_budget_and_valid_receipt(self):
+        from scripts.native_context_budget import approved_profile_budget
+
+        with tempfile.TemporaryDirectory() as directory:
+            instances = Path(directory) / "instances"
+            profile = instances / "qwen"
+            config = profile / "config"
+            config.mkdir(parents=True)
+            (config / "settings.yaml").write_text(
+                "llm: {main_model: local-qwen3-omni}\n",
+                encoding="utf-8",
+            )
+            (config / "interfaces.yaml").write_text(
+                "host:\n  os:\n    enabled: true\n    access_level: 0\n",
+                encoding="utf-8",
+            )
+            with patch.object(MODULE, "INSTANCES_ROOT", instances):
+                MODULE.configure(
+                    "qwen", access_level=0, enable_debug_broker=False,
+                    context_window_tokens=12288,
+                )
+
+            settings = MODULE.yaml.safe_load((config / "settings.yaml").read_text(encoding="utf-8"))
+            budget = settings["system"]["context_depth"]["budget"]
+            self.assertEqual(budget["max_dynamic_chars"], 9000)
+            receipt_budget = approved_profile_budget(profile)
+            self.assertEqual(receipt_budget["max_dynamic_chars"], 9000)
+
     def test_changes_only_selected_profile_and_keeps_other_interfaces(self):
         with tempfile.TemporaryDirectory() as directory:
             instances = Path(directory) / "instances"

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "profile": "vlm-cpu-bench",
+  "notes": "Same 13 Gemma cases and the same observation schema. Audio-only cases are negative controls: no image is sent, so a model must answer unknown rather than invent a scene.",
+  "runtime": {
+    "llama_server": "G:/AI/JAWL-VoiceCompanion/runtime/gemma4-e4b-cpu/llama.cpp/llama-server.exe",
+    "context": 4096,
+    "parallel": 1,
+    "ngl": 0,
+    "mmproj_offload": false,
+    "threads": 6,
+    "threads_batch": 6,
+    "max_tokens": [160, 512],
+    "temperature": 0.0,
+    "health_timeout_s": 240
+  },
+  "models": [
+    {
+      "id": "lfm2.5-vl-450m",
+      "repo": "LiquidAI/LFM2.5-VL-450M-GGUF",
+      "revision": "1abed04b6fe71314d8c446a1371c03d7c332266d",
+      "file": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/lfm2.5-vl-450m/LFM2.5-VL-450M-Q4_K_M.gguf",
+      "mmproj": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/lfm2.5-vl-450m/mmproj-LFM2.5-VL-450m-Q8_0.gguf",
+      "port": 8993,
+      "run": true
+    },
+    {
+      "id": "qwen3.5-0.8b",
+      "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+      "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+      "file": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/qwen3.5-0.8b/Qwen3.5-0.8B-Q4_K_M.gguf",
+      "mmproj": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/qwen3.5-0.8b/mmproj-F16.gguf",
+      "port": 8994,
+      "run": true
+    },
+    {
+      "id": "minicpm-v-4.7-1b",
+      "repo": "openbmb/MiniCPM-V-4.7-1B-gguf",
+      "revision": "0ad5ef54b51a8cf42de80532d840b61b66519054",
+      "file": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/minicpm-v-4.7-1b/MiniCPM-V-4_7-1B-Q4_K_M.gguf",
+      "mmproj": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/minicpm-v-4.7-1b/mmproj-model-f16.gguf",
+      "port": 8995,
+      "run": true
+    },
+    {
+      "id": "lfm2.5-vl-1.6b",
+      "repo": "LiquidAI/LFM2.5-VL-1.6B-GGUF",
+      "revision": "36fc16bc95133424921bcc3da009e83b2f23ffb5",
+      "file": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/lfm2.5-vl-1.6b/LFM2.5-VL-1.6B-Q4_K_M.gguf",
+      "mmproj": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/lfm2.5-vl-1.6b/mmproj-LFM2.5-VL-1.6b-Q8_0.gguf",
+      "port": 8996,
+      "run": true,
+      "note": "Downloaded and measured; better video detail, weak UI grounding."
+    },
+    {
+      "id": "ternary-bonsai-2-2b",
+      "repo": "prism-ml/Ternary-Bonsai-2-2B-gguf",
+      "revision": "683f7be2629342a50987627b40881e54761a2430",
+      "file": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/ternary-bonsai-2-2b/Ternary-Bonsai-2-2B-Q2_0.gguf",
+      "mmproj": "G:/AI/JAWL-VoiceCompanion/runtime/vlm-cpu-bench/models/ternary-bonsai-2-2b/Ternary-Bonsai-2-2B-mmproj-Q8_0.gguf",
+      "port": 8998,
+      "run": false,
+      "note": "Upstream Q2_0 first; PQ2_0/PTQ1_0 require the Prism fork. Weights not downloaded."
+    }
+  ]
+}

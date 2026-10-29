@@ -45,6 +45,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("shell.exec", RiskClass.SHELL, "Run an explicit argv vector on the host.", AccessLevel.ROOT, True),
     ToolSpec("desktop.observe", RiskClass.OBSERVE, "Read a bounded desktop/UI observation.", AccessLevel.OBSERVER),
     ToolSpec("screen.observe", RiskClass.OBSERVE, "Capture one bounded focused-window snapshot.", AccessLevel.OBSERVER),
+    ToolSpec("screen.ground", RiskClass.OBSERVE, "Rank grounded UIA/OCR targets for a spoken query.", AccessLevel.OBSERVER),
     ToolSpec("screen.describe_displays", RiskClass.OBSERVE, "Describe all visible displays with EG2 without raw frames.", AccessLevel.OBSERVER),
     ToolSpec("desktop.act", RiskClass.INTERACTIVE, "Perform a bounded desktop UI action.", AccessLevel.OPERATOR, True),
     ToolSpec("desktop.pointer", RiskClass.INTERACTIVE, "Click or move within a fresh foreground-window target.", AccessLevel.OPERATOR, True),
@@ -286,6 +287,41 @@ class HostOSExecutor:
             if not isinstance(include_image, bool):
                 raise ValueError("include_image must be boolean")
             return self.screen_capture.observe(include_image=include_image)
+        if request.tool == "screen.ground":
+            if self.ui_automation is None and self.screen_capture is None:
+                raise PermissionError("grounding adapters are unavailable")
+            query = request.arguments.get("query", "")
+            if not isinstance(query, str):
+                raise ValueError("query must be a string")
+            limit = request.arguments.get("limit", 5)
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise ValueError("limit must be an integer")
+            min_confidence = request.arguments.get("min_confidence")
+            if min_confidence is not None and (
+                isinstance(min_confidence, bool) or not isinstance(min_confidence, (int, float))
+            ):
+                raise ValueError("min_confidence must be a number")
+            from .grounding import GroundingService
+
+            service = GroundingService(
+                uia=self.ui_automation,
+                screen=self.screen_capture,
+            )
+            observation = service.observe()
+            candidates = service.find(
+                query,
+                observation=observation,
+                min_confidence=min_confidence,
+                limit=max(1, min(limit, 10)),
+            )
+            return {
+                "status": "verified" if observation.get("observation_token") else "unverified",
+                "query": query[:240],
+                "candidates": candidates,
+                "candidate_count": observation.get("candidate_count", 0),
+                "observation_token": observation.get("observation_token"),
+                "persisted": False,
+            }
         if request.tool == "screen.describe_displays":
             if self.display_describer is None:
                 raise PermissionError("display describer is unavailable")

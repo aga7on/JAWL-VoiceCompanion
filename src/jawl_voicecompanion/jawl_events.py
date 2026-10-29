@@ -34,7 +34,7 @@ class JawlEventFileSink:
         except Exception:  # noqa: BLE001 - logging must never break the sink
             pass
         event = {
-            "message": "A bounded screen observation requires attention.",
+            "message": f"Passive screen observation: {summary}",
             "payload": {
                 "source": "jawl_voicecompanion",
                 "event_type": "SCREEN_DELTA",

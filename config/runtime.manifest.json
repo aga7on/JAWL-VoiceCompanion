@@ -49,6 +49,9 @@
     "model": "bonsai",
     "auto_start": false
   },
+  "audio": {
+    "loopback_output_device_name": ""
+  },
   "launch": {
     "run_seconds": 0,
     "tts_provider": "omnivoice"

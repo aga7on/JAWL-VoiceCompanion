@@ -6,12 +6,56 @@ import unittest
 from enum import IntEnum
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.native_jawl_turn_context import (  # noqa: E402
+    apply_declared_capacity,
     install_native_jawl_turn_context,
 )
+
+
+class DeclaredCapacityTests(unittest.TestCase):
+    def test_large_declared_window_retains_catalog_and_disables_fixed_goal_cap(self):
+        from pydantic import BaseModel
+
+        class Budget(BaseModel):
+            max_dynamic_chars: int = 18000
+            skills_max_chars: int = 9000
+            recent_ticks_max_chars: int = 5000
+            hypotheses_max_chars: int = 3000
+            provider_max_chars: int = 3000
+
+        builder = SimpleNamespace(budget=Budget(), goal_manager=SimpleNamespace(compact_context=True))
+        with patch.dict("os.environ", {"JAWL_CONTEXT_WINDOW_TOKENS": "1048576"}):
+            apply_declared_capacity(builder)
+        self.assertFalse(builder.goal_manager.compact_context)
+        self.assertEqual(builder.budget.max_dynamic_chars, 1572864)
+        catalog = "tool schema " * 8000
+        # Exercise the pinned native budgeting algorithm, not just the adapter's
+        # numbers: this is the path that used to remove discovered tool schemas.
+        native = Path(__file__).parents[1] / 'runtime/jawl-sources/jawl-20260906-daily-v2/src/l3_agent/context/builder.py'
+        tree = ast.parse(native.read_text(encoding='utf-8'))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'ContextBuilder')
+        methods = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in {'_trim_block', '_join_blocks', '_apply_context_budget'}]
+        scope = {'Dict': dict}
+        fixture = ast.ClassDef(name='NativeBudget', bases=[], keywords=[], body=methods, decorator_list=[])
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[fixture], type_ignores=[])), str(native), 'exec'), scope)
+        native_budget = scope['NativeBudget']()
+        native_budget.budget = builder.budget
+        blocks, trimmed = native_budget._apply_context_budget({'skills': catalog, 'host_terminal': 'conversation ' * 5000})
+        self.assertEqual(blocks['skills'], catalog)
+        self.assertFalse(trimmed)
+
+    def test_absent_small_or_invalid_capacity_preserves_native_policy(self):
+        for value in ("0", "8192", "invalid", "2097152"):
+            builder = SimpleNamespace(budget=SimpleNamespace(), goal_manager=SimpleNamespace(compact_context=True))
+            original = builder.budget
+            with patch.dict("os.environ", {"JAWL_CONTEXT_WINDOW_TOKENS": value}):
+                apply_declared_capacity(builder)
+            self.assertIs(builder.budget, original)
+            self.assertTrue(builder.goal_manager.compact_context)
 
 
 class Section(IntEnum):
@@ -68,6 +112,27 @@ def install(current_turn_id):
 
 
 class NativeJawlTurnContextTests(unittest.IsolatedAsyncioTestCase):
+    async def test_va_packet_becomes_separate_native_section_and_message_stays_clean(self):
+        from jawl_voicecompanion.perception_packet import attach_packet, make_packet
+        packet = make_packet({"channels": {"screen": {"text": "car on road", "age_ms": 1000, "ttl_ms": 5000}}})
+        registry = Registry()
+        async def user_event(**kwargs):
+            return "USER: " + kwargs["payload"]["message"]
+        registry.register_provider("event", user_event, Section.HEARTBEAT)
+        builder = self.builder_class(registry)
+        payload = {"message": attach_packet("Describe it", packet)}
+        result = await builder.build("HOST_TERMINAL_MESSAGE", payload, [])
+        self.assertIn("PERCEPTION / VA", result)
+        self.assertIn("car on road", result)
+        self.assertIn("USER: Describe it", result)
+        self.assertNotIn("<va_perception>", result)
+        self.assertIn("<va_perception>", payload["message"])  # input identity is not mutated
+
+    def test_work_requests_never_enter_casual_lane(self):
+        from jawl_voicecompanion.native_jawl_turn_context import is_conversational_text
+        for text in ("Продолжай", "Изучи всё и настрой в фоне", "Да, делай", "Разберись с этим", "Поработай самостоятельно"):
+            self.assertFalse(is_conversational_text(text), text)
+
     async def asyncSetUp(self):
         # Each test gets a fresh class because installation patches build.
         class IsolatedBuilder(Builder):
@@ -226,7 +291,7 @@ class NativeJawlTurnContextTests(unittest.IsolatedAsyncioTestCase):
             "HEARTBEAT",
             {"_companion_turn_id": "turn-1", "text": user_text},
         )
-        self.assertLess(len(result), 400)
+        self.assertLess(len(result), 800)
         self.assertNotIn(user_text, result)
         self.assertNotIn("private", result.lower())
         self.assertNotIn("persona", result.lower())

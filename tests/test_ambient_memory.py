@@ -103,6 +103,53 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(payload["duration_seconds"], 4.5)
         self.assertFalse(payload["raw_audio_persisted"])
 
+    def test_ambient_ingest_sanitizes_unknown_mixed_speech_and_sound_bypasses(self):
+        for index, kind in enumerate(("unknown", "mixed", "speech", "sound")):
+            memory = AmbientMemoryBuffer(enabled=True)
+            result = memory.ingest({
+                "schema_version": 1,
+                "event_id": f"unsafe-audio-{index}",
+                "session_id": "test",
+                "type": "AMBIENT_AUDIO_OBSERVATION",
+                "payload": {
+                    "text": "energetic cinematic music, 120 BPM, tense",
+                    "confidence": 0.99,
+                    "audio_kind": kind,
+                    "tags": ["music", "120 BPM", "C major"],
+                    "mood": "tense",
+                },
+            })
+            self.assertEqual(result["status"], "retained")
+            payload = memory.observations()[0]["payload"]
+            self.assertNotIn("energetic cinematic music", payload["text"].lower())
+            self.assertEqual(payload["tags"], [])
+            self.assertNotIn("mood", payload)
+            self.assertEqual(payload["confidence"], 0.0)
+            if kind == "mixed":
+                self.assertEqual(payload["audio_kind"], "unknown")
+
+    def test_tentative_rhythm_cue_stays_machine_readable_as_sound(self):
+        from jawl_voicecompanion.audio_understanding import TENTATIVE_RHYTHM_CUE
+        from jawl_voicecompanion.perception_fusion import PerceptionFusion
+
+        memory = AmbientMemoryBuffer(enabled=True)
+        result = memory.ingest_audio_description({
+            "kind": "sound", "description": TENTATIVE_RHYTHM_CUE,
+            "tags": [], "mood": "", "confidence": 0.0, "duration_seconds": 1,
+        }, event_id="tentative-rhythm")
+        self.assertEqual(result["status"], "retained")
+        payload = memory.observations()[0]["payload"]
+        self.assertEqual(payload["audio_kind"], "sound")
+        self.assertEqual(payload["text"], TENTATIVE_RHYTHM_CUE)
+        self.assertEqual(payload["confidence"], 0.0)
+        self.assertEqual(payload["tags"], [])
+
+        fusion = PerceptionFusion()
+        fusion.note("sound", payload["text"], now=10)
+        composed = fusion.compose(now=11)
+        self.assertIn("not independently verified", composed)
+        self.assertNotIn("music:", composed.lower())
+
     def test_private_duplicate_and_unknown_events_are_not_retained(self):
         memory = AmbientMemoryBuffer(enabled=True)
         private = memory.ingest_system_audio("Password token: secret", event_id="private", now=1)

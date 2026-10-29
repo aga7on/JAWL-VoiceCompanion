@@ -18,6 +18,7 @@ from jawl_voicecompanion.duplex_cascade import (
     TOKEN_USER_INTERRUPTION,
     TOKEN_USER_TALKING,
     TOKEN_USER_THINKING,
+    is_user_backchannel,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,6 +99,11 @@ class DuplexCascadeArbiterTests(unittest.TestCase):
         self.assertEqual(decision.token, TOKEN_USER_FINISH)
         self.assertEqual(decision.action, "commit_turn")
         self.assertEqual(decision.recommended_silence_ms, 380)
+
+    def test_short_question_is_not_a_backchannel(self) -> None:
+        self.assertFalse(is_user_backchannel("Да?"))
+        self.assertFalse(is_user_backchannel("Да ?"))
+        self.assertTrue(is_user_backchannel("Да."))
 
     def test_active_mid_stream_speech_returns_user_talking(self) -> None:
         decision = self.arbiter.evaluate_micro_turn(

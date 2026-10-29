@@ -14,6 +14,7 @@ from typing import Any, Callable, NoReturn
 from urllib.parse import urlsplit
 
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioService
+from .system_audio import SystemAudioLoopback
 from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
 from .ambient_triage import OpenAICompatibleTriageProvider
 from .asr import UtteranceBuffer
@@ -52,6 +53,21 @@ def _voicemem_sidecar_args(args: Any) -> tuple[str, ...]:
     if args.voicemem_local_memory:
         result.append("--local-memory")
     return tuple(result)
+
+
+def _parse_visual_roi(value: Any) -> tuple[float, float, float, float]:
+    try:
+        parts = [float(part) for part in str(value or "").replace(" ", "").split(",")]
+    except (TypeError, ValueError):
+        return (0.0, 0.0, 1.0, 1.0)
+    if len(parts) != 4:
+        return (0.0, 0.0, 1.0, 1.0)
+    x, y, width, height = parts
+    x = max(0.0, min(x, 1.0))
+    y = max(0.0, min(y, 1.0))
+    width = max(0.01, min(width, 1.0 - x))
+    height = max(0.01, min(height, 1.0 - y))
+    return (round(x, 4), round(y, 4), round(width, 4), round(height, 4))
 
 
 def build_companion_runtime(
@@ -167,8 +183,13 @@ def build_companion_runtime(
             api_key=os.environ.get(args.vision_api_key_env, ""),
             timeout_seconds=args.vision_timeout,
         )
-    if args.screen_watch and not (args.hostos_live and args.screen_enabled and vision_describer):
-        error("--screen-watch requires --hostos-live, --screen-enabled, --vision-url and --vision-model")
+    if args.screen_watch:
+        eg2_model = project_root / "runtime" / "models" / "embeddinggemma-2-onnx" / "onnx" / "model_q4.onnx"
+        if not (args.hostos_live and args.screen_enabled and (vision_describer or eg2_model.is_file())):
+            error(
+                "--screen-watch requires --hostos-live, --screen-enabled, and either "
+                "--vision-url/--vision-model or the EmbeddingGemma 2 ONNX model"
+            )
 
     voicemem_args = _voicemem_sidecar_args(args)
     voice_mem = (
@@ -218,12 +239,10 @@ def build_companion_runtime(
     # available; without local audio the VoiceMem streaming path stays in charge.
     asr_service = UtteranceBuffer(gigaam_transcriber) if gigaam_transcriber is not None else None
 
-    # Optional local helpers surfaced in the doctor panel (bounded probes).
+    # Doctor probes only helpers that the current composition explicitly
+    # exposes. Dev-only relay/coding workers are not part of the daily runtime
+    # and must not appear as failed components when they are simply not raised.
     helper_urls: dict[str, str] = {}
-    if getattr(args, "prosody_url", ""):
-        helper_urls["planner"] = str(args.prosody_url).rstrip("/").removesuffix("/v1") + "/health"
-    helper_urls["coding"] = "http://127.0.0.1:8986/health"
-    helper_urls["relay"] = "http://127.0.0.1:8891/v1/models"
 
     proactive_feed = None
     if jawl_web is not None:
@@ -257,11 +276,67 @@ def build_companion_runtime(
     from .eg2_sensory import DEFAULT_EG2_ONNX_ROOT, EmbeddingGemmaSensoryCortex, RollingMediaBuffer
     from .perception_fusion import PerceptionFusion
     perception_fusion = PerceptionFusion(media_buffer=RollingMediaBuffer(window_seconds=300.0, max_items=1800))
+    if getattr(args, "jawl_log_dir", None):
+        perception_fusion.prompt_snapshot_path = Path(args.jawl_log_dir).resolve().parent / "data" / "sensory" / "current-perception.json"
+    from .sensory_history import SensoryHistoryStore
+
+    history_root = (
+        Path(args.jawl_log_dir).resolve().parent
+        if getattr(args, "jawl_log_dir", None)
+        else project_root / "runtime"
+    )
+    sensory_history = SensoryHistoryStore(
+        history_root / "data" / "sensory" / "weekly-history.json",
+        enabled=lambda: ambient_memory.enabled and not ambient_memory.paused,
+    )
+    perception_fusion.history_store = sensory_history
+    if getattr(args, "visual_describer", "eg2") == "qwen":
+        perception_fusion.include_eg2_media_in_scene = False
     try:
         if (DEFAULT_EG2_ONNX_ROOT / "onnx" / "model_q4.onnx").is_file():
-            perception_fusion.eg2 = EmbeddingGemmaSensoryCortex(DEFAULT_EG2_ONNX_ROOT)
+            perception_fusion.eg2 = EmbeddingGemmaSensoryCortex(
+                DEFAULT_EG2_ONNX_ROOT, intra_op_num_threads=4
+            )
+            try:
+                from .eg2_describer import DetailedSensoryDescriber, Eg2VisionDescriber
+                perception_fusion.describer = DetailedSensoryDescriber(perception_fusion.eg2)
+                if vision_describer is None:
+                    vision_describer = Eg2VisionDescriber(perception_fusion.describer)
+            except Exception:  # noqa: BLE001
+                perception_fusion.describer = None
     except Exception:  # noqa: BLE001 - optional sensory cortex must not block startup
         perception_fusion.eg2 = None
+        perception_fusion.describer = None
+
+    eg2_audio_describer = None
+    if getattr(args, "audio_describer", "eg2") == "qwen-omni":
+        audio_url = str(getattr(args, "audio_describer_url", "") or "").strip()
+        audio_model = str(getattr(args, "audio_describer_model", "") or "").strip()
+        if not audio_url or not audio_model:
+            error("--audio-describer qwen-omni requires --audio-describer-url and --audio-describer-model")
+        try:
+            from .audio_understanding import AudioDescriptionService
+            from .qwen_omni_audio import QwenOmniAudioDescriptionProvider
+
+            eg2_audio_describer = AudioDescriptionService(
+                QwenOmniAudioDescriptionProvider(
+                    audio_url,
+                    model=audio_model,
+                    timeout=float(getattr(args, "ambient_triage_timeout", 30.0)),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - audio description remains optional
+            print(f"[audio-describer] disabled: {type(exc).__name__}: {str(exc)[:160]}")
+    elif perception_fusion.describer is not None:
+        try:
+            from .audio_understanding import AudioDescriptionService
+            from .eg2_describer import Eg2AudioDescriptionProvider
+
+            eg2_audio_describer = AudioDescriptionService(
+                Eg2AudioDescriptionProvider(perception_fusion.describer)
+            )
+        except Exception:  # noqa: BLE001 - ambient audio still works without descriptions
+            eg2_audio_describer = None
 
     def _describe_displays(max_displays: int = 2, audio_wav_bytes: bytes | None = None) -> dict[str, Any]:
         adapter = getattr(hostos_executor, "screen_capture", None)
@@ -289,8 +364,18 @@ def build_companion_runtime(
         cortex = perception_fusion.eg2_cortex() if hasattr(perception_fusion, "eg2_cortex") else perception_fusion.eg2
         if cortex is None or not hasattr(cortex, "describe_displays"):
             return {"status": "degraded", "reason": "eg2_not_configured", "persisted": False}
+        describer = getattr(perception_fusion, "describer", None)
         try:
-            description = str(cortex.describe_displays(images, audio_wav_bytes=audio_wav_bytes) or "").strip()[:4000]
+            if describer is not None and hasattr(describer, "describe_displays_detailed"):
+                description = str(describer.describe_displays_detailed(images) or "").strip()[:4000]
+            else:
+                description = str(cortex.describe_displays(images) or "").strip()[:4000]
+            if audio_wav_bytes and describer is not None and hasattr(describer, "describe_audio_detailed"):
+                from .audio_understanding import safe_detailed_audio_claim
+
+                safe_audio = safe_detailed_audio_claim(describer.describe_audio_detailed(audio_wav_bytes))
+                if safe_audio["kind"] == "speech" or safe_audio["description"] == "Possible rhythmic sound; music is not independently verified.":
+                    description = (description + "; Audio: " + safe_audio["description"])[:4000]
         except Exception as exc:  # noqa: BLE001
             return {"status": "degraded", "reason": str(exc)[:200], "persisted": False}
         try:
@@ -317,11 +402,104 @@ def build_companion_runtime(
     if args.ambient_audio:
         if voice_mem is None:
             error("--ambient-audio requires --voicemem-python")
-        ambient_audio = AmbientAudioService(AmbientAudioASRBridge(
+        yamnet_soundscape_detector = None
+        try:
+            from .yamnet_soundscape import YamnetSoundscapeDetector
+
+            yamnet_soundscape_detector = YamnetSoundscapeDetector()
+        except Exception as exc:  # noqa: BLE001 - ASR must remain available without optional soundscape model
+            print(f"[soundscape] disabled: {type(exc).__name__}: {str(exc)[:160]}")
+        ambient_bridge = AmbientAudioASRBridge(
             voice_mem,
             ambient_memory,
             final_asr=asr_service,
-        ), governor=resource_governor)
+            audio_describer=eg2_audio_describer,
+            soundscape_detector=yamnet_soundscape_detector,
+            perception_fusion=perception_fusion,
+        )
+        ambient_capture = SystemAudioLoopback(
+            ambient_bridge.consume,
+            session_id="ambient-audio",
+            output_device_name=getattr(args, "ambient_audio_device", "") or None,
+        )
+        ambient_audio = AmbientAudioService(
+            ambient_bridge, capture=ambient_capture, governor=resource_governor
+        )
+        if getattr(args, "ambient_audio_autostart", False):
+            try:
+                state = ambient_audio.start()
+                capture_state = state.get("capture", {}) if isinstance(state, dict) else {}
+                if not capture_state.get("running"):
+                    print("[ambient-audio] autostart did not reach running capture state")
+            except Exception as exc:  # noqa: BLE001 - expose degraded optional sensor state
+                print(f"[ambient-audio] autostart failed: {type(exc).__name__}: {str(exc)[:160]}")
+
+    streaming_perception = None
+    if (
+        getattr(args, "screen_watch", False)
+        and getattr(args, "visual_describer", "eg2") != "qwen"
+        and perception_fusion.eg2 is not None
+        and perception_fusion.describer is not None
+    ):
+        try:
+            from .eg2_sensory import DEFAULT_EG2_ONNX_ROOT
+            from .eg2_transcribe import Eg2Transcriber
+            from .streaming_perception import StreamingPerception
+
+            vocab_path = DEFAULT_EG2_ONNX_ROOT / "visual_vocab.txt"
+            vocab_cache = vocab_path.with_suffix(".npy")
+            if not vocab_path.is_file() or not vocab_cache.is_file():
+                raise RuntimeError(
+                    "visual Haku vocabulary cache is missing; run scripts/build_visual_vocab.py and warm it"
+                )
+            transcriber = Eg2Transcriber(perception_fusion.eg2, vocab_path=vocab_path)
+            streaming_perception = StreamingPerception(
+                screen_capture=getattr(hostos_executor, "screen_capture", None),
+                cortex=perception_fusion.eg2,
+                describer=perception_fusion.describer,
+                fusion=perception_fusion,
+                transcriber=transcriber,
+                ambient_audio=ambient_audio,
+                target_title=os.environ.get("JAWL_SCREEN_TARGET_TITLE", ""),
+                interval_seconds=1.0,
+                audio_window_seconds=1.0,
+            )
+            streaming_perception.start()
+        except Exception as exc:  # noqa: BLE001 - optional high-rate lane
+            print(f"[sensory-stream] disabled: {type(exc).__name__}: {exc}")
+
+    qwen_visual_sensor = None
+    if getattr(args, "visual_describer", "eg2") == "qwen":
+        qwen_url = getattr(args, "visual_describer_url", None) or args.vision_url
+        screen_capture = getattr(hostos_executor, "screen_capture", None)
+        if not qwen_url:
+            print("[visual-describer] disabled: --visual-describer qwen requires --visual-describer-url or --vision-url")
+        elif not (args.hostos_live and args.screen_enabled and screen_capture is not None):
+            print("[visual-describer] disabled: qwen requires --hostos-live and --screen-enabled")
+        else:
+            try:
+                from .qwen_event_describer import QwenEventDescriber
+                from .qwen_visual_sensor import QwenVisualSensor
+
+                qwen_describer = QwenEventDescriber(
+                    qwen_url,
+                    model=getattr(args, "visual_describer_model", "qwen3.5-0.8b"),
+                    max_age_s=float(getattr(args, "visual_describer_max_age", 6.0)),
+                    timeout=float(args.vision_timeout),
+                )
+                qwen_visual_sensor = QwenVisualSensor(
+                    screen_capture=screen_capture,
+                    describer=qwen_describer,
+                    fusion=perception_fusion,
+                    roi=_parse_visual_roi(getattr(args, "visual_describer_roi", "0,0,1,1")),
+                    target_title=os.environ.get("JAWL_SCREEN_TARGET_TITLE", ""),
+                    display_index=getattr(args, "visual_describer_display_index", None),
+                    active_interval_s=float(getattr(args, "visual_describer_active_interval", 1.0)),
+                    static_interval_s=float(getattr(args, "visual_describer_static_interval", 4.0)),
+                    periodic_s=float(getattr(args, "visual_describer_periodic", 4.0)),
+                )
+            except Exception as exc:  # noqa: BLE001 - optional visual lane
+                print(f"[visual-describer] disabled: {type(exc).__name__}: {exc}")
 
     if args.tts_url:
         tts_client = {
@@ -379,6 +557,8 @@ def build_companion_runtime(
         helper_urls=helper_urls,
         proactive_feed=proactive_feed,
         perception_fusion=perception_fusion,
+        streaming_perception=streaming_perception,
+        visual_sensor=qwen_visual_sensor,
         config_hub=config_hub,
         log_dir=log_dir,
         activity_provider=(
@@ -396,6 +576,35 @@ def build_companion_runtime(
         tls_cert_file=args.tls_cert,
         tls_key_file=args.tls_key,
     )
+    if qwen_visual_sensor is not None:
+        from .arbiter import TurnPriority
+
+        def _qwen_attention(observation: Any, *, _server: Any = server) -> None:
+            try:
+                _server.attention.consume(
+                    {
+                        "type": "SCREEN_DELTA",
+                        "priority": int(TurnPriority.SCREEN_DELTA),
+                        "event_id": f"qwen:{observation.frame_id}",
+                        "payload": {
+                            "changed": True,
+                            "summary": observation.caption,
+                            "significance": 2,
+                            "source": observation.source,
+                            "frame_id": observation.frame_id,
+                            "scene_id": observation.scene_id,
+                            "captured_at": observation.observed_at,
+                            "age_ms": observation.age_ms,
+                            "roi": observation.roi,
+                        },
+                    }
+                )
+            except Exception:
+                pass
+
+        qwen_visual_sensor.on_observation = _qwen_attention
+        qwen_visual_sensor.start()
+
     runtime = CompanionRuntime(server)
     try:
         presentation = create_presentation_server(

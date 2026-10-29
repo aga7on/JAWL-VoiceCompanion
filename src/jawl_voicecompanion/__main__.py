@@ -261,6 +261,75 @@ def main() -> None:
         help="vision request timeout in seconds",
     )
     parser.add_argument(
+        "--visual-describer",
+        choices=("eg2", "qwen"),
+        default="eg2",
+        help="select the continuous visual describer lane (eg2 keeps embeddings/memory; qwen adds change-triggered captions)",
+    )
+    parser.add_argument(
+        "--visual-describer-url",
+        default=None,
+        help="OpenAI-compatible Qwen endpoint for --visual-describer qwen (defaults to --vision-url)",
+    )
+    parser.add_argument(
+        "--visual-describer-model",
+        default="qwen3.5-0.8b",
+        help="model name for --visual-describer qwen",
+    )
+    parser.add_argument(
+        "--visual-describer-roi",
+        default="0,0,1,1",
+        metavar="X,Y,W,H",
+        help="normalized screen ROI for Qwen captions",
+    )
+    parser.add_argument(
+        "--visual-describer-display-index",
+        type=int,
+        choices=(0, 1, 2, 3),
+        default=None,
+        help="capture a physical display by index instead of the focused/target window",
+    )
+    parser.add_argument(
+        "--visual-describer-active-interval",
+        type=float,
+        default=1.0,
+        help="minimum seconds between Qwen requests on active video",
+    )
+    parser.add_argument(
+        "--visual-describer-static-interval",
+        type=float,
+        default=4.0,
+        help="minimum seconds between Qwen requests on static content",
+    )
+    parser.add_argument(
+        "--visual-describer-periodic",
+        type=float,
+        default=4.0,
+        help="periodic Qwen refresh even without visible change",
+    )
+    parser.add_argument(
+        "--visual-describer-max-age",
+        type=float,
+        default=6.0,
+        help="Qwen observation age after which the result is stale",
+    )
+    parser.add_argument(
+        "--audio-describer",
+        choices=("eg2", "qwen-omni"),
+        default="eg2",
+        help="Optional soundscape description backend; ASR remains independent",
+    )
+    parser.add_argument(
+        "--audio-describer-url",
+        default="",
+        help="OpenAI-compatible /v1 endpoint for --audio-describer qwen-omni",
+    )
+    parser.add_argument(
+        "--audio-describer-model",
+        default="local-qwen3-omni",
+        help="Model alias for --audio-describer qwen-omni",
+    )
+    parser.add_argument(
         "--voicemem-python",
         type=Path,
         default=None,
@@ -309,6 +378,16 @@ def main() -> None:
         "--ambient-audio",
         action="store_true",
         help="configure explicit Windows system-audio loopback controls (does not start capture)",
+    )
+    parser.add_argument(
+        "--ambient-audio-autostart",
+        action="store_true",
+        help="start system-audio loopback with the companion (requires --ambient-audio)",
+    )
+    parser.add_argument(
+        "--ambient-audio-device",
+        default="",
+        help="exact Windows output device name for loopback; defaults to the WASAPI default output",
     )
     parser.add_argument(
         "--ambient-triage-url",
@@ -414,6 +493,8 @@ def main() -> None:
         help="loopback port for the supervised TTS worker",
     )
     args = parser.parse_args()
+    if args.ambient_audio_autostart and not args.ambient_audio:
+        parser.error("--ambient-audio-autostart requires --ambient-audio")
     if args.lan_public_host and not args.lan:
         parser.error("--lan-public-host requires --lan")
     lan_access_token = os.environ.get(args.lan_auth_token_env, "") if args.lan else None

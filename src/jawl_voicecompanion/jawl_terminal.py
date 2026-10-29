@@ -138,6 +138,18 @@ class JawlTerminalGateway:
                     event_type = str(event.get("type") or "")
                     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
                     if event_type == "assistant.delta":
+                        if str(payload.get("format") or "") == "speech":
+                            # Owned streaming hook: the sentence was extracted
+                            # from the still-open JSON envelope. It is speech
+                            # only, never a display delta, so the authoritative
+                            # final-text check below stays untouched.
+                            try:
+                                speech = filter_user_delta(payload.get("text", ""))
+                            except JawlUnsafeResponse:
+                                speech = ""
+                            if speech:
+                                yield {"type": "speech_delta", "text": speech}
+                            continue
                         try:
                             fragment = filter_user_delta(payload.get("text", ""))
                         except JawlUnsafeResponse as exc:

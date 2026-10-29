@@ -42,6 +42,7 @@ _TOP_LEVEL = frozenset(
         "profile_script",
         "launch",
         "vision",
+        "audio",
     }
 )
 _PORT_KEYS = frozenset(
@@ -197,14 +198,15 @@ def _loopback_url(value: Any, where: str) -> tuple[str, int]:
 
 def _apply_legacy_defaults(config: dict[str, Any]) -> None:
     """Fill newer fields in-place on the private merged copy only."""
-    for section in ("ports", "models", "brain", "launch", "vision"):
+    for section in ("ports", "models", "brain", "launch", "vision", "audio"):
         config.setdefault(section, {})
     ports = config["ports"]
     models = config["models"]
     brain = config["brain"]
     launch = config["launch"]
     vision = config["vision"]
-    if not all(isinstance(value, dict) for value in (ports, models, brain, launch, vision)):
+    audio = config["audio"]
+    if not all(isinstance(value, dict) for value in (ports, models, brain, launch, vision, audio)):
         raise ValueError("runtime manifest contains an invalid section")
 
     old_llm_url = brain.get("llm_url")
@@ -232,6 +234,7 @@ def _apply_legacy_defaults(config: dict[str, Any]) -> None:
     vision.setdefault("url", "http://127.0.0.1:8986/v1")
     vision.setdefault("model", "bonsai")
     vision.setdefault("auto_start", False)
+    audio.setdefault("loopback_output_device_name", "")
 
 
 def _validate(config: dict[str, Any]) -> dict[str, Any]:
@@ -353,6 +356,14 @@ def _validate(config: dict[str, Any]) -> dict[str, Any]:
             _label(vision[key], f"vision.{key}")
     if "auto_start" in vision and not isinstance(vision["auto_start"], bool):
         raise ValueError("runtime manifest has an invalid vision.auto_start")
+
+    audio = config.get("audio")
+    if not isinstance(audio, dict):
+        raise ValueError("runtime manifest audio must be an object")
+    _validate_keys(audio, frozenset({"loopback_output_device_name"}), "audio")
+    device_name = audio.get("loopback_output_device_name", "")
+    if not isinstance(device_name, str) or len(device_name) > 160 or "\x00" in device_name:
+        raise ValueError("runtime manifest has an invalid audio.loopback_output_device_name")
 
     return config
 

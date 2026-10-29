@@ -7,6 +7,7 @@ import copy
 import importlib
 import json
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -71,6 +72,66 @@ FIXTURE = {
 
 
 class LauncherManifestTests(unittest.TestCase):
+    def test_qwen_refresh_defaults_stay_inside_screen_caption_ttl(self) -> None:
+        for relative in (
+            "scripts/run_integrated_profile.ps1",
+            "scripts/run_local_bonsai_integrated.ps1",
+        ):
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            for name in ("VisualDescriberStaticInterval", "VisualDescriberPeriodic"):
+                match = re.search(rf"\[double\]\${name}\s*=\s*([0-9.]+)", source)
+                self.assertIsNotNone(match, f"missing default for {name} in {relative}")
+                self.assertLess(float(match.group(1)), 5.0, f"{name} must fit the 5 s screen TTL")
+
+        cli = (ROOT / "src/jawl_voicecompanion/__main__.py").read_text(encoding="utf-8")
+        composition = (ROOT / "src/jawl_voicecompanion/composition.py").read_text(encoding="utf-8")
+        for option in ("static_interval", "periodic"):
+            match = re.search(
+                rf'getattr\(args, "visual_describer_{option}", ([0-9.]+)\)',
+                composition,
+            )
+            self.assertIsNotNone(match, f"missing composition fallback for {option}")
+            self.assertLess(float(match.group(1)), 5.0, f"{option} fallback must fit the 5 s screen TTL")
+        for option in ("static-interval", "periodic"):
+            match = re.search(
+                rf'"--visual-describer-{option}",\s*type=float,\s*default=([0-9.]+)',
+                cli,
+            )
+            self.assertIsNotNone(match, f"missing CLI default for {option}")
+            self.assertLess(float(match.group(1)), 5.0, f"{option} must fit the 5 s screen TTL")
+
+    def test_desktop_launch_clears_electron_run_as_node_for_child_only(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell required")
+        source = str(ROOT / "scripts" / "run_integrated_profile.ps1").replace("'", "''")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            electron = root / "desktop" / "node_modules" / "electron" / "dist" / "electron.exe"
+            electron.parent.mkdir(parents=True)
+            electron.write_bytes(b"fixture")
+            logs = root / "logs"
+            logs.mkdir()
+            command = f"""
+$ErrorActionPreference='Stop'; $errors=$null; $tokens=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile('{source}',[ref]$tokens,[ref]$errors)
+if ($errors.Count) {{ throw 'Invalid launcher syntax' }}
+$block=@($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like 'if ($StartDesktopShell)*'}},$true))[0]
+$repo='{str(root).replace("'", "''")}'; $logDir='{str(logs).replace("'", "''")}'; $StartDesktopShell=$true
+$env:ELECTRON_RUN_AS_NODE='1'; $script:captured='unset'
+function Start-Process {{ param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle,[switch]$PassThru,$RedirectStandardOutput,$RedirectStandardError)
+    $script:captured=if ($env:ELECTRON_RUN_AS_NODE) {{$env:ELECTRON_RUN_AS_NODE}} else {{'unset'}}
+    [pscustomobject]@{{Id=12;HasExited=$false}}
+}}
+Invoke-Expression $block.Extent.Text
+[Console]::Out.WriteLine((ConvertTo-Json -Compress @{{captured=$script:captured;restored=$env:ELECTRON_RUN_AS_NODE;pid=$desktopShell.Id}}))
+"""
+            encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+            result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], capture_output=True, text=True, errors="replace", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(payload, {"captured": "unset", "restored": "1", "pid": 12})
+
     def test_supervised_acceptance_forwards_only_managed_snapshot_override(self) -> None:
         source = (ROOT / "scripts" / "run_supervised_profile_acceptance.py").read_text(encoding="utf-8")
         self.assertIn('command.extend(("-JawlSourceRoot", str(source_path)))', source)
@@ -128,6 +189,79 @@ class LauncherManifestTests(unittest.TestCase):
         self.assertIn('instances\\$ProfileName\\.jawl_events', source)
         self.assertNotIn("instances\\daily\\.jawl_events", source)
 
+    def test_managed_stop_signal_is_profile_local_instance_bound_and_uses_shared_cleanup_deadline(self) -> None:
+        source = (ROOT / "scripts" / "run_integrated_profile.ps1").read_text(encoding="utf-8")
+        lock = source.index("$profileLock = [IO.File]::Open")
+        stale_signal_cleanup = source.index("Remove-Item -LiteralPath $launcherStopRequestPath", lock)
+        self.assertGreater(stale_signal_cleanup, lock)
+        self.assertIn("JAWL_LAUNCHER_STOP_REQUEST = $launcherStopRequestPath", source)
+        self.assertIn("JAWL_LAUNCHER_STOP_STATUS = $launcherStopStatusPath", source)
+        self.assertIn("$stopRequest.schema_version -eq 1", source)
+        self.assertIn("-ceq $companionRuntimeInstanceId", source)
+        self.assertIn("request_id = [string]$stopRequest.request_id", source)
+        self.assertIn("status = 'stopping'", source)
+        self.assertIn("Move-Item -LiteralPath $statusTempPath -Destination $launcherStopStatusPath -Force", source)
+        self.assertIn("Test-Path -LiteralPath $launcherStopRequestPath -PathType Leaf", source)
+        self.assertIn("$shutdownDeadline = [DateTime]::UtcNow.AddSeconds(25)", source)
+        self.assertIn("$ownedProcesses | Where-Object { -not $_.HasExited }", source)
+        self.assertNotIn("$process.WaitForExit(25000)", source)
+
+    def test_process_tree_cleanup_refuses_reused_root_pid(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell required")
+        source = (ROOT / "scripts" / "run_integrated_profile.ps1").read_text(encoding="utf-8")
+        function = source.split("function Stop-OwnedProcessTree($process) {", 1)[1].split(
+            "\nfunction Wait-JawlHeartbeatReady", 1
+        )[0]
+        command = f"""
+$ErrorActionPreference='Stop'; $script:stopCalls=0
+function Get-Process {{ param($Id, $ErrorAction); [pscustomobject]@{{Id=$Id;StartTime=[datetime]'2026-01-02T03:04:06'}} }}
+function Get-CimInstance {{ @() }}
+function Stop-Process {{ $script:stopCalls++ }}
+function Stop-OwnedProcessTree($process) {{{function}
+$owned=[pscustomobject]@{{Id=123;StartTime=[datetime]'2026-01-02T03:04:05'}}
+Stop-OwnedProcessTree $owned
+[Console]::Out.WriteLine((ConvertTo-Json -Compress @{{stopCalls=$script:stopCalls}}))
+"""
+        encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], capture_output=True, text=True, errors="replace", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.strip()), {"stopCalls": 0})
+
+    def test_startup_readiness_waits_for_fresh_react_completion(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell required")
+        source = (ROOT / "scripts" / "run_integrated_profile.ps1").read_text(encoding="utf-8")
+        function = source.split(
+            "function Wait-JawlHeartbeatReady", 1
+        )[1].split("\n\nAssert-PortAvailable", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            log_path = str(Path(temporary) / "main.log").replace("'", "''")
+            command = f"""
+$ErrorActionPreference='Stop'; $script:polls=0; $script:logPath='{log_path}'
+$script:portFile=Join-Path (Split-Path -Parent $script:logPath) 'terminal.port'
+$started=[datetime]::UtcNow.AddSeconds(-1)
+$stamp=[datetime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture)
+Set-Content -LiteralPath $script:logPath -Value "$stamp - JAWL - INFO - [System] JAWL started successfully."
+function Start-Sleep {{ param([int]$Milliseconds); $script:polls++; if ($script:polls -eq 2) {{
+    $next=[datetime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture)
+    Add-Content -LiteralPath $script:logPath -Value "$next - JAWL.Agent - INFO - [ReAct] Empty actions list received. Concluding cycle."
+}} }}
+function Wait-JawlHeartbeatReady{function}
+$proc=[pscustomobject]@{{HasExited=$false}}
+Wait-JawlHeartbeatReady $script:logPath $started 5 $proc
+[Console]::Out.WriteLine((ConvertTo-Json -Compress @{{polls=$script:polls}}))
+"""
+            encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                capture_output=True, text=True, errors="replace", timeout=30,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.strip()), {"polls": 2})
+
     def test_wrapper_forwards_disposable_profile_no_browser_and_temperature(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if not powershell:
@@ -137,24 +271,91 @@ class LauncherManifestTests(unittest.TestCase):
 $errors = $null; $tokens = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile('{path}', [ref]$tokens, [ref]$errors)
 if ($errors.Count) {{ throw 'Invalid launcher syntax' }}
-$ProfileName = 'b0-fixture'; $NoBrowser = $true; $RunSeconds = 1
+$ProfileName = 'b0-fixture'; $NoBrowser = $true; $StartDesktopShell = $true; $RunSeconds = 1
+$VisualDescriber='qwen'; $VisualDescriberUrl=''; $VisualDescriberPort=8994
+$VisualDescriberModel='qwen3.5-0.8b'; $VisualDescriberThreads=4
+$VisualDescriberServerPath='server.exe'; $VisualDescriberModelPath='model.gguf'; $VisualDescriberMmprojPath='mmproj.gguf'
+$VisualDescriberRoi='0,0,1,1'; $VisualDescriberActiveInterval=1.0; $VisualDescriberStaticInterval=5.0
+$VisualDescriberPeriodic=10.0; $VisualDescriberMaxAge=6.0
+$NoLocalAudio=$false
+$repo='G:\\fixture'; $ReportPath='runtime\\qwen-cowatch.json'
 $JawlConsolePort=2770; $ControlPort=2467; $PresentationPort=2766; $TtsPort=2889
 $TtsProvider='tera'; $VisionUrl='http://127.0.0.1:8986/v1'; $VisionModel='fixture'; $ModelAlias='fixture'
 $assignment = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$integratedArgs'}}, $true))[0]
 Invoke-Expression $assignment.Extent.Text
+$audioModes = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like 'if (-not $NoLocalAudio*'}}, $true))
+foreach ($audioMode in $audioModes) {{ Invoke-Expression $audioMode.Extent.Text }}
 $noBrowser = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like 'if ($NoBrowser)*'}}, $true))[0]
 Invoke-Expression $noBrowser.Extent.Text
-[Console]::Out.WriteLine((ConvertTo-Json -InputObject @($integratedArgs) -Compress))
+$desktopShell = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like 'if ($StartDesktopShell)*'}}, $true))[0]
+Invoke-Expression $desktopShell.Extent.Text
+$qwen = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like 'if ($VisualDescriber -eq ''qwen'')*'}}, $true))[0]
+Invoke-Expression $qwen.Extent.Text
+$managedArgs = @($integratedArgs)
+$reportAssignment = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$report'}}, $true))[0]
+Invoke-Expression $reportAssignment.Extent.Text
+$managedReport = $report
+$VisualDescriberUrl='http://127.0.0.1:8994/v1'
+$NoLocalAudio=$true
+Invoke-Expression $assignment.Extent.Text
+foreach ($audioMode in $audioModes) {{ Invoke-Expression $audioMode.Extent.Text }}
+Invoke-Expression $qwen.Extent.Text
+$externalArgs = @($integratedArgs)
+[Console]::Out.WriteLine((ConvertTo-Json -InputObject @{{managed=$managedArgs;external=$externalArgs;report=$managedReport}} -Compress))
 """
         encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
         result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], capture_output=True, text=True, errors="replace", timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
-        arguments = json.loads(result.stdout.strip())
+        payload = json.loads(result.stdout.strip())
+        arguments = payload["managed"]
+        self.assertIn("-StartLocalAudio", arguments)
+        self.assertIn("-UseVoiceMem", arguments)
         self.assertEqual(arguments[arguments.index("-ProfileName") + 1], "b0-fixture")
         self.assertEqual(arguments[arguments.index("-JawlTemperatureOverride") + 1], "0.3")
         self.assertIn("-NoBrowser", arguments)
+        self.assertNotIn("-AllowBusyStartup", arguments)
+        self.assertIn("-StartDesktopShell", arguments)
+        self.assertIn("-ManageVisualQwenServer", arguments)
+        self.assertEqual(arguments[arguments.index("-VisualDescriberUrl") + 1], "http://127.0.0.1:8994/v1")
+        self.assertNotIn("-ManageVisualQwenServer", payload["external"])
+        self.assertNotIn("-StartLocalAudio", payload["external"])
+        self.assertNotIn("-UseVoiceMem", payload["external"])
+        self.assertEqual(payload["report"], str(Path("G:/fixture/runtime/qwen-cowatch.json")))
+        self.assertEqual(payload["external"][payload["external"].index("-VisualDescriberUrl") + 1], "http://127.0.0.1:8994/v1")
         source = (ROOT / "scripts" / "run_local_bonsai_integrated.ps1").read_text(encoding="utf-8")
         self.assertNotIn("apply_llm_overrides.py", source)
+
+    def test_headless_ambient_audio_keeps_voicemem_without_starting_tts(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell required")
+        path = str(ROOT / "scripts" / "run_local_bonsai_integrated.ps1").replace("'", "''")
+        command = f"""
+$errors = $null; $tokens = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile('{path}', [ref]$tokens, [ref]$errors)
+if ($errors.Count) {{ throw 'Invalid launcher syntax' }}
+$NoLocalAudio=$true; $EnableAmbientAudio=$true; $StartAmbientAudio=$true; $integratedArgs=@('core')
+$audioModes = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -like 'if (-not $NoLocalAudio*'}}, $true))
+$startLocal = $audioModes[0]
+$voiceMem = $audioModes[1]
+Invoke-Expression $startLocal.Extent.Text
+Invoke-Expression $voiceMem.Extent.Text
+$autostart = @($ast.FindAll({{param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and $n.Extent.Text -eq 'if ($StartAmbientAudio) {{ $integratedArgs += ''-StartAmbientAudio'' }}'}}, $true))[0]
+if (-not $autostart) {{ throw 'Ambient audio autostart forwarding is missing.' }}
+Invoke-Expression $autostart.Extent.Text
+[Console]::Out.WriteLine((ConvertTo-Json -Compress @{{args=$integratedArgs}}))
+"""
+        encoded = base64.b64encode(command.encode("utf-16le")).decode("ascii")
+        result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                                capture_output=True, text=True, errors="replace", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads(result.stdout.strip())["args"]
+        self.assertIn("-UseVoiceMem", args)
+        self.assertNotIn("-StartLocalAudio", args)
+        self.assertIn("-StartAmbientAudio", args)
+        integrated = (ROOT / "scripts" / "run_integrated_profile.ps1").read_text(encoding="utf-8")
+        self.assertIn("if ($EnableStreamingAsr -and -not $StartLocalAudio)", integrated)
+        self.assertIn("--ambient-audio-autostart", integrated)
 
     def test_profile_lock_is_exclusive_and_released_on_prepare_failure(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -169,6 +370,8 @@ Invoke-Expression $noBrowser.Extent.Text
             command = f"""
 $ErrorActionPreference='Stop'; $ProfileName='fixture'
 $logDir='{directory}'; $profileLockPath=Join-Path $logDir 'run.lock'
+$launcherStopRequestPath=Join-Path $logDir 'data\\interfaces\\launcher-stop.request'
+    $launcherStopStatusPath=Join-Path $logDir 'data\\interfaces\\launcher-stop.status'
 $blocked=$false; $failed=$false
 try {{
 {prefix}
@@ -205,6 +408,56 @@ $again=[IO.File]::Open($profileLockPath, 'OpenOrCreate', 'ReadWrite', 'None'); $
             ], cwd=temporary, capture_output=True, text=True, errors="replace", timeout=30)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Brain port is unavailable", result.stderr)
+            self.assertEqual(listener.getsockname()[1], port)
+
+    def test_real_wrapper_rejects_managed_qwen_port_collision_before_holder_starts(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if not powershell:
+            self.skipTest("PowerShell required")
+        required = (
+            ROOT / "runtime/gemma4-e4b-cpu/llama.cpp/llama-server.exe",
+            ROOT / "runtime/vlm-cpu-bench/models/qwen3.5-0.8b/Qwen3.5-0.8B-Q4_K_M.gguf",
+            ROOT / "runtime/vlm-cpu-bench/models/qwen3.5-0.8b/mmproj-F16.gguf",
+        )
+        if not all(path.is_file() for path in required):
+            self.skipTest("managed Qwen local assets required")
+        with socket.socket() as listener, socket.socket() as brain_listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            # The machine may have the daily brain already running on its
+            # managed default port. Keep that unrelated endpoint untouched and
+            # give preflight a free brain port so this test reaches the Qwen
+            # collision it is intended to verify.
+            brain_listener.bind(("127.0.0.1", 0))
+            brain_port = brain_listener.getsockname()[1]
+            brain_listener.close()
+            # Keep this smoke test independent of a running daily companion:
+            # its standard control and presentation ports may be occupied.
+            managed_ports = []
+            for _ in range(3):
+                with socket.socket() as port_probe:
+                    port_probe.bind(("127.0.0.1", 0))
+                    managed_ports.append(port_probe.getsockname()[1])
+            result = subprocess.run(
+                [
+                    powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-File", str(ROOT / "scripts" / "run_local_bonsai_integrated.ps1"),
+                    "-ProfileName", "b0-qwen-port-collision", "-NoBrowser", "-RunSeconds", "1",
+                    "-JawlConsolePort", str(managed_ports[0]),
+                    "-ControlPort", str(managed_ports[1]),
+                    "-PresentationPort", str(managed_ports[2]),
+                    "-BrainPort", str(brain_port),
+                    "-VisualDescriber", "qwen", "-VisualDescriberPort", str(port),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Visual Qwen port is unavailable", result.stderr)
             self.assertEqual(listener.getsockname()[1], port)
 
     def test_real_integrated_launcher_rejects_colliding_overrides_before_profile_writes(self) -> None:
@@ -343,7 +596,8 @@ try {{ Get-BrainProbeUrls 'http://127.0.0.1:8991/v1' 8990 | Out-Null }} catch {{
         holder_source = (ROOT / "scripts" / "hold_supervised_brain.py").read_text(encoding="utf-8")
         self.assertIn("return model_ready(args.port, args.alias)", holder_source)
         self.assertIn("require_free_ports([args.port])", holder_source)
-        self.assertIn('"--reasoning", "off", "--no-webui"', holder_source)
+        self.assertIn('"--reasoning", args.reasoning, "--no-webui"', holder_source)
+        self.assertIn('parser.add_argument("--reasoning", choices=("on", "off", "auto"), default="off")', holder_source)
         self.assertEqual(hold_supervised_brain._repo_path("fixture/model.gguf"), ROOT / "fixture/model.gguf")
         absolute_fixture = ROOT / "fixture" / "model.gguf"
         self.assertEqual(hold_supervised_brain._repo_path(str(absolute_fixture)), absolute_fixture)
@@ -351,6 +605,17 @@ try {{ Get-BrainProbeUrls 'http://127.0.0.1:8991/v1' 8990 | Out-Null }} catch {{
         self.assertFalse(hold_supervised_brain._is_valid_api_url("http://user:pass@127.0.0.1:8990/v1", 8990))
         self.assertFalse(hold_supervised_brain._is_valid_api_url("http://127.0.0.1:8991/v1", 8990))
         self.assertNotIn("_served_alias_matches", holder_source)
+
+    def test_holder_enforces_configured_generation_limit_in_llama_server(self) -> None:
+        args = mock.Mock(
+            llm_exe="llama-server.exe", model="brain.gguf", alias="local-qwen3-omni",
+            port=8990, threads=12, ctx_size=12288, max_tokens=512,
+            gpu_layers=99, device="CUDA0,CUDA1", reasoning="auto",
+        )
+        command = hold_supervised_brain._worker_command(args, mmproj="projector.gguf")
+        self.assertEqual(command[command.index("--n-predict") + 1], "512")
+        self.assertEqual(command[command.index("--ctx-size") + 1], "12288")
+        self.assertEqual(command[command.index("--mmproj") + 1], "projector.gguf")
 
 
 if __name__ == "__main__":

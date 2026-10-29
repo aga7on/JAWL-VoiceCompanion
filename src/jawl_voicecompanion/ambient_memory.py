@@ -18,7 +18,12 @@ from typing import Any
 from uuid import uuid4
 
 from .ambient_triage import AmbientTriageProvider, validate_triage_result
-from .audio_understanding import AUDIO_KINDS, AudioDescriptionUnavailable, validate_audio_description
+from .audio_understanding import (
+    AUDIO_KINDS,
+    TENTATIVE_RHYTHM_CUE,
+    AudioDescriptionUnavailable,
+    validate_audio_description,
+)
 from .resources import ResourceGovernor
 
 
@@ -148,16 +153,40 @@ class AmbientMemoryBuffer:
             "retention_until": retention_until,
         }
         if stream == "system_audio":
-            audio_kind = _bounded_text(payload.get("audio_kind"), 20)
+            raw_audio_kind = _bounded_text(payload.get("audio_kind"), 20)
+            audio_kind = raw_audio_kind
+            if audio_kind and audio_kind not in AUDIO_KINDS:
+                audio_kind = "unknown"
+            if audio_kind == "mixed":
+                # There is no independent overlap detector on this boundary.
+                audio_kind = "unknown"
+                normalized_payload[text_key] = "No reliable audio event detected."
+                normalized_payload["confidence"] = 0.0
+            tentative_rhythm = (
+                audio_kind == "sound"
+                and text == TENTATIVE_RHYTHM_CUE
+                and not payload.get("tags")
+                and not payload.get("mood")
+                and _confidence(payload.get("confidence")) == 0.0
+            )
+            if audio_kind in {"unknown", "sound", "speech"}:
+                normalized_payload[text_key] = {
+                    "unknown": "No reliable audio event detected.",
+                    "sound": TENTATIVE_RHYTHM_CUE if tentative_rhythm else "Audio event not identified.",
+                    "speech": "Speech detected; background music is not independently confirmed.",
+                }[audio_kind]
+                normalized_payload["confidence"] = 0.0
             if audio_kind in AUDIO_KINDS:
                 normalized_payload["audio_kind"] = audio_kind
             tags = payload.get("tags")
-            if isinstance(tags, list):
+            if audio_kind in {"unknown", "sound", "speech"}:
+                normalized_payload["tags"] = []
+            elif isinstance(tags, list):
                 normalized_payload["tags"] = [
                     _bounded_text(item, 40) for item in tags[:8] if _bounded_text(item, 40)
                 ]
             mood = _bounded_text(payload.get("mood"), 80)
-            if mood:
+            if mood and audio_kind not in {"unknown", "sound", "speech"}:
                 normalized_payload["mood"] = mood
             duration = payload.get("duration_seconds")
             if isinstance(duration, (int, float)) and not isinstance(duration, bool) and 0 < duration <= 30:

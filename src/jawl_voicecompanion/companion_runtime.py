@@ -23,6 +23,7 @@ class CompanionRuntime:
     _closed: bool = False
     _presentation_closed: bool = False
     _control_closed: bool = False
+    _sensory_history_flushed: bool = False
     PRESENTATION_JOIN_TIMEOUT_SECONDS: ClassVar[float] = 2.0
 
     def attach_presentation(self, presentation: Any, *, start: bool = True) -> Any:
@@ -90,6 +91,25 @@ class CompanionRuntime:
                 errors.append(exc)
             else:
                 self._control_closed = True
+        # The control server stops the capture/description producers in
+        # server_close(). Persist their final text observations only after
+        # those producers have been asked to stop, so shutdown cannot race a
+        # late history write. SensoryHistoryStore already flushes periodically;
+        # this closes the final short interval and surfaces a failed write.
+        if not self._sensory_history_flushed:
+            history = getattr(self.control, "sensory_history", None)
+            flush = getattr(history, "flush", None)
+            if callable(flush):
+                try:
+                    flush_result = flush()
+                    if isinstance(flush_result, dict) and flush_result.get("last_error"):
+                        raise OSError(str(flush_result["last_error"]))
+                except BaseException as exc:  # noqa: BLE001 - keep teardown best-effort
+                    errors.append(exc)
+                else:
+                    self._sensory_history_flushed = True
+            else:
+                self._sensory_history_flushed = True
         self._closed = self._presentation_closed and self._control_closed
         if errors:
             raise errors[0]

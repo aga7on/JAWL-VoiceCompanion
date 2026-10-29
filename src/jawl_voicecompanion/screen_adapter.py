@@ -135,8 +135,11 @@ class ScreenCaptureAdapter:
             str(term).casefold() for term in redaction_terms if str(term).strip()
         )
 
-    def capture_displays(self, *, max_displays: int = 2) -> list[dict[str, Any]]:
+    def capture_displays(
+        self, *, max_displays: int = 2, include_ocr: bool | None = None,
+    ) -> list[dict[str, Any]]:
         """Capture up to ``max_displays`` monitors without persisting frames."""
+        run_ocr = self.ocr_enabled if include_ocr is None else self.ocr_enabled and bool(include_ocr)
         count = max(0, min(int(max_displays), 4))
         if count == 0:
             return []
@@ -206,6 +209,8 @@ class ScreenCaptureAdapter:
                     all_screens=True,
                     include_layered_windows=False,
                 ).convert("RGB")
+                ocr_items, redaction_rects = self._collect_ocr(image, enabled=run_ocr)
+                self._redact_pixels(image, redaction_rects)
                 encoded = self._encode_jpeg(image)
             except (OSError, TypeError, ValueError) as exc:
                 results.append(
@@ -220,8 +225,7 @@ class ScreenCaptureAdapter:
                 )
                 continue
             digest = __import__("hashlib").sha256(encoded["data_base64"].encode("ascii")).hexdigest()
-            results.append(
-                {
+            result = {
                     "status": "verified",
                     "captured_at": _now(),
                     "source": "display",
@@ -231,7 +235,11 @@ class ScreenCaptureAdapter:
                     "image": encoded,
                     "persisted": False,
                 }
-            )
+            if ocr_items:
+                result["ocr"] = ocr_items
+            if redaction_rects:
+                result["redacted_regions"] = min(len(redaction_rects), 64)
+            results.append(result)
         while len(results) < count:
             results.append(
                 {
@@ -253,8 +261,11 @@ class ScreenCaptureAdapter:
             "configured_redaction_rects": len(self.redaction_rects),
         }
 
-    def observe(self, *, include_image: bool = True) -> dict[str, Any]:
+    def observe(
+        self, *, include_image: bool = True, include_ocr: bool | None = None,
+    ) -> dict[str, Any]:
         """Return one focused-window observation without persisting the frame."""
+        run_ocr = self.ocr_enabled if include_ocr is None else self.ocr_enabled and bool(include_ocr)
         if not include_image:
             return {
                 "status": "degraded",
@@ -307,14 +318,7 @@ class ScreenCaptureAdapter:
                 all_screens=True,
                 include_layered_windows=False,
             ).convert("RGB")
-            ocr_items = self._run_ocr(image) if self.ocr_enabled else []
-            redaction_rects = list(self.redaction_rects)
-            for item in ocr_items:
-                text = str(item.get("text") or "").casefold()
-                if text and any(term in text for term in self.redaction_terms):
-                    rect = self._coerce_rect(item.get("bbox"))
-                    if rect is not None:
-                        redaction_rects.append(rect)
+            ocr_items, redaction_rects = self._collect_ocr(image, enabled=run_ocr)
             self._redact_pixels(image, redaction_rects)
             encoded = self._encode_jpeg(image)
         except (OSError, TypeError, ValueError) as exc:
@@ -354,6 +358,131 @@ class ScreenCaptureAdapter:
         redacted_count = len(redaction_rects)
         if redacted_count:
             result["redacted_regions"] = min(redacted_count, 64)
+        return result
+
+    def observe_window(
+        self, title_contains: str, *, include_image: bool = True,
+        include_ocr: bool | None = None,
+    ) -> dict[str, Any]:
+        """Capture a visible window by title without changing focus.
+
+        This is the background-video path: the user may be typing in another
+        window while a player stays visible on the desktop. The same blocked
+        title and redaction rules as focused-window capture apply.
+        """
+        if not include_image:
+            return {
+                "status": "degraded",
+                "reason": "metadata_only_screen_observation_not_implemented",
+                "persisted": False,
+            }
+        run_ocr = self.ocr_enabled if include_ocr is None else self.ocr_enabled and bool(include_ocr)
+        if not self.enabled:
+            return {
+                "status": "degraded",
+                "reason": "screen_observation_disabled",
+                "persisted": False,
+            }
+        if os.name != "nt":
+            return {
+                "status": "degraded",
+                "reason": "target_window_capture_requires_windows",
+                "persisted": False,
+            }
+        try:
+            from PIL import ImageGrab
+            import win32gui
+        except ImportError:
+            return {
+                "status": "degraded",
+                "reason": "screen_capture_dependencies_unavailable",
+                "persisted": False,
+            }
+        needle = str(title_contains or "").casefold().strip()
+        if not needle:
+            return self.observe(include_image=include_image, include_ocr=run_ocr)
+        matches: list[tuple[int, int, str, str, tuple[int, int, int, int]]] = []
+
+        def _visit(hwnd: int, _extra: Any) -> None:
+            try:
+                if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+                    return
+                title = str(win32gui.GetWindowText(hwnd) or "")
+                if needle not in title.casefold():
+                    return
+                left, top, right, bottom = (
+                    int(value) for value in win32gui.GetWindowRect(hwnd)
+                )
+                if right <= left or bottom <= top:
+                    return
+                area = (right - left) * (bottom - top)
+                matches.append(
+                    (
+                        area,
+                        int(hwnd),
+                        title,
+                        str(win32gui.GetClassName(hwnd) or "")[:120],
+                        (left, top, right, bottom),
+                    )
+                )
+            except Exception:
+                return
+
+        win32gui.EnumWindows(_visit, None)
+        if not matches:
+            return self.observe(include_image=include_image, include_ocr=run_ocr)
+        matches.sort(key=lambda item: item[0], reverse=True)
+        _, hwnd, title, class_name, (left, top, right, bottom) = matches[0]
+        if self._is_blocked_window(title, class_name):
+            return {
+                "status": "denied",
+                "reason": "sensitive_or_companion_window_blocked",
+                "persisted": False,
+            }
+        try:
+            image = ImageGrab.grab(
+                bbox=(left, top, right, bottom),
+                all_screens=True,
+                include_layered_windows=False,
+            ).convert("RGB")
+            ocr_items, redaction_rects = self._collect_ocr(image, enabled=run_ocr)
+            self._redact_pixels(image, redaction_rects)
+            encoded = self._encode_jpeg(image)
+        except (OSError, TypeError, ValueError) as exc:
+            return {
+                "status": "degraded",
+                "reason": "screen_capture_failed",
+                "detail": str(exc)[:200],
+                "persisted": False,
+            }
+        encoded["coordinate_scale"] = {
+            "x": round(max(1.0, (right - left) / max(1, encoded["width"])), 4),
+            "y": round(max(1.0, (bottom - top) / max(1, encoded["height"])), 4),
+        }
+        digest = hashlib.sha256(encoded["data_base64"].encode("ascii")).hexdigest()
+        result = {
+            "status": "verified",
+            "captured_at": _now(),
+            "source": "target_window",
+            "capture_semantics": "visible_screen_region_of_target_window",
+            "content_capture_guaranteed": False,
+            "window": {"class_name": class_name, "bounds": [left, top, right, bottom]},
+            "observation_digest": digest,
+            "observation_token": issue_observation_token(
+                int(hwnd), class_name, [left, top, right, bottom], digest
+            ),
+            "image": encoded,
+            "persisted": False,
+        }
+        safe_ocr = [
+            item
+            for item in ocr_items
+            if not self._ocr_item_is_redacted(item, redaction_rects)
+        ]
+        if safe_ocr:
+            result["ocr"] = safe_ocr[:64]
+        if redaction_rects:
+            result["redacted_regions"] = min(len(redaction_rects), 64)
         return result
 
     def _is_blocked_window(self, title: str, class_name: str) -> bool:
@@ -397,26 +526,11 @@ class ScreenCaptureAdapter:
                 from pytesseract import Output
                 data = pytesseract.image_to_data(image, output_type=Output.DICT, config="--psm 6")
             except (ImportError, OSError, RuntimeError, TypeError, ValueError):
-                return []
-            items: list[dict[str, Any]] = []
-            texts = data.get("text", [])
-            for index, raw_text in enumerate(texts[:128]):
-                text = str(raw_text or "").strip()[:240]
-                if not text:
-                    continue
-                try:
-                    bbox = (
-                        int(data["left"][index]),
-                        int(data["top"][index]),
-                        int(data["left"][index]) + int(data["width"][index]),
-                        int(data["top"][index]) + int(data["height"][index]),
-                    )
-                    confidence = float(data.get("conf", [0])[index])
-                except (KeyError, IndexError, TypeError, ValueError):
-                    continue
-                if self._coerce_rect(bbox) is not None:
-                    items.append({"text": text, "bbox": list(bbox), "confidence": round(max(0.0, confidence), 2)})
-            return items[:64]
+                provider = self._windows_ocr_provider() if os.name == "nt" else None
+            else:
+                return self._tesseract_items(data)
+        if provider is None:
+            return []
         try:
             raw_items = provider(image)
         except (OSError, RuntimeError, TypeError, ValueError):
@@ -438,6 +552,59 @@ class ScreenCaptureAdapter:
                 confidence = 0.0
             items.append({"text": text, "bbox": list(bbox), "confidence": confidence})
         return items[:64]
+
+    def _collect_ocr(
+        self, image: Any, *, enabled: bool,
+    ) -> tuple[list[dict[str, Any]], list[tuple[int, int, int, int]]]:
+        redaction_rects = list(self.redaction_rects)
+        raw_items = self._run_ocr(image) if enabled else []
+        for item in raw_items:
+            text = str(item.get("text") or "").casefold()
+            if text and any(term in text for term in self.redaction_terms):
+                rect = self._coerce_rect(item.get("bbox"))
+                if rect is not None:
+                    redaction_rects.append(rect)
+        safe_items = [
+            item for item in raw_items
+            if not self._ocr_item_is_redacted(item, redaction_rects)
+        ][:64]
+        return safe_items, redaction_rects
+
+    def _tesseract_items(self, data: Any) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        texts = data.get("text", [])
+        for index, raw_text in enumerate(texts[:128]):
+            text = str(raw_text or "").strip()[:240]
+            if not text:
+                continue
+            try:
+                bbox = (
+                    int(data["left"][index]),
+                    int(data["top"][index]),
+                    int(data["left"][index]) + int(data["width"][index]),
+                    int(data["top"][index]) + int(data["height"][index]),
+                )
+                confidence = float(data.get("conf", [0])[index])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            if self._coerce_rect(bbox) is not None:
+                items.append(
+                    {
+                        "text": text,
+                        "bbox": list(bbox),
+                        "confidence": round(max(0.0, confidence), 2),
+                    }
+                )
+        return items[:64]
+
+    def _windows_ocr_provider(self) -> Any:
+        provider = getattr(self, "_windows_ocr", None)
+        if provider is None:
+            from .windows_ocr import WindowsOcr
+
+            provider = WindowsOcr()
+            self._windows_ocr = provider
+        return provider
 
     @classmethod
     def _redact_pixels(cls, image: Any, rects: Iterable[Iterable[int]]) -> None:

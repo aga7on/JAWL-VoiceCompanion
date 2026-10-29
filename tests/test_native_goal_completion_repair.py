@@ -1,16 +1,25 @@
-"""Keep native completion authority while allowing one bounded correction."""
+﻿"""Keep native completion authority while allowing one bounded correction."""
 import ast
+import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 from typing import Any
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from jawl_voicecompanion.native_goal_completion_repair import install_native_goal_completion_repair, REPAIR_REASON
+from jawl_voicecompanion.native_goal_completion_repair import (
+    goal_v2_payload_diagnostic,
+    goal_v2_structure_diagnostic,
+    install_native_goal_completion_repair,
+    REPAIR_REASON,
+)
 
 
 def native_validator():
@@ -23,6 +32,43 @@ def native_validator():
 
 
 class GoalCompletionRepairTests(unittest.IsolatedAsyncioTestCase):
+    def test_opt_in_goal_diagnostic_records_shape_only_inside_owned_profile(self):
+        marker = "PRIVATE_GOAL_SENTINEL_7241"
+        raw = json.dumps({"v": 2, "state": "act", "calls": [], "private": marker})
+        diagnostic = goal_v2_structure_diagnostic(raw)
+        self.assertEqual(diagnostic["issue"], "valid_json_structure_unavailable")
+        self.assertNotIn(marker, json.dumps(diagnostic))
+        safe = goal_v2_payload_diagnostic({"v": 2, "state": "act", "calls": [], "secret": marker})
+        self.assertEqual(safe["issue"], "act_requires_call")
+        self.assertEqual(safe["unknown_field_count"], 1)
+        self.assertNotIn(marker, json.dumps(safe))
+        instances = ROOT / "runtime/instances"
+        with tempfile.TemporaryDirectory(dir=instances) as temporary:
+            home = Path(temporary)
+            logs = home / "logs"
+            env = {
+                "JAWL_ACCEPTANCE_GOAL_PROTOCOL_DIAGNOSTICS": "1",
+                "JAWL_INSTANCE_HOME": str(home),
+                "JAWL_LOG_DIR": str(logs),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                from jawl_voicecompanion.native_goal_completion_repair import _record_goal_v2_diagnostic
+                _record_goal_v2_diagnostic(raw)
+            contents = (logs / "goal-protocol-diagnostics.jsonl").read_text("utf-8")
+            self.assertIn("valid_json_structure_unavailable", contents)
+            self.assertNotIn("private", contents)
+            self.assertNotIn(marker, contents)
+
+    def test_goal_diagnostic_classifies_truncated_json_without_copying_text(self):
+        marker = "PRIVATE_GOAL_SENTINEL_9918"
+        raw = '{"v":2,"state":"act","calls":[{"tool":"x","args":{}],"private":"' + marker
+        result = goal_v2_structure_diagnostic(
+            raw, parse_error="System Error: Invalid JSON format. Details: Unterminated string."
+        )
+        self.assertEqual(result["issue"], "json_syntax_error")
+        self.assertEqual(result["known_protocol_keys_seen"], ["calls", "state", "v"])
+        self.assertNotIn(marker, json.dumps(result))
+
     def fixture(self, *, limit=1):
         class Loop:
             def _parse_response(self, raw_answer):

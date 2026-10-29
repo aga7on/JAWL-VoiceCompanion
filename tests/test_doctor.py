@@ -59,6 +59,33 @@ class DoctorTests(unittest.TestCase):
         self.assertFalse(checks["vision"]["ready"])
         self.assertFalse(checks["asr"]["ready"])
 
+    def test_live_qwen_visual_sensor_reports_ready_only_with_fresh_delivery(self):
+        gateway = TextGateway(responder=_Responder("connected"), brain_name="jawl_web_chat")
+        base = {
+            "running": True, "captures": 10, "delivered": 8,
+            "caption_fresh": True, "last_error": None,
+        }
+        report = build_doctor_report(
+            gateway=gateway,
+            hostos=SimpleNamespace(dry_run=True),
+            vision=SimpleNamespace(status=lambda: {"configured": True, "screen_enabled": True}),
+            visual_sensor=SimpleNamespace(state=lambda: dict(base)),
+        )
+        check = next(item for item in report["checks"] if item["id"] == "vision")
+        self.assertEqual(check["status"], "online")
+        self.assertTrue(check["ready"])
+
+        base["caption_fresh"] = False
+        report = build_doctor_report(
+            gateway=gateway,
+            hostos=SimpleNamespace(dry_run=True),
+            vision=SimpleNamespace(status=lambda: {"configured": True, "screen_enabled": True}),
+            visual_sensor=SimpleNamespace(state=lambda: dict(base)),
+        )
+        check = next(item for item in report["checks"] if item["id"] == "vision")
+        self.assertEqual(check["status"], "degraded")
+        self.assertFalse(check["ready"])
+
     def test_required_offline_jawl_blocks_report(self):
         report = self._report(
             TextGateway(responder=_Responder("offline"), brain_name="jawl_web_chat")
@@ -85,6 +112,22 @@ class DoctorTests(unittest.TestCase):
         self.assertNotIn("G:\\", str(report))
 
 
+    def test_optional_off_is_neutral_and_does_not_degrade_the_runtime(self):
+        report = self._report(
+            TextGateway(responder=_Responder("connected"), brain_name="jawl_web_chat"),
+            live=False, configured=False,
+        )
+        checks = {item["id"]: item for item in report["checks"]}
+        self.assertEqual(report["status"], "ready")
+        self.assertEqual(checks["hostos"]["status"], "dry_run")
+        self.assertEqual(checks["hostos"]["state"], "ok")
+        self.assertTrue(checks["hostos"]["ready"])
+        self.assertEqual(checks["vision"]["state"], "off")
+        self.assertEqual(checks["tts"]["state"], "off")
+        self.assertIn("vision", report["optional_off"])
+        self.assertIn("tts", report["optional_off"])
+        self.assertNotIn("Validate the selected Vision profile", report["recommendations"])
+
     def test_configured_jawl_is_not_a_connected_chat(self):
         report = self._report(TextGateway(responder=_Responder("configured")))
         self.assertEqual(report["status"], "blocked")
@@ -96,6 +139,24 @@ class DoctorTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertEqual(_health(SimpleNamespace(health=lambda: payload))["status"], "degraded")
 
+    def test_doctor_uses_cached_voicemem_state_instead_of_blocking_health_rpc(self):
+        class BusyVoiceMem:
+            def state(self):
+                return {"status": "running", "running": True, "ready": True, "last_request_ok": True}
+
+            def health(self):
+                raise AssertionError("doctor must not queue a VoiceMem health RPC")
+
+        report = build_doctor_report(
+            gateway=TextGateway(responder=_Responder("connected"), brain_name="jawl_web_chat"),
+            hostos=SimpleNamespace(dry_run=True),
+            vision=SimpleNamespace(status=lambda: {"configured": False, "screen_enabled": False}),
+            voice_mem=BusyVoiceMem(),
+        )
+        check = next(item for item in report["checks"] if item["id"] == "voicemem")
+        self.assertEqual(check["status"], "ready")
+        self.assertTrue(check["ready"])
+
     def test_ambient_capture_must_be_running_without_error(self):
         for running, error, expected in ((True, None, True), (False, None, False), (True, "device_lost", False)):
             with self.subTest(running=running, error=error):
@@ -103,11 +164,28 @@ class DoctorTests(unittest.TestCase):
                     gateway=TextGateway(), hostos=SimpleNamespace(dry_run=True),
                     vision=SimpleNamespace(status=lambda: {}),
                     ambient_audio=SimpleNamespace(state=lambda: {
-                        "configured": True, "capture": {"running": running, "last_error": error},
+                        "configured": True,
+                        "capture": {
+                            "running": running, "last_error": error,
+                            "consumer_chunks": 1, "last_consumer_chunk_age_ms": 100,
+                        },
                     }),
                 )
                 check = next(item for item in report["checks"] if item["id"] == "ambient_audio")
                 self.assertEqual(check["ready"], expected)
+
+    def test_ambient_capture_running_without_pcm_is_not_reported_ready(self):
+        report = build_doctor_report(
+            gateway=TextGateway(), hostos=SimpleNamespace(dry_run=True),
+            vision=SimpleNamespace(status=lambda: {}),
+            ambient_audio=SimpleNamespace(state=lambda: {
+                "configured": True,
+                "capture": {"running": True, "consumer_chunks": 0, "last_consumer_chunk_age_ms": None},
+            }),
+        )
+        check = next(item for item in report["checks"] if item["id"] == "ambient_audio")
+        self.assertEqual(check["status"], "waiting_for_samples")
+        self.assertFalse(check["ready"])
 
 
 if __name__ == "__main__":

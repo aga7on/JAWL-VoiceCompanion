@@ -55,6 +55,7 @@ def test_legacy_defaults_keep_model_identity_and_allow_missing_model_files(tmp_p
         "model": "bonsai",
         "auto_start": False,
     }
+    assert result["audio"] == {"loopback_output_device_name": ""}
     assert "tera_python" not in result["models"]
     assert "tera_release" not in result["models"]
     assert original == _manifest()
@@ -294,6 +295,20 @@ def test_resolution_performs_no_writes_outside_manifest_files(tmp_path: Path) ->
         Path("config/runtime.manifest.json"),
         Path("config/runtime.manifest.local.json"),
     }
+
+
+def test_audio_loopback_device_is_machine_specific_manifest_setting(tmp_path: Path) -> None:
+    manifest = _manifest()
+    name = "DigitalOutput (NVIDIA High Definition Audio)"
+    manifest["audio"] = {"loopback_output_device_name": name}
+    _write_manifest(tmp_path / "config" / "runtime.manifest.json", manifest)
+
+    assert load_runtime_manifest(tmp_path)["audio"]["loopback_output_device_name"] == name
+
+    manifest["audio"] = {"loopback_output_device_name": "x" * 161}
+    _write_manifest(tmp_path / "config" / "runtime.manifest.json", manifest)
+    with pytest.raises(ValueError, match="audio.loopback_output_device_name"):
+        load_runtime_manifest(tmp_path)
 
 
 def test_cli_emits_one_json_document_from_an_unrelated_working_directory(tmp_path: Path) -> None:

@@ -40,6 +40,8 @@ class _CycleState:
     terminal_result: Any = None
     policy_denied: bool = False
     native_loop: Any = None
+    spoken_text: str = ""
+    user_message: str = ""
     emit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     broadcast_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -55,6 +57,14 @@ def native_companion_chat_active() -> bool:
         return False
     manager = getattr(state.native_loop, "goal_manager", None)
     return getattr(manager, "active_goal", None) is None
+
+
+def active_companion_message() -> str:
+    """The raw correlated user utterance for the active turn (bounded)."""
+    state = _CYCLE.get()
+    if state is None or state.closed:
+        return ""
+    return str(state.user_message or "")[:2000]
 
 
 def record_native_policy_denial() -> bool:
@@ -365,6 +375,11 @@ def install_native_delivery_guard(
             return await original_run(loop, *args, **kwargs)
 
         state = _CycleState(turn_id=turn_id, parent=_CYCLE.get(), native_loop=loop)
+        payload = kwargs.get("payload")
+        if payload is None and len(args) >= 2:
+            payload = args[1]
+        if isinstance(payload, dict):
+            state.user_message = str(payload.get("message") or "")[:2000]
         token = _CYCLE.set(state)
         try:
             try:
@@ -399,4 +414,44 @@ def install_native_delivery_guard(
     return installation
 
 
-__all__ = ["NativeDeliveryGuardInstallation", "install_native_delivery_guard"]
+async def emit_active_delta(text: str, *, event_format: str = "speech") -> bool:
+    """Emit one bounded ``assistant.delta`` for the active correlated cycle.
+
+    Used by the owned streaming hook: the reply sentence is already extracted
+    from the partially generated JSON envelope, so the Companion can start
+    speaking before the envelope closes.  Never raises into the model path.
+    """
+    fragment = str(text or "").strip()
+    if not fragment:
+        return False
+    state = _CYCLE.get()
+    if state is None or state.closed or state.terminal_event:
+        return False
+    # A later ReAct step may repeat the same sentence; speak each sentence once.
+    if fragment in state.spoken_text:
+        return False
+    state.spoken_text = (state.spoken_text + " " + fragment)[-4000:]
+    client = state.terminal_client
+    if client is None:
+        installation = vars(type(state.native_loop)).get(_INSTALL_ATTR)
+        if installation is None:
+            return False
+        try:
+            client = installation.terminal_client_resolver(state.native_loop)
+        except Exception:
+            return False
+    emit = getattr(client, "emit_gateway_event", None)
+    if not callable(emit):
+        return False
+    try:
+        await emit(
+            state.turn_id,
+            "assistant.delta",
+            {"text": fragment[:2000], "format": str(event_format)[:20]},
+        )
+        return True
+    except Exception:
+        return False
+
+
+__all__ = ["NativeDeliveryGuardInstallation", "emit_active_delta", "install_native_delivery_guard"]

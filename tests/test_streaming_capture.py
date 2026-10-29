@@ -200,6 +200,22 @@ class StreamingCaptureHttpTests(unittest.TestCase):
         self.assertEqual(other["draft"], "")
         self.assertNotIn("stale transcript", json.dumps(draft))
 
+    def test_draft_reports_barge_in_actions_while_assistant_speaks(self):
+        self.server.asr = _CanonicalASR()
+        self.acquire("capture-a")
+        self.streaming.publish("capture:capture-a", "session-a", "Стой, подожди")
+        _, stop = self.request("/api/voice/draft", {
+            "capture_id": "capture-a", "session_id": "session-a", "assistant_speaking": True,
+        })
+        self.assertEqual(stop["duplex_action"], "cancel_tts")
+        self.streaming.publish("capture:capture-a", "session-a", "угу")
+        _, nod = self.request("/api/voice/draft", {
+            "capture_id": "capture-a", "session_id": "session-a", "assistant_speaking": True,
+        })
+        self.assertEqual(nod["duplex_action"], "ignore_backchannel")
+        self.assertEqual(nod["avatar_gesture"], "nod")
+        self.assertGreaterEqual(nod["required_ms"], 380)
+
     def test_draft_and_preface_authorize_capture_without_creating_turns(self):
         self.acquire("owned")
         for path in ("/api/voice/draft", "/api/voice/preface"):
@@ -328,7 +344,7 @@ class StreamingCaptureHttpTests(unittest.TestCase):
         self.server.asr = _CanonicalASR()
         self.server.voice_mem_async = None
         self.acquire("owned")
-        for text, suppress in (("Стоп", True), ("Открой браузер", True), ("Ага", False), ("Ага", "true")):
+        for text, suppress in (("Стоп", True), ("Открой браузер", True), ("Да?", True), ("Ага", False), ("Ага", "true")):
             with self.subTest(text=text, suppress=suppress):
                 self.server.asr.finish = Mock(return_value={"status": "transcribed", "text": text})
                 with patch.object(CompanionRequestHandler, "_external_asr_events", return_value=[]) as dispatch:

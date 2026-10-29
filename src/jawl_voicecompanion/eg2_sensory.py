@@ -139,6 +139,7 @@ class EmbeddingGemmaSensoryCortex:
         scene_change_threshold: float = 0.88,
         load_vision: bool = True,
         load_audio: bool = True,
+        intra_op_num_threads: int = 1,
     ) -> None:
         import numpy as np
         import onnxruntime as ort
@@ -147,18 +148,25 @@ class EmbeddingGemmaSensoryCortex:
         self._np = np
         self.model_root = Path(model_root or DEFAULT_EG2_ONNX_ROOT).resolve()
         self.scene_change_threshold = float(scene_change_threshold)
+        self.intra_op_num_threads = max(1, min(32, int(intra_op_num_threads)))
         self._last_screen_embedding: Any = None
         self._last_multimodal_screen_embedding: Any = None
 
         onnx_dir = self.model_root / "onnx"
         self.tokenizer = Tokenizer.from_file(str(self.model_root / "tokenizer.json"))
+        session_options = ort.SessionOptions()
+        session_options.intra_op_num_threads = self.intra_op_num_threads
+        session_options.inter_op_num_threads = 1
+        session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         self.text_session = ort.InferenceSession(
             str(onnx_dir / "model_q4.onnx"),
+            sess_options=session_options,
             providers=["CPUExecutionProvider"],
         )
         self.vision_session = (
             ort.InferenceSession(
                 str(onnx_dir / "vision_encoder_q4.onnx"),
+                sess_options=session_options,
                 providers=["CPUExecutionProvider"],
             )
             if load_vision and (onnx_dir / "vision_encoder_q4.onnx").is_file()
@@ -167,6 +175,7 @@ class EmbeddingGemmaSensoryCortex:
         self.audio_session = (
             ort.InferenceSession(
                 str(onnx_dir / "audio_encoder_q4.onnx"),
+                sess_options=session_options,
                 providers=["CPUExecutionProvider"],
             )
             if load_audio and (onnx_dir / "audio_encoder_q4.onnx").is_file()
@@ -278,15 +287,18 @@ class EmbeddingGemmaSensoryCortex:
         np = self._np
         from PIL import Image
 
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((320, 224))
+        # 21x30 patches (480x336) is divisible by pooling_kernel_size=3 -> 70 soft tokens,
+        # and pixel_position_ids must be (pos_x, pos_y) for Gemma4 axial RoPE.
+        gh, gw = 21, 30
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((gw * 16, gh * 16))
         arr = np.asarray(img, dtype=np.float32) / 255.0
         patches = (
-            arr.reshape(14, 16, 20, 16, 3)
+            arr.reshape(gh, 16, gw, 16, 3)
             .transpose(0, 2, 1, 3, 4)
-            .reshape(1, 280, 768)
+            .reshape(1, gh * gw, 768)
         )
-        pos_y, pos_x = np.meshgrid(np.arange(14), np.arange(20), indexing="ij")
-        pixel_pos = np.stack([pos_y.ravel(), pos_x.ravel()], axis=-1)[
+        pos_y, pos_x = np.meshgrid(np.arange(gh), np.arange(gw), indexing="ij")
+        pixel_pos = np.stack([pos_x.ravel(), pos_y.ravel()], axis=-1)[
             None, :, :
         ].astype(np.int64)
         v_feats = self.vision_session.run(
@@ -309,6 +321,54 @@ class EmbeddingGemmaSensoryCortex:
         )[0][0]
         norm = float(np.linalg.norm(vec)) or 1.0
         return vec / norm
+
+    def embed_image_tokens(self, image_bytes: bytes):
+        """Return the global image embedding plus its 70 contextualized tokens."""
+        if self.vision_session is None:
+            raise RuntimeError("Vision encoder is not loaded")
+        np = self._np
+        from PIL import Image
+
+        gh, gw = 21, 30
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize(
+            (gw * 16, gh * 16)
+        )
+        arr = np.asarray(img, dtype=np.float32) / 255.0
+        patches = (
+            arr.reshape(gh, 16, gw, 16, 3)
+            .transpose(0, 2, 1, 3, 4)
+            .reshape(1, gh * gw, 768)
+        )
+        pos_y, pos_x = np.meshgrid(np.arange(gh), np.arange(gw), indexing="ij")
+        pixel_pos = np.stack([pos_x.ravel(), pos_y.ravel()], axis=-1)[
+            None, :, :
+        ].astype(np.int64)
+        v_feats = self.vision_session.run(
+            ["image_features"],
+            {"pixel_values": patches, "pixel_position_ids": pixel_pos},
+        )[0]
+        ids = np.array(
+            [[2, _BOI_TOKEN_ID] + [_IMAGE_TOKEN_ID] * v_feats.shape[0] + [_EOI_TOKEN_ID, 1]],
+            dtype=np.int64,
+        )
+        last_hidden, sentence = self.text_session.run(
+            ["last_hidden_state", "sentence_embedding"],
+            {
+                "input_ids": ids,
+                "attention_mask": np.ones_like(ids),
+                "image_features": v_feats,
+                "video_features": self._empty,
+                "audio_features": self._empty,
+            },
+        )
+        token_vecs = np.asarray(
+            last_hidden[0, 2 : 2 + v_feats.shape[0], :], dtype=np.float32
+        )
+        token_norms = np.linalg.norm(token_vecs, axis=1, keepdims=True)
+        token_vecs = token_vecs / np.maximum(token_norms, 1e-6)
+        global_vec = np.asarray(sentence[0], dtype=np.float32)
+        global_vec = global_vec / max(float(np.linalg.norm(global_vec)), 1e-6)
+        return global_vec, token_vecs
 
     def classify_screen(self, image_bytes: bytes) -> SensoryObservation:
         np = self._np

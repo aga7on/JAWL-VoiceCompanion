@@ -283,6 +283,43 @@ class VoiceMemSidecarTests(unittest.TestCase):
         self.assertEqual(client.state()["status"], "stopped")
         self.assertFalse(client.state()["running"])
 
+    def test_state_snapshot_does_not_wait_for_slow_sidecar_response(self):
+        client = VoiceMemProcessClient(sys.executable, args=("--test-stub",), timeout_seconds=3)
+        waiting = threading.Event()
+        release = threading.Event()
+        errors: list[Exception] = []
+        original_read = client._read_until_complete
+
+        def slow_read(request_id: str):
+            waiting.set()
+            release.wait(2)
+            return original_read(request_id)
+
+        def request() -> None:
+            try:
+                client.feed_partial("status snapshot probe")
+            except Exception as exc:  # pragma: no cover - assertion reports any failure
+                errors.append(exc)
+
+        try:
+            with patch.object(client, "_read_until_complete", side_effect=slow_read):
+                worker = threading.Thread(target=request, daemon=True)
+                worker.start()
+                self.assertTrue(waiting.wait(2))
+                started = time.perf_counter()
+                state = client.state()
+                elapsed = time.perf_counter() - started
+                self.assertLess(elapsed, 0.2)
+                self.assertTrue(state["running"])
+                release.set()
+                worker.join(timeout=2)
+                self.assertFalse(worker.is_alive())
+                self.assertFalse(errors)
+                self.assertTrue(client.state()["ready"])
+        finally:
+            release.set()
+            client.close()
+
     def test_client_warmup_rejects_unknown_kind_without_starting_process(self):
         client = VoiceMemProcessClient(sys.executable, args=("--test-stub",), timeout_seconds=2)
         with self.assertRaises(ValueError):

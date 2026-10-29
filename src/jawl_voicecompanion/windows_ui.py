@@ -37,6 +37,20 @@ def control_fingerprint(control: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _bounded_bounds(control: Any, max_edge: int = 100_000) -> list[int] | None:
+    """Return screen bounds for visual grounding, or None when unavailable."""
+    try:
+        rect = control.BoundingRectangle
+        values = [int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)]
+    except Exception:  # UIA raises for detached or provider-less elements.
+        return None
+    if any(value < -max_edge or value > max_edge for value in values):
+        return None
+    if values[2] <= values[0] or values[3] <= values[1]:
+        return None
+    return values
+
+
 def _properties(control: Any, max_text_chars: int) -> dict[str, Any]:
     return {
         "name": str(getattr(control, "Name", "") or "")[:max_text_chars],
@@ -44,6 +58,7 @@ def _properties(control: Any, max_text_chars: int) -> dict[str, Any]:
         "control_type": str(getattr(control, "ControlTypeName", "") or "")[:max_text_chars],
         "automation_id": str(getattr(control, "AutomationId", "") or "")[:max_text_chars],
         "window_handle": int(getattr(control, "NativeWindowHandle", 0) or 0),
+        "bounds": _bounded_bounds(control),
     }
 
 
@@ -133,6 +148,22 @@ class WindowsUIAutomationAdapter:
         if current != expected:
             return {"status": "stale_target", "reason": "element_changed_before_action"}
         if operation == "click":
+            # Prefer the semantic Invoke pattern: it is reliable for standard
+            # buttons even when the pointer is elsewhere, and it still maps to
+            # a normal accessibility invocation rather than a blind coordinate.
+            pattern = None
+            try:
+                import uiautomation as automation
+                pattern = record.control.GetPattern(automation.PatternId.InvokePattern)
+            except Exception:
+                pattern = None
+            if pattern is not None:
+                try:
+                    pattern.Invoke()
+                    return {"status": "dispatched", "verified": False, "operation": operation,
+                            "via": "invoke_pattern"}
+                except Exception:
+                    pass
             record.control.Click()
             return {"status": "dispatched", "verified": False, "operation": operation}
         if operation == "focus":

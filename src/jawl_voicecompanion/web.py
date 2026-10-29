@@ -37,6 +37,7 @@ from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .jawl_events import JawlEventFileSink
 from .jawl_web import JawlWebUnavailable
+from .live_speech import LiveSpeechSession
 from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
 from .resources import ResourceGovernor
@@ -58,6 +59,35 @@ MAX_BODY_BYTES = 64 * 1024
 AVATAR_AUDIO_STALE_SECONDS = 0.75
 LAN_AUTH_MIN_TOKEN_LENGTH = 16
 LAN_AUTH_REALM = "JAWL VoiceCompanion LAN"
+_RELATIVE_MINUTE_QUERY = re.compile(
+    r"\b(?P<en>\d+|one|two|three|four|five|ten|fifteen|twenty|thirty)\s*(?:minutes?|mins?)\s+ago\b|"
+    r"(?P<ru>\d+|одну|один|одна|две|два|три|четыре|пять|десять|пятнадцать|двадцать|тридцать)"
+    r"\s*минут\w*\s+назад\b",
+    re.IGNORECASE,
+)
+_MINUTE_WORDS = {
+    "one": 1, "одну": 1, "один": 1, "одна": 1,
+    "two": 2, "две": 2, "два": 2,
+    "three": 3, "три": 3,
+    "four": 4, "четыре": 4,
+    "five": 5, "пять": 5,
+    "ten": 10, "десять": 10,
+    "fifteen": 15, "пятнадцать": 15,
+    "twenty": 20, "двадцать": 20,
+    "thirty": 30, "тридцать": 30,
+}
+
+
+def _history_focus_seconds_ago(text: str) -> float | None:
+    match = _RELATIVE_MINUTE_QUERY.search(str(text or ""))
+    if not match:
+        return None
+    amount = match.group("en") or match.group("ru")
+    try:
+        minutes = int(amount)
+    except ValueError:
+        minutes = _MINUTE_WORDS.get(str(amount).casefold(), 0)
+    return float(minutes * 60) if minutes > 0 else None
 
 
 def require_loopback_host(host: str) -> str:
@@ -306,6 +336,8 @@ class CompanionServer(ThreadingHTTPServer):
     helper_urls: dict[str, str] | None = None,
     proactive_feed: Any | None = None,
     perception_fusion: Any | None = None,
+    streaming_perception: Any | None = None,
+    visual_sensor: Any | None = None,
     config_hub: Any | None = None,
     log_dir: Path | None = None,
     legacy_presentation: bool = True,
@@ -357,6 +389,7 @@ class CompanionServer(ThreadingHTTPServer):
         self._load_presence_preferences()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
         self.sensory_ingestor = sensory_ingestor
+        self.sensory_history = getattr(perception_fusion, "history_store", None)
         self.ambient_audio = ambient_audio
         self.ambient_scheduler = ambient_scheduler
         self.resources = resource_governor or ResourceGovernor()
@@ -380,6 +413,8 @@ class CompanionServer(ThreadingHTTPServer):
         self.helper_urls = dict(helper_urls or {})
         self.proactive_feed = proactive_feed
         self.perception_fusion = perception_fusion
+        self.streaming_perception = streaming_perception
+        self.visual_sensor = visual_sensor
         self.config_hub = config_hub
         self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
@@ -400,6 +435,10 @@ class CompanionServer(ThreadingHTTPServer):
         # deliberately a runtime identity, not a persisted session identifier:
         # after a restart any in-flight audio belongs to the old process.
         self.runtime_instance_id = uuid4().hex
+        launcher_stop_request = os.environ.get("JAWL_LAUNCHER_STOP_REQUEST", "").strip()
+        self.launcher_stop_request = Path(launcher_stop_request).resolve() if launcher_stop_request else None
+        launcher_stop_status = os.environ.get("JAWL_LAUNCHER_STOP_STATUS", "").strip()
+        self.launcher_stop_status = Path(launcher_stop_status).resolve() if launcher_stop_status else None
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
@@ -419,6 +458,25 @@ class CompanionServer(ThreadingHTTPServer):
         }
         if tls_context is not None:
             self.socket = tls_context.wrap_socket(self.socket, server_side=True)
+
+    def doctor_report(self) -> dict[str, Any]:
+        """One live readiness snapshot shared by /api/health and /api/doctor."""
+        return build_doctor_report(
+            gateway=self.gateway,
+            hostos=self.hostos,
+            vision=self.vision,
+            voice_mem=self.voice_mem,
+            asr=self.asr,
+            tts=self.tts,
+            ambient_memory=self.ambient_memory,
+            ambient_audio=self.ambient_audio,
+            resource_governor=self.resources,
+            streaming_asr=self.streaming_asr,
+            visual_sensor=self.visual_sensor,
+            helper_urls=self.helper_urls,
+            sensory_ingestor=self.sensory_ingestor,
+            gigaam_transcriber=getattr(self, "gigaam_transcriber", None),
+        )
 
     def origin_allowed(self, origin: str | None, host_header: str | None) -> bool:
         """Require an exact same-origin request, including scheme and port."""
@@ -581,43 +639,99 @@ class CompanionServer(ThreadingHTTPServer):
         }
 
     _SCREEN_QUERY = re.compile(
-        r"(экран|скрин|монитор|что\s+(сейчас\s+)?(происходит|видно)|опиши\s+(что|экран|кадр))",
+        r"(\u044d\u043a\u0440\u0430\u043d|\u0441\u043a\u0440\u0438\u043d|\u043c\u043e\u043d\u0438\u0442\u043e\u0440|\u0447\u0442\u043e\s+(\u0441\u0435\u0439\u0447\u0430\u0441\s+)?(\u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442|\u0432\u0438\u0434\u043d\u043e)|\u043e\u043f\u0438\u0448\u0438\s+(\u0447\u0442\u043e|\u044d\u043a\u0440\u0430\u043d|\u043a\u0430\u0434\u0440)|"
+        r"what(?:'s| is)?\s+on\s+(?:the\s+)?(?:screen|display)|"
+        r"what\s+(?:do\s+you|can\s+you)\s+see|what\s+is\s+visible|"
+        r"describe\s+(?:the\s+)?(?:current\s+)?(?:screen|scene|frame|gameplay)|"
+        r"(?:current|currently|right\s+now).{0,32}(?:screen|scene|frame|gameplay)|"
+        r"what\s+changed\s+(?:in|between)\s+(?:the\s+)?(?:scene|screen|game))",
+        re.IGNORECASE,
+    )
+    _PERCEPTION_HISTORY_QUERY = re.compile(
+        r"(\u0447\u0442\u043e\s+(\u0438\u0437\u043c\u0435\u043d\u0438\u043b\u043e\u0441\u044c|\u0431\u044b\u043b\u043e\s+\u0440\u0430\u043d\u044c\u0448\u0435|\u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u043b\u043e\s+\u0434\u043e\s+\u044d\u0442\u043e\u0433\u043e)|"
+        r"\u0440\u0430\u043d\u044c\u0448\u0435|\u043f\u0440\u0435\u0436\u0434\u0435|\u0434\u043e\s+\u044d\u0442\u043e\u0433\u043e|\u043c\u0435\u0436\u0434\u0443|\u0441\u0432\u044f\u0437\u044c|\u0441\u0432\u044f\u0437\u0430\u043d\u043e|"
+        r"what\s+changed|earlier|before\s+that|timeline|temporal\s+link|how\s+.*relate)",
+        re.IGNORECASE,
+    )
+    _SENSORY_HISTORY_QUERY = re.compile(
+        r"(\u0438\u0441\u0442\u043e\u0440\u0438\u044f|\u0438\u0441\u0442\u043e\u0440\u0438\u044e|"
+        r"\u0437\u0430\s+(\u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439\s+)?\u0447\u0430\u0441|"
+        r"\u0437\u0430\s+\u043d\u0435\u0434\u0435\u043b\w*|\u043d\u0435\u0434\u0435\u043b\w*\s+\u0440\u0430\u0431\u043e\u0442|"
+        r"\u043c\u0438\u043d\u0443\u0442\w*\s+\u043d\u0430\u0437\u0430\u0434|\u0447\u0430\u0441\w*\s+\u043d\u0430\u0437\u0430\u0434|"
+        r"\u0432\u0441\u0451\s+\u0432\u0440\u0435\u043c\u044f|\u0437\u0430\s+\u0432\u0441\u0451\s+\u0432\u0440\u0435\u043c\u044f|"
+        r"\u0447\u0442\u043e\s+\u0431\u044b\u043b\u043e|\u0447\u0442\u043e\s+\u0432\u0438\u0434\u0435\u043b\u0430|"
+        r"\u0447\u0442\u043e\s+\u044f\s+(\u0434\u0435\u043b\u0430\u043b|\u0441\u043c\u043e\u0442\u0440\u0435\u043b)|"
+        r"week|weekly|last\s+hour|minutes?\s+ago|\d+\s*minutes?\s+ago|\d+\s*hours?\s+ago|"
+        r"what\s+(?:did\s+you|have\s+you)\s+(?:seen|heard)|what\s+happened\s+(?:earlier|before))",
         re.IGNORECASE,
     )
 
     # Spoken preface gate: explicit screen nouns only (narrower than the
     # background-enrichment regex) and only for a just-finished utterance.
     PREFACE_SCREEN_QUERY = re.compile(
-        r"(экран|скрин|монитор|дисплей|кадр)",
+        r"(\u044d\u043a\u0440\u0430\u043d|\u0441\u043a\u0440\u0438\u043d|\u043c\u043e\u043d\u0438\u0442\u043e\u0440|\u0434\u0438\u0441\u043f\u043b\u0435\u0439|\u043a\u0430\u0434\u0440)",
         re.IGNORECASE,
     )
     PREFACE_MAX_SILENCE_MS = 4500.0
 
     def enrich_turn_text(self, text: str) -> str:
-        """Ground turn text: mid-turn note + freshest perception observation."""
+        """Attach the ready AV observation once, outside the conversational text."""
+        from .perception_packet import attach_packet, make_packet, render_packet
+
         clean = str(text or "").strip()
         if not clean:
             return clean
-        prefix = ""
         try:
             active = self.gateway.arbiter.state().get("active")
-        except Exception:  # noqa: BLE001 - enrichment is best-effort
+        except Exception:
             active = None
         if isinstance(active, dict) and active.get("priority") == "USER_FINAL" and not active.get("cancelled"):
-            prefix = (
-                "[Примечание: это сообщение пришло, пока предыдущий ответ ещё готовился; "
-                "предыдущая реплика и это сообщение — один контекст.]\n"
-            )
+            clean = "[Сообщение продолжает предыдущую реплику, ответ на которую ещё готовится.]\n" + clean
         fusion = self.perception_fusion
-        if fusion is None or not self._SCREEN_QUERY.search(clean):
-            return prefix + clean
+        if fusion is None:
+            return clean
+        history_requested = bool(
+            getattr(self, "_PERCEPTION_HISTORY_QUERY", CompanionServer._PERCEPTION_HISTORY_QUERY).search(clean)
+            or getattr(self, "_SENSORY_HISTORY_QUERY", CompanionServer._SENSORY_HISTORY_QUERY).search(clean)
+        )
+        week_requested = bool(re.search(r"недел\w*|\bweek\b|\bweekly\b", clean, re.IGNORECASE))
+        snapshot = {}
+        observation = ""
         try:
-            observation = fusion.compose()
-        except Exception:  # noqa: BLE001 - enrichment is best-effort
-            observation = ""
-        if not observation:
-            return prefix + clean + "\n\n[Свежих наблюдений восприятия нет: экран не наблюдался в последние минуты.]"
-        return prefix + clean + "\n\n[ВНУТРЕННИЕ НАБЛЮДЕНИЯ ВОСПРИЯТИЯ (фон, не цитировать дословно): " + observation[:900] + "]"
+            snapshot_fn = getattr(fusion, "compose_snapshot", None)
+            if callable(snapshot_fn):
+                try:
+                    snapshot = snapshot_fn(include_visual_history=history_requested)
+                except TypeError:
+                    snapshot = snapshot_fn()
+                observation = str(snapshot.get("text") or "")
+            else:
+                observation = fusion.compose()
+        except Exception:
+            pass
+        history_text = ""
+        sensory_history = getattr(self, "sensory_history", None)
+        if history_requested and sensory_history is not None:
+            try:
+                focus = _history_focus_seconds_ago(clean)
+                lookback = 7 * 24 * 3600 if week_requested else min(7 * 24 * 3600, max(300, focus + 30)) if focus is not None else 3600
+                history_text = sensory_history.context_text(
+                    seconds=lookback, include_week=week_requested, focus_seconds_ago=focus,
+                    focus_window_seconds=60.0, max_chars=5600 if week_requested else 4200,
+                )
+            except Exception:
+                pass
+        if history_requested and not history_text:
+            history_text = "\n".join(
+                f"{event.get('age_s', 0):.1f} с назад: {event.get('text', '')}"
+                for event in snapshot.get("recent_visual_events", []) if isinstance(event, dict)
+            )
+        packet = make_packet(snapshot, fallback=observation, history=history_text)
+        if not render_packet(packet):
+            if not self._SCREEN_QUERY.search(clean):
+                return clean
+            packet["summary"] = "Свежего наблюдения экрана нет; текущее изображение неизвестно."
+        return attach_packet(clean, packet)
 
     def voice_preface(self, partial: str, *, silence_ms: float | None = None) -> str:
         """Build a short speakable provisional line from fresh perception.
@@ -645,8 +759,8 @@ class CompanionServer(ThreadingHTTPServer):
         if not observation:
             return ""
         clause = observation.split(". ", 1)[0].strip()
-        clause = re.sub(r"^(?:Экран|Окно|Звук|Музыка|Слышно)\s*:\s*", "", clause, flags=re.IGNORECASE).strip()
-        clause = clause.strip("«»\"' .;:,-")
+        clause = re.sub(r"^(?:\u042d\u043a\u0440\u0430\u043d|\u041e\u043a\u043d\u043e|\u0417\u0432\u0443\u043a|\u041c\u0443\u0437\u044b\u043a\u0430|\u0421\u043b\u044b\u0448\u043d\u043e)\s*:\s*", "", clause, flags=re.IGNORECASE).strip()
+        clause = clause.strip("\u00ab\u00bb\"\' .;:,-")
         if not clause:
             return ""
         if len(clause) > 140:
@@ -716,6 +830,10 @@ class CompanionServer(ThreadingHTTPServer):
             step("responder", responder_close)
         if self.screen_watcher is not None:
             step("screen_watcher", self.screen_watcher.stop)
+        if self.streaming_perception is not None:
+            step("streaming_perception", self.streaming_perception.stop)
+        if self.visual_sensor is not None:
+            step("visual_sensor", self.visual_sensor.stop)
         if self.ambient_audio is not None:
             step("ambient_audio", self.ambient_audio.stop)
         step("playback_suppression", self.playback_suppression.end)
@@ -806,6 +924,14 @@ class CompanionServer(ThreadingHTTPServer):
         resources = self.resources.state() if self.resources is not None else None
         sensory_state = self.sensory_ingestor.state() if self.sensory_ingestor is not None else None
         screen_state = self.screen_watcher.state() if self.screen_watcher is not None else None
+        visual_state = self.visual_sensor.state() if self.visual_sensor is not None else None
+        capture_state = self.voice_capture.state() if self.voice_capture is not None else None
+        ambient_audio_state = self.ambient_audio.state() if self.ambient_audio is not None else None
+        ambient_audio_bridge_state = (
+            ambient_audio_state.get("bridge")
+            if isinstance(ambient_audio_state, dict) and isinstance(ambient_audio_state.get("bridge"), dict)
+            else {}
+        )
         streaming_state = self.streaming_asr.snapshot() if self.streaming_asr is not None else None
         chat_status = getattr(self.gateway, "chat_status", None)
         chat_status = chat_status() if callable(chat_status) else "starting"
@@ -852,11 +978,111 @@ class CompanionServer(ThreadingHTTPServer):
                 "running": bool(sensory_state.get("running")) if sensory_state else False,
                 "lines": sensory_state.get("counters", {}).get("lines", 0) if sensory_state else 0,
             },
+            "capture": {
+                "microphone_owner": capture_state.get("owner") if capture_state else None,
+                "microphone_expires_in_ms": capture_state.get("expires_in_ms", 0) if capture_state else 0,
+                "loopback_configured": bool(ambient_audio_state and ambient_audio_state.get("configured")),
+                "loopback_enabled": bool(ambient_audio_state and ambient_audio_state.get("enabled")),
+                "loopback_paused": bool(ambient_audio_state and ambient_audio_state.get("paused")),
+                "loopback_running": bool(
+                    ambient_audio_state
+                    and isinstance(ambient_audio_state.get("capture"), dict)
+                    and ambient_audio_state["capture"].get("running")
+                ),
+                "loopback_device": (
+                    ambient_audio_state.get("capture", {}).get("device")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_device_index": (
+                    ambient_audio_state.get("capture", {}).get("device_index")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_host_api_index": (
+                    ambient_audio_state.get("capture", {}).get("host_api_index")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_sample_rate": (
+                    ambient_audio_state.get("capture", {}).get("sample_rate")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_channels": (
+                    ambient_audio_state.get("capture", {}).get("channels")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_error": (
+                    ambient_audio_state.get("capture", {}).get("last_error")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_last_chunk_age_ms": (
+                    ambient_audio_state.get("capture", {}).get("last_chunk_age_ms")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_signal_window_state": (
+                    ambient_audio_state.get("capture", {}).get("signal_window_state", "unknown")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else "unknown"
+                ),
+                "loopback_signal_window_rms": (
+                    ambient_audio_state.get("capture", {}).get("signal_window_rms")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_signal_window_duration_ms": (
+                    ambient_audio_state.get("capture", {}).get("signal_window_duration_ms", 0)
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else 0
+                ),
+                "soundscape_configured": bool(ambient_audio_bridge_state.get("soundscape_configured")),
+                "soundscape_count": int(ambient_audio_bridge_state.get("soundscape_count", 0) or 0),
+                "soundscape_errors": int(ambient_audio_bridge_state.get("soundscape_errors", 0) or 0),
+                "soundscape_latency_ms_p95": ambient_audio_bridge_state.get("soundscape_latency_ms_p95"),
+                "soundscape_last_kind": ambient_audio_bridge_state.get("soundscape_last_kind"),
+                "soundscape_last_tags": list(ambient_audio_bridge_state.get("soundscape_last_tags") or [])[:4],
+                "soundscape_last_age_ms": ambient_audio_bridge_state.get("soundscape_last_age_ms"),
+                "soundscape_last_fresh": bool(ambient_audio_bridge_state.get("soundscape_last_fresh")),
+                "audio_description_configured": bool(ambient_audio_bridge_state.get("audio_description_configured")),
+                "audio_description_provider": ambient_audio_bridge_state.get("audio_description_provider"),
+                "audio_description_count": int(ambient_audio_bridge_state.get("audio_description_count", 0) or 0),
+                "audio_description_errors": int(ambient_audio_bridge_state.get("audio_description_errors", 0) or 0),
+                "audio_description_skipped": int(ambient_audio_bridge_state.get("audio_description_skipped", 0) or 0),
+                "audio_description_latency_ms_p95": ambient_audio_bridge_state.get("audio_description_latency_ms_p95"),
+                "audio_description_last_kind": ambient_audio_bridge_state.get("audio_description_last_kind"),
+                "audio_description_last_age_ms": ambient_audio_bridge_state.get("audio_description_last_age_ms"),
+                "audio_description_last_fresh": bool(ambient_audio_bridge_state.get("audio_description_last_fresh")),
+            },
             "screen": {
                 "running": bool(screen_state.get("running")) if screen_state else False,
                 "next_wait_seconds": screen_state.get("next_wait_seconds") if screen_state else None,
                 "idle_polls": screen_state.get("idle_polls") if screen_state else None,
                 "event_count": screen_state.get("event_count", 0) if screen_state else 0,
+            },
+            "visual": {
+                "running": bool(visual_state.get("running")) if visual_state else False,
+                "captures": visual_state.get("captures", 0) if visual_state else 0,
+                "submits": visual_state.get("submits", 0) if visual_state else 0,
+                "delivered": visual_state.get("delivered", 0) if visual_state else 0,
+                "dropped_scene_change": visual_state.get("dropped_scene_change", 0) if visual_state else 0,
+                "dropped_stale": visual_state.get("dropped_stale", 0) if visual_state else 0,
+                "capture_errors": visual_state.get("capture_errors", 0) if visual_state else 0,
+                "error_active": bool(visual_state.get("last_error")) if visual_state else False,
+                "scene_changes": visual_state.get("scene_changes", 0) if visual_state else 0,
+                "dirty": bool(visual_state.get("dirty")) if visual_state else False,
+                "dirty_reason": visual_state.get("dirty_reason") if visual_state else None,
+                "latest_age_ms": visual_state.get("latest_age_ms") if visual_state else None,
+                "caption_fresh": visual_state.get("caption_fresh") if visual_state else None,
+                "caption_age_ms": visual_state.get("caption_age_ms") if visual_state else None,
+                "caption_confirmed_age_ms": visual_state.get("caption_confirmed_age_ms") if visual_state else None,
+                "age_ms_p50": visual_state.get("age_ms_p50") if visual_state else None,
+                "age_ms_p95": visual_state.get("age_ms_p95") if visual_state else None,
+                "last_submit_reason": visual_state.get("last_submit_reason") if visual_state else None,
+                "scene_id": visual_state.get("scene_id") if visual_state else None,
             },
             "voice": {
                 "tts": self.tts is not None,
@@ -880,10 +1106,44 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path == "/api/health":
+            doctor = self.server.doctor_report()
             health = self.server.gateway.health()
+            components = dict(health.get("components", {}))
+            components.update({item["id"]: item["status"] for item in doctor["checks"]})
+            health["components"] = components
+            health["status"] = doctor["status"]
+            health["optional_off"] = doctor["optional_off"]
             health["runtime_instance_id"] = self.server.runtime_instance_id
             health["resources"] = self.server.resources.state()
             self._json(health)
+            return
+        if path == "/api/profile/stop/status":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            status_path = self.server.launcher_stop_status
+            if status_path is None:
+                self._json({"ok": False, "error": "managed profile stop is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                status = json.loads(status_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                self._json({"ok": True, "status": "waiting_for_launcher"})
+                return
+            acknowledged = (
+                isinstance(status, dict)
+                and status.get("schema_version") == 1
+                and status.get("runtime_instance_id") == self.server.runtime_instance_id
+                and isinstance(status.get("request_id"), str)
+                and status.get("status") == "stopping"
+            )
+            self._json({
+                "ok": True,
+                "status": "stopping" if acknowledged else "waiting_for_launcher",
+                "request_id": status.get("request_id") if acknowledged else None,
+            })
             return
         if path == "/api/voice/capture":
             try:
@@ -912,21 +1172,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json(self.server.resources.state())
             return
         if path == "/api/doctor":
-            self._json(build_doctor_report(
-                gateway=self.server.gateway,
-                hostos=self.server.hostos,
-                vision=self.server.vision,
-                voice_mem=self.server.voice_mem,
-                asr=self.server.asr,
-                tts=self.server.tts,
-                ambient_memory=self.server.ambient_memory,
-                ambient_audio=self.server.ambient_audio,
-                resource_governor=self.server.resources,
-                streaming_asr=self.server.streaming_asr,
-                helper_urls=self.server.helper_urls,
-                sensory_ingestor=self.server.sensory_ingestor,
-                gigaam_transcriber=getattr(self.server, "gigaam_transcriber", None),
-            ))
+            self._json(self.server.doctor_report())
             return
         if path == "/api/proactive":
             try:
@@ -970,6 +1216,41 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001 - the hint is best-effort
                 draft = ""
             self._json({"configured": True, "draft": draft[:1200]})
+            return
+        if path == "/api/sensory-history":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            store = self.server.sensory_history
+            if store is None:
+                self._json({"configured": False, "status": "not_configured"})
+                return
+            self._json({
+                "configured": True,
+                "state": store.state(),
+                "last_hour": store.context_text(seconds=3600, max_chars=6000),
+                "week": store.context_text(seconds=7 * 24 * 3600, include_week=True, max_chars=6000),
+            })
+            return
+        if path == "/api/perception/stream":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            stream = self.server.streaming_perception
+            if stream is None:
+                self._json({"configured": False, "running": False})
+                return
+            try:
+                self._json({"configured": True, **stream.snapshot(seconds=30.0, limit=20)})
+            except Exception as exc:  # noqa: BLE001 - sensor status is best-effort
+                self._json(
+                    {"configured": True, "running": False, "error": f"{type(exc).__name__}: {exc}"[:300]},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
             return
         if path == "/api/session":
             self._json(
@@ -1061,6 +1342,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             status = self.server.vision.status()
             if self.server.screen_watcher is not None:
                 status["watcher"] = self.server.screen_watcher.state()
+            if self.server.visual_sensor is not None:
+                status["visual_sensor"] = self.server.visual_sensor.state()
             status["attention"] = self.server.attention.state()
             fusion = getattr(self.server, "perception_fusion", None)
             cortex = getattr(fusion, "eg2", None) if fusion is not None else None
@@ -1110,6 +1393,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 "state": state,
                 "observations": self.server.ambient_memory.observations(),
                 "episodes": self.server.ambient_memory.episodes(),
+                "sensory_history": self.server.sensory_history.state() if self.server.sensory_history is not None else None,
             })
             return
         if path == "/api/ambient-audio":
@@ -1132,9 +1416,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             result: dict[str, Any] = {"configured": True}
             if self.server.voice_mem is not None:
                 try:
-                    voicemem = self.server.voice_mem.health()
-                except VoiceMemUnavailable as exc:
-                    voicemem = {"status": "degraded", "reason": str(exc)}
+                    # This is a polling UI endpoint. Read process/request
+                    # state only; a sidecar health RPC can sit behind a long
+                    # audio inference on the same JSONL pipe.
+                    voicemem = self.server.voice_mem.state()
+                except Exception:  # noqa: BLE001 - status polling must not stall the control plane
+                    voicemem = {"status": "degraded", "running": False, "ready": False}
                 result.update(voicemem)
                 result["voicemem"] = voicemem
                 if self.server.voice_mem_async is not None:
@@ -1213,7 +1500,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             "/api/memory", "/api/tasks", "/api/character", "/api/runtime/status",
             "/api/capabilities",
             # Legacy engine-specific aliases (kept for compatibility).
-            "/api/jawl/status", "/api/jawl/overview", "/api/jawl/memory",
+            "/api/jawl/status", "/api/jawl/activity", "/api/jawl/overview", "/api/jawl/memory",
             "/api/jawl/persona", "/api/jawl/hostos", "/api/jawl/journal",
         }:
             try:
@@ -1244,6 +1531,11 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                         })
                     else:
                         self._json({"configured": True, "status": status})
+                elif path == "/api/jawl/activity":
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured", "running": False})
+                        return
+                    self._json(adapter.activity())
                 elif path in ("/api/jawl/memory", "/api/memory"):
                     if adapter is None:
                         self._json({"configured": False, "status": "not_configured"})
@@ -1433,6 +1725,33 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._require_browser_session()
             payload = self._read_json()
+            if self.path == "/api/profile/stop":
+                if payload:
+                    raise ValueError("profile stop request body must be empty")
+                target = self.server.launcher_stop_request
+                if target is None:
+                    self._json({"ok": False, "error": "managed profile stop is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                request = {
+                    "schema_version": 1,
+                    "runtime_instance_id": self.server.runtime_instance_id,
+                    "request_id": uuid4().hex,
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                }
+                temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    temporary.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+                    os.replace(temporary, target)
+                except OSError:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    self._json({"ok": False, "error": "launcher stop request could not be recorded"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return
+                self._json({"ok": True, "status": "stop_requested", "request_id": request["request_id"]}, status=HTTPStatus.ACCEPTED)
+                return
             if self.path == "/api/config-hub/save":
                 hub = self.server.config_hub
                 if hub is None:
@@ -1609,12 +1928,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "draft": "", "mode": "streaming", "status": "cancelled"})
                     return
                 text = str(snapshot.get("text") or "").strip()
+                assistant_speaking = payload.get("assistant_speaking") is True
+                extended_used = payload.get("extended_used") is True
                 if snapshot.get("active") and text:
                     if not is_meaningful_transcript(text):
                         self._json({"ok": True, "draft": "", "mode": "streaming", "hold": False,
                                     "silence_ms": snapshot.get("silence_ms"), "required_ms": turn_policy.BASE_SILENCE_MS})
                         return
-                    decision = turn_policy.decide(text, float(snapshot.get("silence_ms") or 0.0))
+                    decision = turn_policy.decide(
+                        text,
+                        float(snapshot.get("silence_ms") or 0.0),
+                        extended_used,
+                        assistant_speaking=assistant_speaking,
+                    )
                     self._json({
                         "ok": True, "draft": text, "mode": "streaming",
                         "hold": bool(decision["hold"]),
@@ -2045,7 +2371,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "status": "promoted", "episode": marked, "memory": stored})
                 return
             if self.path == "/api/ambient-memory/clear":
-                self._json(self.server.ambient_memory.clear())
+                result = self.server.ambient_memory.clear()
+                if self.server.sensory_history is not None:
+                    result["sensory_history"] = self.server.sensory_history.clear()
+                self._json(result)
                 return
             if self.path == "/api/ambient-memory/pause":
                 self._json({"ok": True, "state": self.server.ambient_memory.pause()})
@@ -2062,6 +2391,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                         self.server.ambient_audio.stop()
                     self.server.ambient_memory.set_enabled(False)
                     erased = self.server.ambient_memory.clear()
+                    if self.server.sensory_history is not None:
+                        erased["sensory_history"] = self.server.sensory_history.clear()
                     self._json({
                         "ok": True,
                         "mode": mode,
@@ -2356,7 +2687,66 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     pass
             send({"type": "voice_reset_ack"})
             return
+        if action in {"speak_delta", "speak_finish", "speak_cancel"}:
+            self._handle_live_speech(connection, payload, action, send)
+            return
         send({"type": "error", "error": "unsupported_action"})
+
+    def _handle_live_speech(
+        self,
+        connection: WebSocketConnection,
+        payload: dict[str, Any],
+        action: str,
+        send: Any,
+    ) -> None:
+        """Speech-first duplex lane: stream the reply and speak it sentence by sentence.
+
+        The client pushes the reply as it arrives (text or the raw JAWL JSON
+        envelope).  Every finished sentence is synthesized immediately and
+        pushed back as the same NDJSON audio events the desktop player already
+        consumes, so the first sound starts before the answer is complete.
+        """
+        if action == "speak_cancel":
+            session = getattr(self, "_live_speech", None)
+            if session is not None:
+                session.cancel()
+                self._live_speech = None
+            send({"type": "speech_cancelled"})
+            return
+        if self.server.tts is None:
+            send({"type": "error", "error": "tts_not_configured"})
+            return
+        session = getattr(self, "_live_speech", None)
+        if session is None:
+            mode = "envelope" if payload.get("mode") == "envelope" else "text"
+            session = LiveSpeechSession(
+                self.server.tts,
+                voice=payload.get("voice"),
+                speed=float(payload.get("speed") or 1.0),
+                request_id=payload.get("request_id"),
+                mode=mode,
+            )
+            session.start()
+            self._live_speech = session
+        if action == "speak_delta":
+            session.feed(str(payload.get("text") or ""))
+            chunks = session.poll_audio(timeout=0.05)
+        else:
+            session.finish(payload.get("text"))
+            chunks = session.drain_all()
+            self._live_speech = None
+        index = 0
+        for audio in chunks:
+            send({
+                "type": "audio",
+                "index": index,
+                "media_type": "audio/wav",
+                "data_base64": base64.b64encode(audio).decode("ascii"),
+            })
+            index += 1
+        if action == "speak_finish":
+            state = session.state()
+            send({"type": "done", "count": state["audio_chunks"], "state": state})
 
     def _feed_voice_chunk(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Shared voice-chunk ingestion for /api/voice/audio and the WS transport."""
@@ -2692,7 +3082,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         return value[:128] if value else f"turn-{uuid4().hex}"
 
     def _stream_chat(self, text: str, correlation_id: str | None = None) -> None:
-        """Stream text deltas and one final ResponseEnvelope as NDJSON."""
+        """Stream text deltas, early speech audio and one final envelope as NDJSON."""
         self.send_response(HTTPStatus.OK)
         _security_headers(self)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -2700,18 +3090,76 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("Connection", "close")
         self.end_headers()
+        speech = None
+        audio_index = 0
+        completed = False
+        stream_lock = threading.Lock()
+
+        def send_event(payload: dict[str, Any]) -> None:
+            with stream_lock:
+                self._stream_event(payload)
+
+        def on_audio(audio: bytes) -> None:
+            # Called from the synthesis worker the moment a sentence WAV is
+            # ready, so audio overtakes the still-running text stream.
+            nonlocal audio_index
+            with stream_lock:
+                payload = {
+                    "type": "audio",
+                    "index": audio_index,
+                    "media_type": "audio/wav",
+                    "data_base64": base64.b64encode(audio).decode("ascii"),
+                }
+                audio_index += 1
+                self._stream_event(payload)
+
         try:
             for event in self.server.gateway.stream_text(
                 self.server.enrich_turn_text(text), session_id=self.server.session_token, correlation_id=correlation_id,
             ):
-                self._stream_event(event)
+                if event.get("type") == "speech_delta":
+                    # Early reply sentence from the owned brain streaming hook.
+                    # Forward the text and synthesize it immediately; the worker
+                    # pushes the WAV through on_audio as soon as it exists.
+                    send_event({
+                        "type": "speech_delta",
+                        "text": str(event.get("text") or ""),
+                    })
+                    if self.server.tts is not None:
+                        if speech is None:
+                            speech = LiveSpeechSession(
+                                self.server.tts, mode="text", on_audio=on_audio
+                            )
+                            speech.start()
+                        speech.feed(str(event.get("text") or ""))
+                    continue
+                send_event(event)
+                if event.get("type") == "final":
+                    completed = True
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             return
         except Exception as exc:  # noqa: BLE001 - report provider failures in-band
             try:
-                self._stream_event({"type": "error", "error": str(exc)[:500]})
+                send_event({"type": "error", "error": str(exc)[:500]})
             except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
                 return
+        finally:
+            if speech is not None:
+                if completed:
+                    try:
+                        speech.finish()
+                        deadline = time.monotonic() + 60.0
+                        while not speech.done and time.monotonic() < deadline:
+                            time.sleep(0.02)
+                        send_event({
+                            "type": "speech_done",
+                            "count": audio_index,
+                            "state": speech.state(),
+                        })
+                    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                        pass
+                else:
+                    speech.cancel()
 
     def _stream_event(self, payload: dict[str, Any]) -> None:
         body = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
@@ -2954,6 +3402,8 @@ def create_server(
     proactive_feed: Any | None = None,
     sensory_ingestor: Any | None = None,
     perception_fusion: Any | None = None,
+    streaming_perception: Any | None = None,
+    visual_sensor: Any | None = None,
     config_hub: Any | None = None,
     log_dir: Path | None = None,
     legacy_presentation: bool = True,
@@ -3021,7 +3471,7 @@ def create_server(
         if perception_fusion is not None and isinstance(event, dict):
             payload = event.get("payload")
             if isinstance(payload, dict):
-                perception_fusion.note("screen", str(payload.get("summary") or ""))
+                perception_fusion.note("eg2_media", str(payload.get("summary") or ""))
         return active_attention.consume(event)
 
     watcher = (
@@ -3057,6 +3507,8 @@ def create_server(
         helper_urls=helper_urls,
         proactive_feed=proactive_feed,
         perception_fusion=perception_fusion,
+        streaming_perception=streaming_perception,
+        visual_sensor=visual_sensor,
         config_hub=config_hub,
         log_dir=log_dir,
         legacy_presentation=legacy_presentation,

@@ -1,5 +1,24 @@
-# Pinned test/runtime packages for the dependency-light Companion development environment.
+# Pinned development-gate dependencies: Companion tests, snapshot import tests,
+# and browser E2E. These do not change the packaged/runtime dependency profile.
 aiohttp==3.14.1
 pytest==9.1.1
 # Ephemeral TLS certificates for loopback transport tests; not a runtime dependency.
 cryptography==48.0.1
+# The pinned JAWL source snapshot imports these during repository unittest
+# discovery; keep them in the development environment so the full gate can
+# import and exercise the snapshot-backed tests.
+pydantic==2.12.5
+PyYAML==6.0.3
+psutil==7.2.2
+SQLAlchemy==2.0.52
+aiosqlite==0.22.1
+jsonschema==4.26.0
+qdrant-client==1.17.1
+fastembed==0.8.0
+openai==3.8.0
+tiktoken==0.14.0
+ruamel.yaml==0.19.1
+python-dotenv==1.2.3
+kuzu==0.11.3
+rapidfuzz==3.14.3
+selenium==4.51.0

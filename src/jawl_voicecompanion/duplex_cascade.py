@@ -86,8 +86,11 @@ _RU_THINKING_BIGRAMS = frozenset({
 
 
 def is_user_backchannel(text: str) -> bool:
-    """Recognize only explicit brief acknowledgements, never arbitrary words."""
-    words = DuplexCascadeArbiter._normalize_words(str(text or ""))
+    """Recognize only explicit brief acknowledgements, never questions or arbitrary words."""
+    raw = str(text or "").strip()
+    if raw.endswith(("?", "？")):
+        return False
+    words = DuplexCascadeArbiter._normalize_words(raw)
     return bool(words) and len(words) <= 2 and (
         " ".join(words) in _RU_BACKCHANNEL_WORDS
         or all(word in _RU_BACKCHANNEL_WORDS for word in words)

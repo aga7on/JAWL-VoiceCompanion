@@ -98,6 +98,18 @@ def decide(
         silence_elapsed_ms=silence_ms,
         rms_peak=0.05 if str(text or "").strip() else 0.0,
     )
+    # While the assistant speaks, a barge-in is an event, not an utterance to
+    # endpoint: backchannel must keep TTS alive and interruption must reset it,
+    # regardless of the text being a one-word "unfinished" draft.
+    if assistant_speaking and micro.action in {"ignore_backchannel", "cancel_tts"}:
+        return {
+            "action": "listen",
+            "hold": False,
+            "required_ms": micro.recommended_silence_ms,
+            "duplex_token": micro.token,
+            "duplex_action": micro.action,
+            "avatar_gesture": micro.avatar_gesture,
+        }
     hold = looks_incomplete(text)
     if hold and not extended_used:
         action = "hold" if silence_ms < EXTENDED_SILENCE_MS else "end"

@@ -444,18 +444,36 @@ class RuntimeSupervisorTests(unittest.TestCase):
             parent.wait(timeout=10)
             parent.stdout.close()
         # The OS must reap the worker shortly after the parent's job handle
-        # is gone. Poll for a bounded time instead of asserting instantly.
+        # is gone. Windows os.kill(pid, 0) is not a liveness probe: unlike POSIX,
+        # Windows may call TerminateProcess for signal 0. Open a synchronization
+        # handle once and observe its signaled state without changing the child.
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        process_handle = kernel32.OpenProcess(0x00100000, False, worker_pid)  # SYNCHRONIZE
+        if not process_handle:
+            return  # The process was already reaped before it could be opened.
         deadline = time.time() + 15
-        alive = True
-        while time.time() < deadline:
-            try:
-                # os.kill with signal 0 raises if the process is gone.
-                os.kill(worker_pid, 0)
-            except (ProcessLookupError, PermissionError, OSError):
-                alive = False
-                break
-            time.sleep(0.3)
-        self.assertFalse(alive, "worker survived its parent being killed")
+        try:
+            while time.time() < deadline:
+                wait = kernel32.WaitForSingleObject(process_handle, 0)
+                if wait == 0:  # WAIT_OBJECT_0: process exited
+                    break
+                if wait != 258:  # WAIT_TIMEOUT
+                    raise ctypes.WinError(ctypes.get_last_error())
+                time.sleep(0.3)
+            self.assertEqual(
+                kernel32.WaitForSingleObject(process_handle, 0), 0,
+                "worker survived its parent being killed",
+            )
+        finally:
+            kernel32.CloseHandle(process_handle)
 
     def test_unknown_worker_restart_raises(self):
         supervisor = RuntimeSupervisor([])

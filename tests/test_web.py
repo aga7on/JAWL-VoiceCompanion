@@ -15,11 +15,14 @@ from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.gateway import validate_response_envelope  # noqa: E402
 from jawl_voicecompanion.jawl_web import JawlWebUnavailable  # noqa: E402
 from jawl_voicecompanion.web import (  # noqa: E402
+    CompanionServer,
     create_presentation_server,
     create_server,
     is_meaningful_transcript,
     voice_memory_block,
 )
+from jawl_voicecompanion.perception_fusion import PerceptionFusion  # noqa: E402
+from jawl_voicecompanion.perception_packet import split_packet, render_packet
 
 
 def _stop_test_http_server(server, thread):
@@ -222,6 +225,79 @@ class WebTests(unittest.TestCase):
         with urlopen(request, timeout=2) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def test_managed_profile_stop_requires_session_and_records_atomic_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "launcher-stop.request"
+            status_target = Path(directory) / "launcher-stop.status"
+            self.server.launcher_stop_request = target
+            self.server.launcher_stop_status = status_target
+            status, result = self.post_json("/api/profile/stop", {})
+            self.assertEqual(status, 202)
+            self.assertEqual(result["ok"], True)
+            self.assertEqual(result["status"], "stop_requested")
+            request = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(request["schema_version"], 1)
+            self.assertEqual(request["runtime_instance_id"], self.server.runtime_instance_id)
+            self.assertRegex(request["request_id"], r"^[0-9a-f]{32}$")
+            self.assertEqual(result["request_id"], request["request_id"])
+            self.assertIn("requested_at", request)
+
+            status_code, pending = self.get_json_auth("/api/profile/stop/status")
+            self.assertEqual(status_code, 200)
+            self.assertEqual(pending["status"], "waiting_for_launcher")
+            status_target.write_text(json.dumps({
+                "schema_version": 1,
+                "runtime_instance_id": self.server.runtime_instance_id,
+                "request_id": request["request_id"],
+                "status": "stopping",
+            }), encoding="utf-8")
+            status_code, acknowledged = self.get_json_auth("/api/profile/stop/status")
+            self.assertEqual(status_code, 200)
+            self.assertEqual(acknowledged["status"], "stopping")
+            self.assertEqual(acknowledged["request_id"], request["request_id"])
+
+            status_target.write_text(json.dumps({
+                "schema_version": 1,
+                "runtime_instance_id": "0" * 32,
+                "request_id": request["request_id"],
+                "status": "stopping",
+            }), encoding="utf-8")
+            _, mismatched = self.get_json_auth("/api/profile/stop/status")
+            self.assertEqual(mismatched["status"], "waiting_for_launcher")
+
+            unauthenticated = Request(
+                self.base + "/api/profile/stop",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as denied:
+                urlopen(unauthenticated, timeout=2)
+            self.assertEqual(denied.exception.code, 403)
+            denied.exception.close()
+
+            unauthenticated_status = Request(self.base + "/api/profile/stop/status")
+            with self.assertRaises(HTTPError) as denied_status:
+                urlopen(unauthenticated_status, timeout=2)
+            self.assertEqual(denied_status.exception.code, 403)
+            denied_status.exception.close()
+
+    def test_managed_profile_stop_fails_closed_when_not_owned_by_launcher(self):
+        self.server.launcher_stop_request = None
+        self.server.launcher_stop_status = None
+        request = Request(
+            self.base + "/api/profile/stop",
+            data=b"{}",
+            headers={"Content-Type": "application/json", **self.session_headers},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as unavailable:
+            urlopen(request, timeout=2)
+        self.assertEqual(unavailable.exception.code, 503)
+        payload = json.loads(unavailable.exception.read().decode("utf-8"))
+        self.assertEqual(payload["error"], "managed profile stop is unavailable")
+        unavailable.exception.close()
+
     def test_health_and_browser_are_available(self):
         status, health = self.get_json("/api/health")
         self.assertEqual(status, 200)
@@ -230,6 +306,10 @@ class WebTests(unittest.TestCase):
         _, second_health = self.get_json("/api/health")
         self.assertEqual(health["runtime_instance_id"], second_health["runtime_instance_id"])
         self.assertEqual(health["resources"]["profile"], "standard")
+        _, doctor = self.get_json("/api/doctor")
+        self.assertEqual(health["status"], doctor["status"])
+        for check in doctor["checks"]:
+            self.assertEqual(health["components"][check["id"]], check["status"])
         with urlopen(self.base + "/app", timeout=2) as response:
             frontend = response.read()
             self.assertIn(b"JAWL Companion", frontend)
@@ -365,6 +445,18 @@ class WebTests(unittest.TestCase):
         self.assertFalse(vision["configured"])
         self.assertEqual(vision["plan_execution"], "local_hostos")
         self.assertIn("attention", vision)
+        class _VisualSensor:
+            def state(self):
+                return {"caption_fresh": False, "caption_age_ms": 5100.0, "caption_ttl_ms": 5000.0}
+
+            def stop(self):
+                return None
+
+        self.server.visual_sensor = _VisualSensor()
+        status, vision = self.get_json("/api/vision/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(vision["visual_sensor"]["caption_fresh"], False)
+        self.assertEqual(vision["visual_sensor"]["caption_age_ms"], 5100.0)
         self.post_json("/api/hostos/level", {"level": 1})
         status, result = self.post_json("/api/vision/look", {"prompt": "Что видно?"})
         self.assertEqual(status, 200)
@@ -430,6 +522,25 @@ class WebTests(unittest.TestCase):
             status = json.loads(response.read().decode("utf-8"))
         self.assertFalse(status["configured"])
         self.assertEqual(status["status"], "not_configured")
+
+        class _AmbientAudio:
+            def state(self):
+                return {
+                    "audio_description_configured": True,
+                    "audio_description_count": 2,
+                    "audio_description_latency_ms_p50": 1800.0,
+                    "audio_description_latency_ms_p95": 2600.0,
+                }
+
+            def stop(self):
+                return None
+
+        self.server.ambient_audio = _AmbientAudio()
+        request = Request(self.base + "/api/ambient-audio", headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            status = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(status["audio_description_count"], 2)
+        self.assertEqual(status["audio_description_latency_ms_p95"], 2600.0)
 
     def test_tts_playback_marker_is_ephemeral(self):
         status, started = self.post_json(
@@ -547,6 +658,24 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(voice["configured"])
         self.assertEqual(voice["status"], "not_configured")
+
+    def test_voice_status_uses_nonblocking_process_snapshot(self):
+        class BusyVoiceMem:
+            def state(self):
+                return {"status": "running", "running": True, "ready": True, "pid": 17}
+
+            def health(self):
+                raise AssertionError("status polling must not send a blocking health RPC")
+
+            def close(self):
+                return None
+
+        self.server.voice_mem = BusyVoiceMem()
+        status, voice = self.get_json("/api/voice/status")
+        self.assertEqual(status, 200)
+        self.assertTrue(voice["configured"])
+        self.assertEqual(voice["voicemem"]["status"], "running")
+        self.assertTrue(voice["voicemem"]["ready"])
 
     def test_chat_and_level_change_work(self):
         status, response = self.post_json("/api/chat", {"text": "Привет"})
@@ -1009,6 +1138,254 @@ class _FakeFusion:
         return self.line
 
 
+class CurrentPerceptionEnrichmentTests(unittest.TestCase):
+    def test_current_scene_question_gets_atomic_frame_provenance_and_history_guard(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        fusion = PerceptionFusion()
+        capture_time = time.monotonic()
+        fusion.observe_caption(
+            "Earth from space with illuminated city lights.",
+            captured_at_monotonic=capture_time,
+            captured_at_wall=1_800_000_000.0,
+            frame_id="qwen-frame-62",
+            source="screen:qa-video:roi=0.1,0.1,0.8,0.8",
+            scene_id="scene-7",
+        )
+        ServerContext.perception_fusion = fusion
+
+        enriched = CompanionServer.enrich_turn_text(
+            ServerContext,
+            "Describe the current gameplay scene. Mention the visible characters and setting.",
+        )
+
+        self.assertNotIn("qwen-frame-62", enriched)
+        self.assertNotIn("scene-7", enriched)
+        self.assertNotIn("screen:qa-video", enriched)
+        self.assertIn("Earth from space with illuminated city lights.", enriched)
+        _, packet = split_packet(enriched)
+        self.assertTrue(packet["channels"]["screen"]["hypothesis"])
+        self.assertGreaterEqual(packet["channels"]["screen"]["age_s"], 0)
+
+    def test_retained_system_audio_transcript_is_injected_into_next_brain_turn(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        fusion = PerceptionFusion()
+        fusion.note("speech", "System-audio transcript: The quest marker moved to the north gate.")
+        ServerContext.perception_fusion = fusion
+
+        enriched = CompanionServer.enrich_turn_text(ServerContext, "What changed in the game?")
+
+        self.assertIn("What changed in the game?", enriched)
+        self.assertIn("System-audio transcript: The quest marker moved to the north gate.", enriched)
+
+    def test_brain_context_carries_shared_audio_video_timing_and_source_ids(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        fusion = PerceptionFusion()
+        captured = time.monotonic()
+        fusion.observe_caption(
+            "The current frame shows a teacher in a classroom.",
+            captured_at_monotonic=captured,
+            captured_at_wall=time.time(),
+            frame_id="frame-17",
+            source="screen:target-visible",
+            scene_id="scene-4",
+        )
+        fusion.note(
+            "speech",
+            "System-audio transcript: The sun is dying.",
+            now=captured - 0.4,
+            metadata={
+                "source": "system_audio_loopback",
+                "segment_id": "audio-segment-9",
+                "duration_ms": 15000,
+                "segment_started_monotonic": captured - 16.0,
+                "segment_ended_monotonic": captured - 1.0,
+                "confidence": 0.7,
+                "confidence_calibrated": False,
+            },
+        )
+        fusion.note(
+            "music",
+            "Music detected by YAMNet.",
+            now=captured - 1.2,
+            metadata={
+                "source": "system_audio_loopback",
+                "segment_id": "audio-segment-9",
+                "detector": "yamnet-onnx-cpu",
+                "duration_ms": 15000,
+                "model_score": 0.34,
+                "calibrated": False,
+                "music_state": "music",
+                "candidate_tags": ["Saxophone", "Electronic music"],
+                "candidate_tags_calibrated": False,
+                "music_windows": 3,
+                "windows": 5,
+                "rms_dbfs": -24.5,
+                "energy_trend": "rising",
+            },
+        )
+        ServerContext.perception_fusion = fusion
+
+        enriched = CompanionServer.enrich_turn_text(ServerContext, "What is happening now?")
+
+        clean, packet = split_packet(enriched)
+        self.assertEqual(clean, "What is happening now?")
+        channels = packet["channels"]
+        self.assertIn("teacher in a classroom", channels["screen"]["text"])
+        self.assertIn("The sun is dying", channels["speech"]["text"])
+        self.assertEqual(channels["speech"]["duration_s"], 15)
+        self.assertGreaterEqual(channels["speech"]["age_s"], 1)
+        self.assertTrue(channels["music"]["hypothesis"])
+        self.assertEqual(channels["music"]["candidate_tags"], ["Saxophone", "Electronic music"])
+        for diagnostic in ("frame-17", "scene-4", "audio-segment-9", "rms_dbfs", "music_windows", "model_score"):
+            self.assertNotIn(diagnostic, enriched)
+        self.assertIn("Saxophone", render_packet(packet))
+
+    def test_unverified_audio_tag_warning_requires_fresh_uncalibrated_candidates(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        cases = (
+            ("calibrated", 0.0, True, ["Saxophone"], False),
+            ("no-tags", 0.0, False, [], False),
+            ("stale", 25.0, False, ["Saxophone"], False),
+            ("fresh-unverified", 0.0, False, ["Saxophone"], True),
+        )
+        warning = "\u0410\u0443\u0434\u0438\u043e\u0442\u0435\u0433\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0435 \u0438 \u043d\u0435 \u043a\u0430\u043b\u0438\u0431\u0440\u043e\u0432\u0430\u043d\u044b"
+        for label, age_s, calibrated, tags, expected in cases:
+            with self.subTest(label=label):
+                fusion = PerceptionFusion()
+                now = time.monotonic()
+                fusion.note(
+                    "music",
+                    "Music detected by YAMNet.",
+                    now=now - age_s,
+                    metadata={
+                        "candidate_tags": tags,
+                        "candidate_tags_calibrated": calibrated,
+                    },
+                )
+                ServerContext.perception_fusion = fusion
+                enriched = CompanionServer.enrich_turn_text(ServerContext, "What is two plus two?")
+                _, packet = split_packet(enriched)
+                rendered = render_packet(packet)
+                self.assertEqual(bool(packet.get("channels", {}).get("music", {}).get("hypothesis")) and "Saxophone" in rendered, expected)
+
+    def test_current_screen_question_does_not_mix_old_visual_history(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+            _PERCEPTION_HISTORY_QUERY = CompanionServer._PERCEPTION_HISTORY_QUERY
+
+        fusion = PerceptionFusion()
+        now = time.monotonic()
+        fusion.record_visual_event(
+            "An older shot shows the Sun.",
+            captured_at_monotonic=now - 4.0,
+            captured_at_wall=time.time() - 4.0,
+            frame_id="old-frame",
+            source="screen:test",
+            scene_id="old-scene",
+            now=now,
+        )
+        fusion.observe_caption(
+            "The current frame shows a classroom.",
+            captured_at_monotonic=now,
+            captured_at_wall=time.time(),
+            frame_id="current-frame",
+            source="screen:test",
+            scene_id="current-scene",
+            now=now,
+        )
+        fusion.note(
+            "speech",
+            "Current audio observation.",
+            now=now,
+            metadata={"source": "system_audio_loopback", "segment_id": "audio-current"},
+        )
+        ServerContext.perception_fusion = fusion
+
+        current = CompanionServer.enrich_turn_text(ServerContext, "What is visible on the screen now?")
+        historical = CompanionServer.enrich_turn_text(ServerContext, "What changed between the scenes?")
+
+        self.assertIn("The current frame shows a classroom.", current)
+        self.assertIn("Current audio observation.", current)
+        self.assertNotIn("An older shot shows the Sun.", current)
+        self.assertIn("An older shot shows the Sun.", historical)
+
+
+class SensoryHistoryEnrichmentTests(unittest.TestCase):
+    def test_recent_and_weekly_sensory_queries_receive_compact_history(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class History:
+            def __init__(self):
+                self.calls = []
+
+            def context_text(self, **kwargs):
+                self.calls.append(kwargs)
+                return "SENSORY HISTORY: recorded scene and audio event"
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+            _PERCEPTION_HISTORY_QUERY = CompanionServer._PERCEPTION_HISTORY_QUERY
+            _SENSORY_HISTORY_QUERY = CompanionServer._SENSORY_HISTORY_QUERY
+            perception_fusion = PerceptionFusion()
+            sensory_history = History()
+
+        recent = CompanionServer.enrich_turn_text(ServerContext, "What happened two minutes ago?")
+        recent_ru = CompanionServer.enrich_turn_text(ServerContext, "Что происходило две минуты назад?")
+        weekly = CompanionServer.enrich_turn_text(ServerContext, "Summarize the weekly history")
+
+        self.assertIn("SENSORY HISTORY: recorded scene and audio event", recent)
+        self.assertIn("SENSORY HISTORY: recorded scene and audio event", recent_ru)
+        self.assertIn("SENSORY HISTORY: recorded scene and audio event", weekly)
+        self.assertEqual(ServerContext.sensory_history.calls[0]["seconds"], 5 * 60)
+        self.assertEqual(ServerContext.sensory_history.calls[0]["focus_seconds_ago"], 120.0)
+        self.assertEqual(ServerContext.sensory_history.calls[1]["focus_seconds_ago"], 120.0)
+        self.assertEqual(ServerContext.sensory_history.calls[2]["seconds"], 7 * 24 * 3600)
+        self.assertEqual(ServerContext.sensory_history.calls[2]["focus_seconds_ago"], None)
+        self.assertTrue(ServerContext.sensory_history.calls[2]["include_week"])
+
+
 class VoicePrefaceTests(unittest.TestCase):
     def _start_server(self, *, partial, fusion, silence_ms=800.0):
         server = create_server(
@@ -1043,46 +1420,46 @@ class VoicePrefaceTests(unittest.TestCase):
 
     def test_screen_question_returns_bounded_preface(self):
         self._start_server(
-            partial="Компаньон, что сейчас происходит на экране?",
-            fusion=_FakeFusion("Экран: окно OpenCode с таблицей логов. Звук: тишина"),
+            partial="\u041a\u043e\u043c\u043f\u0430\u043d\u044c\u043e\u043d, \u0447\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442 \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435?",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode \u0441 \u0442\u0430\u0431\u043b\u0438\u0446\u0435\u0439 \u043b\u043e\u0433\u043e\u0432. \u0417\u0432\u0443\u043a: \u0442\u0438\u0448\u0438\u043d\u0430"),
         )
         status, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["text"], "Смотрю: окно OpenCode с таблицей логов.")
+        self.assertEqual(data["text"], "\u0421\u043c\u043e\u0442\u0440\u044e: \u043e\u043a\u043d\u043e OpenCode \u0441 \u0442\u0430\u0431\u043b\u0438\u0446\u0435\u0439 \u043b\u043e\u0433\u043e\u0432.")
 
     def test_non_screen_question_has_no_preface(self):
         self._start_server(
-            partial="Напиши короткое письмо коллеге",
-            fusion=_FakeFusion("Экран: окно OpenCode"),
+            partial="\u041d\u0430\u043f\u0438\u0448\u0438 \u043a\u043e\u0440\u043e\u0442\u043a\u043e\u0435 \u043f\u0438\u0441\u044c\u043c\u043e \u043a\u043e\u043b\u043b\u0435\u0433\u0435",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode"),
         )
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_broad_phrase_without_screen_noun_is_not_spoken(self):
         self._start_server(
-            partial="Что сейчас происходит?",
-            fusion=_FakeFusion("Экран: окно OpenCode"),
+            partial="\u0427\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442?",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode"),
         )
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_stale_partial_is_never_spoken(self):
         self._start_server(
-            partial="Что сейчас на экране?",
-            fusion=_FakeFusion("Экран: окно OpenCode"),
+            partial="\u0427\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435?",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode"),
             silence_ms=30000.0,
         )
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_missing_or_broken_perception_is_soft(self):
-        self._start_server(partial="что на экране", fusion=_FakeFusion(error=True))
+        self._start_server(partial="\u0427\u0442\u043e \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435", fusion=_FakeFusion(error=True))
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_preface_requires_browser_session(self):
-        self._start_server(partial="что на экране", fusion=_FakeFusion("Экран: окно"))
+        self._start_server(partial="\u0427\u0442\u043e \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435", fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e"))
         with self.assertRaises(HTTPError) as context:
             self._post("/api/voice/preface", {"session_id": "s1"}, headers={})
         with context.exception:
@@ -1171,12 +1548,68 @@ class ShellStatusTests(unittest.TestCase):
         self.assertFalse(data["sensory"]["running"])
         self.assertFalse(data["screen"]["running"])
         self.assertFalse(data["voice"]["tts"])
+        self.assertFalse(data["visual"]["error_active"])
+        self.assertIsNone(data["capture"]["microphone_owner"])
+        self.assertFalse(data["capture"]["loopback_configured"])
+        self.assertFalse(data["capture"]["loopback_running"])
 
     def test_shell_status_requires_browser_session(self):
         with self.assertRaises(HTTPError) as context:
             urlopen(self.base + "/api/shell/status", timeout=2)
         with context.exception:
             self.assertEqual(context.exception.code, 403)
+
+    def test_shell_status_reports_active_capture_sources(self):
+        self.server.voice_capture.acquire("desktop", "capture-test")
+        self.server.ambient_audio = type(
+            "AmbientAudioState",
+            (),
+            {
+                "state": lambda _self: {
+                    "configured": True,
+                    "enabled": True,
+                    "paused": False,
+                    "capture": {"running": True, "device": "DigitalOutput (2- NVIDIA High Definition Audio) [Loopback]", "device_index": 38, "host_api_index": 2, "sample_rate": 48000, "channels": 2, "last_error": None, "last_chunk_age_ms": 123.0, "signal_window_state": "digital_silence", "signal_window_rms": 0.0, "signal_window_duration_ms": 1000.0},
+                    "bridge": {"soundscape_configured": True, "soundscape_count": 1, "soundscape_errors": 0, "soundscape_latency_ms_p95": 24.0, "soundscape_last_kind": "music", "soundscape_last_tags": ["Saxophone"], "soundscape_last_age_ms": 800.0, "soundscape_last_fresh": True, "audio_description_configured": True, "audio_description_provider": "qwen3-omni", "audio_description_count": 3, "audio_description_errors": 1, "audio_description_skipped": 0, "audio_description_latency_ms_p95": 940.0, "audio_description_last_kind": "music", "audio_description_last_age_ms": 2500.0, "audio_description_last_fresh": True},
+                },
+                "stop": lambda _self: None,
+            },
+        )()
+        self.server.visual_sensor = type(
+            "VisualSensorState",
+            (),
+            {
+                "state": lambda _self: {"running": True, "latest_age_ms": 800, "caption_fresh": False, "caption_age_ms": 7000},
+                "stop": lambda _self: None,
+            },
+        )()
+        request = Request(self.base + "/api/shell/status", headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(data["capture"]["microphone_owner"], "desktop")
+        self.assertTrue(data["capture"]["loopback_configured"])
+        self.assertTrue(data["capture"]["loopback_running"])
+        self.assertEqual(data["capture"]["loopback_last_chunk_age_ms"], 123.0)
+        self.assertEqual(data["capture"]["loopback_device"], "DigitalOutput (2- NVIDIA High Definition Audio) [Loopback]")
+        self.assertEqual(data["capture"]["loopback_device_index"], 38)
+        self.assertEqual(data["capture"]["loopback_host_api_index"], 2)
+        self.assertEqual(data["capture"]["loopback_sample_rate"], 48000)
+        self.assertEqual(data["capture"]["loopback_channels"], 2)
+        self.assertEqual(data["capture"]["loopback_signal_window_state"], "digital_silence")
+        self.assertEqual(data["capture"]["loopback_signal_window_rms"], 0.0)
+        self.assertEqual(data["capture"]["loopback_signal_window_duration_ms"], 1000.0)
+        self.assertEqual(data["capture"]["soundscape_last_kind"], "music")
+        self.assertEqual(data["capture"]["soundscape_last_tags"], ["Saxophone"])
+        self.assertEqual(data["capture"]["soundscape_last_age_ms"], 800.0)
+        self.assertTrue(data["capture"]["soundscape_last_fresh"])
+        self.assertEqual(data["capture"]["audio_description_provider"], "qwen3-omni")
+        self.assertEqual(data["capture"]["audio_description_count"], 3)
+        self.assertEqual(data["capture"]["audio_description_errors"], 1)
+        self.assertEqual(data["capture"]["audio_description_last_kind"], "music")
+        self.assertEqual(data["capture"]["audio_description_last_age_ms"], 2500.0)
+        self.assertTrue(data["capture"]["audio_description_last_fresh"])
+        self.assertFalse(data["visual"]["caption_fresh"])
+        self.assertEqual(data["visual"]["caption_age_ms"], 7000)
 
 
 class AgentLogTests(unittest.TestCase):

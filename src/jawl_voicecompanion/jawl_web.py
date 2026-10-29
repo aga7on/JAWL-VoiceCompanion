@@ -76,6 +76,23 @@ class JawlWebAdapter:
             self.last_status = "online"
         return self.last_status
 
+    def activity(self) -> dict[str, Any]:
+        """Return live process/tick state for the Companion status panel."""
+        agent = self._get("/api/agent/status")
+        tick = self._get("/api/tick")
+        try:
+            step = max(0, min(int(tick.get("step") or 0), 1000))
+        except (TypeError, ValueError):
+            step = 0
+        return {
+            "configured": True,
+            "status": "online",
+            "running": bool(agent.get("running")),
+            "phase": str(tick.get("phase") or "unknown")[:40],
+            "step": step,
+            "model": str(tick.get("model") or "")[:120],
+        }
+
     def overview(self) -> dict[str, Any]:
         sources = {
             "agent": "/api/agent/status",

@@ -50,8 +50,13 @@ class VoiceMemProcessClient:
         self._process: subprocess.Popen[bytes] | None = None
         self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._lock = Lock()
+        # Keep lifecycle snapshots responsive while one serialized sidecar
+        # request waits for CPU audio processing or model startup.
+        self._request_lock = Lock()
         self._reader: Thread | None = None
         self._status = "not_started"
+        self._last_request_ok: bool | None = None
+        self._last_request_error: str | None = None
 
     def feed_partial(self, text: str, *, ended: bool = False, session_id: str = "local") -> list[dict[str, Any]]:
         request_id = str(uuid4())
@@ -124,6 +129,9 @@ class VoiceMemProcessClient:
                 "status": self._status,
                 "running": running,
                 "pid": process.pid if running else None,
+                "ready": running and self._last_request_ok is True,
+                "last_request_ok": self._last_request_ok,
+                "last_request_error": self._last_request_error,
             }
 
     def close(self) -> None:
@@ -169,16 +177,32 @@ class VoiceMemProcessClient:
             pass
 
     def _request(self, payload: dict[str, Any], request_id: str) -> list[dict[str, Any]]:
-        with self._lock:
+        # Requests share one JSONL pipe and are correlated by request_id, so
+        # serialize them. Do not hold the lifecycle lock while waiting for a
+        # response: /api/health and the UI need a non-blocking state snapshot
+        # even while VoiceMem processes an audio segment.
+        with self._request_lock:
             try:
-                process = self._ensure_process()
-                if process.stdin is None:
-                    raise VoiceMemUnavailable("VoiceMem sidecar stdin is unavailable")
-                process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-                process.stdin.flush()
-                return self._read_until_complete(request_id)
+                with self._lock:
+                    process = self._ensure_process()
+                    if process.stdin is None:
+                        raise VoiceMemUnavailable("VoiceMem sidecar stdin is unavailable")
+                    process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
+                    process.stdin.flush()
+                replies = self._read_until_complete(request_id)
+                failed = next((item for item in replies if item.get("type") == "VOICE_DEGRADED"), None)
+                with self._lock:
+                    self._last_request_ok = failed is None
+                    self._last_request_error = (
+                        str((failed.get("payload") or {}).get("reason") or "sidecar_degraded")[:160]
+                        if failed is not None else None
+                    )
+                return replies
             except (OSError, BrokenPipeError, VoiceMemUnavailable):
-                self._status = "degraded"
+                with self._lock:
+                    self._status = "degraded"
+                    self._last_request_ok = False
+                    self._last_request_error = "sidecar_unavailable"
                 raise VoiceMemUnavailable("VoiceMem sidecar is unavailable")
 
     def _ensure_process(self) -> subprocess.Popen[bytes]:
