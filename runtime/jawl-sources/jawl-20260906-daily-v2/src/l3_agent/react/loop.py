@@ -44,6 +44,7 @@ from src.l3_agent.skills.registry import (
     resolve_native_tool_name,
 )
 from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
+from src.l3_agent.react import action_repair
 from src.l3_agent.event_buffer import BoundedEventBuffer
 from src.l3_agent.companion_gateway import (
     CompanionTurnState,
@@ -152,6 +153,21 @@ def _normalize_tool_output(text: str) -> str:
     return "".join(
         ch for ch in normalized if ord(ch) >= 0x20 or ch in "\t\n\r"
     )
+
+def _parse_response_native(
+    loop: "ReactLoop", raw_answer: str
+) -> Tuple[Optional[AgentResponse], Optional[str]]:
+    """Native JSON answer parsing: schema validation + native tool names."""
+    parsed, error = parse_llm_json(raw_answer)
+    if parsed is None or error:
+        return parsed, error
+    for action in parsed.actions:
+        resolved = resolve_native_tool_name(action.tool_name)
+        if action.tool_name.startswith("jawl_") and resolved == action.tool_name:
+            return None, f"System Error: Unknown native tool '{action.tool_name}'."
+        action.tool_name = resolved
+    return parsed, None
+
 
 class ReactLoop:
     """
@@ -1268,17 +1284,10 @@ class ReactLoop:
         self, raw_answer: str
     ) -> Tuple[Optional[AgentResponse], Optional[str]]:
         """
-        Parses the agent's JSON response.
+        Parses the agent's JSON response (native parsing with the top-level
+        action repair fallback).
         """
-        parsed, error = parse_llm_json(raw_answer)
-        if parsed is None or error:
-            return parsed, error
-        for action in parsed.actions:
-            resolved = resolve_native_tool_name(action.tool_name)
-            if action.tool_name.startswith("jawl_") and resolved == action.tool_name:
-                return None, f"System Error: Unknown native tool '{action.tool_name}'."
-            action.tool_name = resolved
-        return parsed, None
+        return action_repair.parse_with_repair(self, raw_answer, _parse_response_native)
 
     def add_realtime_event(self, event_data: Dict[str, Any]) -> None:
         """

@@ -7,34 +7,31 @@ argument ``message`` instead of ``text``. The native parser's heuristic
 fallback only repairs action *lists*, so these replies collapse into empty
 actions and the correlated Companion turn ends without a delivery.
 
-This owned hook wraps ``ReactLoop._parse_response`` and only pre-normalizes
-the raw answer when the native shape is present verbatim: the top-level
-action object is wrapped into ``{"actions": [ ... ]}`` and the single
-terminal-message argument alias is mapped to ``text``. Native parsing,
-policy, discovery and validation remain untouched; a repaired payload still
-passes the full native schema path.
+``parse_with_repair`` is invoked natively by ``ReactLoop._parse_response``
+and only pre-normalizes the raw answer when the native shape is present
+verbatim: the top-level action object is wrapped into ``{"actions": [ ... ]}``
+and the single terminal-message argument alias is mapped to ``text``.
+Native parsing, policy, discovery and validation remain untouched; a
+repaired payload still passes the full native schema path.
 """
 
 from __future__ import annotations
 
-import importlib
 import json
-import re
 import sys
+from typing import Any
 
-_INSTALL_ATTR = "__jawl_owned_action_repair_installation__"
+from src.l3_agent.context import companion
+
 _TERMINAL_SKILL = "HostTerminalMessages.send_message_to_terminal"
 _MAX_REPAIRED_CHARS = 60_000
 _PERCEIVED_TYPES: dict[type, type] = {}
 
 
 def _with_perception(parsed):
-    context = sys.modules.get("src.l3_agent.context.companion")
-    if context is None:
-        try:
-            from src.l3_agent.context import companion as context
-        except Exception:
-            context = None
+    # Resolve through sys.modules so an owning profile can observe the
+    # perception seam without monkeypatching this module's import.
+    context = sys.modules.get("src.l3_agent.context.companion") or companion
     getter = getattr(context, "current_perception", None)
     perception = getter() if callable(getter) else ""
     if parsed is None or not perception or not hasattr(parsed, "model_dump"):
@@ -102,42 +99,18 @@ def repair_raw_answer(raw_answer: str) -> str:
     return json.dumps(envelope, ensure_ascii=False)
 
 
-def install_native_action_repair(loop_class: type | None = None) -> object:
-    if loop_class is None:
-        native = importlib.import_module("src.l3_agent.react.loop")
-        loop_class = native.ReactLoop
-    existing = vars(loop_class).get(_INSTALL_ATTR)
-    if existing is not None:
-        if loop_class._parse_response is existing.wrapped_parse:
-            return existing
-        raise RuntimeError("native action repair hook was replaced")
-    original_parse = loop_class._parse_response
-
-    def parse(loop, raw_answer):
-        try:
-            repaired = repair_raw_answer(raw_answer)
-        except Exception:  # noqa: BLE001 - repair must never break native parsing
-            repaired = str(raw_answer or "")
-        if repaired == raw_answer:
-            parsed, error = original_parse(loop, raw_answer)
-            return _with_perception(parsed), error
-        parsed, error = original_parse(loop, repaired)
-        if parsed is not None and getattr(parsed, "actions", None):
-            return _with_perception(parsed), error
-        # The repair did not help: keep the native result untouched.
-        parsed, error = original_parse(loop, raw_answer)
+def parse_with_repair(loop: Any, raw_answer: str, native_parse: Any):
+    """Parse with the top-level action repair fallback; perception is attached."""
+    try:
+        repaired = repair_raw_answer(raw_answer)
+    except Exception:  # noqa: BLE001 - repair must never break native parsing
+        repaired = str(raw_answer or "")
+    if repaired == raw_answer:
+        parsed, error = native_parse(loop, raw_answer)
         return _with_perception(parsed), error
-
-    class _Installation:
-        pass
-
-    installation = _Installation()
-    installation.loop_class = loop_class
-    installation.wrapped_parse = parse
-    installation.original_parse = original_parse
-    loop_class._parse_response = parse
-    setattr(loop_class, _INSTALL_ATTR, installation)
-    return installation
-
-
-__all__ = ["install_native_action_repair", "repair_raw_answer"]
+    parsed, error = native_parse(loop, repaired)
+    if parsed is not None and getattr(parsed, "actions", None):
+        return _with_perception(parsed), error
+    # The repair did not help: keep the native result untouched.
+    parsed, error = native_parse(loop, raw_answer)
+    return _with_perception(parsed), error

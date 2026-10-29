@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, goal_repair=None, action_repair=None, goal_backoff=None, terminal_context=None):
+def write_startup_receipt(snapshot, delivery, goal_repair=None, goal_backoff=None, terminal_context=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -69,31 +69,12 @@ def write_startup_receipt(snapshot, delivery, goal_repair=None, action_repair=No
     if not all(check.values()):
         raise RuntimeError("owned brain hooks were not installed on the actual native classes")
     if goal_repair is not None:
-        parse_chain_valid = (
-            goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
-        )
-        if not parse_chain_valid and action_repair is not None:
-            # The action repair hook wraps the Goal repair parser: its saved
-            # original must still be the Goal repair wrapper, so the Goal
-            # completion path remains reachable in the chain.
-            parse_chain_valid = (
-                action_repair.original_parse is goal_repair.wrapped_parse
-                and goal_repair.loop_class._handle_protocol_error is goal_repair.wrapped_error
-            )
         if not (
-            parse_chain_valid
-            or (
-                goal_repair.loop_class._handle_protocol_error is goal_repair.wrapped_error
-                and vars(goal_repair.loop_class).get("__jawl_owned_goal_completion_repair__") is goal_repair
-                and goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
-            )
+            goal_repair.loop_class._handle_protocol_error is goal_repair.wrapped_error
+            and vars(goal_repair.loop_class).get("__jawl_owned_goal_completion_repair__") is goal_repair
+            and goal_repair.loop_class._parse_response is goal_repair.wrapped_parse
         ):
             raise RuntimeError("native Goal completion repair hook is not installed")
-    if action_repair is not None and (
-        action_repair.loop_class._parse_response is not action_repair.wrapped_parse
-        or vars(action_repair.loop_class).get("__jawl_owned_action_repair_installation__") is not action_repair
-    ):
-        raise RuntimeError("native action repair hook is not installed")
     if goal_backoff is not None:
         check["goal_wakeup_backoff"] = (
             goal_backoff.manager_class.should_run_heartbeat is goal_backoff.wrapped_should_run
@@ -120,7 +101,6 @@ def write_startup_receipt(snapshot, delivery, goal_repair=None, action_repair=No
         "source": snapshot["source"], "snapshot_sha256": snapshot["snapshot_sha256"],
         "entrypoint": str(Path(__file__).resolve()), "hooks": check,
         "goal_protocol_repair_installed": goal_repair is not None,
-        "action_repair_installed": action_repair is not None,
         "terminal_context_compaction": {
             "installed": terminal_context is not None,
             "keep_recent_messages": 12,
@@ -173,13 +153,10 @@ def main():
     terminal_context = terminal_context_extension.install_native_terminal_context_compaction()
     goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
     goal_repair = goal_repair_extension.install_native_goal_completion_repair()
-    action_repair_extension = load_extension("_owned_jawl_action_repair", "native_jawl_action_repair.py")
-    action_repair = action_repair_extension.install_native_action_repair()
     write_startup_receipt(
         snapshot,
         delivery,
         goal_repair=goal_repair,
-        action_repair=action_repair,
         goal_backoff=goal_backoff,
         terminal_context=terminal_context,
     )

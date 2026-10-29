@@ -28341,6 +28341,125 @@
 +smallest relevant check, fix and rerun failures, then run the repository's
 +declared verification gate before claiming completion. A test that was not run,
 +timed out, was interrupted, or applies to a stale workspace is not green.
+--- a/src/l3_agent/react/action_repair.py
++++ b/src/l3_agent/react/action_repair.py
+@@ -0,0 +1,116 @@
++"""Repair a top-level action object emitted by local 27B models.
++
++On long native prompts the local model sometimes emits a structurally valid
++JSON object whose ``tool_name``/``parameters`` keys sit at the top level
++instead of inside the ``actions`` array, and spell the terminal-message
++argument ``message`` instead of ``text``. The native parser's heuristic
++fallback only repairs action *lists*, so these replies collapse into empty
++actions and the correlated Companion turn ends without a delivery.
++
++``parse_with_repair`` is invoked natively by ``ReactLoop._parse_response``
++and only pre-normalizes the raw answer when the native shape is present
++verbatim: the top-level action object is wrapped into ``{"actions": [ ... ]}``
++and the single terminal-message argument alias is mapped to ``text``.
++Native parsing, policy, discovery and validation remain untouched; a
++repaired payload still passes the full native schema path.
++"""
++
++from __future__ import annotations
++
++import json
++import sys
++from typing import Any
++
++from src.l3_agent.context import companion
++
++_TERMINAL_SKILL = "HostTerminalMessages.send_message_to_terminal"
++_MAX_REPAIRED_CHARS = 60_000
++_PERCEIVED_TYPES: dict[type, type] = {}
++
++
++def _with_perception(parsed):
++    # Resolve through sys.modules so an owning profile can observe the
++    # perception seam without monkeypatching this module's import.
++    context = sys.modules.get("src.l3_agent.context.companion") or companion
++    getter = getattr(context, "current_perception", None)
++    perception = getter() if callable(getter) else ""
++    if parsed is None or not perception or not hasattr(parsed, "model_dump"):
++        return parsed
++    base = type(parsed)
++    response_type = _PERCEIVED_TYPES.get(base)
++    if response_type is None:
++        class PerceivedResponse(base):
++            perception: str = ""
++
++            @property
++            def thoughts(self):
++                return f"\n[Perception]: {self.perception}\n" + super().thoughts
++        response_type = _PERCEIVED_TYPES[base] = PerceivedResponse
++    return response_type.model_validate({**parsed.model_dump(), "perception": perception})
++
++
++def _top_level_action_object(raw: str) -> dict | None:
++    """Return the single top-level action object, or None."""
++    clean = str(raw or "").strip()
++    if not clean.startswith("{") or not clean.endswith("}") or len(clean) > _MAX_REPAIRED_CHARS:
++        return None
++    if '"actions"' in clean or '"observation"' in clean or '"reasoning"' in clean:
++        return None
++    try:
++        data = json.loads(clean, strict=False)
++    except (ValueError, TypeError):
++        return None
++    if not isinstance(data, dict):
++        return None
++    if "tool_name" not in data or not isinstance(data.get("tool_name"), str):
++        return None
++    if "parameters" not in data or not isinstance(data.get("parameters"), dict):
++        return None
++    extra = {key for key in data if key not in {"tool_name", "parameters"}}
++    allowed = {"action_id", "depends_on", "parallel_group", "resources", "name", "arguments"}
++    if not extra.issubset(allowed):
++        return None
++    return data
++
++
++def _normalize_action(action: dict) -> dict:
++    normalized = {
++        "tool_name": str(action["tool_name"]),
++        "parameters": dict(action["parameters"]),
++    }
++    if isinstance(action.get("action_id"), str):
++        normalized["action_id"] = action["action_id"]
++    parameters = normalized["parameters"]
++    if (
++        normalized["tool_name"] == _TERMINAL_SKILL
++        and "text" not in parameters
++        and isinstance(parameters.get("message"), str)
++    ):
++        parameters["text"] = parameters.pop("message")
++    return normalized
++
++
++def repair_raw_answer(raw_answer: str) -> str:
++    """Wrap a top-level action object into the canonical envelope shape."""
++    action = _top_level_action_object(raw_answer)
++    if action is None:
++        return str(raw_answer or "")
++    envelope = {"actions": [_normalize_action(action)]}
++    return json.dumps(envelope, ensure_ascii=False)
++
++
++def parse_with_repair(loop: Any, raw_answer: str, native_parse: Any):
++    """Parse with the top-level action repair fallback; perception is attached."""
++    try:
++        repaired = repair_raw_answer(raw_answer)
++    except Exception:  # noqa: BLE001 - repair must never break native parsing
++        repaired = str(raw_answer or "")
++    if repaired == raw_answer:
++        parsed, error = native_parse(loop, raw_answer)
++        return _with_perception(parsed), error
++    parsed, error = native_parse(loop, repaired)
++    if parsed is not None and getattr(parsed, "actions", None):
++        return _with_perception(parsed), error
++    # The repair did not help: keep the native result untouched.
++    parsed, error = native_parse(loop, raw_answer)
++    return _with_perception(parsed), error
 --- a/src/l3_agent/skills/catalog.py
 +++ b/src/l3_agent/skills/catalog.py
 @@ -0,0 +1,23 @@
@@ -38946,7 +39065,7 @@
  
  from src.l0_state.agent.state import AgentState, AgentStatus
  
-@@ -27,14 +31,127 @@
+@@ -27,13 +31,142 @@
  from src.l1_databases.vector.manager import VectorManager
  
  from src.l3_agent.llm.executor import LLMExecutor
@@ -38964,7 +39083,7 @@
 +    resolve_native_tool_name,
 +)
  from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
--
++from src.l3_agent.react import action_repair
 +from src.l3_agent.event_buffer import BoundedEventBuffer
 +from src.l3_agent.companion_gateway import (
 +    CompanionTurnState,
@@ -39073,10 +39192,24 @@
 +    return "".join(
 +        ch for ch in normalized if ord(ch) >= 0x20 or ch in "\t\n\r"
 +    )
++
++def _parse_response_native(
++    loop: "ReactLoop", raw_answer: str
++) -> Tuple[Optional[AgentResponse], Optional[str]]:
++    """Native JSON answer parsing: schema validation + native tool names."""
++    parsed, error = parse_llm_json(raw_answer)
++    if parsed is None or error:
++        return parsed, error
++    for action in parsed.actions:
++        resolved = resolve_native_tool_name(action.tool_name)
++        if action.tool_name.startswith("jawl_") and resolved == action.tool_name:
++            return None, f"System Error: Unknown native tool '{action.tool_name}'."
++        action.tool_name = resolved
++    return parsed, None
+ 
  
  class ReactLoop:
-     """
-@@ -50,11 +167,23 @@
+@@ -50,11 +183,23 @@
          agent_state: AgentState,
          sql_ticks: SQLTicks,
          vector_manager: VectorManager,
@@ -39101,7 +39234,7 @@
      ) -> None:
          """
          Initializes the ReAct loop.
-@@ -84,14 +213,112 @@
+@@ -84,14 +229,112 @@
          self.vector_manager = vector_manager
  
          self.tools = tools
@@ -39216,7 +39349,7 @@
  
      async def run(
          self, event_name: str, payload: Dict[str, Any], missed_events: List[Dict[str, Any]]
-@@ -105,21 +332,90 @@
+@@ -105,21 +348,90 @@
              missed_events: List of missed background events.
          """
  
@@ -39308,7 +39441,7 @@
                  self.agent_state.update_state(AgentStatus.THINKING)
  
                  # --------------------------------------------------------------
-@@ -146,11 +442,21 @@
+@@ -146,11 +458,21 @@
                          if tree_md:
                              self.agent_state.current_thoughts_tree = tree_md
  
@@ -39330,7 +39463,7 @@
  
                  # --------------------------------------------------------------
                  # LLM execution call
-@@ -162,11 +468,90 @@
+@@ -162,11 +484,90 @@
                      temperature=self.agent_state.temperature,
                      logger=agent_logger,
                      log_prefix="[LLM]",
@@ -39423,7 +39556,7 @@
                      break
  
                  # --------------------------------------------------------------
-@@ -175,59 +560,323 @@
+@@ -175,59 +576,323 @@
  
                  parsed_response, error_msg = self._parse_response(raw_answer)
                  if error_msg:
@@ -39770,7 +39903,7 @@
  
      # -------------------------------------------------------------------------
      # Private Helpers
-@@ -248,10 +897,12 @@
+@@ -248,10 +913,12 @@
              List[Dict[str, Any]]: Messages list in OpenAI format.
          """
  
@@ -39785,7 +39918,7 @@
  
          messages = [
              {"role": "system", "content": prompt},
-@@ -260,7 +911,12 @@
+@@ -260,7 +927,12 @@
  
          messages = copy.deepcopy(messages)
  
@@ -39799,7 +39932,7 @@
  
          self.agent_state.last_input_tokens = self.executor.tracker.count_messages_tokens(
              messages
-@@ -286,10 +942,37 @@
+@@ -286,10 +958,37 @@
          """
  
          self.agent_state.update_state(AgentStatus.ACTING)
@@ -39838,7 +39971,7 @@
  
          args_to_rag = []
          for act in actions:
-@@ -305,11 +988,98 @@
+@@ -305,11 +1004,98 @@
                  "execution_report": results_str,
                  "step": self.agent_state.current_step,
                  "max_steps": self.agent_state.max_react_steps,
@@ -39940,7 +40073,7 @@
          """
          Logic for graceful completion (absence of actions).
  
-@@ -317,19 +1087,182 @@
+@@ -317,27 +1103,191 @@
              thoughts: Final thoughts of the agent prior to sleep.
          """
  
@@ -40125,24 +40258,19 @@
  
      def _parse_response(
          self, raw_answer: str
-@@ -337,7 +1270,15 @@
+     ) -> Tuple[Optional[AgentResponse], Optional[str]]:
          """
-         Parses the agent's JSON response.
-         """
+-        Parses the agent's JSON response.
+-        """
 -        return parse_llm_json(raw_answer)
-+        parsed, error = parse_llm_json(raw_answer)
-+        if parsed is None or error:
-+            return parsed, error
-+        for action in parsed.actions:
-+            resolved = resolve_native_tool_name(action.tool_name)
-+            if action.tool_name.startswith("jawl_") and resolved == action.tool_name:
-+                return None, f"System Error: Unknown native tool '{action.tool_name}'."
-+            action.tool_name = resolved
-+        return parsed, None
++        Parses the agent's JSON response (native parsing with the top-level
++        action repair fallback).
++        """
++        return action_repair.parse_with_repair(self, raw_answer, _parse_response_native)
  
      def add_realtime_event(self, event_data: Dict[str, Any]) -> None:
          """
-@@ -347,7 +1288,21 @@
+@@ -347,7 +1297,21 @@
              event_data: Event payload dict.
          """
  
@@ -40165,7 +40293,7 @@
  
      def _dump_context_to_file(self, messages: List[Dict[str, Any]]) -> None:
          """
-@@ -366,11 +1321,44 @@
+@@ -366,11 +1330,44 @@
          with open(image_path, "rb") as image_file:
              return base64.b64encode(image_file.read()).decode("utf-8")
  
@@ -40212,7 +40340,7 @@
  
          Args:
              messages: Messages list.
-@@ -379,39 +1367,103 @@
+@@ -379,39 +1376,103 @@
              List[Dict[str, Any]]: Messages list with Base64 payloads injected.
          """
  

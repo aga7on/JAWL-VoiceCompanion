@@ -286,7 +286,8 @@
     "src/l3_agent/prompt/system/optional/SWARM.md": "a67a6c37336f0a7b26745b21d2b8b15622fe99e736018a29c2f1238b4a837bc8",
     "src/l3_agent/prompt/system/optional/TASKS.md": "3f0acb25483911752290a375932c6c0a77cc6d09fce25205c0a75bc55503bf2d",
     "src/l3_agent/prompt/system/optional/TREE_OF_THOUGHTS.md": "2294c5a2d122879b85ca41703fa0c16f26482c0063994fdfe95a70f566163dd3",
-    "src/l3_agent/react/loop.py": "2e2af66fb0e9bc37bf46b45e951a749c6754ccb348dac10c81a9efcbcba34eec",
+    "src/l3_agent/react/action_repair.py": "e67d57236bad3a8fa3bea10c6b844237b3fa76b297280b3364f5ae384e3ddf03",
+    "src/l3_agent/react/loop.py": "c1d7838cfca99323bf06d5bf7f2230d60a1cc297bf1c8b0e3f482f34a21c507e",
     "src/l3_agent/skills/catalog.py": "7af7ee46e14d9c0c370e5ecd5526be39a15f8aebb6135039e2e93a108a1f404d",
     "src/l3_agent/skills/coding_reconciliation.py": "e88e4a545a6495b8e2a4d93b8b36ad75ad5e08f9c1600835bad26ac3ad42af1f",
     "src/l3_agent/skills/coding_telemetry.py": "860d3ac2552419f21b5eb1bfee30bb6241eb9225d04e9620343c8183d75c0f46",
@@ -356,5 +357,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "98dea364f6e1c7e3620804827e4a6daf3fe313751309c48e38071f7e640be7d0"
+  "snapshot_sha256": "1256852eba9bed0cac735f71a99f388db0ea01ea36adaa26a7c4e85c06c2ae56"
 }
