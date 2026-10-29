@@ -43,6 +43,7 @@ export function createVoiceDraftController({
   request,
   getCurrent,
   onDraft = () => {},
+  onDecision = () => {},
   timeoutMs = DEFAULT_TIMEOUT_MS,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -50,7 +51,8 @@ export function createVoiceDraftController({
   if (typeof request !== 'function' || typeof getCurrent !== 'function') {
     throw new TypeError('voice draft controller requires request and getCurrent functions');
   }
-  if (typeof onDraft !== 'function' || typeof setTimer !== 'function' || typeof clearTimer !== 'function') {
+  if (typeof onDraft !== 'function' || typeof onDecision !== 'function'
+      || typeof setTimer !== 'function' || typeof clearTimer !== 'function') {
     throw new TypeError('invalid voice draft callback or timer functions');
   }
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
@@ -167,6 +169,7 @@ export function createVoiceDraftController({
           return;
         }
         const text = response.draft.slice(0, MAX_DRAFT_CHARS);
+        try { onDecision(response, identity); } catch { /* decision failure is isolated */ }
         if (text !== renderedText) {
           renderedText = text;
           try { onDraft(text, identity); } catch { /* presentation failure is isolated */ }

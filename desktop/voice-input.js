@@ -35,7 +35,8 @@ export function decideMicTurn({text = '', overlap = false, voicedMs = 0,
   const acknowledgements = new Set(['угу', 'ага', 'да', 'ясно', 'понял', 'понятно', 'окей', 'ок',
     'хорошо', 'круто', 'ого', 'вау', 'классно', 'точно', 'верно', 'ладно', 'мгм', 'хм',
     'ах', 'ох', 'ха', 'хех', 'прикольно', 'ништяк', 'супер']);
-  const backchannel = words.length > 0 && words.length <= 2 &&
+  const question = /[?？]$/.test(raw);
+  const backchannel = words.length > 0 && words.length <= 2 && !question &&
     (joined === 'ну да' || words.every(word => acknowledgements.has(word)));
   const interrupt = words.some(word => ['стоп', 'стой', 'подожди', 'погоди', 'хватит',
     'тихо', 'замолчи', 'остановись', 'перестань', 'слушай', 'послушай', 'нет', 'лучше', 'давай'].includes(word));
@@ -43,8 +44,9 @@ export function decideMicTurn({text = '', overlap = false, voicedMs = 0,
     || /(?:как бы|то есть|потому что|я хотел|я хочу)$/.test(joined)
     || /(?:\.\.\.|…|,|[-—])$/.test(raw);
   const requiredMs = thinking ? Math.max(normalSilenceMs, 2200)
-    : raw && /[.!?]$/.test(raw) ? Math.min(normalSilenceMs, 380) : normalSilenceMs;
-  if (overlap && !backchannel && (interrupt || words.length >= 2 || voicedMs >= 550)) {
+    : backchannel ? Math.min(normalSilenceMs, 380)
+    : question ? Math.min(normalSilenceMs, 380) : normalSilenceMs;
+  if (overlap && !backchannel && (question || interrupt || words.length >= 2 || voicedMs >= 550)) {
     return {action: 'cancel_tts', requiredMs};
   }
   if (silenceMs >= requiredMs) {
@@ -167,7 +169,7 @@ export class MicInputGate {
 }
 
 export class CaptureLease {
-  constructor({captureId, fetchImpl = fetch, headers = () => ({'Content-Type': 'application/json'}), onLost = () => {}}) {
+  constructor({captureId, fetchImpl = (...args) => globalThis.fetch(...args), headers = () => ({'Content-Type': 'application/json'}), onLost = () => {}}) {
     this.captureId = captureId;
     this.fetchImpl = fetchImpl;
     this.headers = headers;

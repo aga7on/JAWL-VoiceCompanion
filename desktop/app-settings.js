@@ -40,10 +40,10 @@ const SETTING_FIELDS = [
 ];
 
 const SETTING_GROUPS = [
-  { title: '🧠 Мозг и Личность (JAWL Core)', match: (k) => k.startsWith('settings:llm') || k.startsWith('settings:identity') || k.startsWith('settings:system') },
-  { title: '👁 Чувства и Мультимодальность', match: (k) => k.startsWith('interfaces:multimodality') },
-  { title: '🔌 Инструменты и MCP-мосты', match: (k) => k.startsWith('interfaces:mcp') },
-  { title: '🛠 Инженерия и Реверс (Debug Broker / RE)', match: (k) => k.startsWith('interfaces:debug_broker') },
+  { title: 'Мозг и личность', match: (k) => k.startsWith('settings:llm') || k.startsWith('settings:identity') || k.startsWith('settings:system') },
+  { title: 'Чувства и мультимодальность', match: (k) => k.startsWith('interfaces:multimodality') },
+  { title: 'Инструменты и MCP-мосты', match: (k) => k.startsWith('interfaces:mcp') },
+  { title: 'Инженерия и реверс', match: (k) => k.startsWith('interfaces:debug_broker') },
 ];
 
 function fieldDescriptor(key, value) {
@@ -88,7 +88,24 @@ async function loadSettings() {
       setStatusLine(`не удалось обновить настройки; черновики сохранены: ${e.message}`);
       renderSettings(document.querySelector('#settings-search')?.value || '');
     } else {
-      list.textContent = 'config hub недоступен';
+      const card = document.createElement('div');
+      card.className = 'card settings-load-error';
+      card.setAttribute('role', 'group');
+      const heading = document.createElement('h3');
+      heading.id = 'settings-load-error-heading';
+      heading.textContent = 'Настройки недоступны';
+      card.setAttribute('aria-labelledby', heading.id);
+      const message = document.createElement('p');
+      message.className = 'note';
+      message.setAttribute('role', 'alert');
+      message.textContent = 'Сервис настроек не ответил. Повторите загрузку позже.';
+      const retry = document.createElement('button');
+      retry.className = 'btn secondary';
+      retry.type = 'button';
+      retry.textContent = 'Повторить загрузку';
+      retry.addEventListener('click', loadSettings);
+      card.append(heading, message, retry);
+      list.replaceChildren(card);
     }
   }
 }
@@ -158,22 +175,31 @@ function renderField(key, value) {
   fl.className = 'fl';
   const fn = document.createElement('div');
   fn.className = 'fn';
+  fn.id = `setting-label-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   fn.textContent = d.label;
   fl.appendChild(fn);
+  let description = null;
   if (d.desc) {
-    const fd = document.createElement('div');
-    fd.className = 'fd';
-    fd.textContent = d.desc;
-    fl.appendChild(fd);
+    description = document.createElement('div');
+    description.className = 'fd';
+    description.id = `${fn.id}-description`;
+    description.textContent = d.desc;
+    fl.appendChild(description);
   }
   row.appendChild(fl);
+  const associateControl = (element, label = d.label) => {
+    element.setAttribute('aria-label', label);
+    if (description) element.setAttribute('aria-describedby', description.id);
+  };
 
   let control;
   if (d.type === 'bool') {
-    control = document.createElement('span');
+    control = document.createElement('button');
     control.className = 'sw';
+    control.type = 'button';
     control.setAttribute('role', 'switch');
     control.setAttribute('aria-checked', String(!!value));
+    associateControl(control);
     control.addEventListener('click', () => {
       const next = control.getAttribute('aria-checked') !== 'true';
       control.setAttribute('aria-checked', String(next));
@@ -186,10 +212,12 @@ function renderField(key, value) {
     range.type = 'range';
     range.min = d.min ?? 0; range.max = d.max ?? 100; range.step = d.step ?? 1;
     range.value = Number(value) || 0;
+    associateControl(range, `${d.label}, ползунок`);
     const num = document.createElement('input');
     num.type = 'number';
     num.min = range.min; num.max = range.max; num.step = range.step;
     num.value = range.value;
+    associateControl(num, `${d.label}, числовое значение`);
     range.addEventListener('input', () => { num.value = range.value; markSettingDirty(key, Number(range.value)); });
     num.addEventListener('input', () => { range.value = num.value; markSettingDirty(key, Number(num.value)); });
     wrap.append(range, num);
@@ -200,6 +228,7 @@ function renderField(key, value) {
     const num = document.createElement('input');
     num.type = 'number';
     num.value = Number(value) || 0;
+    associateControl(num);
     if (d.min !== undefined) num.min = d.min;
     if (d.max !== undefined) num.max = d.max;
     if (d.step !== undefined) num.step = d.step;
@@ -214,6 +243,7 @@ function renderField(key, value) {
     control = wrap;
   } else if (d.type === 'enum') {
     control = document.createElement('select');
+    associateControl(control);
     for (const [v, label] of (d.options || [])) {
       const option = document.createElement('option');
       option.value = v;
@@ -226,6 +256,7 @@ function renderField(key, value) {
     control = document.createElement('input');
     control.type = 'text';
     control.value = value === null || value === undefined ? '' : String(value);
+    associateControl(control);
     control.addEventListener('input', () => markSettingDirty(key, control.value));
   }
   row.appendChild(control);

@@ -90,6 +90,57 @@ test('dirty edits enable save immediately and survive search rerenders', async (
   assert.equal(rerenderedInput.value, 'Luna 2');
 });
 
+test('settings load failure is localized and retry restores the settings form', async () => {
+  let attempts = 0;
+  const h = createHarness(async () => {
+    attempts += 1;
+    if (attempts === 1) return response({error: 'unavailable'}, {ok: false, status: 503});
+    return response({ok: true, revision: 'r2', values: {'settings:identity.agent_name': 'Luna'}});
+  });
+  h.context.configHub = null;
+  await h.context.loadSettings();
+
+  const alert = h.find(h.list, (el) => el.className === 'card settings-load-error');
+  assert.ok(alert);
+  assert.equal(alert.getAttribute('role'), 'group');
+  assert.equal(alert.children[1].getAttribute('role'), 'alert');
+  assert.match(alert.children[1].textContent, /Сервис настроек не ответил/);
+  const retry = h.find(alert, (el) => el.textContent === 'Повторить загрузку');
+  assert.ok(retry);
+  await retry.emit('click');
+
+  assert.equal(attempts, 2);
+  assert.equal(h.find(h.list, (el) => el.id === 'settings-save')?.disabled, true);
+  assert.equal(h.find(h.list, (el) => el.tagName === 'input' && el.type === 'text')?.value, 'Luna');
+  assert.equal(h.find(h.list, (el) => el.className === 'card settings-load-error'), null);
+});
+
+test('typed settings controls expose names and use keyboard-focusable switches', async () => {
+  const h = createHarness();
+  vm.runInContext(`configHub = {
+    ok: true,
+    revision: 'r1',
+    values: {
+      'settings:system.proactive_guidance': false,
+      'settings:llm.temperature': 0.4,
+    },
+  };`, h.context);
+  h.context.renderSettings('');
+
+  const toggle = h.find(h.list, (el) => el.getAttribute('role') === 'switch');
+  assert.equal(toggle.tagName, 'button');
+  assert.equal(toggle.type, 'button');
+  assert.equal(toggle.getAttribute('aria-checked'), 'false');
+  assert.equal(toggle.getAttribute('aria-label'), 'Проактивные подсказки');
+  await toggle.emit('click');
+  assert.equal(toggle.getAttribute('aria-checked'), 'true');
+
+  const range = h.find(h.list, (el) => el.type === 'range');
+  const number = h.find(h.list, (el) => el.type === 'number');
+  assert.equal(range.getAttribute('aria-label'), 'Температура, ползунок');
+  assert.equal(number.getAttribute('aria-label'), 'Температура, числовое значение');
+});
+
 test('save HTTP failures keep the draft and report failure', async () => {
   const h = createHarness(async () => response({error: 'conflict'}, {ok: false, status: 409}));
   const input = h.find(h.list, (el) => el.tagName === 'input' && el.type === 'text');

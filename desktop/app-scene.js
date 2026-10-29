@@ -12,6 +12,8 @@ const canvas = document.getElementById('avatar-canvas');
 const statusEl = document.getElementById('avatar-status');
 
 const WARDROBE_ROOT = '/api/avatar/model'; // served by the companion
+const DEFAULT_MODEL = 'JawlieBlockingV3';
+const MODEL_PREFERENCE_KEY = 'jawl-avatar-model-v2';
 
 const renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: true});
 renderer.setClearColor(0x00000000, 0);
@@ -533,6 +535,7 @@ async function wearForRequest(model, requestId) {
   const vrm = await swapModel(`${WARDROBE_ROOT}/${name}.vrm`, requestId);
   if (!vrm || !modelLoadGate.isCurrent(requestId)) return null;
   state.wornModel = name;
+  try { localStorage.setItem(MODEL_PREFERENCE_KEY, name); } catch { /* storage is optional */ }
   return vrm;
 }
 
@@ -673,9 +676,9 @@ window.__jawlScene = {
 resize();
 renderPhysicsControls();
 tick();
-// default model: the wardrobe's first, else the constraint sample.
-// Waits for app.js to establish the session (csrf) first - the wardrobe
-// and model endpoints are session-gated.
+// Default model: the owner-selected model, else the previous choice, else the
+// wardrobe's first entry. Waits for app.js to establish the session (csrf)
+// first - the wardrobe and model endpoints are session-gated.
 (async () => {
   const requestId = modelLoadGate.next();
   for (let i = 0; i < 20 && !window.__jcsrf; i++) {
@@ -686,9 +689,14 @@ tick();
     const r = await wardrobeFetch('/api/avatar/wardrobe');
     const w = await r.json();
     if (!modelLoadGate.isCurrent(requestId)) return;
-    const first = (w.models || [])[0];
-    if (first) {
-      const vrm = await wearForRequest(first.model, requestId);
+    const models = w.models || [];
+    let saved = '';
+    try { saved = localStorage.getItem(MODEL_PREFERENCE_KEY) || ''; } catch { /* storage is optional */ }
+    const preferred = [saved, DEFAULT_MODEL]
+      .find(name => name && models.some(model => model.model === name));
+    const selected = models.find(model => model.model === preferred) || models[0];
+    if (selected) {
+      const vrm = await wearForRequest(selected.model, requestId);
       if (vrm) return;
     }
   } catch { /* fall through to direct load */ }

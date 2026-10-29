@@ -4,7 +4,7 @@
 // The legacy two-window shell (panel + avatar) stays available via
 // --legacy-shell for OBS/verification runs.
 
-const { app, BrowserWindow, shell, ipcMain, session, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, session, screen, globalShortcut, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const http = require('http');
 
@@ -23,6 +23,8 @@ let appWindow = null;
 let avatarWindow = null;
 let panelWindow = null;
 let readinessAttempt = null;
+let tray = null;
+let allowWindowClose = false;
 const internalPageUrls = new Set();
 
 function internalPage(message, canRetry = false) {
@@ -160,6 +162,11 @@ function createAppWindow() {
   };
   if (x !== undefined && y !== undefined) { windowOpts.x = x; windowOpts.y = y; }
   appWindow = new BrowserWindow(windowOpts);
+  appWindow.on('close', (event) => {
+    if (LEGACY || allowWindowClose || !tray) return;
+    event.preventDefault();
+    appWindow.hide();
+  });
   // Persist position and size on move/resize (debounced).
   let saveTimer = null;
   const saveState = () => {
@@ -199,6 +206,53 @@ function createAppWindow() {
     });
   } catch (_) {}
   return appWindow;
+}
+
+function createTray() {
+  if (LEGACY || tray) return;
+  try {
+    const source = nativeImage.createFromPath(path.join(__dirname, '..', 'runtime', 'avatar-render.png'));
+    const size = source.getSize();
+    const icon = source.isEmpty() ? source : source.crop({
+      x: Math.max(0, Math.floor(size.width * 0.32)),
+      y: Math.max(0, Math.floor(size.height * 0.18)),
+      width: Math.max(1, Math.floor(size.width * 0.36)),
+      height: Math.max(1, Math.floor(size.height * 0.38)),
+    }).resize({ width: 16, height: 16 });
+    tray = new Tray(icon);
+    tray.setToolTip('JAWL Voice Companion');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c JAWL', click: () => {
+        if (!appWindow || appWindow.isDestroyed()) createAppWindow();
+        appWindow.show();
+        appWindow.focus();
+      } },
+      { label: '\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u0432\u0435\u0441\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c', click: () => {
+        if (!appWindow || appWindow.isDestroyed()) {
+          createAppWindow();
+          appWindow.webContents.once('did-finish-load', () => {
+            if (!appWindow || appWindow.isDestroyed()) return;
+            appWindow.show();
+            appWindow.focus();
+            appWindow.webContents.send('jawl-profile-stop-request');
+          });
+          return;
+        }
+        appWindow.show();
+        appWindow.focus();
+        appWindow.webContents.send('jawl-profile-stop-request');
+      } },
+      { type: 'separator' },
+      { label: '\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 (\u0441\u043b\u0443\u0436\u0431\u044b \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0430\u0442 \u0440\u0430\u0431\u043e\u0442\u0443)', click: () => app.quit() },
+    ]));
+    tray.on('double-click', () => {
+      if (!appWindow || appWindow.isDestroyed()) createAppWindow();
+      appWindow.show();
+      appWindow.focus();
+    });
+  } catch (error) {
+    console.error('Unable to create JAWL tray icon:', error);
+  }
 }
 
 function createLegacyWindows() {
@@ -339,10 +393,14 @@ if (debugPortArg) {
 
 app.whenReady().then(async () => {
   installPermissionGuards();
+  createTray();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       LEGACY ? createLegacyWindows() : createAppWindow();
       retryPanelReadiness();
+    } else if (!LEGACY && appWindow && !appWindow.isDestroyed()) {
+      appWindow.show();
+      appWindow.focus();
     }
   });
   if (LEGACY) {
@@ -351,6 +409,12 @@ app.whenReady().then(async () => {
     createAppWindow();
   }
   await startPanelReadiness();
+});
+
+app.on('before-quit', () => { allowWindowClose = true; });
+
+ipcMain.on('jawl-profile-stop-accepted', (event) => {
+  if (event.sender === appWindow?.webContents) app.quit();
 });
 
 app.on('window-all-closed', () => {

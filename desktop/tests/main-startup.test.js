@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const mainPath = path.join(__dirname, '..', 'main.js');
 const source = fs.readFileSync(mainPath, 'utf8');
 
-function createHarness({ health = () => true } = {}) {
+function createHarness({ health = () => true, trayIconAvailable = true } = {}) {
   const state = {
     windows: [],
     requests: 0,
@@ -19,6 +19,10 @@ function createHarness({ health = () => true } = {}) {
     ipcHandlers: new Map(),
     commandLine: [],
     startup: null,
+    trays: [],
+    quitRequested: false,
+    errors: [],
+    sentMessages: [],
   };
   let healthCheck = health;
 
@@ -29,12 +33,13 @@ function createHarness({ health = () => true } = {}) {
       this.handlers = new Map();
       this.destroyed = false;
       this.alwaysOnTop = false;
+      this.hidden = false;
       this.size = [options.width, options.height];
       this.webContents = new EventEmitter();
       this.webContents.setWindowOpenHandler = (handler) => {
         this.webContents.openHandler = handler;
       };
-      this.webContents.send = () => {};
+      this.webContents.send = (channel, ...args) => state.sentMessages.push({window: this, channel, args});
       this.webContents.getURL = () => this.urls.at(-1) || '';
       state.windows.push(this);
     }
@@ -44,6 +49,9 @@ function createHarness({ health = () => true } = {}) {
     setIgnoreMouseEvents(flag) {
       this.ignoreMouseEvents = Boolean(flag);
     }
+    hide() { this.hidden = true; }
+    show() { this.hidden = false; }
+    focus() { this.focused = true; }
     setSize(w, h) {
       this.size = [w, h];
     }
@@ -66,6 +74,17 @@ function createHarness({ health = () => true } = {}) {
     }
   }
 
+  class MockTray extends EventEmitter {
+    constructor(icon) {
+      super();
+      if (icon.isEmpty?.()) throw new Error('empty icon');
+      this.icon = icon;
+      state.trays.push(this);
+    }
+    setToolTip(value) { this.tooltip = value; }
+    setContextMenu(menu) { this.menu = menu; }
+  }
+
   const electron = {
     app: {
       commandLine: { appendSwitch: (...args) => state.commandLine.push(args) },
@@ -78,9 +97,16 @@ function createHarness({ health = () => true } = {}) {
         };
       },
       on(name, handler) { state.appHandlers.set(name, handler); },
-      quit() {},
+      quit() { state.quitRequested = true; },
     },
     BrowserWindow: MockBrowserWindow,
+    Tray: MockTray,
+    Menu: { buildFromTemplate: (items) => items },
+    nativeImage: { createFromPath: () => ({
+      isEmpty: () => !trayIconAvailable,
+      getSize: () => ({ width: 480, height: 640 }),
+      crop: () => ({ resize: () => ({ trayIcon: true }) }),
+    }) },
     shell: { openExternal(url) { state.externalUrls.push(url); return Promise.resolve(); } },
     ipcMain: { on(name, handler) { state.ipcHandlers.set(name, handler); } },
     session: {
@@ -128,7 +154,7 @@ function createHarness({ health = () => true } = {}) {
     process: { env: {}, argv: ['electron'], platform: 'win32' },
     URL,
     setTimeout: (callback) => { queueMicrotask(callback); return 0; },
-    console,
+    console: { error: (...args) => state.errors.push(args) },
   };
   vm.runInNewContext(source, context, { filename: mainPath });
 
@@ -148,6 +174,73 @@ test('waits for health before navigating the app window to the companion', async
   assert.match(window.urls[0], /^data:text\/html/);
   assert.equal(window.urls[1], 'http://127.0.0.1:2367/app');
   assert.equal(window.urls.filter((url) => url === 'http://127.0.0.1:2367/app').length, 1);
+});
+
+test('keeps the daily UI in the tray when its window closes and exposes show/exit actions', async () => {
+  const harness = createHarness();
+  await harness.ready();
+
+  const window = harness.state.windows[0];
+  const close = window.handlers.get('close');
+  let prevented = false;
+  close({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(window.hidden, true);
+  assert.equal(harness.state.trays.length, 1);
+  assert.equal(harness.state.trays[0].tooltip, 'JAWL Voice Companion');
+
+  const [showItem, stopItem, , exitItem] = harness.state.trays[0].menu;
+  assert.equal(showItem.label, '\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c JAWL');
+  assert.equal(stopItem.label, '\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u0432\u0435\u0441\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c');
+  assert.equal(exitItem.label, '\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 (\u0441\u043b\u0443\u0436\u0431\u044b \u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0430\u0442 \u0440\u0430\u0431\u043e\u0442\u0443)');
+  showItem.click();
+  assert.equal(window.hidden, false);
+  assert.equal(window.focused, true);
+  window.hide();
+  stopItem.click();
+  assert.equal(window.hidden, false);
+  assert.equal(window.focused, true);
+  assert.equal(harness.state.sentMessages.at(-1).channel, 'jawl-profile-stop-request');
+  harness.state.ipcHandlers.get('jawl-profile-stop-accepted')({sender: {}});
+  assert.equal(harness.state.quitRequested, false);
+  harness.state.ipcHandlers.get('jawl-profile-stop-accepted')({sender: window.webContents});
+  assert.equal(harness.state.quitRequested, true);
+  exitItem.click();
+  assert.equal(harness.state.quitRequested, true);
+
+  harness.state.appHandlers.get('before-quit')();
+  prevented = false;
+  close({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+});
+
+test('does not hide the daily UI when the tray icon cannot be created', async () => {
+  const harness = createHarness({ trayIconAvailable: false });
+  await harness.ready();
+
+  const window = harness.state.windows[0];
+  let prevented = false;
+  window.handlers.get('close')({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.equal(window.hidden, false);
+  assert.equal(harness.state.trays.length, 0);
+});
+
+test('tray stop waits for a recreated renderer to finish loading', async () => {
+  const harness = createHarness();
+  await harness.ready();
+  const oldWindow = harness.state.windows[0];
+  oldWindow.destroyed = true;
+
+  const stopItem = harness.state.trays[0].menu[1];
+  stopItem.click();
+  const replacement = harness.state.windows[1];
+  assert.ok(replacement);
+  assert.equal(harness.state.sentMessages.length, 0);
+  replacement.webContents.emit('did-finish-load');
+  assert.equal(replacement.hidden, false);
+  assert.equal(replacement.focused, true);
+  assert.equal(harness.state.sentMessages.at(-1).channel, 'jawl-profile-stop-request');
 });
 
 test('shows bounded recovery and allows one manual retry after the service starts', async () => {

@@ -8,10 +8,14 @@ import {CaptureLease, MicInputGate, normalizeMicConfig, uploadUtteranceFor,
 
 test('turn heuristic distinguishes Russian overlap, finished questions, and bounded hesitation', () => {
   assert.equal(decideMicTurn({text: 'Угу, понятно.', overlap: true, voicedMs: 300, silenceMs: 400}).action, 'finish_backchannel');
-  for (const text of ['Стой!', 'Нет, подожди', 'Открой браузер']) {
+  assert.equal(decideMicTurn({text: 'Да.', overlap: true, voicedMs: 300, silenceMs: 400}).action, 'finish_backchannel');
+  assert.equal(decideMicTurn({text: 'Да?', overlap: true, voicedMs: 300, silenceMs: 400}).action, 'cancel_tts');
+  for (const text of ['Стой!', 'Нет, подожди', 'Открой браузер', 'Где ключи?']) {
     assert.equal(decideMicTurn({text, overlap: true}).action, 'cancel_tts');
   }
   assert.equal(decideMicTurn({text: 'И что теперь?', silenceMs: 400}).action, 'commit_turn');
+  assert.equal(decideMicTurn({text: 'Я хотел сказать.', silenceMs: 400}).action, 'hold_turn');
+  assert.equal(decideMicTurn({text: 'Я хотел сказать.', silenceMs: 1200}).action, 'commit_turn');
   for (const text of ['я хотел чтобы', 'ну как бы', 'э-э...', 'давай напишем мод, который']) {
     assert.equal(decideMicTurn({text, silenceMs: 1300}).action, 'hold_turn');
     assert.equal(decideMicTurn({text, silenceMs: 2200}).action, 'commit_turn');
@@ -65,6 +69,23 @@ test('settings are bounded and preserve threshold hysteresis', () => {
   assert.ok(config.closeRms < config.openRms);
   assert.equal(config.silenceMs, 5000);
   assert.equal(config.preRollMs, 500);
+});
+
+test('default capture lease keeps the browser fetch receiver intact', async () => {
+  const original = globalThis.fetch;
+  const receivers = [];
+  globalThis.fetch = function (..._args) {
+    receivers.push(this);
+    return Promise.resolve(new Response(JSON.stringify({ok: true}), {status: 200}));
+  };
+  try {
+    const lease = new CaptureLease({captureId: 'desk-default'});
+    await lease.request('release');
+    assert.equal(receivers.length, 1);
+    assert.equal(receivers[0], globalThis);
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test('capture lease acquires before media, renews with its id, then releases', async () => {
