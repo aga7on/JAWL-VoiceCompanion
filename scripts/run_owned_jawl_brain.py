@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_repair=None, action_repair=None, streaming=None, goal_backoff=None, terminal_context=None):
+def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_repair=None, action_repair=None, goal_backoff=None, terminal_context=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -103,11 +103,6 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_re
         or vars(action_repair.loop_class).get("__jawl_owned_action_repair_installation__") is not action_repair
     ):
         raise RuntimeError("native action repair hook is not installed")
-    if streaming is not None and (
-        streaming.provider_class.complete is not streaming.wrapped_complete
-        or streaming.provider_class._consume_stream is not streaming.wrapped_consume
-    ):
-        raise RuntimeError("native streaming hook is not installed")
     if goal_backoff is not None:
         check["goal_wakeup_backoff"] = (
             goal_backoff.manager_class.should_run_heartbeat is goal_backoff.wrapped_should_run
@@ -133,7 +128,6 @@ def write_startup_receipt(snapshot, delivery, context, json_format=None, goal_re
         "local_json_format_installed": json_format is not None,
         "goal_protocol_repair_installed": goal_repair is not None,
         "action_repair_installed": action_repair is not None,
-        "streaming_installed": streaming is not None,
         "terminal_context_compaction": {
             "installed": terminal_context is not None,
             "keep_recent_messages": 12,
@@ -192,8 +186,6 @@ def main():
     action_repair = action_repair_extension.install_native_action_repair()
     json_format_extension = load_extension("_owned_jawl_json_format", "native_jawl_json_format.py")
     json_format = json_format_extension.install_native_json_format()
-    streaming_extension = load_extension("_owned_jawl_streaming", "native_jawl_streaming.py")
-    streaming = streaming_extension.install_native_streaming()
     write_startup_receipt(
         snapshot,
         delivery,
@@ -201,7 +193,6 @@ def main():
         json_format,
         goal_repair=goal_repair,
         action_repair=action_repair,
-        streaming=streaming,
         goal_backoff=goal_backoff,
         terminal_context=terminal_context,
     )

@@ -10,8 +10,70 @@ from uuid import uuid4
 
 
 _TURN_ID: ContextVar[str] = ContextVar("jawl_companion_turn_id", default="")
+_SPEECH_SINK: ContextVar["SpeechDeltaSink | None"] = ContextVar(
+    "jawl_companion_speech_sink", default=None
+)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _AVATAR_STATES = {"idle", "listening", "thinking", "speaking", "error"}
+
+
+class SpeechDeltaSink:
+    """Per-turn sink for user-visible speech deltas.
+
+    Fed by the provider speech-first tee (``llm/speech_first`` extracts
+    complete reply sentences from the partially streamed JSON envelope).
+    Each sentence is published once as ``COMPANION_SPEECH_DELTA`` so the
+    terminal bridge can start TTS before the envelope closes.  Private
+    envelope fields never reach this sink.
+    """
+
+    def __init__(self, event_bus: Any, turn_id: str) -> None:
+        self._event_bus = event_bus
+        self.turn_id = str(turn_id or "")[:128]
+        self._spoken = ""
+        self._closed = False
+
+    async def emit(self, text: str) -> bool:
+        fragment = str(text or "").strip()
+        if not fragment or self._closed or not self.turn_id:
+            return False
+        # A later ReAct step may repeat the same sentence; speak each once.
+        if fragment in self._spoken:
+            return False
+        self._spoken = (self._spoken + " " + fragment)[-4000:]
+        try:
+            await self._event_bus.publish(
+                _speech_delta_event(),
+                companion_turn_id=self.turn_id,
+                speech_text=fragment[:2000],
+                event_format="speech",
+            )
+        except Exception:
+            return False
+        return True
+
+    def close(self) -> None:
+        self._closed = True
+
+
+def _speech_delta_event() -> Any:
+    # Imported lazily: utils.event.registry pulls pydantic, and this module
+    # stays importable for pure correlation contexts.
+    from src.utils.event.registry import Events
+
+    return Events.COMPANION_SPEECH_DELTA
+
+
+def bind_speech_sink(sink: "SpeechDeltaSink | None") -> Token:
+    return _SPEECH_SINK.set(sink)
+
+
+def reset_speech_sink(token: Token) -> None:
+    _SPEECH_SINK.reset(token)
+
+
+def current_speech_sink() -> "SpeechDeltaSink | None":
+    return _SPEECH_SINK.get()
 
 
 def set_companion_turn_id(value: Any) -> Token[str]:

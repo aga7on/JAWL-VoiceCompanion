@@ -146,7 +146,7 @@
     "src/l2_interfaces/host/os/skills/process_sessions.py": "5bc146499d16e1529c526043400433f46c9d413355ebd8ca3a580667b82169bd",
     "src/l2_interfaces/host/os/state.py": "994db64deb23883744a85b7a05e0bd0c98d7d91f5555f883e31cbd34c94f9ebb",
     "src/l2_interfaces/host/terminal/client.py": "58b93d0e4fbc2380ced9e19fc6946f344db906ea9b967bb3a9bb424aef99b6d2",
-    "src/l2_interfaces/host/terminal/events.py": "dae762f9468ebcbed7d2fa13cf6bb4e2da698c73a3a6782d25b8d48760a8a1fd",
+    "src/l2_interfaces/host/terminal/events.py": "802939259b3f9aa51d22c5ca35f5b9bbc86e541ebf26995e97a15ab944c0babd",
     "src/l2_interfaces/host/terminal/plugin.py": "5bedd59524679400d386f2808e75836bdd9cfad19b157521630bd3a665df800b",
     "src/l2_interfaces/host/terminal/skills/messages.py": "3d423467eb5e17845b84de94694989d17829f986ef3bc969792489de47727d58",
     "src/l2_interfaces/host/terminal/state.py": "8e3a4352b1b4fd8b120dde84433b16ac6d4933f6f81400128e415f7154c0cc4d",
@@ -234,7 +234,7 @@
     "src/l2_interfaces/web/search/skills/tavily_search.py": "38b9d13417d459fb42b10d734fdd276fbc202a0b266101f2916d180764944edb",
     "src/l2_interfaces/web/search/skills/trafilatura_read.py": "c00e3820ffb69af6b10696e6d23a2824787b6f1260fb3d9be6a97e566d1e9db4",
     "src/l2_interfaces/web/search/state.py": "deae30c0ae58074be463e90218f04216f699abe8879a0cf783f0f7ac2aa9b614",
-    "src/l3_agent/companion_gateway.py": "a6010272ad062aa25d40d79ea82e08b27f77db317296f15ea594fb6e2fb542cf",
+    "src/l3_agent/companion_gateway.py": "e42620a3c2986044702ab84bac50fe03801b80e16a8713f5774666607b378d80",
     "src/l3_agent/context/builder.py": "838489ab68d3cd244524dc0b16be9a43c1957ee8365249a16d8b0aa50e4d5df8",
     "src/l3_agent/context/rag/entity_extractor.py": "4b31637e8e450d597152067e91e71a48bd965903a5bd475e32f33098453f1735",
     "src/l3_agent/context/rag/memories.py": "ec7e71f5a1e513b1d12b04cedd4bdcf66f3181eb9c703b1a7c27233533ab2065",
@@ -262,8 +262,9 @@
     "src/l3_agent/llm/providers/contracts.py": "c9a1dce3079e10ef15d182a4506c36e55140344720fb71c2673cdb679e8c77bd",
     "src/l3_agent/llm/providers/discovery.py": "ba98145e34c6f81051d16af0ccf119e6ab0bdd6b56b8bb8aabd9df2ceaa2ab9e",
     "src/l3_agent/llm/providers/factory.py": "b3249df697d3d25f3a381f9d19fa75986cdaf8cbcc702d37a5322273c71afc35",
-    "src/l3_agent/llm/providers/openai_compatible.py": "863868c69f28f07353bcf1c80781db6243a2f50f5fa9c20066c928d8e9234d14",
+    "src/l3_agent/llm/providers/openai_compatible.py": "3658692584c973dca81e10a3b0282a3dc77519d6533365e2135d2367757a57b0",
     "src/l3_agent/llm/providers/qwb.py": "7bb91b8c60c287992617ad8960641611d25884e8aa8d498c2c25e4c2686b0e4d",
+    "src/l3_agent/llm/speech_first.py": "5a279ba6033de65c0b88e149b15c4c0f5d5f26e807571868b256c3c783f87a82",
     "src/l3_agent/prompt/builder.py": "134330563c6c180db496f2455d9b9adb3697a6f789cc1b1dd62d07fed83ec822",
     "src/l3_agent/prompt/personality/EXAMPLES_OF_STYLE.example.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "src/l3_agent/prompt/personality/SOUL.example.md": "732cd14a2de2cf91677ca5394da56028deed8738096a944ba41fe28ee51add0e",
@@ -282,7 +283,7 @@
     "src/l3_agent/prompt/system/optional/SWARM.md": "a67a6c37336f0a7b26745b21d2b8b15622fe99e736018a29c2f1238b4a837bc8",
     "src/l3_agent/prompt/system/optional/TASKS.md": "3f0acb25483911752290a375932c6c0a77cc6d09fce25205c0a75bc55503bf2d",
     "src/l3_agent/prompt/system/optional/TREE_OF_THOUGHTS.md": "2294c5a2d122879b85ca41703fa0c16f26482c0063994fdfe95a70f566163dd3",
-    "src/l3_agent/react/loop.py": "098e24ff5872dba702cacf17a7e7da3b9445da05751f3444a5d35bf0375ddf0c",
+    "src/l3_agent/react/loop.py": "dd8da496107124b01d2fa3e0aa30f87958f6ad12fa0b5770119dad19ae4383e2",
     "src/l3_agent/skills/catalog.py": "7af7ee46e14d9c0c370e5ecd5526be39a15f8aebb6135039e2e93a108a1f404d",
     "src/l3_agent/skills/coding_reconciliation.py": "e88e4a545a6495b8e2a4d93b8b36ad75ad5e08f9c1600835bad26ac3ad42af1f",
     "src/l3_agent/skills/coding_telemetry.py": "860d3ac2552419f21b5eb1bfee30bb6241eb9225d04e9620343c8183d75c0f46",
@@ -326,7 +327,7 @@
     "src/utils/dtime.py": "b15f876daafafba17c867d7b56681bcfb5a2e3897870d9a46e26fd7d4471e4f7",
     "src/utils/event/bridge.py": "6f228e717db0e4adea967e2a3c99286e520873e941c0231a29166fc495c45415",
     "src/utils/event/bus.py": "df03dc271e2eadf161dfd24f396b6e64f36f84178b90bb307bf908b37c74779f",
-    "src/utils/event/registry.py": "e9bc5763b0c293b872d02d3bc420fe85cbecd56e73928bad4192291ae09fc14b",
+    "src/utils/event/registry.py": "360719785d4bb4dde1f4fe0e1c17ef2aabc9f997b14318eac08c82ad7291e289",
     "src/utils/logger.py": "22f10df05909ef4ffbcb132a599262697de51e760729f49478622f1486cb32fd",
     "src/utils/policy_denial.py": "d726446e71dd4bc7e91f66a5bbdbf1230be3712a4872d83615c49984c4190d8b",
     "src/utils/settings.py": "62a456a7c560de704ec8a91a48d95afd1d735792f8cb404ba36d8a26ee03315f",
@@ -352,5 +353,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "3377d6032206a9a3382b68204d606ad6e0ce506234e6eb1c1f58d26f2d9e64c3"
+  "snapshot_sha256": "c022041efa65fdffcf7966a5f3e19ccc5546d8e9481e2bce3d2e4cf06c529223"
 }

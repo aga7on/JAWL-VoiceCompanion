@@ -46,8 +46,12 @@ from src.l3_agent.skills.registry import (
 from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
 from src.l3_agent.event_buffer import BoundedEventBuffer
 from src.l3_agent.companion_gateway import (
+    SpeechDeltaSink,
+    bind_speech_sink,
     current_companion_turn_id,
+    current_speech_sink,
     reset_companion_turn_id,
+    reset_speech_sink,
     set_companion_turn_id,
 )
 
@@ -359,6 +363,11 @@ class ReactLoop:
         ).strip()[:128]
         companion_turn_token = set_companion_turn_id(
             payload.get("_companion_turn_id", "")
+        )
+        speech_sink_token = bind_speech_sink(
+            SpeechDeltaSink(self.event_bus, current_companion_turn_id())
+            if current_companion_turn_id()
+            else None
         )
 
         try:
@@ -842,6 +851,10 @@ class ReactLoop:
             await asyncio.shield(self._handle_cycle_cancelled())
             raise
         finally:
+            speech_sink = current_speech_sink()
+            if speech_sink is not None:
+                speech_sink.close()
+            reset_speech_sink(speech_sink_token)
             policy_completion.close_request(current_companion_turn_id())
             reset_companion_turn_id(companion_turn_token)
             self.active_companion_turn_id = ""
