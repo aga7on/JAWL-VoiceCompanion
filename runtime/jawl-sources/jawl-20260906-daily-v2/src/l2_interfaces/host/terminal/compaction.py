@@ -1,40 +1,29 @@
 """Compact old native terminal turns before they consume the prompt budget.
 
-This owned adapter reads the existing terminal history file, preserves recent
+This adapter reads the existing terminal history file, preserves recent
 turns verbatim, and represents older turns as bounded chronological excerpts.
 It does not call a model during prompt construction, so it adds no generation
-latency and cannot invent a semantic summary.
+latency and cannot invent a semantic summary. ``HostTerminalClient.get_context_block``
+invokes it natively; no product extension layer installs anything.
 """
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 import os
 import re
-import sys
-from pathlib import Path
-from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
+from src.l3_agent.context import perception_packet
 
-_INSTALL_ATTR = "__jawl_terminal_context_compaction_installation__"
 _PERCEPTION_BLOCK = re.compile(r"\n\n\[ФОН ВОСПРИЯТИЯ[^\]]{0,1200}\]", re.S | re.I)
 _WHITESPACE = re.compile(r"\s+")
-_DEFAULT_KEEP_RECENT = 12
-_DEFAULT_TARGET_CHARS = 18000
-_DEFAULT_EXCERPT_CHARS = 140
+DEFAULT_KEEP_RECENT = 12
+DEFAULT_TARGET_CHARS = 18000
+DEFAULT_EXCERPT_CHARS = 140
 
 
 def _without_sensors(text: str) -> str:
-    name = "_owned_perception_packet"
-    module = sys.modules.get(name)
-    if module is None:
-        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("perception_packet.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-    return module.strip_appendix(text)
+    return perception_packet.strip_appendix(text)
 
 
 def _message_text(item: Any) -> str:
@@ -59,9 +48,9 @@ def _compact_excerpt(text: str, limit: int) -> str:
 def compact_terminal_history(
     history: list[Any],
     *,
-    keep_recent: int = _DEFAULT_KEEP_RECENT,
-    target_chars: int = _DEFAULT_TARGET_CHARS,
-    excerpt_chars: int = _DEFAULT_EXCERPT_CHARS,
+    keep_recent: int = DEFAULT_KEEP_RECENT,
+    target_chars: int = DEFAULT_TARGET_CHARS,
+    excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
 ) -> tuple[str, dict[str, int | bool]]:
     """Format durable history with a compact older section and exact recent turns."""
     if keep_recent < 2 or target_chars < 1000:
@@ -125,70 +114,30 @@ def compact_terminal_history(
     }
 
 
-@dataclass(frozen=True)
-class TerminalContextCompactionInstallation:
-    client_class: type
-    original_get_context_block: Callable[..., Any]
-    wrapped_get_context_block: Callable[..., Any]
-    target_chars: int = _DEFAULT_TARGET_CHARS
-
-
-def install_native_terminal_context_compaction(
-    client_class: type | None = None,
-    *,
-    keep_recent: int = _DEFAULT_KEEP_RECENT,
-    target_chars: int = _DEFAULT_TARGET_CHARS,
-) -> TerminalContextCompactionInstallation:
-    """Wrap the native terminal provider without modifying the imported JAWL tree."""
-    if client_class is None:
-        client_class = importlib.import_module(
-            "src.l2_interfaces.host.terminal.client"
-        ).HostTerminalClient
-    if not isinstance(client_class, type):
-        raise TypeError("terminal context compaction requires a client class")
-    existing = vars(client_class).get(_INSTALL_ATTR)
-    if isinstance(existing, TerminalContextCompactionInstallation):
-        return existing
-    original = getattr(client_class, "get_context_block", None)
-    if not callable(original):
-        raise TypeError("native terminal client does not expose get_context_block")
+def declared_target_chars(default: int = DEFAULT_TARGET_CHARS) -> int:
+    """Scale the compaction target with a declared context window, like the kernel."""
     try:
         window = int(os.environ.get("JAWL_CONTEXT_WINDOW_TOKENS", "0"))
     except ValueError:
         window = 0
     if 65536 <= window <= 1048576:
-        target_chars = max(target_chars, window * 3 // 2)
-
-    async def wrapped(client: Any, **kwargs: Any) -> str:
-        block = await original(client, **kwargs)
-        if "Recent messages:\n" not in block:
-            return block
-        reader = getattr(client, "_read_history_file", None)
-        if not callable(reader):
-            return block
-        history = reader()
-        if not isinstance(history, list):
-            return block
-        compacted, stats = compact_terminal_history(
-            history,
-            keep_recent=keep_recent,
-            target_chars=target_chars,
-        )
-        return block.split("Recent messages:\n", 1)[0] + "Recent messages:\n" + compacted
-
-    installation = TerminalContextCompactionInstallation(client_class, original, wrapped, target_chars)
-    original_record = getattr(client_class, "_record_message", None)
-    if callable(original_record):
-        def record(client, sender, text, time_str=""):
-            return original_record(client, sender, _without_sensors(text) if sender == "User" else text, time_str)
-        setattr(client_class, "_record_message", record)
-    setattr(client_class, "get_context_block", wrapped)
-    setattr(client_class, _INSTALL_ATTR, installation)
-    return installation
+        return max(default, window * 3 // 2)
+    return default
 
 
-__all__ = [
-    "TerminalContextCompactionInstallation",
-    "compact_terminal_history",
-    "install_native_terminal_context_compaction",
-]
+def compact_context_block(block: str, client: Any) -> str:
+    """Compact the ``Recent messages`` section of a terminal context block."""
+    if "Recent messages:\n" not in block:
+        return block
+    reader = getattr(client, "_read_history_file", None)
+    if not callable(reader):
+        return block
+    history = reader()
+    if not isinstance(history, list):
+        return block
+    compacted, _stats = compact_terminal_history(
+        history,
+        keep_recent=DEFAULT_KEEP_RECENT,
+        target_chars=declared_target_chars(),
+    )
+    return block.split("Recent messages:\n", 1)[0] + "Recent messages:\n" + compacted

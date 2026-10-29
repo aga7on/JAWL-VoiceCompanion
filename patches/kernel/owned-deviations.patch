@@ -19432,6 +19432,152 @@
 +        )
 +        while len(sessions) > self._MAX_RECORDS and terminal:
 +            sessions.pop(terminal.pop(0)["id"], None)
+--- a/src/l2_interfaces/host/terminal/compaction.py
++++ b/src/l2_interfaces/host/terminal/compaction.py
+@@ -0,0 +1,143 @@
++"""Compact old native terminal turns before they consume the prompt budget.
++
++This adapter reads the existing terminal history file, preserves recent
++turns verbatim, and represents older turns as bounded chronological excerpts.
++It does not call a model during prompt construction, so it adds no generation
++latency and cannot invent a semantic summary. ``HostTerminalClient.get_context_block``
++invokes it natively; no product extension layer installs anything.
++"""
++
++from __future__ import annotations
++
++import os
++import re
++from typing import Any
++
++from src.l3_agent.context import perception_packet
++
++_PERCEPTION_BLOCK = re.compile(r"\n\n\[ФОН ВОСПРИЯТИЯ[^\]]{0,1200}\]", re.S | re.I)
++_WHITESPACE = re.compile(r"\s+")
++DEFAULT_KEEP_RECENT = 12
++DEFAULT_TARGET_CHARS = 18000
++DEFAULT_EXCERPT_CHARS = 140
++
++
++def _without_sensors(text: str) -> str:
++    return perception_packet.strip_appendix(text)
++
++
++def _message_text(item: Any) -> str:
++    if not isinstance(item, dict):
++        return ""
++    value = item.get("text")
++    return _without_sensors(value).strip() if isinstance(value, str) else ""
++
++
++def _compact_excerpt(text: str, limit: int) -> str:
++    clean = _PERCEPTION_BLOCK.sub("", text)
++    clean = _WHITESPACE.sub(" ", clean).strip()
++    if len(clean) <= limit:
++        return clean
++    if limit <= 3:
++        return clean[:limit]
++    head = max(1, limit * 2 // 3)
++    tail = max(1, limit - head - 3)
++    return clean[:head].rstrip() + " … " + clean[-tail:].lstrip()
++
++
++def compact_terminal_history(
++    history: list[Any],
++    *,
++    keep_recent: int = DEFAULT_KEEP_RECENT,
++    target_chars: int = DEFAULT_TARGET_CHARS,
++    excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
++) -> tuple[str, dict[str, int | bool]]:
++    """Format durable history with a compact older section and exact recent turns."""
++    if keep_recent < 2 or target_chars < 1000:
++        raise ValueError("invalid terminal history compaction limits")
++    valid = [item for item in history if isinstance(item, dict) and _message_text(item)]
++    rendered = []
++    source_chars = sum(len(_message_text(item)) for item in valid)
++    if source_chars <= target_chars:
++        rendered = [
++            f"[{str(item.get('time') or '').strip()}] [{str(item.get('sender') or 'Unknown')}]: {_message_text(item)}"
++            for item in valid
++        ]
++        return "\n".join(rendered), {
++            "compacted": False, "messages": len(valid), "source_chars": sum(map(len, rendered)),
++            "output_chars": sum(map(len, rendered)), "summarized_messages": 0,
++        }
++
++    split = max(0, len(valid) - keep_recent)
++    older = valid[:split]
++    recent = valid[split:]
++    first_time = str(older[0].get("time") or "")[:32] if older else ""
++    last_time = str(older[-1].get("time") or "")[:32] if older else ""
++    lines = [
++        "Earlier conversation (all messages retained as short chronological excerpts; "
++        f"{first_time} to {last_time}; perception snapshots omitted):"
++    ]
++    selected_older = older
++    for item in selected_older:
++        sender_value = str(item.get("sender") or "Unknown").lower()
++        sender = "U" if sender_value in {"user", "human"} else "A" if sender_value in {"assistant", "agent"} else "O"
++        excerpt = _compact_excerpt(_message_text(item), excerpt_chars)
++        if excerpt:
++            lines.append(f"{sender}: {excerpt}")
++    lines.append("Recent conversation (verbatim):")
++    for item in recent:
++        sender = str(item.get("sender") or "Unknown")[:32]
++        timestamp = str(item.get("time") or "")[:32]
++        lines.append(f"[{timestamp}] [{sender}]: {_message_text(item)}")
++
++    result = "\n".join(lines)
++    # The native provider budget for the active 65K profile is 20K chars.
++    # This safety valve keeps additional room for the rest of JAWL context.
++    if len(result) > target_chars:
++        compact_lines = [lines[0]]
++        for item in selected_older:
++            sender_value = str(item.get("sender") or "Unknown").lower()
++            sender = "U" if sender_value in {"user", "human"} else "A" if sender_value in {"assistant", "agent"} else "O"
++            excerpt = _compact_excerpt(_message_text(item), 48)
++            if excerpt:
++                compact_lines.append(f"{sender}: {excerpt}")
++        compact_lines.append("Recent conversation (verbatim, sensory appendices removed):")
++        for item in recent:
++            sender = str(item.get("sender") or "Unknown")[:32]
++            text = _compact_excerpt(_message_text(item), 280)
++            compact_lines.append(f"[{sender}]: {text}")
++        result = "\n".join(compact_lines)
++
++    return result, {
++        "compacted": True, "messages": len(valid), "source_chars": source_chars,
++        "output_chars": len(result), "summarized_messages": len(older),
++    }
++
++
++def declared_target_chars(default: int = DEFAULT_TARGET_CHARS) -> int:
++    """Scale the compaction target with a declared context window, like the kernel."""
++    try:
++        window = int(os.environ.get("JAWL_CONTEXT_WINDOW_TOKENS", "0"))
++    except ValueError:
++        window = 0
++    if 65536 <= window <= 1048576:
++        return max(default, window * 3 // 2)
++    return default
++
++
++def compact_context_block(block: str, client: Any) -> str:
++    """Compact the ``Recent messages`` section of a terminal context block."""
++    if "Recent messages:\n" not in block:
++        return block
++    reader = getattr(client, "_read_history_file", None)
++    if not callable(reader):
++        return block
++    history = reader()
++    if not isinstance(history, list):
++        return block
++    compacted, _stats = compact_terminal_history(
++        history,
++        keep_recent=DEFAULT_KEEP_RECENT,
++        target_chars=declared_target_chars(),
++    )
++    return block.split("Recent messages:\n", 1)[0] + "Recent messages:\n" + compacted
 --- a/src/l2_interfaces/mcp/__init__.py
 +++ b/src/l2_interfaces/mcp/__init__.py
 @@ -0,0 +1 @@
@@ -35018,7 +35164,7 @@
              return SkillResult.fail(str(e))
 --- a/src/l2_interfaces/host/terminal/client.py
 +++ b/src/l2_interfaces/host/terminal/client.py
-@@ -8,13 +8,42 @@
+@@ -8,13 +8,43 @@
  
  import asyncio
  import json
@@ -35033,6 +35179,7 @@
  from src.utils.dtime import get_now_formatted
  from src.utils.settings import HostTerminalConfig
  from src.l2_interfaces.host.terminal.state import HostTerminalState
++from src.l2_interfaces.host.terminal import compaction
 +from src.l3_agent.companion_gateway import (
 +    current_companion_turn_id,
 +    default_response,
@@ -35062,7 +35209,7 @@
  
  
  class HostTerminalClient:
-@@ -30,6 +59,9 @@
+@@ -30,6 +60,9 @@
          data_dir: Path,
          agent_name: str,
          timezone: int,
@@ -35072,7 +35219,7 @@
      ) -> None:
          """
          Initializes the terminal TCP server.
-@@ -45,12 +77,14 @@
+@@ -45,12 +78,14 @@
          self.config = config
          self.agent_name = agent_name
          self.timezone = timezone
@@ -35087,7 +35234,7 @@
          self.port_file = (
              data_dir / "interfaces" / "host" / "terminal" / "terminal.port"
          )  # Port file
-@@ -59,10 +93,15 @@
+@@ -59,10 +94,15 @@
  
          self.server: Optional[asyncio.AbstractServer] = None
          self.active_writers: set[asyncio.StreamWriter] = set()
@@ -35104,7 +35251,7 @@
  
      async def start(self) -> None:
          """Starts the TCP server and saves the OS-issued port to a file for the UI."""
-@@ -73,6 +112,7 @@
+@@ -73,6 +113,7 @@
  
          # Retrieve the actual issued port number
          actual_port = self.server.sockets[0].getsockname()[1]
@@ -35112,7 +35259,7 @@
  
          # Save it to a file so that the CLI knows where to connect
          self.port_file.write_text(str(actual_port))
-@@ -110,22 +150,41 @@
+@@ -110,22 +151,41 @@
          incoming text streams into the queue for processing by the Events module.
          """
  
@@ -35158,7 +35305,7 @@
              self.state.is_ui_connected = True
              main_logger.info("[Host OS] CLI chat connected to the terminal.")
              await self.incoming_queue.put(("_CONNECTION_OPENED", ""))
-@@ -141,14 +200,34 @@
+@@ -141,14 +201,34 @@
                      # Extract JSON payload
                      try:
                          parsed = json.loads(text)
@@ -35194,7 +35341,7 @@
  
          except asyncio.CancelledError:
              pass
-@@ -158,9 +237,13 @@
+@@ -158,9 +238,13 @@
  
          finally:
              self.active_writers.discard(writer)
@@ -35209,7 +35356,7 @@
                  self.state.is_ui_connected = False
                  main_logger.info("[Host OS] CLI chat disconnected from the terminal.")
                  await self.incoming_queue.put(("_CONNECTION_CLOSED", ""))
-@@ -172,7 +255,58 @@
+@@ -172,7 +256,58 @@
              except Exception as e:
                  main_logger.debug(f"[Host Terminal] Error closing client session: {e}")
  
@@ -35269,7 +35416,7 @@
          """
          Asynchronous broadcasting of a message from the agent to all active TCP sessions (open consoles).
          Packs the text into JSON with a timestamp for parsing on the CLI widgets side.
-@@ -184,11 +318,29 @@
+@@ -184,11 +319,29 @@
          time_str = get_now_formatted(self.timezone, "%Y-%m-%d %H:%M:%S")
          self._record_message(self.agent_name, text, time_str)
  
@@ -35302,7 +35449,7 @@
          data = payload.encode("utf-8")
  
          for writer in list(self.active_writers):
-@@ -198,6 +350,136 @@
+@@ -198,10 +351,145 @@
              except Exception:
                  self.active_writers.discard(writer)
  
@@ -35439,6 +35586,24 @@
      def _record_message(self, sender: str, text: str, time_str: str = "") -> None:
          """Writes message to L0 State and the physical history file."""
          if not time_str:
+             time_str = get_now_formatted(self.timezone, "%Y-%m-%d %H:%M:%S")
++
++        # User turns may carry a perception appendix; keep history durable and
++        # lean by storing the clean user text only.
++        if sender == "User":
++            text = compaction._without_sensors(text)
+ 
+         self.state.add_message(sender, text, time_str)
+ 
+@@ -244,4 +532,7 @@
+             if self.state.is_ui_connected
+             else "The terminal window is closed."
+         )
+-        return f"### HOST TERMINAL [ON]\n{desc}\nStatus: {ui_status}\n\nRecent messages:\n{self.state.formatted_messages}"
++        block = f"### HOST TERMINAL [ON]\n{desc}\nStatus: {ui_status}\n\nRecent messages:\n{self.state.formatted_messages}"
++        # Compact old turns natively so long histories cannot crowd out the
++        # rest of the prompt; recent turns stay verbatim.
++        return compaction.compact_context_block(block, self)
 --- a/src/l2_interfaces/host/terminal/events.py
 +++ b/src/l2_interfaces/host/terminal/events.py
 @@ -6,6 +6,8 @@

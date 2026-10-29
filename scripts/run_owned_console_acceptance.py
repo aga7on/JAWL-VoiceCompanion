@@ -139,7 +139,7 @@ def probe(report: dict) -> None:
     report["brain_bootstrap"]["identity_verified"] = bool(
         (receipt["pid"] == brain_process.pid or receipt["parent_pid"] == brain_process.pid)
         and receipt["bootstrap_only"] is True
-        and receipt["hooks"] == {"delivery_guard": True, "terminal_context_compaction": True, "goal_wakeup_backoff": True}
+        and receipt["hooks"] == {"delivery_guard": True, "goal_wakeup_backoff": True}
         and Path(receipt["instance_home"]).resolve() == home.resolve()
     )
     if not (brain_process.returncode == 0 and report["brain_bootstrap"]["initialized"]

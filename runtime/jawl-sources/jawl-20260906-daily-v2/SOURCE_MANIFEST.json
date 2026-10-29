@@ -145,7 +145,8 @@
     "src/l2_interfaces/host/os/skills/network.py": "9494115a1908e5327888148b86351d3395db7aaa7654e41e792f1a9237b11c79",
     "src/l2_interfaces/host/os/skills/process_sessions.py": "5bc146499d16e1529c526043400433f46c9d413355ebd8ca3a580667b82169bd",
     "src/l2_interfaces/host/os/state.py": "994db64deb23883744a85b7a05e0bd0c98d7d91f5555f883e31cbd34c94f9ebb",
-    "src/l2_interfaces/host/terminal/client.py": "58b93d0e4fbc2380ced9e19fc6946f344db906ea9b967bb3a9bb424aef99b6d2",
+    "src/l2_interfaces/host/terminal/client.py": "e46d43e0c1ed9f83f19b9cf1eac444b1a1cfb83483c5d237db223ac861b86200",
+    "src/l2_interfaces/host/terminal/compaction.py": "b2781cfb20716b098dee5475c0fb316c04288262671348c9a1ead8026fa8d901",
     "src/l2_interfaces/host/terminal/events.py": "802939259b3f9aa51d22c5ca35f5b9bbc86e541ebf26995e97a15ab944c0babd",
     "src/l2_interfaces/host/terminal/plugin.py": "5bedd59524679400d386f2808e75836bdd9cfad19b157521630bd3a665df800b",
     "src/l2_interfaces/host/terminal/skills/messages.py": "3d423467eb5e17845b84de94694989d17829f986ef3bc969792489de47727d58",
@@ -357,5 +358,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "1256852eba9bed0cac735f71a99f388db0ea01ea36adaa26a7c4e85c06c2ae56"
+  "snapshot_sha256": "1359f966aea749477c4490c0b5f2fb2af6c1d2908a1a05b168760be1e25dc4b6"
 }

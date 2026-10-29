@@ -48,7 +48,7 @@ def check_isolation(*, require_clean_import=True):
             raise ValueError(f"isolated {key} is required")
 
 
-def write_startup_receipt(snapshot, delivery, goal_repair=None, goal_backoff=None, terminal_context=None):
+def write_startup_receipt(snapshot, delivery, goal_repair=None, goal_backoff=None):
     """Persist bounded process/hook identity; no env values, prompts or thoughts."""
     import psutil
 
@@ -58,14 +58,6 @@ def write_startup_receipt(snapshot, delivery, goal_repair=None, goal_backoff=Non
             for cls in (delivery.react_loop_class, delivery.terminal_client_class, delivery.event_bus_class)
         ),
     }
-    if terminal_context is not None:
-        check["terminal_context_compaction"] = (
-            vars(terminal_context.client_class).get(
-                "__jawl_terminal_context_compaction_installation__"
-            ) is terminal_context
-            and terminal_context.client_class.get_context_block
-            is terminal_context.wrapped_get_context_block
-        )
     if not all(check.values()):
         raise RuntimeError("owned brain hooks were not installed on the actual native classes")
     if goal_repair is not None:
@@ -101,12 +93,6 @@ def write_startup_receipt(snapshot, delivery, goal_repair=None, goal_backoff=Non
         "source": snapshot["source"], "snapshot_sha256": snapshot["snapshot_sha256"],
         "entrypoint": str(Path(__file__).resolve()), "hooks": check,
         "goal_protocol_repair_installed": goal_repair is not None,
-        "terminal_context_compaction": {
-            "installed": terminal_context is not None,
-            "keep_recent_messages": 12,
-            "compact_when_source_chars_exceed": getattr(terminal_context, "target_chars", 18000),
-            "target_chars": getattr(terminal_context, "target_chars", 18000),
-        },
         "context_capacity": {
             "dynamic_chars": companion_context.declared_capacity_chars(),
             "goal_fixed_compaction_disabled": bool(companion_context.declared_capacity_chars()),
@@ -147,10 +133,6 @@ def main():
     goal_backoff_extension = load_extension("_owned_jawl_goal_wakeup_backoff", "native_goal_wakeup_backoff.py")
     goal_backoff = goal_backoff_extension.install_native_goal_wakeup_backoff()
 
-    terminal_context_extension = load_extension(
-        "_owned_terminal_context_compaction", "native_terminal_context_compaction.py"
-    )
-    terminal_context = terminal_context_extension.install_native_terminal_context_compaction()
     goal_repair_extension = load_extension("_owned_jawl_goal_completion_repair", "native_goal_completion_repair.py")
     goal_repair = goal_repair_extension.install_native_goal_completion_repair()
     write_startup_receipt(
@@ -158,7 +140,6 @@ def main():
         delivery,
         goal_repair=goal_repair,
         goal_backoff=goal_backoff,
-        terminal_context=terminal_context,
     )
 
     print("Owned brain entrypoint initialized.", flush=True)

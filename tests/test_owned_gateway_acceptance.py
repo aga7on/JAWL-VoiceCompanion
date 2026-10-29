@@ -53,8 +53,7 @@ class OwnedGatewayAcceptanceTests(unittest.TestCase):
     def receipt(self):
         return {"schema_version": 1, "instance_id": "fixture", "bootstrap_only": False,
                 "goal_protocol_repair_installed": True,
-                "hooks": {"delivery_guard": True, "terminal_context_compaction": True,
-                          "goal_wakeup_backoff": True},
+                "hooks": {"delivery_guard": True, "goal_wakeup_backoff": True},
                 "instance_home": str(entry.INSTANCES / "fixture"),
                 "entrypoint": str(ROOT / "scripts/run_owned_jawl_brain.py"),
                 "source": str(ROOT / "runtime/jawl-sources/fixture"),
@@ -67,10 +66,8 @@ class OwnedGatewayAcceptanceTests(unittest.TestCase):
         owner = SimpleNamespace(owns_pid=lambda pid: pid == os.getpid())
         entry.validate_brain_receipt(receipt, "fixture", snapshot, owner)
         for changed in ({"bootstrap_only": True}, {"snapshot_sha256": "b" * 64},
-                        {"hooks": {"delivery_guard": False, "terminal_context_compaction": True,
-                                   "goal_wakeup_backoff": True}},
-                        {"hooks": {"delivery_guard": True, "terminal_context_compaction": True,
-                                   "goal_wakeup_backoff": False}},
+                        {"hooks": {"delivery_guard": False, "goal_wakeup_backoff": True}},
+                        {"hooks": {"delivery_guard": True, "goal_wakeup_backoff": False}},
                         {"process_created_at": receipt["process_created_at"] - 1},
                         {"entrypoint": str(ROOT / "other.py")}, {"pid": True}):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
