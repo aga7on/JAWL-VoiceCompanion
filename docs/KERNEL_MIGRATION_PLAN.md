@@ -22,24 +22,43 @@ extension-слоями `native_*` снаружи ядра, переносятс�
 
 | # | Модуль-источник | Ядро | Статус |
 | --- | --- | --- | --- |
-| 1/1b | `native_policy_completion` | goals/policy_completion (policy denial) | восстановление |
-| 2 | `native_jawl_streaming` | `llm/speech_first.py` + tee в `openai_compatible` | восстановление |
-| 3 | `native_jawl_turn_context` | `context/companion.py` + `context/perception_packet.py` | восстановление |
-| 4 | `native_jawl_json_format` | `llm/envelope_policy.py` (+`CompanionTurnState`) | восстановление |
-| 5 | `native_jawl_action_repair` | `react/action_repair.py` | восстановление |
-| 6 | `native_terminal_context_compaction` | `l2_interfaces/host/terminal/compaction.py` | восстановление |
-| 7 | `native_goal_wakeup_backoff` | `goals/wakeup_backoff.py` | восстановление |
-| 8 | `native_goal_completion_repair` | `goals/completion_repair.py` | восстановление |
+| 1/1b | `native_policy_completion` | goals/policy_completion (policy denial) | DONE `6996f0b` |
+| 2 | `native_jawl_streaming` | `llm/speech_first.py` + tee в `openai_compatible` | DONE `1cd7082` |
+| 3 | `native_jawl_turn_context` | `context/companion.py` + `context/perception_packet.py` | DONE `1b447ff` |
+| 4 | `native_jawl_json_format` | `llm/envelope_policy.py` (+`CompanionTurnState`) | DONE `b6dba07` |
+| 5 | `native_jawl_action_repair` | `react/action_repair.py` | DONE `7318a39` |
+| 6 | `native_terminal_context_compaction` | `l2_interfaces/host/terminal/compaction.py` | DONE `635c81b` |
+| 7 | `native_goal_wakeup_backoff` | `goals/wakeup_backoff.py` | DONE `e30329a` |
+| 8 | `native_goal_completion_repair` | `goals/completion_repair.py` | DONE `636189f` |
 | 9 | `native_jawl_admission` | admission нативен | очередь |
 | 10 | `native_jawl_delivery` | delivery нативен (`_CYCLE`) | очередь |
 
-Срезы 1–8 переносятся заново после потери рабочей песочницы (спецификации
-сохранены в памяти сессии); каждый коммит публикуется в
-`origin/reorg/kernel-migration-20261029` сразу.
+Срезы 1–8 перенесены заново после потери рабочей песочницы и опубликованы в
+`origin/reorg/kernel-migration-20261029`. Receipt финализирован:
+`write_startup_receipt(snapshot, delivery)`, hooks = `{"delivery_guard": True}`.
 
 ### DONE-записи
 
-(заполняются коммитами слайсов)
+- `6996f0b` slice-1/1b — policy denial: `utils/policy_denial.py` +
+  `goals/policy_completion.py` (NATIVE_POLICY_DENIAL_REASON, per-turn latch);
+  `_check_security_policies` — нативный wrapper, fail-fast в `call_skill`.
+- `1cd7082` slice-2 — streaming: `llm/speech_first.py`, `SpeechDeltaSink` +
+  `COMPANION_SPEECH_DELTA`, `_stream_first_request`/`_tee_speech`; продукт
+  `speech_first.py` — shim.
+- `1b447ff` slice-3 — turn context: `context/companion.py`
+  (`jawl_companion_turn_binding`, casual-лейн, declared capacity),
+  `context/perception_packet.py`; продукт `perception_packet.py` — shim.
+- `b6dba07` slice-4 — envelope policy: `llm/envelope_policy.py`
+  (`apply_envelope_policy` нативен в `_request_kwargs`), `CompanionTurnState`.
+- `7318a39` slice-5 — action repair: `react/action_repair.py`
+  (`parse_with_repair` нативен в `_parse_response`).
+- `635c81b` slice-6 — terminal compaction:
+  `l2_interfaces/host/terminal/compaction.py` (нативен в `get_context_block`).
+- `e30329a` slice-7 — goal wakeup backoff: `goals/wakeup_backoff.py`
+  (делегирование из `GoalManager`).
+- `636189f` slice-8 — goal completion repair: `goals/completion_repair.py`
+  (`consider_completion_repair` в `_parse_response`, `note_protocol_error` в
+  `_handle_protocol_error`, `_goal_v2_payload` probe).
 
 ### Уточнение механики (обязательно для слайсов)
 
