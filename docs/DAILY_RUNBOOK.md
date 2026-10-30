@@ -28,6 +28,23 @@ npm start
 ```
 
 Manifest задаёт порты и пути, local override может изменить effective значения.
+
+## Единый интерфейс (ADR-052, 2026-10-30)
+
+Отдельный presentation-сервер `8766` удалён: интерфейс один —
+`http://127.0.0.1:2367/app`. Режим сцены для OBS/«питомца» — та же страница в
+`?mode=obs` (прозрачный фон, без органов управления):
+
+```powershell
+.\scripts\run_avatar_window.ps1   # окно поверх других окон
+# или Browser Source в OBS: http://127.0.0.1:2367/app?mode=obs
+```
+
+Старые ссылки `http://127.0.0.1:8766/avatar` и аргументы `-PresentationPort` /
+`--presentation-port` / `--presentation-url` — deprecated: первые не работают,
+вторые принимаются как no-op один релиз и будут удалены. В
+`config/runtime.manifest.json` и профилях ключ `ports.presentation` больше не
+нужен (загрузчики принимают его и игнорируют один релиз).
 Не запускать второй стек поверх первого и не убивать владельца занятого порта.
 Подробные existing flags/dependencies: [RELEASE](RELEASE.md).
 `run_web.ps1` без connected parameters — демо, не замена этого стека.
