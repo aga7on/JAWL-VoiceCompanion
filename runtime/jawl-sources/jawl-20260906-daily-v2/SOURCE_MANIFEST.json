@@ -235,7 +235,7 @@
     "src/l2_interfaces/web/search/skills/tavily_search.py": "38b9d13417d459fb42b10d734fdd276fbc202a0b266101f2916d180764944edb",
     "src/l2_interfaces/web/search/skills/trafilatura_read.py": "c00e3820ffb69af6b10696e6d23a2824787b6f1260fb3d9be6a97e566d1e9db4",
     "src/l2_interfaces/web/search/state.py": "deae30c0ae58074be463e90218f04216f699abe8879a0cf783f0f7ac2aa9b614",
-    "src/l3_agent/companion_gateway.py": "db4b0c732ae84e648f8123be303c093018804026b9708bf22c740e2b2a2fe5c9",
+    "src/l3_agent/companion_gateway.py": "fae29fddb7ef828ce44f5165fdcc951e59c1c5adcda52de501853f95276ec8a1",
     "src/l3_agent/context/builder.py": "a5a771b00f36fbabfe02ccda17a34dd27f176caba0f84baebbeba8ba8e2a202d",
     "src/l3_agent/context/companion.py": "2b13fd6651e64fec51da62b545f81e6ee173e5df285b84e0017875a8546ed9d3",
     "src/l3_agent/context/perception_packet.py": "240007bc41c3fae75d685301cedbb186043ed409f3879d3743fb383df8bf32da",
@@ -361,5 +361,5 @@
     "web/index.html": "8c74ceaf7c1d6755680162ad9e5d1ba94774698149c43275416e37c999ad8d4e",
     "web/styles.css": "ed64296c2ac63105432b5de819bbdbec3d2efdbcacc65775baa31194f924133c"
   },
-  "snapshot_sha256": "69c180178ea585bc5a2d9095e7b2a3fcb27945c198dc0b134d627998e9813b76"
+  "snapshot_sha256": "07614177b781666f1715e81d8d49d4250a764d0261637bc73866eea7d0acd3c4"
 }

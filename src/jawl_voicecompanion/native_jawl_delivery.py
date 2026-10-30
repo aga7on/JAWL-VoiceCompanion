@@ -5,14 +5,19 @@ without changing its payload, suppressing repeated terminal broadcasts.
 If a correlated ReAct cycle returns without a terminal event, it emits one
 bounded ``turn.error``.  It never turns private tick/thought content into reply
 text and never changes native goal state.
+
+The per-turn cycle state lives natively in ``src.l3_agent.companion_gateway``
+(``CompanionCycleState``); this module only wires the guard installation over
+the native classes. Policy denial and companion-turn queries are kernel
+concerns (``goals.policy_completion``, ``CompanionTurnState``).
 """
 from __future__ import annotations
 
 import asyncio
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 import importlib
 import re
+import sys
 from typing import Any, Callable
 
 
@@ -20,77 +25,29 @@ _TURN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _MISSING_REPLY_REASON = (
     "Native ReAct cycle ended without a correlated terminal response."
 )
-NATIVE_POLICY_DENIAL_REASON = "Native HostOS policy denied the action; the request was stopped."
 _DEFAULT_EMIT_TIMEOUT_SECONDS = 1.0
 _MAX_EMIT_TIMEOUT_SECONDS = 5.0
 _INSTALL_ATTR = "__jawl_native_delivery_guard_installation__"
-_CYCLE: ContextVar["_CycleState | None"] = ContextVar(
-    "jawl_native_delivery_cycle", default=None
-)
 
 
-@dataclass
-class _CycleState:
-    turn_id: str
-    parent: "_CycleState | None"
-    terminal_event: str = ""
-    terminal_client: Any = None
-    closed: bool = False
-    suppress_private_completion: bool = False
-    terminal_result: Any = None
-    policy_denied: bool = False
-    native_loop: Any = None
-    spoken_text: str = ""
-    user_message: str = ""
-    emit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    broadcast_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+def _cycle_module():
+    """Resolve the kernel cycle-state module lazily (no native import at load)."""
+    module = sys.modules.get("src.l3_agent.companion_gateway")
+    if module is None:
+        from src.l3_agent import companion_gateway as module
+    return module
 
 
-def native_policy_denied() -> bool:
-    state = _CYCLE.get()
-    return bool(state is not None and not state.closed and state.policy_denied)
+def _cycle_state_cls():
+    return _cycle_module().CompanionCycleState
 
 
-def native_companion_chat_active() -> bool:
-    state = _CYCLE.get()
-    if state is None or state.closed:
-        return False
-    manager = getattr(state.native_loop, "goal_manager", None)
-    return getattr(manager, "active_goal", None) is None
-
-
-def active_companion_message() -> str:
-    """The raw correlated user utterance for the active turn (bounded)."""
-    state = _CYCLE.get()
-    if state is None or state.closed:
-        return ""
-    return str(state.user_message or "")[:2000]
-
-
-def record_native_policy_denial() -> bool:
-    """Called only by the owned hook observing native authority's exception."""
-    state = _CYCLE.get()
-    if state is None or state.closed:
-        return False
-    state.policy_denied = True
-    return True
-
-
-def _active_state(turn_id: Any) -> _CycleState | None:
-    turn_id = _valid_turn_id(turn_id)
-    state = _CYCLE.get()
-    while state is not None:
-        if not state.closed and state.turn_id == turn_id:
-            return state
-        state = state.parent
-    return None
+def _active_state(turn_id: Any):
+    return _cycle_module().find_active_cycle(turn_id)
 
 
 def _valid_turn_id(value: Any) -> str:
-    if not isinstance(value, str):
-        return ""
-    value = value.strip()
-    return value if _TURN_ID.fullmatch(value) else ""
+    return _cycle_module().valid_cycle_turn_id(value)
 
 
 def _cycle_turn_id(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
@@ -105,35 +62,11 @@ def _cycle_turn_id(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
 def _record_terminal_event(
     client: Any, turn_id: Any, event_type: Any, result: Any
 ) -> None:
-    current = _CYCLE.get()
-    turn_id = _valid_turn_id(turn_id)
-    if (
-        current is None
-        or not turn_id
-        or event_type not in {"assistant.final", "turn.error", "turn.cancelled"}
-        or not isinstance(result, dict)
-        or result.get("turn_id") != turn_id
-        or result.get("type") != event_type
-    ):
-        return
-
-    state: _CycleState | None = current
-    while state is not None:
-        if not state.closed and state.turn_id == turn_id:
-            state.terminal_client = client
-            state.terminal_event = event_type
-            state.terminal_result = result
-        state = state.parent
+    _cycle_module().record_cycle_terminal_event(client, turn_id, event_type, result)
 
 
 def _remember_terminal_client(client: Any, turn_id: Any) -> None:
-    current = _CYCLE.get()
-    turn_id = _valid_turn_id(turn_id)
-    state: _CycleState | None = current
-    while state is not None:
-        if not state.closed and state.turn_id == turn_id:
-            state.terminal_client = client
-        state = state.parent
+    _cycle_module().remember_cycle_terminal_client(client, turn_id)
 
 
 def _default_terminal_client_resolver(
@@ -292,7 +225,7 @@ def install_native_delivery_guard(
         # Native tool batches may contain several terminal actions even though
         # terminate_loop ends the cycle only after the whole batch. Suppress
         # repeats before native history/legacy writers as well as typed SSE.
-        current = _CYCLE.get()
+        current = _cycle_module().current_companion_cycle()
         effective_turn = turn_id or (current.turn_id if current is not None else "")
         state = _active_state(effective_turn)
         if state is None:
@@ -305,7 +238,7 @@ def install_native_delivery_guard(
     async def guarded_completion(
         loop: Any, thoughts: str, status: str = "completed"
     ) -> Any:
-        current = _CYCLE.get()
+        current = _cycle_module().current_companion_cycle()
         if current is None or status != "completed":
             return await original_completion(loop, thoughts, status)
         # The pinned native method persists thoughts to sql_ticks, then asks the
@@ -318,7 +251,7 @@ def install_native_delivery_guard(
     async def guarded_publish(
         bus: Any, event: Any, *args: Any, **kwargs: Any
     ) -> Any:
-        current = _CYCLE.get()
+        current = _cycle_module().current_companion_cycle()
         if (
             current is not None
             and current.suppress_private_completion
@@ -332,7 +265,7 @@ def install_native_delivery_guard(
         return await original_publish(bus, event, *args, **kwargs)
 
     async def emit_missing_terminal(
-        loop: Any, state: _CycleState, *, preserve_error: bool
+        loop: Any, state: Any, *, preserve_error: bool
     ) -> None:
         if state.terminal_event:
             return
@@ -342,6 +275,7 @@ def install_native_delivery_guard(
             return
 
         try:
+            from src.l3_agent.goals.policy_completion import NATIVE_POLICY_DENIAL_REASON
             client = state.terminal_client
             if not isinstance(client, terminal_client_class):
                 client = installation.terminal_client_resolver(loop)
@@ -374,13 +308,16 @@ def install_native_delivery_guard(
         if not turn_id:
             return await original_run(loop, *args, **kwargs)
 
-        state = _CycleState(turn_id=turn_id, parent=_CYCLE.get(), native_loop=loop)
+        gateway = _cycle_module()
+        state = _cycle_state_cls()(
+            turn_id=turn_id, parent=gateway.current_companion_cycle(), native_loop=loop
+        )
         payload = kwargs.get("payload")
         if payload is None and len(args) >= 2:
             payload = args[1]
         if isinstance(payload, dict):
             state.user_message = str(payload.get("message") or "")[:2000]
-        token = _CYCLE.set(state)
+        token = gateway.bind_companion_cycle(state)
         try:
             try:
                 result = await original_run(loop, *args, **kwargs)
@@ -393,7 +330,7 @@ def install_native_delivery_guard(
             return result
         finally:
             state.closed = True
-            _CYCLE.reset(token)
+            gateway.reset_companion_cycle(token)
 
     observed_emit.__name__ = getattr(original_emit, "__name__", "emit_gateway_event")
     guarded_run.__name__ = getattr(original_run, "__name__", "run")
@@ -417,41 +354,12 @@ def install_native_delivery_guard(
 async def emit_active_delta(text: str, *, event_format: str = "speech") -> bool:
     """Emit one bounded ``assistant.delta`` for the active correlated cycle.
 
-    Used by the owned streaming hook: the reply sentence is already extracted
-    from the partially generated JSON envelope, so the Companion can start
-    speaking before the envelope closes.  Never raises into the model path.
+    Delegates to the kernel implementation in ``companion_gateway`` (the reply
+    sentence is already extracted from the partially generated JSON envelope,
+    so the Companion can start speaking before the envelope closes).  Never
+    raises into the model path.
     """
-    fragment = str(text or "").strip()
-    if not fragment:
-        return False
-    state = _CYCLE.get()
-    if state is None or state.closed or state.terminal_event:
-        return False
-    # A later ReAct step may repeat the same sentence; speak each sentence once.
-    if fragment in state.spoken_text:
-        return False
-    state.spoken_text = (state.spoken_text + " " + fragment)[-4000:]
-    client = state.terminal_client
-    if client is None:
-        installation = vars(type(state.native_loop)).get(_INSTALL_ATTR)
-        if installation is None:
-            return False
-        try:
-            client = installation.terminal_client_resolver(state.native_loop)
-        except Exception:
-            return False
-    emit = getattr(client, "emit_gateway_event", None)
-    if not callable(emit):
-        return False
-    try:
-        await emit(
-            state.turn_id,
-            "assistant.delta",
-            {"text": fragment[:2000], "format": str(event_format)[:20]},
-        )
-        return True
-    except Exception:
-        return False
+    return await _cycle_module().emit_active_delta(text, event_format=event_format)
 
 
 __all__ = ["NativeDeliveryGuardInstallation", "emit_active_delta", "install_native_delivery_guard"]

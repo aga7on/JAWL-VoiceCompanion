@@ -22028,12 +22028,14 @@
 +        return None
 --- a/src/l3_agent/companion_gateway.py
 +++ b/src/l3_agent/companion_gateway.py
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,369 @@
 +"""Correlation context shared by the native JAWL Companion Gateway."""
 +
 +from __future__ import annotations
 +
++import asyncio
 +from contextvars import ContextVar, Token
++from dataclasses import dataclass, field
 +from math import isfinite
 +import re
 +from typing import Any, Mapping
@@ -22042,6 +22044,7 @@
 +
 +_TURN_ID: ContextVar[str] = ContextVar("jawl_companion_turn_id", default="")
 +_TURN_STATE: ContextVar[Any] = ContextVar("jawl_companion_turn_state", default=None)
++_CYCLE: ContextVar[Any] = ContextVar("jawl_native_delivery_cycle", default=None)
 +_SPEECH_SINK: ContextVar["SpeechDeltaSink | None"] = ContextVar(
 +    "jawl_companion_speech_sink", default=None
 +)
@@ -22156,6 +22159,139 @@
 +
 +def current_companion_turn_state() -> "CompanionTurnState | None":
 +    return _TURN_STATE.get()
++
++
++_CYCLE_TURN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
++_DELIVERY_INSTALL_ATTR = "__jawl_native_delivery_guard_installation__"
++MISSING_REPLY_REASON = (
++    "Native ReAct cycle ended without a correlated terminal response."
++)
++
++
++@dataclass
++class CompanionCycleState:
++    """Per-turn delivery cycle state bound around a correlated ReAct run.
++
++    Tracks whether exactly one terminal gateway event confirmed the cycle,
++    guards against repeated terminal broadcasts, and remembers the terminal
++    client that spoke for the turn. Parent links keep nested runs isolated.
++    """
++
++    turn_id: str
++    parent: Any = None
++    terminal_event: str = ""
++    terminal_client: Any = None
++    closed: bool = False
++    suppress_private_completion: bool = False
++    terminal_result: Any = None
++    policy_denied: bool = False
++    native_loop: Any = None
++    spoken_text: str = ""
++    user_message: str = ""
++    emit_lock: Any = field(default_factory=asyncio.Lock)
++    broadcast_lock: Any = field(default_factory=asyncio.Lock)
++
++
++def valid_cycle_turn_id(value: Any) -> str:
++    if not isinstance(value, str):
++        return ""
++    value = value.strip()
++    return value if _CYCLE_TURN_ID.fullmatch(value) else ""
++
++
++def bind_companion_cycle(state: CompanionCycleState) -> Token:
++    return _CYCLE.set(state)
++
++
++def reset_companion_cycle(token: Token) -> None:
++    _CYCLE.reset(token)
++
++
++def current_companion_cycle() -> "CompanionCycleState | None":
++    return _CYCLE.get()
++
++
++def find_active_cycle(turn_id: Any) -> "CompanionCycleState | None":
++    turn_id = valid_cycle_turn_id(turn_id)
++    state = _CYCLE.get()
++    while state is not None:
++        if not state.closed and state.turn_id == turn_id:
++            return state
++        state = state.parent
++    return None
++
++
++def record_cycle_terminal_event(
++    client: Any, turn_id: Any, event_type: Any, result: Any
++) -> None:
++    current = _CYCLE.get()
++    turn_id = valid_cycle_turn_id(turn_id)
++    if (
++        current is None
++        or not turn_id
++        or event_type not in {"assistant.final", "turn.error", "turn.cancelled"}
++        or not isinstance(result, dict)
++        or result.get("turn_id") != turn_id
++        or result.get("type") != event_type
++    ):
++        return
++    state = current
++    while state is not None:
++        if not state.closed and state.turn_id == turn_id:
++            state.terminal_client = client
++            state.terminal_event = event_type
++            state.terminal_result = result
++        state = state.parent
++
++
++def remember_cycle_terminal_client(client: Any, turn_id: Any) -> None:
++    current = _CYCLE.get()
++    turn_id = valid_cycle_turn_id(turn_id)
++    state = current
++    while state is not None:
++        if not state.closed and state.turn_id == turn_id:
++            state.terminal_client = client
++        state = state.parent
++
++
++async def emit_active_delta(text: str, *, event_format: str = "speech") -> bool:
++    """Emit one bounded ``assistant.delta`` for the active correlated cycle.
++
++    The reply sentence is already extracted from the partially generated JSON
++    envelope, so the Companion can start speaking before the envelope closes.
++    Never raises into the model path.
++    """
++    fragment = str(text or "").strip()
++    if not fragment:
++        return False
++    state = _CYCLE.get()
++    if state is None or state.closed or state.terminal_event:
++        return False
++    # A later ReAct step may repeat the same sentence; speak each sentence once.
++    if fragment in state.spoken_text:
++        return False
++    state.spoken_text = (state.spoken_text + " " + fragment)[-4000:]
++    client = state.terminal_client
++    if client is None:
++        installation = vars(type(state.native_loop)).get(_DELIVERY_INSTALL_ATTR)
++        if installation is None:
++            return False
++        try:
++            client = installation.terminal_client_resolver(state.native_loop)
++        except Exception:
++            return False
++    emit = getattr(client, "emit_gateway_event", None)
++    if not callable(emit):
++        return False
++    try:
++        await emit(
++            state.turn_id,
++            "assistant.delta",
++            {"text": fragment[:2000], "format": str(event_format)[:20]},
++        )
++        return True
++    except Exception:
++        return False
 +
 +
 +def _bounded_text(

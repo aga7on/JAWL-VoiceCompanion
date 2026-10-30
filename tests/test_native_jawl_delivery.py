@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
+# The delivery guard keeps its per-turn cycle state in the kernel.
+sys.path.insert(0, str(Path(__file__).parents[1] / "runtime/jawl-sources/jawl-20260906-daily-v2"))
 
 from jawl_voicecompanion.native_jawl_delivery import (  # noqa: E402
     install_native_delivery_guard,

@@ -2,8 +2,11 @@
 import ast
 import asyncio
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtime/jawl-sources/jawl-20260906-daily-v2"))
 
 from jawl_voicecompanion.native_jawl_delivery import install_native_delivery_guard
 
