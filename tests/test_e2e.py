@@ -901,6 +901,9 @@ class LocalE2ETests(unittest.TestCase):
             return response.status, response.read()
 
     def test_chat_avatar_approval_execution_and_emergency_stop(self):
+        # Exercise the same lazy-start boundary as a real first voice partial
+        # before doctor reports its cached process state.
+        self.voice_mem.feed_partial("warmup", ended=False, session_id="doctor-warmup")
         status, session = self.get_json("/api/session")
         self.assertEqual(status, 200)
         self.assertTrue(session["csrf_token"])
@@ -927,11 +930,10 @@ class LocalE2ETests(unittest.TestCase):
         with urlopen(self.base + "/app.js", timeout=3) as response:
             js = response.read()
             self.assertIn(b"/api/attention", js)
-        # ADR-045: the Live2D /avatar page and /avatar-assets store are
-        with self.assertRaises(HTTPError) as context:
-            urlopen(self.base + "/avatar", timeout=3)
-        self.assertEqual(context.exception.code, 404)
-        context.exception.close()
+        # ADR-052 keeps this compatibility path as a redirect to the unified
+        # OBS scene mode.
+        with urlopen(self.base + "/avatar", timeout=3) as response:
+            self.assertEqual(response.geturl(), self.base + "/app?mode=obs")
         _, avatar_config = self.get_json("/api/avatar/config")
         self.assertFalse(avatar_config["enabled"])
         self.assertEqual(avatar_config.get("deprecated"), "live2d")
@@ -1388,7 +1390,8 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual(len(triaged["episodes"]), 1)
         episode = triaged["episodes"][0]
         self.assertEqual(episode["payload"]["source"], "mixed")
-        self.assertEqual(episode["payload"]["importance"], "promote_candidate")
+        self.assertEqual(episode["payload"]["importance"], "retain")
+        self.assertFalse(episode["payload"]["verified"])
         self.assertFalse(episode["payload"]["raw_audio_persisted"])
         self.assertFalse(episode["payload"]["raw_frame_persisted"])
         _, after = self.get_json("/api/ambient-memory")
@@ -1489,18 +1492,18 @@ class LocalE2ETests(unittest.TestCase):
         self.assertFalse(reset["resources"]["gaming_mode"])
 
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
-        _, status = self.get_json("/api/voice/status")
-        self.assertTrue(status["configured"])
-        self.assertEqual(status["status"], "ready")
-        self.assertEqual(status["process"]["status"], "running")
-        self.assertTrue(status["process"]["running"])
-        self.assertIsInstance(status["process"]["pid"], int)
         _, partial = self.post_json("/api/voice/partial", {
             "session_id": "voice-s1", "text": "покажи", "ended": False,
         })
         self.assertTrue(partial["events"], partial)
         self.assertEqual(partial["events"][0]["type"], "USER_PARTIAL")
         self.assertEqual(partial["responses"], [])
+        _, status = self.get_json("/api/voice/status")
+        self.assertTrue(status["configured"])
+        self.assertEqual(status["status"], "running")
+        self.assertTrue(status["ready"])
+        self.assertTrue(status["running"])
+        self.assertIsInstance(status["pid"], int)
         _, final = self.post_json("/api/voice/partial", {
             "session_id": "voice-s1", "text": "покажи редактор", "ended": True,
         })
