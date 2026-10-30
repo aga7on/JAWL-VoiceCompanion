@@ -79,3 +79,6 @@ voicemem_memoryspace/demo/
 rust-client/target/
 
 jawl-companion.exe
+
+# Workspace backup clone (reorg workbench) — not part of this repo's tree
+/backup/
