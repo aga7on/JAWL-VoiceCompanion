@@ -77,10 +77,9 @@ if (-not $browser) {
 }
 
 $controlPort = Get-FreeLoopbackPort
-$presentationPort = Get-FreeLoopbackPort
-while ($presentationPort -eq $controlPort) { $presentationPort = Get-FreeLoopbackPort }
 $baseUrl = "http://127.0.0.1:$controlPort"
-$presentationUrl = "http://127.0.0.1:$presentationPort/avatar?debug=1"
+# ADR-052: one origin - the app serves the panel and the ?mode=obs surface.
+$obsUrl = "$baseUrl/app?mode=obs"
 $tempRoot = Join-Path $companionRoot 'runtime\browser-render-smoke'
 $evidenceRoot = Join-Path $companionRoot ("runtime\browser-evidence\" + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
@@ -88,39 +87,41 @@ New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 $serverOut = Join-Path $tempRoot 'server.stdout.log'
 $serverErr = Join-Path $tempRoot 'server.stderr.log'
 $controlDomPath = Join-Path $tempRoot 'control.dom.html'
-$avatarDomPath = Join-Path $tempRoot 'avatar.dom.html'
+$obsDomPath = Join-Path $tempRoot 'obs.dom.html'
 $controlProfile = Join-Path $tempRoot 'control-profile'
-$avatarProfile = Join-Path $tempRoot 'avatar-profile'
+$obsProfile = Join-Path $tempRoot 'obs-profile'
 $controlScreenshot = Join-Path $evidenceRoot 'control.png'
-$avatarScreenshot = Join-Path $evidenceRoot 'avatar.png'
+$obsScreenshot = Join-Path $evidenceRoot 'obs.png'
 $server = $null
 
 try {
     $server = Start-Process -FilePath $pythonExe -WorkingDirectory $companionRoot -PassThru `
-        -ArgumentList @('-m', 'jawl_voicecompanion', '--host', '127.0.0.1', '--port', "$controlPort", '--presentation-host', '127.0.0.1', '--presentation-port', "$presentationPort") `
+        -ArgumentList @('-m', 'jawl_voicecompanion', '--host', '127.0.0.1', '--port', "$controlPort") `
         -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
     Wait-Health $baseUrl $server
-    $controlDom = Invoke-BrowserDump $browser "$baseUrl/" $controlDomPath $controlProfile $controlScreenshot
-    $avatarDom = Invoke-BrowserDump $browser $presentationUrl $avatarDomPath $avatarProfile $avatarScreenshot
-    foreach ($image in @($controlScreenshot, $avatarScreenshot)) {
+    $controlDom = Invoke-BrowserDump $browser "$baseUrl/app" $controlDomPath $controlProfile $controlScreenshot
+    $obsDom = Invoke-BrowserDump $browser $obsUrl $obsDomPath $obsProfile $obsScreenshot
+    foreach ($image in @($controlScreenshot, $obsScreenshot)) {
         if (-not (Test-Path -LiteralPath $image -PathType Leaf)) { throw "Browser screenshot was not created: $image" }
     }
-    foreach ($marker in @('JAWL VoiceCompanion', 'id="mic-gate"', 'id="obs-url"', 'id="health"')) {
+    foreach ($marker in @('JAWL Companion', 'id="chat-log"', 'id="avatar-canvas"', 'id="settings-list"')) {
         if ($controlDom -notmatch [regex]::Escape($marker)) { throw "Control DOM marker missing: $marker" }
     }
-    foreach ($marker in @('JAWL Avatar', 'id="surface"', 'id="avatar"', 'id="subtitle"')) {
-        if ($avatarDom -notmatch [regex]::Escape($marker)) { throw "Avatar DOM marker missing: $marker" }
+    # The obs renderer keeps only the stage: app.js sets obs-mode + title.
+    foreach ($marker in @('id="avatar-canvas"', 'obs-mode', 'JAWL Avatar')) {
+        if ($obsDom -notmatch [regex]::Escape($marker)) { throw "OBS DOM marker missing: $marker" }
     }
+    if ($obsDom -match 'id="chat-log"') { throw 'OBS mode must not render the chat panel.' }
     $result = [ordered]@{
         schema_version = 1
         profile = 'browser_render_smoke'
         status = 'passed'
         browser = Split-Path -Leaf $browser
         control_url = $baseUrl
-        presentation_url = $presentationUrl
+        obs_url = $obsUrl
         evidence_dir = $evidenceRoot
-        screenshots = @($controlScreenshot, $avatarScreenshot)
-        checks = @('control_dom', 'avatar_dom', 'gate_ui', 'obs_url', 'health_ui', 'transparent_avatar_surface')
+        screenshots = @($controlScreenshot, $obsScreenshot)
+        checks = @('control_dom', 'obs_dom', 'app_markers', 'obs_mode_markers', 'obs_hides_panel')
     }
     $result | ConvertTo-Json -Compress
 } finally {
