@@ -111,7 +111,12 @@ try {
     foreach ($marker in @('id="avatar-canvas"', 'obs-mode', 'JAWL Avatar')) {
         if ($obsDom -notmatch [regex]::Escape($marker)) { throw "OBS DOM marker missing: $marker" }
     }
-    if ($obsDom -match 'id="chat-log"') { throw 'OBS mode must not render the chat panel.' }
+    if ($obsDom -notmatch '<body[^>]*\bobs-mode\b') {
+        throw 'OBS mode class was not applied to the rendered document.'
+    }
+    if ($obsDom -notmatch '(?s)body\.obs-mode nav\.rail,.*?body\.obs-mode div\.side,.*?\{\s*display:\s*none\s*!important;\s*\}') {
+        throw 'OBS mode must hide the application chrome and chat/settings panel.'
+    }
     $result = [ordered]@{
         schema_version = 1
         profile = 'browser_render_smoke'
@@ -121,7 +126,7 @@ try {
         obs_url = $obsUrl
         evidence_dir = $evidenceRoot
         screenshots = @($controlScreenshot, $obsScreenshot)
-        checks = @('control_dom', 'obs_dom', 'app_markers', 'obs_mode_markers', 'obs_hides_panel')
+        checks = @('control_dom', 'obs_dom', 'app_markers', 'obs_mode_class', 'obs_hides_panel')
     }
     $result | ConvertTo-Json -Compress
 } finally {
