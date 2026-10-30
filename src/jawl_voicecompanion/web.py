@@ -260,6 +260,49 @@ def _security_headers(handler: BaseHTTPRequestHandler, *, presentation: bool = F
     ))
 
 
+class _TurnReplayCache:
+    """Bounded idempotency cache for retried voice-turn finalization.
+
+    A transport retry of ``/api/voice/end`` (or the WS ``voice_final`` action)
+    must never dispatch the same utterance to the brain twice. Only results
+    the caller provides a stable ``correlation_id`` for are cached; cancelled
+    and failed attempts are never cached, so a retry may still succeed.
+    """
+
+    def __init__(self, *, limit: int = 32, ttl_seconds: float = 120.0,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self._limit = max(1, int(limit))
+        self._ttl = max(1.0, float(ttl_seconds))
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            expires_at, result = entry
+            if expires_at <= now:
+                del self._entries[key]
+                return None
+            return result
+
+    def put(self, key: str, result: dict[str, Any]) -> None:
+        now = self._clock()
+        with self._lock:
+            for existing, (expires_at, _) in list(self._entries.items()):
+                if expires_at <= now:
+                    del self._entries[existing]
+            if len(self._entries) >= self._limit:
+                # Bounded and deterministic: drop the oldest insertion instead
+                # of growing without limit under a replay flood.
+                oldest = min(self._entries, key=lambda k: self._entries[k][0])
+                del self._entries[oldest]
+            self._entries[key] = (now + self._ttl, result)
+
+
 class CompanionServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -395,6 +438,7 @@ class CompanionServer(ThreadingHTTPServer):
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
+        self._turn_replay = _TurnReplayCache()
         self._avatar_audio_lock = threading.Lock()
         self._avatar_audio = {
             "schema_version": 1,
@@ -2776,7 +2820,33 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         }
 
     def _finish_voice_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Shared utterance finalization for /api/voice/end and the WS transport."""
+        """Shared utterance finalization for /api/voice/end and the WS transport.
+
+        A transport retry carrying the same client ``correlation_id`` replays
+        the cached result instead of dispatching the utterance to the brain a
+        second time. Cancelled and failed attempts are never cached, so a
+        retry after an error or cancellation may still complete normally.
+        """
+        cache = getattr(self.server, "_turn_replay", None)
+        replay_key: str | None = None
+        raw_correlation = str(payload.get("correlation_id") or "").strip()
+        if cache is not None and raw_correlation:
+            session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+            replay_key = f"{session_id}|{raw_correlation[:128]}"
+            replayed = cache.get(replay_key)
+            if replayed is not None:
+                return {**replayed, "replay": True}
+        result = self._finish_voice_turn_once(payload)
+        if (
+            replay_key is not None
+            and isinstance(result, dict)
+            and result.get("ok")
+            and result.get("status") != "cancelled"
+        ):
+            cache.put(replay_key, result)
+        return result
+
+    def _finish_voice_turn_once(self, payload: dict[str, Any]) -> dict[str, Any]:
         capture_cancel = self.server.voice_capture.authorize_stream(payload)
         if self.server.voice_mem is None:
             return {"ok": False, "error": "VoiceMem sidecar is not configured"}

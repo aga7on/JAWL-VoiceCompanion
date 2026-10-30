@@ -355,6 +355,51 @@ class StreamingCaptureHttpTests(unittest.TestCase):
                 self.assertNotIn("filtered", result)
                 dispatch.assert_called_once()
 
+    def test_voice_end_retry_with_same_correlation_replays_without_second_dispatch(self):
+        self.server.asr = _CanonicalASR()
+        self.server.voice_mem_async = None
+        self.server.asr.finish = Mock(return_value={"status": "transcribed", "text": "Привет, как дела?"})
+        self.acquire("owned")
+        payload = {
+            "capture_id": "owned", "session_id": "session-a", "correlation_id": "corr-1",
+        }
+        with patch.object(self.server.gateway, "handle_text", return_value={"answer": "Хорошо"}) as responder:
+            status, first = self.request("/api/voice/end", dict(payload))
+            status, second = self.request("/api/voice/end", dict(payload))
+            status, third = self.request("/api/voice/end", {**payload, "correlation_id": "corr-2"})
+        self.assertEqual(status, 200)
+        self.assertEqual(first["transcript"], "Привет, как дела?")
+        self.assertEqual(first["responses"], [{"answer": "Хорошо"}])
+        self.assertNotIn("replay", first)
+        # The retry returns the same dispatch result without touching the brain.
+        self.assertTrue(second.get("replay"))
+        self.assertEqual(second["responses"], first["responses"])
+        self.assertEqual(second["transcript"], first["transcript"])
+        # A fresh correlation id is new work and dispatches again.
+        self.assertNotIn("replay", third)
+        self.assertEqual(responder.call_count, 2)
+        self.assertEqual(self.server.asr.finish.call_count, 2)
+
+    def test_failed_finalization_is_not_cached_so_retry_can_succeed(self):
+        self.server.asr = _CanonicalASR()
+        self.server.voice_mem_async = None
+        self.acquire("owned")
+        payload = {
+            "capture_id": "owned", "session_id": "session-a", "correlation_id": "corr-x",
+        }
+        self.server.asr.finish = Mock(side_effect=RuntimeError("asr glitch"))
+        status, first = self.request("/api/voice/end", dict(payload))
+        self.assertEqual(status, 200)
+        self.assertFalse(first["ok"])
+        self.server.asr.finish = Mock(return_value={"status": "transcribed", "text": "Ещё раз"})
+        with patch.object(self.server.gateway, "handle_text", return_value={"answer": "Понял"}) as responder:
+            status, second = self.request("/api/voice/end", dict(payload))
+        self.assertEqual(status, 200)
+        self.assertTrue(second["ok"])
+        self.assertNotIn("replay", second)
+        self.assertEqual(second["transcript"], "Ещё раз")
+        responder.assert_called_once()
+
     def test_release_during_snapshot_drops_inflight_draft_and_preface(self):
         for path, field in (("/api/voice/draft", "draft"), ("/api/voice/preface", "text")):
             with self.subTest(path=path):
