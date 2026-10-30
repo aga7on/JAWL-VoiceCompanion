@@ -63,6 +63,30 @@ class MeaningfulTranscriptTests(unittest.TestCase):
             with self.subTest(speech=speech):
                 self.assertTrue(is_meaningful_transcript(speech))
 
+    def test_rejects_repeated_filler_runs(self):
+        for junk in (
+            "ага ага ага",
+            "Ага. Ага. Ага. Ага!",
+            "угу угу угу угу",
+            "мгм мгм мгм",
+            "ага угу ага угу",
+            "хм хм хм",
+        ):
+            with self.subTest(junk=junk):
+                self.assertFalse(is_meaningful_transcript(junk))
+
+    def test_keeps_short_filler_acknowledgements_and_real_repetition(self):
+        for speech in (
+            "ага",
+            "угу, понятно",
+            "ага ага",  # two acks: real backchannel, not a hallucination run
+            "да да, конечно",
+            "ну и ну",
+            "очень очень хорошо",
+        ):
+            with self.subTest(speech=speech):
+                self.assertTrue(is_meaningful_transcript(speech))
+
     def test_error_envelope_is_never_voiced(self):
         envelope = {
             "schema_version": 1,
