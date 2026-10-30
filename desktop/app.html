@@ -81,13 +81,13 @@
   nav.rail .spacer { flex: 1; }
   .settings-list { max-height: 420px; overflow-y: auto; overflow-x: hidden; }
   /* V.E.G.A.-style fields: label+desc left, typed control right */
-  .field { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(30,58,77,.5); }
+  .field { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgba(30,58,77,.5); }
   .field:last-child { border-bottom: 0; }
   .field .fl { flex: 1; min-width: 0; }
   .field .fn { font-size: 13px; color: var(--text); }
   .field .fd { font-size: 11px; color: var(--muted); margin-top: 1px; }
   .field .fc { display: inline-flex; align-items: center; gap: 6px; }
-  .field .unit { font-size: 10px; color: var(--muted); }
+  .field .unit { font-size: 11px; color: var(--muted); }
   .field input[type=number], .field input[type=text] {
     width: 90px; background: var(--bg); color: var(--text);
     border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 12px;
@@ -121,10 +121,9 @@
     max-width: min(420px, calc(100% - 24px));
     padding: 9px 12px; border: 1px solid rgba(79,209,165,.5);
     border-radius: 8px; background: rgba(10,21,32,.96); color: var(--text);
-    box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.25); font-size: 12px;
   }
   #connection-feedback.error { border-color: rgba(224,112,95,.65); color: #ffd9d2; }
-  #connection-feedback[hidden] { display: none; }
 
   .status-strip {
     display: flex; align-items: center; gap: 12px;
@@ -171,21 +170,8 @@
     background: radial-gradient(ellipse at 50% 30%, #1032447a, #0a1520 70%);
   }
   #avatar-canvas { width: 100%; height: 100%; display: block; }
-  #avatar-status {
-    position: absolute; left: 10px; top: 8px;
-    font-size: 11px; color: var(--muted);
-    background: rgba(10,21,32,.6); padding: 2px 8px; border-radius: 6px;
-  }
-  #sensory-health {
-    position: absolute; right: 10px; top: 8px; z-index: 4;
-    max-width: min(56%, 420px); padding: 3px 8px;
-    border: 1px solid rgba(123,168,160,.3); border-radius: 6px;
-    background: rgba(10,21,32,.82); color: var(--text);
-    font-size: 10px; line-height: 1.35; text-align: right;
-    overflow-wrap: anywhere;
-  }
-  #sensory-health[data-state="warn"], .sensor-value[data-state="warn"] { color: #f0c977; }
-  #sensory-health[data-state="error"], .sensor-value[data-state="error"] { color: #ffd0c8; }
+  .sensor-value[data-state="warn"] { color: #f0c977; }
+  .sensor-value[data-state="error"] { color: #ffd0c8; }
   .sensor-value { text-align: right; }
   #avatar-caption {
     position: absolute; left: 12px; right: 12px; bottom: 10px;
@@ -206,7 +192,7 @@
     min-height: 0;
     background: var(--bg-2);
   }
-  .side .section { flex: 1; overflow-y: auto; padding: 12px; display: none; }
+  .side .section { flex: 1; overflow-y: auto; padding: 10px; display: none; }
   .side .section.active { display: block; }
   .side .section[data-section="chat"].active {
     display: flex;
@@ -224,7 +210,7 @@
     flex: 1;
     min-height: 0;
   }
-  .msg { max-width: 88%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; font-size: 13px; }
+  .msg { max-width: 88%; padding: 7px 11px; border-radius: 12px; white-space: pre-wrap; font-size: 13px; }
   .msg.user { align-self: flex-end; background: var(--accent-2); color: #eafff8; }
   .msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--line); }
   .msg.system { align-self: center; color: var(--muted); font-size: 11px; background: none; }
@@ -306,9 +292,9 @@
   body.settings-mode .side { width: auto; flex: 1; border-left: 0; }
   body.settings-mode .section[data-section="settings"].active {
     width: 100%; max-width: 1120px; margin: 0 auto;
-    padding: 18px 24px 30px;
+    padding: 14px 20px 24px;
   }
-  .settings-toolbar { display: flex; align-items: center; gap: 20px; margin-bottom: 12px; }
+  .settings-toolbar { display: flex; align-items: center; gap: 20px; margin-bottom: 10px; }
   .settings-toolbar .settings-heading { flex: 1; min-width: 0; }
   .settings-toolbar .settings-heading h3 { margin-bottom: 3px; }
   .settings-toolbar #settings-search { flex: none; width: min(320px, 36vw); }
@@ -319,7 +305,7 @@
   body.settings-mode #settings-list > .card { margin-bottom: 0; min-width: 0; }
   body.settings-mode #settings-list > #settings-save {
     grid-column: 1 / -1; justify-self: end; min-width: 170px;
-    margin: 2px 0 0; box-shadow: 0 8px 22px rgba(0,0,0,.28);
+    margin: 2px 0 0;
   }
   body.settings-mode .settings-activity { margin-top: 12px; }
   .settings-list .field { min-width: 0; align-items: flex-start; }
@@ -370,13 +356,6 @@
   .mic-capture-settings input[aria-invalid="true"] { border-color: var(--danger); }
   .mic-capture-settings .save-row { justify-content: flex-end; }
   .mic-capture-settings button[aria-busy="true"] { cursor: progress; }
-  @media (prefers-reduced-motion: reduce) {
-    .mic-capture-settings * { scroll-behavior: auto; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    #thinking.on { animation: none; }
-    #avatar-caption { transition: none; }
-  }
   @media (max-width: 720px) {
     .status-strip { font-size: 10px; }
     nav.rail { width: 52px; }
