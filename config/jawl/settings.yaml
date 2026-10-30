@@ -1,4 +1,4 @@
-﻿# Owned baseline for the connected daily scenario. Provider credentials are external.
+# Owned baseline for the connected daily scenario. Provider credentials are external.
 identity:
   agent_name: Компаньон
 llm:
@@ -25,7 +25,7 @@ llm:
   provider:
     kind: openai_compatible
     display_name: Local OpenAI-compatible model (profile-selected)
-    request_timeout_seconds: 120
+    request_timeout_seconds: 300
   temperature: 1.0
 system:
   timezone: 3

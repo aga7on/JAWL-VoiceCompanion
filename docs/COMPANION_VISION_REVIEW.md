@@ -1,5 +1,10 @@
 # Companion vision review — AGA7ON (2026-09-11, night session)
 
+> **Historical product/research review (2026-09-11).** Its proposals are not
+> implementation status or current defaults. Use [STATE](STATE.md) for current
+> evidence, [TODO](../TODO.md) for the active queue, and [docs/README.md](README.md)
+> for document routing.
+
 Written for the morning read. Scope: reconcile the whole repository against
 the operator's product idea (a living companion-waifu that sees the desktop,
 reacts to consumed content, lives in realtime, helps with projects/coding/

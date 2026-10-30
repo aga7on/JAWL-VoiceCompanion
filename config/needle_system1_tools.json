@@ -1,0 +1,32 @@
+[
+  {
+    "name": "attention_decision",
+    "description": "Decide how the companion reacts to one observed event.",
+    "triggers": ["event", "observed", "attention", "decide", "companion", "notification", "build", "user"],
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "attention": {
+          "type": "string",
+          "enum": ["ignore", "queue", "wake"],
+          "description": "ignore = noise or user unavailable; queue = matters later, must not interrupt now; wake = the agent must consider it immediately"
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["low", "normal", "high"],
+          "description": "how urgent the event is for the user"
+        },
+        "memory_candidate": {
+          "type": "boolean",
+          "description": "true only for durable facts about the user, their preferences, projects or commitments; never for transient technical noise"
+        },
+        "route": {
+          "type": "string",
+          "enum": ["none", "task", "agent"],
+          "description": "cheapest sufficient path: none = nothing to do, task = update an existing task, agent = full reasoning required"
+        }
+      },
+      "required": ["attention", "priority", "memory_candidate", "route"]
+    }
+  }
+]

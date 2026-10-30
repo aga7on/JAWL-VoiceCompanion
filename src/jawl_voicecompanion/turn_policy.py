@@ -15,9 +15,25 @@ replace it later behind the same interface.
 from __future__ import annotations
 
 import re
+from .duplex_cascade import (
+    TOKEN_NO_VOICE,
+    TOKEN_USER_BACKCHANNEL,
+    TOKEN_USER_FINISH,
+    TOKEN_USER_INTERRUPTION,
+    TOKEN_USER_TALKING,
+    TOKEN_USER_THINKING,
+    DuplexCascadeArbiter,
+)
 
 BASE_SILENCE_MS = 800
 EXTENDED_SILENCE_MS = 2000
+
+_DEFAULT_ARBITER = DuplexCascadeArbiter(
+    eg2_model_root=None,
+    fast_finish_silence_ms=BASE_SILENCE_MS,
+    normal_silence_ms=BASE_SILENCE_MS,
+    thinking_silence_ms=EXTENDED_SILENCE_MS,
+)
 
 _TERMINAL = (".", "!", "?", "…")
 _WORD = re.compile(r"[а-яёa-z0-9]+(?:-[а-яёa-z0-9]+)*", re.IGNORECASE)
@@ -63,20 +79,63 @@ def looks_incomplete(text: str) -> bool:
         return True
     return False
 
-def decide(text: str, silence_ms: float, extended_used: bool = False) -> dict:
+def decide(
+    text: str,
+    silence_ms: float,
+    extended_used: bool = False,
+    *,
+    assistant_speaking: bool = False,
+) -> dict:
     """Return the endpoint decision for the open utterance.
 
     ``extended_used`` is True when this utterance already received one
     extension; only one extension is granted per utterance so a monologue
     cannot hold the turn forever.
     """
+    micro = _DEFAULT_ARBITER.evaluate_micro_turn(
+        text,
+        assistant_speaking=assistant_speaking,
+        silence_elapsed_ms=silence_ms,
+        rms_peak=0.05 if str(text or "").strip() else 0.0,
+    )
+    # While the assistant speaks, a barge-in is an event, not an utterance to
+    # endpoint: backchannel must keep TTS alive and interruption must reset it,
+    # regardless of the text being a one-word "unfinished" draft.
+    if assistant_speaking and micro.action in {"ignore_backchannel", "cancel_tts"}:
+        return {
+            "action": "listen",
+            "hold": False,
+            "required_ms": micro.recommended_silence_ms,
+            "duplex_token": micro.token,
+            "duplex_action": micro.action,
+            "avatar_gesture": micro.avatar_gesture,
+        }
     hold = looks_incomplete(text)
     if hold and not extended_used:
         action = "hold" if silence_ms < EXTENDED_SILENCE_MS else "end"
-        return {"action": action, "hold": True, "required_ms": EXTENDED_SILENCE_MS}
+        return {
+            "action": action,
+            "hold": True,
+            "required_ms": EXTENDED_SILENCE_MS,
+            "duplex_token": TOKEN_USER_THINKING if action == "hold" else TOKEN_USER_FINISH,
+            "duplex_action": micro.action,
+            "avatar_gesture": micro.avatar_gesture,
+        }
     required = BASE_SILENCE_MS if not hold else EXTENDED_SILENCE_MS
     action = "end" if silence_ms >= required else "listen"
-    return {"action": action, "hold": hold, "required_ms": required}
+    token = (
+        micro.token
+        if assistant_speaking
+        else (TOKEN_USER_FINISH if action == "end" else TOKEN_USER_TALKING)
+    )
+    return {
+        "action": action,
+        "hold": hold,
+        "required_ms": required,
+        "duplex_token": token,
+        "duplex_action": micro.action,
+        "avatar_gesture": micro.avatar_gesture,
+    }
 
 
 __all__ = [

@@ -1,5 +1,12 @@
 # Architecture Decisions
 
+Навигация на 2026-10-10: [карта](README.md), [текущий продукт](PRODUCT.md),
+[состояние](STATE.md), [единственная очередь](../TODO.md).
+Это хронологический журнал, не backlog и не показатель runtime readiness.
+ADR-044–046 заменяют ранние ASR fallback/2D-only/Live2D решения;
+текущий клиент Electron + three-vrm, GigaAM-only, TeraTTS default.
+Старые команды/providers/defaults читать в контексте даты, не как текущий запуск.
+
 Product clarification: 2026-09-05. These decisions describe intent, not live
 readiness. [PRODUCT.md](PRODUCT.md) is the current product specification;
 [STATE.md](STATE.md) records implemented/verified limits. Later clarifications
@@ -29,7 +36,7 @@ voice models to be replaced without rewriting JAWL.
 
 ## ADR-003 — 2D Live2D only for the current product
 
-Status: Accepted
+Status: Superseded by ADR-045
 Date: 2026-08-31
 
 The first avatar target is 2D Live2D. VRM/3D is deferred indefinitely until
@@ -358,7 +365,7 @@ JAWL's own provider path rather than making the Companion a second brain.
 
 ## ADR-024 - Add Qwen3-ASR as an explicit final-utterance option
 
-Status: Accepted
+Status: **Superseded by ADR-044** (2026-09-21)
 Date: 2026-09-01
 
 The supplied CPU/RAM benchmark selects Qwen3-ASR-0.6B as the current audio
@@ -556,7 +563,7 @@ external account actions during development.
 
 ## ADR-036 — Native Rust client as audio owner and Live2D host
 
-Status: Accepted
+Status: Superseded by ADR-045 (avatar) and ADR-046 (capture ownership)
 Date: 2026-09-17
 
 The browser tab must not own the character's hearing or body. A thin native
@@ -605,6 +612,115 @@ on the first screen delta with an honest "waking" state, not a masked one.
 Quantization is allowed only through the MULTIMODAL_MODEL_GATE mini-bench
 (IQ2/IQ1 need the F16+imatrix path); the earlier Q1 Bonsai failure stands.
 Target profile: <= 8 GB RAM, ~14 GB VRAM. 20 GB is a ceiling, not the norm.
+## ADR-044 — GigaAM — единственный ASR; provider-путь и фолбэк удалены
+
+Status: Accepted
+Date: 2026-09-21
+Owner: владелец (сформулировано в диалоге: «фолбек не нужен, оставляем для
+всех asr задач gigaam»)
+
+Удалены: OpenAI-совместимый provider-путь (`--asr-url`, `--asr-model`,
+`--asr-api-key-env`, `--asr-timeout`, `--asr-max-utterance-bytes`), класс
+`OpenAICompatibleASRClient` и сервис-обёртка, бэкенды `qwen`/`whisper` в
+лаунчере (`-AsrBackend`), их серверы (`run_asr_server.ps1`,
+`asr_whisper_server.py`) и «fallback lane» в финале реплики.
+
+Причины (evidence, а не вкус):
+1. GigaAM выиграл head-to-head на одном клипе 9.6 с: **0.58 с против 1.19 с**
+   и точнее русский (падежи, пунктуация, кавычки) — CHANGELOG 2026-09-13.
+2. Qwen3-ASR **не запускался** в ежедневном профиле вообще
+   (`if (-not $asrAlready -and $AsrBackend -ne 'gigaam')`), то есть 971 MB
+   (767 MB Q8_0 + 204 MB mmproj) и порт 8984 были мёртвым грузом.
+3. «Фолбэк» был **фиктивным**: `--asr-url` передавался всегда, сервера на
+   8984 не было, и при сбое GigaAM ход завершался ошибкой
+   `ASR fallback failed`. Это не защита, а её имитация.
+4. Provider-путь породил сопутствующий костыль — фильтр эха промпта
+   (`_ASR_PROMPT_ECHO_MARKERS`), который удалён вместе с движком.
+
+Что осталось вместо него: `UtteranceBuffer` в ядре (bounded PCM16-сессии,
+8 сессий / 4 MiB / TTL 120 с, упаковка WAV) + канонический
+`CrispASRFileTranscriber`. Партиалы имеют ровно одного владельца — CrispASR
+streaming bridge; без него `/api/voice/draft` возвращает mode `unavailable`.
+Ошибка транскрайбера сообщается явно (`unavailable`/`failed`), а не
+маскируется вторым движком.
+
+Следствия: минус движок, минус порт, минус 971 MB на диске (файлы моделей
+оставлены владельцу, код на них больше не ссылается), минус ветки в
+лаунчере/докторе, минус один источник расхождения транскриптов.
+Живая проверка голосового контура после среза обязательна (ADR-041/AGENTS:
+major runtime update) и выполняется на поднятом пользователем стеке.
+
+## ADR-042 — Языковая граница: cognition boundary как разделитель требований
+
+Status: Accepted
+Date: 2026-09-21
+Owner: владелец (сформулировано в диалоге)
+
+Правило: **модели до cognition boundary обязаны понимать язык пользователя;
+модели после — работают с каноническим структурированным состоянием.**
+Внутренний язык Companion — не английский и не русский, а типизированные
+JSON/events (`{type, action, target, scope, confidence}`), а не проза:
+
+- до JAWL: ASR (русский **обязателен**), fast reflex/intent (русский
+  обязателен, если путь обходит основной мозг);
+- после JAWL: tool retrieval, policy/posture classifiers, memory promotion,
+  resource governor — язык не важен, допустимы monolingual модели;
+- запрещено прогонять каждый запрос через большой LLM ради перевода: тогда
+  маленькая модель не экономит, а добавляет стоимость поверх уже
+  отработавшей большой.
+
+Следствие: не нужно искать русскоязычную версию каждой малой модели —
+русский нужен на human-facing границе, внутри системы — один строгий
+canonical machine language.
+
+## ADR-043 — Placement System-1 и судьба Laya (deferred)
+
+Status: Accepted
+Date: 2026-09-21
+Owner: владелец (сформулировано в диалоге)
+
+Целевая схема: `deterministic reflexes (STOP/CANCEL/MUTE, DND, barge-in,
+HostOS policy, memory write) → System-1 (дешёвое понимание/routing/extraction)
+→ JAWL (System 2: persona, goals, memory, policy, tools)`. R2T2 — восприятие
+речи на входе этой схемы.
+
+- System-1 кандидат — **Needle 3** (in-process native, без нового порта и
+  сервиса); он же кандидат на tool *retrieval* (top-N кандидатов в JAWL
+  ReAct), но **никогда** не прямой исполнитель privileged/HostOS действий:
+  иначе появляется второй tool authority.
+- **Laya сейчас не интегрируется.** 600+ MB и ещё один dependency/ownership
+  boundary должны быть оправданы benchmark'ом, а не архитектурной идеей.
+  Условие появления: Needle не справляется на нашем датасете — тогда Laya
+  как источник калиброванных распределений рядом, для сравнения.
+- Замер Laya: `laya-multilingual` поставляется **без финальной калибровки**
+  (README прямо предупреждает об overconfidence; temperature fitting на своём
+  held-out обязателен). Наш RU-прогон это подтверждает: неверный ответ
+  «billing» при confidence `0.896` — порог `if p > 0.8 → interrupt` небезопасен.
+- Критерий допуска любого System-1 кандидата — не accuracy, а **false wake**
+  (заговорил зря), **false memory promotion** (мусор в память), **missed
+  important**, p95 latency, CPU/RAM и соответствие confidence реальной ошибке
+  на нашем датасете событий Companion.
+
+### Поправка 2026-09-21: критерий применён, и Needle его не прошёл
+
+Прогнали критерий на 20 событиях Companion (канонические ключи/enums,
+английский — то есть **не** языковая проблема): все документированные входы
+дают отказ или неверный ответ с высокой уверенностью — `agent.run` (сырое
+состояние / инструкция / проза) 0 вызовов, `triggers` = 0/20 полных при
+`false_memory_promotion=10` и confidence 0.93 на ошибках, `needle.extract`
+= 20/20 `None`. Детали — `docs/RESEARCH.md`.
+
+Следствия:
+- тезис «Needle заменяет Laya» **не подтверждён**; Needle — tool-caller и
+  кандидат на tool-*retrieval*, а не решатель по состоянию системы;
+- Laya остаётся **единственным** кандидатом на калиброванные распределения
+  решений, но интегрируется только после сравнения на нашем датасете
+  (требование к калибровке сохраняется: overconfidence подтверждён);
+- пока же attention/triage остаются на детерминированных правилах — это
+  честный статус-кво, а не временный костыль;
+- **порядок тестов**: R2T2 и Needle3 проверяются по отдельности, связка —
+  только после независимых вердиктов (прямое указание владельца).
+
 ## ADR-041 — Product Core поверх engines (цельность, не монолитность)
 
 Status: Accepted
@@ -653,3 +769,161 @@ Qwen3-VL-2B (port 8983): 4.2 s live answers, ~0.2–0.8 s warm inference,
 ~11 GB VRAM. Bonsai stays available only as an on-demand manual tool via
 `scripts/run_coding_server.ps1` (8986), started explicitly when a heavy
 coding/vision task needs it. The `--all` launcher no longer starts Bonsai.
+
+## ADR-045 — Electron и 3D VRM как текущая оболочка
+
+Status: Accepted
+Date: 2026-10-01; запись консолидирована 2026-10-05
+
+Это фиксация уже выбранной границы из STATE, не новый возврат к 3D.
+Companion использует `desktop/` Electron и three-vrm; Live2D/Mocari удалены.
+JAWL остаётся единственным владельцем persona/memory/tasks/tools/policy.
+Эмоция и speech level одного конверта управляют лицом/телом; OBS должен
+показывать тот же персонаж без private control/chat. Единую панель, LAN и
+OBS принимать отдельно, не считать автоматически готовыми после удаления Live2D.
+
+Прежнее ограничение 2D-only и Cubism-host из ADR-003/036 не действует.
+Существующие VRM/license и активный выбор сохраняются; новая reference-модель
+не поставлена до likeness/physics acceptance. Канон — PRODUCT/STATE,
+art stage gates — CHARACTER_ART_DIRECTION.
+
+## ADR-046 — Один активный mic capture, renderer по умолчанию
+
+Status: Accepted (implementation boundary); live-device acceptance OPEN
+Date: 2026-10-05
+
+Штатный разговор Electron `/app` использует getUserMedia → AudioWorklet →
+bounded software gate → общий UtteranceBuffer/GigaAM/JAWL. Rust остаётся
+явной альтернативой native capture, не параллельным default owner. Обе
+дорожки приобретают один server lease до открытия устройства, renew/release
+сохраняют identity; срок истечения ограничивает потерянного клиента.
+Lease не даёт HostOS/ambient authority и не отменяет durable задачи.
+
+Один ConfigHub хранит `interfaces.yaml voice.capture.*`; revision-check,
+backup и безопасная атомарная запись сохраняют остальные настройки. Порог
+открытия/закрытия, pre-roll и endpoint берутся snapshot при новом capture.
+Save не перезапускает JAWL и не перестраивает текущую реплику. Capture при
+простом открытии страницы не начинается; нужны явный выбор/разрешение.
+RMS gate — программный, не hardware noise suppression и не acoustic echo test.
+
+NDJSON/WebAudio отменяет текущую speech generation, не задачу агента.
+Actual synthetic browser acceptance обязательно до real-provider/device
+duplex/echo/barge-in; PASS одной дорожки не доказывает другую.
+
+## ADR-047 — OmniVoice is the default TTS voice
+
+Status: Accepted
+Date: 2026-10-13
+
+Owner decision: default synthesis switches from TeraTTSv2 (ru_f1, port 9889) to
+OmniVoice (k2-fsa venv `G:\AI\OmniVoice`, port 9890, cuda:1, reference voice
+`runtime/models/asr/voice_ref_aleksandra.wav`). Rationale: explicit owner request
+2026-10-13; RU realtime lane measured next to the Hikari brain; live strict run
+attempt7 proved the owned Job holds 9890 and the owner confirmed hearing the voice.
+TeraTTSv2 remains a selectable provider (`-TtsProvider tera`); OmniVoice paths stay
+launcher-side until the manifest carries them. Prosody/emotion alignment and voice
+cloning remain separate work (B2-06, A-04 lip-sync).
+
+## ADR-048 — Canonical daily model roles
+
+Status: Accepted
+Date: 2026-10-29
+Owner decision: use the model set listed below as the canonical target for
+permanent JAWL Companion work. This selects roles and defaults for future work;
+it does not claim that every lane passed live quality or 24/7 acceptance.
+
+| Role | Canonical component | Placement / boundary |
+|---|---|---|
+| Brain, planning, dialogue | Gemini 3.8 Flash | Local relay endpoint; the relay/provider owns model execution. The last recorded profile declared a 1,048,576-token window. |
+| Visual scene description | Qwen3.5-0.8B Q4 | Separate CPU-only local describer. |
+| Screen text and UI structure | Windows OCR + UIA | OS services, not learned models; OCR is a separate evidence channel. |
+| Speech transcription | GigaAM v3 e2e RNNT q8 via CrispASR | CPU. Preserve transcript uncertainty when confidence is unavailable. |
+| Audio description / embeddings | EmbeddingGemma 2 ONNX | CPU; provide bounded candidate descriptions/embeddings, not authoritative genre, mood, or emotion claims. |
+| Music presence and sound-event hypotheses | YAMNet ONNX | CPU; confirmed music and unverified event candidates remain separate channels. |
+| Semantic memory retrieval | paraphrase-multilingual-MiniLM-L12-v2 ONNX | CPU vector embeddings. |
+| Speech output | OmniVoice 0.6B | CUDA 1, unchanged from ADR-047. |
+
+No dedicated voice-emotion classifier is adopted. Aniemore was rejected for
+always-on use; direct-mic delivery cues remain an opt-in experiment and must not
+be labeled as emotion recognition. VoiceMem is a sidecar service, not another
+canonical LLM. Hikari and Qwen-Omni are not defaults under this decision.
+
+The model-role decision supersedes the historical stack proposals in
+`docs/SENSORY_STACK_DESIGN.md` and any stale daily-profile name. Actual live
+capture remains opt-in at the device boundary, and audio/visual quality,
+freshness, recovery, resource use, and integrated-duration gates remain tracked
+in `docs/DAILY_ACCEPTANCE.md`.
+
+Deployment parity is still required: `config/runtime.manifest.json` currently
+selects `local-hikari` / `local-bonsai2`, and the legacy local launcher follows
+that manifest; the wrapper's visual-describer default is also still EG2. A run
+from those defaults alone is not a deployment of this canonical stack until an
+explicitly configured Gemini relay profile and Qwen visual lane are raised.
+
+## ADR-049 — JAWL = owned-ядро, patch-queue к upstream
+
+Status: Accepted (2026-10-29)
+
+Движок JAWL (th0r3nt/JAWL, MIT, снимок `runtime/jawl-sources/jawl-20260906-daily-v2`)
+продолжает жить как пиненный снимок, но становится owned-ядром: дефекты и
+capability, которые продукт сегодня чинит extension-слоями `native_*` снаружи,
+переносятся в саму поставку ядра минимальными upstream-worthy патчами
+(patch-queue к `th0r3nt/JAWL`, отчёт `docs/research/kernel-upstream-baseline-20261029.md`,
+`patches/kernel/owned-deviations.patch`).
+
+Правило среза: правка ядра + снятие хука + focused regression — одним
+изменением; двойных слоёв не копим. Конечная цель: в `src/` не остаётся
+модулей, чинящих ядро снаружи.
+
+Архитектурный курс — гибридный путь: когнитивные capability живут внутри JAWL
+через extension points ядра, GPU-инференс-воркеры и presentation остаются
+отдельными процессами/модулями за их client-API; тяжёлые стратегии (ToT, Swarm)
+подключаются по требованию, а не в основном цикле.
+
+## ADR-050 — Двухскоростной контур: «спутник» = экспедиция той же личности
+
+Status: Proposed (2026-10-29)
+
+Компаньон работает в двух скоростях: быстрый реактивный контур (голос,
+терминал, перцепция) и медленный глубокий контур (исследование, длинные
+задачи). Медленный контур — не вторая личность и не отдельный агент:
+«спутник» — это экспедиция той же личности с тем же ядром, уходящая в
+длительную задачу и возвращающая результаты в общий контекст. Детали
+контура и механика возврата — в рамках этого решения (Proposed).
+
+## ADR-051 — Вердикты по внешним аналогам и усиление ASR-контура
+
+Status: Accepted (2026-10-30)
+
+Сверка с внешними проектами (SHSD, sbintuitions/DuplexCascade,
+Project-N-E-K-O/N.E.K.O, pipecat, Open-LLM-VTuber) проведена по мандату
+«мерджить только то, что реально лучше». Решения:
+
+1. Скользящее окно сенсорики уже существует на правильном уровне
+   (event-level: perception_fusion / sensory_history / streaming_perception);
+   media-ring и watermark'ы SHSD — уровень файлового анализа, НЕ принят.
+2. Микро-туры и VAD-free control-токены DuplexCascade уже реализованы
+   детерминированным арбитром (duplex_cascade.py); обученный full-duplex
+   контроллер НЕ принят (новая модель противоречит ADR-048); слот под замену
+   за интерфейсом MicroTurnDecision зарезервирован.
+3. Механизм speech-first (TTS на подходе генерации) формально описан в
+   docs/SPEECH_FIRST_MECHANISM.md; продуктовые заимствования из N.E.K.O
+   (проактивная доставка, 5-уровневая память) и SmartTurn из pipecat в ядро
+   НЕ приняты (облачность / новые модели); подробности и backlog —
+   docs/MERGE_PLAN_20261030.md.
+4. ASR-контур усилен: (a) отсев механических повторов филлеров в
+   transcript_quality; (b) идемпотентная финализация уттеранса — транспортный
+   повтор с тем же correlation_id отдаёт replay-результат и не диспатчит
+   сообщение мозгу дважды (web._TurnReplayCache, bounded 32/120 с).
+
+## ADR-052 — UI-консолидация без наращивания слоёв
+
+Status: Accepted (2026-10-30)
+
+Два интерфейса (2367/app + 8766/avatar) сводятся в один монолит (сцена +
+диалог + настройки в одном приложении, один сервер, один порт). Правило
+анти-наращивания: каждый слайс — net-negative (строк/файлов/серверов
+удаляется ≥, чем добавляется), никаких новых фреймворков и state-складов,
+presentation-слой только, ядро и его гарантии не трогаются. Удаляемое
+удаляется в том же слайсе. Бюджеты, слайсы S1–S4 и стоп-условие —
+docs/UI_CONSOLIDATION_PLAN.md.

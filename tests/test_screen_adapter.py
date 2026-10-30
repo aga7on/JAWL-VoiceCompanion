@@ -24,6 +24,14 @@ class ScreenCaptureAdapterTests(unittest.TestCase):
         result = ScreenCaptureAdapter().observe()
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(result["reason"], "screen_observation_disabled")
+
+    def test_capture_displays_disabled_returns_bounded_list(self):
+        results = ScreenCaptureAdapter().capture_displays(max_displays=2)
+        self.assertEqual(len(results), 2)
+        for result in results:
+            self.assertEqual(result["status"], "degraded")
+            self.assertEqual(result["reason"], "screen_observation_disabled")
+            self.assertFalse(result["persisted"])
         self.assertFalse(result["persisted"])
 
     def test_metadata_only_request_does_not_capture(self):
@@ -67,6 +75,30 @@ class ScreenCaptureAdapterTests(unittest.TestCase):
         self.assertEqual(items[0]["bbox"], [1, 2, 20, 30])
         self.assertEqual(items[1]["confidence"], 88.0)
         self.assertTrue(any(term in items[0]["text"].casefold() for term in adapter.redaction_terms))
+
+    def test_collect_ocr_is_opt_in_and_redacts_sensitive_regions(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow is optional")
+        calls = []
+        adapter = ScreenCaptureAdapter(
+            ocr_enabled=True,
+            ocr_provider=lambda _image: calls.append(True) or [
+                {"text": "Password: secret", "bbox": [0, 0, 10, 10], "confidence": 99},
+                {"text": "Inventory: 12 lives", "bbox": [20, 20, 50, 30], "confidence": 90},
+            ],
+        )
+        image = Image.new("RGB", (64, 40), (255, 255, 255))
+
+        skipped, skipped_rects = adapter._collect_ocr(image, enabled=False)
+        safe, rects = adapter._collect_ocr(image, enabled=True)
+
+        self.assertEqual(calls, [True])
+        self.assertEqual(skipped, [])
+        self.assertEqual(skipped_rects, [])
+        self.assertEqual([item["text"] for item in safe], ["Inventory: 12 lives"])
+        self.assertIn((0, 0, 10, 10), rects)
 
     def test_pixel_redaction_is_opaque_and_clipped(self):
         try:

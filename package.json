@@ -1,0 +1,25 @@
+{
+  "name": "jawl-voicecompanion",
+  "version": "1.0.0",
+  "description": "Русскоязычный компаньон для Windows: персонаж рядом на экране, голос и текст, общая память JAWL, инициативное восприятие и поручения на ПК.",
+  "main": "app.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aga7on/JAWL-VoiceCompanion.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/aga7on/JAWL-VoiceCompanion/issues"
+  },
+  "homepage": "https://github.com/aga7on/JAWL-VoiceCompanion#readme"
+}

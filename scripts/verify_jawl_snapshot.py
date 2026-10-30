@@ -16,9 +16,17 @@ _KEY_SHAPED = re.compile(rb"sk-[A-Za-z0-9_-]{24,}")
 
 
 def _is_generated_bytecode(path: Path) -> bool:
-    """Return whether *path* is interpreter cache, not source input."""
+    """Return whether *path* is generated state, not source input.
 
-    return path.suffix.lower() == ".pyc" and "__pycache__" in path.parts
+    Interpreter cache and kernel runtime logs are produced by running the
+    snapshot and never belong to the pinned source inventory. ``path`` is
+    expected relative to the snapshot root so a top-level ``logs`` runtime
+    directory is matched, not an absolute parent named ``logs``.
+    """
+
+    return (
+        path.suffix.lower() == ".pyc" and "__pycache__" in path.parts
+    ) or (bool(path.parts) and path.parts[0] == "logs")
 
 
 def _hash(path: Path) -> str:
@@ -58,7 +66,9 @@ def verify(source: Path) -> dict[str, object]:
     actual_paths = {
         path.relative_to(source).as_posix()
         for path in source.rglob("*")
-        if path.is_file() and path.name != MANIFEST_NAME and not _is_generated_bytecode(path)
+        if path.is_file()
+        and path.name != MANIFEST_NAME
+        and not _is_generated_bytecode(path.relative_to(source))
     }
     manifest_paths = set(actual)
     extras = sorted(actual_paths - manifest_paths)

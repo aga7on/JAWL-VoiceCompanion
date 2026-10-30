@@ -1,15 +1,41 @@
 import asyncio
 import importlib
 import logging
+import logging.handlers
 import os
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
+
+
+def _handler_ids():
+    return {
+        id(handler)
+        for logger in [logging.getLogger(), *logging.Logger.manager.loggerDict.values()]
+        if isinstance(logger, logging.Logger)
+        for handler in logger.handlers
+    }
+
+
+def _close_test_owned_handlers(preexisting_handler_ids):
+    closed = set()
+    for logger in [logging.getLogger(), *logging.Logger.manager.loggerDict.values()]:
+        if not isinstance(logger, logging.Logger):
+            continue
+        for handler in list(logger.handlers):
+            if id(handler) in preexisting_handler_ids:
+                continue
+            logger.removeHandler(handler)
+            if id(handler) not in closed:
+                handler.close()
+                closed.add(id(handler))
 
 
 class JawlGoalRecoveryTests(unittest.TestCase):
     def test_in_flight_action_is_persisted_and_reconciled_after_restart(self):
+        preexisting_handler_ids = _handler_ids()
         snapshot = (
             Path(__file__).parents[1]
             / "runtime"
@@ -20,16 +46,36 @@ class JawlGoalRecoveryTests(unittest.TestCase):
             key: os.environ.get(key)
             for key in (
                 "JAWL_INSTANCE_ID",
+                "JAWL_INSTANCE_HOME",
+                "JAWL_INSTANCES_ROOT",
+                "JAWL_DATA_DIR",
+                "JAWL_CONFIG_DIR",
                 "JAWL_LOG_DIR",
+                "JAWL_CACHE_DIR",
+                "JAWL_PROMPT_DIR",
+                "JAWL_SANDBOX_DIR",
+                "JAWL_ENV_FILE",
                 "PYTHONDONTWRITEBYTECODE",
             )
         }
         with tempfile.TemporaryDirectory() as temp:
             temp_root = Path(temp)
+            instance = temp_root / "instance"
+            instances = temp_root / "instances"
+            for name in ("data", "config", "logs", "cache", "prompts", "sandbox"):
+                (instance / name).mkdir(parents=True, exist_ok=True)
             os.environ.update(
                 {
                     "JAWL_INSTANCE_ID": "goal-recovery-test",
-                    "JAWL_LOG_DIR": str(temp_root / "logs"),
+                    "JAWL_INSTANCE_HOME": str(instance),
+                    "JAWL_INSTANCES_ROOT": str(instances),
+                    "JAWL_DATA_DIR": str(instance / "data"),
+                    "JAWL_CONFIG_DIR": str(instance / "config"),
+                    "JAWL_LOG_DIR": str(instance / "logs"),
+                    "JAWL_CACHE_DIR": str(instance / "cache"),
+                    "JAWL_PROMPT_DIR": str(instance / "prompts"),
+                    "JAWL_SANDBOX_DIR": str(instance / "sandbox"),
+                    "JAWL_ENV_FILE": str(instance / ".env"),
                     "PYTHONDONTWRITEBYTECODE": "1",
                 }
             )
@@ -239,7 +285,7 @@ class JawlGoalRecoveryTests(unittest.TestCase):
                     ["confirmed", "needs_reconciliation"],
                 )
             finally:
-                logging.shutdown()
+                _close_test_owned_handlers(preexisting_handler_ids)
                 sys.path.pop(0)
                 for name in list(sys.modules):
                     if name not in before_modules and (
@@ -251,6 +297,42 @@ class JawlGoalRecoveryTests(unittest.TestCase):
                         os.environ.pop(key, None)
                     else:
                         os.environ[key] = value
+
+    def test_cleanup_preserves_preexisting_handlers_and_detaches_owned_rotating_handler(self):
+        logger = logging.getLogger("test.jawl_goal_recovery.handler_ownership")
+        original_level = logger.level
+        original_propagate = logger.propagate
+        preserved_stream = StringIO()
+        preserved_handler = logging.StreamHandler(preserved_stream)
+        logger.addHandler(preserved_handler)
+        preexisting_handler_ids = _handler_ids()
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                log_path = Path(temp) / "logs" / "pytest.log"
+                log_path.parent.mkdir(parents=True)
+                owned_handler = logging.handlers.RotatingFileHandler(
+                    log_path, maxBytes=1024, backupCount=1, encoding="utf-8"
+                )
+                logger.addHandler(owned_handler)
+                logger.setLevel(logging.INFO)
+                logger.info("initial owned log write")
+                self.assertTrue(log_path.exists())
+
+                _close_test_owned_handlers(preexisting_handler_ids)
+                self.assertIn(preserved_handler, logger.handlers)
+                self.assertFalse(preserved_handler.stream.closed)
+                self.assertNotIn(owned_handler, logger.handlers)
+                self.assertIsNone(owned_handler.stream)
+
+            logger.info("write after temporary directory removal")
+            self.assertFalse(log_path.exists())
+            self.assertIn("write after temporary directory removal", preserved_stream.getvalue())
+        finally:
+            logger.removeHandler(preserved_handler)
+            preserved_handler.close()
+            logger.setLevel(original_level)
+            logger.propagate = original_propagate
 
 
 if __name__ == "__main__":

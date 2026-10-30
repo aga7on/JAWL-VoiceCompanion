@@ -28,32 +28,67 @@ from uuid import uuid4
 from .approvals import ApprovalStore
 from .ambient_audio import AmbientAudioDisabled, AmbientAudioService, PlaybackSuppression
 from .ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
-from .asr import ASRUnavailable, ExternalASRService
+from .asr import UtteranceBuffer
 from .audit import AuditLog
 from .attention import AttentionPresence
-from .avatar import AvatarAssetStore
 from .doctor import build_doctor_report
 from .event_log import log_event
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .jawl_events import JawlEventFileSink
 from .jawl_web import JawlWebUnavailable
+from .live_speech import LiveSpeechSession
 from .models import ToolRequest
 from .presence import ScreenDeltaWatcher
 from .resources import ResourceGovernor
 from .tts import TTSService, TTSUnavailable, TTSCancelled
+from .speech_requests import validate_speech_request_id
 from . import turn_policy
+from .duplex_cascade import is_user_backchannel
 from .vision import JawlNativeVisionExecutor, VisionLookService
 from .voicemem_client import VoiceMemAsyncIngest, VoiceMemProcessClient, VoiceMemUnavailable
 from .ws_server import WebSocketConnection, WebSocketError, is_websocket_upgrade, send_handshake_response
 from .system_audio import SystemAudioUnavailable
 from .stream_chat import StreamChatIngestor
+from .voice_capture import (
+    CaptureLeaseError, VoiceCaptureLease, VoiceCaptureSettings, capture_config_error, read_config_hub_settings,
+)
+from .transcript_quality import is_meaningful_transcript
 
 
 MAX_BODY_BYTES = 64 * 1024
 AVATAR_AUDIO_STALE_SECONDS = 0.75
 LAN_AUTH_MIN_TOKEN_LENGTH = 16
 LAN_AUTH_REALM = "JAWL VoiceCompanion LAN"
+_RELATIVE_MINUTE_QUERY = re.compile(
+    r"\b(?P<en>\d+|one|two|three|four|five|ten|fifteen|twenty|thirty)\s*(?:minutes?|mins?)\s+ago\b|"
+    r"(?P<ru>\d+|одну|один|одна|две|два|три|четыре|пять|десять|пятнадцать|двадцать|тридцать)"
+    r"\s*минут\w*\s+назад\b",
+    re.IGNORECASE,
+)
+_MINUTE_WORDS = {
+    "one": 1, "одну": 1, "один": 1, "одна": 1,
+    "two": 2, "две": 2, "два": 2,
+    "three": 3, "три": 3,
+    "four": 4, "четыре": 4,
+    "five": 5, "пять": 5,
+    "ten": 10, "десять": 10,
+    "fifteen": 15, "пятнадцать": 15,
+    "twenty": 20, "двадцать": 20,
+    "thirty": 30, "тридцать": 30,
+}
+
+
+def _history_focus_seconds_ago(text: str) -> float | None:
+    match = _RELATIVE_MINUTE_QUERY.search(str(text or ""))
+    if not match:
+        return None
+    amount = match.group("en") or match.group("ru")
+    try:
+        minutes = int(amount)
+    except ValueError:
+        minutes = _MINUTE_WORDS.get(str(amount).casefold(), 0)
+    return float(minutes * 60) if minutes > 0 else None
 
 
 def require_loopback_host(host: str) -> str:
@@ -79,61 +114,6 @@ def is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(value).is_loopback
     except ValueError:
         return False
-
-
-# ASR hallucination on noise/silence must never become a user turn: the model
-# can echo its own transcription prompt, emit single filler characters, switch
-# to a foreign script (throat clearing turns into CJK filler characters) or
-# just stutter one character many times on keyboard noise. These are technical
-# artifacts, not user speech.
-_ASR_PROMPT_ECHO_MARKERS = ("transcribe the audio exactly as spoken", "транскрибируй аудио")
-_MIN_MEANINGFUL_TRANSCRIPT_CHARS = 2
-
-# CJK/Hangul ranges: a Russian transcription should never contain these. When
-# Qwen3-ASR receives non-speech noise it often switches languages and emits CJK
-# filler characters ("嗯嗯嗯"), which is a hard technical-artifact signal.
-_ASR_FOREIGN_SCRIPT_RANGES = (
-    (0x2E80, 0x2EFF),  # CJK Radicals Supplement
-    (0x3040, 0x309F),  # Hiragana
-    (0x30A0, 0x30FF),  # Katakana
-    (0x31F0, 0x31FF),  # Katakana Phonetic Extensions
-    (0x3400, 0x4DBF),  # CJK Unified Ideographs Extension A
-    (0x4E00, 0x9FFF),  # CJK Unified Ideographs
-    (0xF900, 0xFAFF),  # CJK Compatibility Ideographs
-    (0xFF00, 0xFF5F),  # Fullwidth Forms
-    (0xAC00, 0xD7AF),  # Hangul Syllables
-)
-
-
-def _contains_foreign_script(text: str) -> bool:
-    for char in text:
-        code = ord(char)
-        for start, end in _ASR_FOREIGN_SCRIPT_RANGES:
-            if start <= code <= end:
-                return True
-    return False
-
-
-def is_meaningful_transcript(text: str) -> bool:
-    """Keep real utterances (including short ones like «Ок»), drop ASR noise."""
-    cleaned = re.sub(r"[\W_]+", "", str(text or ""), flags=re.UNICODE)
-    if not cleaned:
-        return False
-    if len(cleaned) < _MIN_MEANINGFUL_TRANSCRIPT_CHARS:
-        return False
-    lowered = cleaned.casefold()
-    for marker in _ASR_PROMPT_ECHO_MARKERS:
-        if re.sub(r"[\W_]+", "", marker, flags=re.UNICODE).casefold() in lowered:
-            return False
-    if _contains_foreign_script(cleaned):
-        # Russian speech never contains CJK/Hangul; this is an ASR language
-        # switch on noise (throat clearing, keyboard, silence).
-        return False
-    if len(set(lowered)) == 1:
-        # Single repeated character is a filler/stutter ("嗯嗯嗯", "ммм", "ааа"),
-        # not an utterance. Real short words use more than one character.
-        return False
-    return True
 
 
 def voice_memory_block(memory_context: str, *, limit: int = 800) -> str:
@@ -246,34 +226,67 @@ def _host_header_parts(value: str | None, scheme: str) -> tuple[str, int] | None
     return parsed.hostname.casefold().rstrip("."), port
 
 
-def _security_headers(handler: BaseHTTPRequestHandler, *, presentation: bool = False) -> None:
-    """Apply a conservative policy to both control and presentation responses."""
+def _security_headers(handler: BaseHTTPRequestHandler) -> None:
+    """Apply a conservative security policy to all HTTP responses."""
     handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("Referrer-Policy", "no-referrer")
-    if presentation:
-        # The avatar page is the OBS source and is embedded by the loopback
-        # control panel. OBS loads it top-level, so framing stays restricted
-        # to loopback control origins; LAN origins must load it top-level.
-        handler.send_header("Content-Security-Policy", (
-            "default-src 'self'; object-src 'none'; base-uri 'none'; "
-            "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; connect-src 'self'; "
-            "frame-ancestors http://127.0.0.1:* http://localhost:* "
-            "https://127.0.0.1:* https://localhost:*"
-        ))
-        handler.send_header("Cross-Origin-Opener-Policy", "same-origin")
-        handler.send_header("Cross-Origin-Resource-Policy", "same-origin")
-        return
     handler.send_header("X-Frame-Options", "DENY")
     handler.send_header("Cross-Origin-Opener-Policy", "same-origin")
     handler.send_header("Cross-Origin-Resource-Policy", "same-origin")
     handler.send_header("Content-Security-Policy", (
         "default-src 'self'; object-src 'none'; base-uri 'none'; "
         "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
+        # blob: in connect-src is required by GLTFLoader: embedded VRM
+        # textures are extracted to blob: URLs and re-fetched. Without it the
+        # model renders as an untextured white mannequin.
+        "img-src 'self' data: blob:; media-src 'self' blob:; "
+        "connect-src 'self' blob:; "
         "frame-src http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:*; "
         "frame-ancestors 'none'"
     ))
+
+
+class _TurnReplayCache:
+    """Bounded idempotency cache for retried voice-turn finalization.
+
+    A transport retry of ``/api/voice/end`` (or the WS ``voice_final`` action)
+    must never dispatch the same utterance to the brain twice. Only results
+    the caller provides a stable ``correlation_id`` for are cached; cancelled
+    and failed attempts are never cached, so a retry may still succeed.
+    """
+
+    def __init__(self, *, limit: int = 32, ttl_seconds: float = 120.0,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self._limit = max(1, int(limit))
+        self._ttl = max(1.0, float(ttl_seconds))
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            expires_at, result = entry
+            if expires_at <= now:
+                del self._entries[key]
+                return None
+            return result
+
+    def put(self, key: str, result: dict[str, Any]) -> None:
+        now = self._clock()
+        with self._lock:
+            for existing, (expires_at, _) in list(self._entries.items()):
+                if expires_at <= now:
+                    del self._entries[existing]
+            if len(self._entries) >= self._limit:
+                # Bounded and deterministic: drop the oldest insertion instead
+                # of growing without limit under a replay flood.
+                oldest = min(self._entries, key=lambda k: self._entries[k][0])
+                del self._entries[oldest]
+            self._entries[key] = (now + self._ttl, result)
 
 
 class CompanionServer(ThreadingHTTPServer):
@@ -289,23 +302,24 @@ class CompanionServer(ThreadingHTTPServer):
         screen_watcher: ScreenDeltaWatcher | None = None,
         voice_mem: VoiceMemProcessClient | None = None,
         tts_service: TTSService | None = None,
-        avatar_assets: AvatarAssetStore | None = None,
         attention: AttentionPresence | None = None,
+        avatar_wardrobe_dir: Path | None = None,
         ambient_memory: AmbientMemoryBuffer | None = None,
         sensory_ingestor: Any | None = None,
         ambient_audio: AmbientAudioService | None = None,
         ambient_scheduler: AmbientTriageScheduler | None = None,
         jawl_hostos_control: bool = False,
         audit_log: AuditLog | None = None,
-        asr_service: ExternalASRService | None = None,
+        asr_service: UtteranceBuffer | None = None,
         streaming_asr: Any | None = None,
         gigaam_transcriber: Any | None = None,
     helper_urls: dict[str, str] | None = None,
     proactive_feed: Any | None = None,
     perception_fusion: Any | None = None,
+    streaming_perception: Any | None = None,
+    visual_sensor: Any | None = None,
     config_hub: Any | None = None,
     log_dir: Path | None = None,
-    legacy_presentation: bool = True,
     resource_governor: ResourceGovernor | None = None,
     presence_file: Path | None = None,
         stream_chat: StreamChatIngestor | None = None,
@@ -314,6 +328,7 @@ class CompanionServer(ThreadingHTTPServer):
         lan_access_token: str | None = None,
         lan_auth_user: str = "tablet",
         tls_context: ssl.SSLContext | None = None,
+        voice_delivery_enabled: bool = False,
     ):
         bind_host = str(server_address[0])
         if not is_loopback_host(bind_host) and not lan_mode:
@@ -333,8 +348,16 @@ class CompanionServer(ThreadingHTTPServer):
         self.voice_mem = voice_mem
         self.voice_mem_async = VoiceMemAsyncIngest(voice_mem) if voice_mem is not None else None
         self.tts = tts_service
-        self.avatar_assets = avatar_assets
         self.attention = attention or AttentionPresence()
+        # ADR-045 appearance surface: the bounded wardrobe directory the agent
+        # can swap VRM models from. Defaults to the project's
+        # runtime/vrm-models/ (repo root = three levels up from this file);
+        # nothing outside it is ever listed or served.
+        self.avatar_wardrobe_dir = (
+            Path(avatar_wardrobe_dir).resolve()
+            if avatar_wardrobe_dir
+            else (Path(__file__).resolve().parent.parent.parent / "runtime" / "vrm-models")
+        )
         # Episodic timeline (ADR-038): the single shared TimeService. It owns
         # "now / recently / long ago" for Heartbeat, memory, attention and the
         # avatar. Bounded, one owner, no reasoning — it records episodes and
@@ -346,9 +369,15 @@ class CompanionServer(ThreadingHTTPServer):
         self._load_presence_preferences()
         self.ambient_memory = ambient_memory or AmbientMemoryBuffer()
         self.sensory_ingestor = sensory_ingestor
+        self.sensory_history = getattr(perception_fusion, "history_store", None)
         self.ambient_audio = ambient_audio
         self.ambient_scheduler = ambient_scheduler
         self.resources = resource_governor or ResourceGovernor()
+        # ADR-046 single-window app: the compact Electron app (chat + 3D
+        # character + settings) is served from the repo's desktop/ dir.
+        self.desktop_dir = (
+            Path(frontend_dir).resolve().parent / "desktop"
+        )
         if self.tts is not None:
             self.tts.set_governor(self.resources)
         if self.ambient_scheduler is not None:
@@ -357,17 +386,20 @@ class CompanionServer(ThreadingHTTPServer):
         if self.ambient_audio is not None:
             self.ambient_audio.bridge.set_playback_suppression(self.playback_suppression)
         self.asr = asr_service
+        self.voice_capture = VoiceCaptureLease()
         self.streaming_asr = streaming_asr
         self.gigaam_transcriber = gigaam_transcriber
         self._asr_prefetch_sessions: deque[str] = deque(maxlen=16)
         self.helper_urls = dict(helper_urls or {})
         self.proactive_feed = proactive_feed
         self.perception_fusion = perception_fusion
+        self.voice_delivery_enabled = bool(voice_delivery_enabled)
+        self.streaming_perception = streaming_perception
+        self.visual_sensor = visual_sensor
         self.config_hub = config_hub
         self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
-        self.legacy_presentation = bool(legacy_presentation)
         self.lan_mode = bool(lan_mode)
         self.lan_access_token = str(lan_access_token or "")
         self.lan_auth_user = str(lan_auth_user or "tablet")
@@ -378,14 +410,18 @@ class CompanionServer(ThreadingHTTPServer):
         self.stream_chat = stream_chat or StreamChatIngestor(
             downstream=self._accept_stream_chat_event,
         )
-        self.presentation_url: str | None = None
         # A fresh process must invalidate browser-side speech buffers.  This is
         # deliberately a runtime identity, not a persisted session identifier:
         # after a restart any in-flight audio belongs to the old process.
         self.runtime_instance_id = uuid4().hex
+        launcher_stop_request = os.environ.get("JAWL_LAUNCHER_STOP_REQUEST", "").strip()
+        self.launcher_stop_request = Path(launcher_stop_request).resolve() if launcher_stop_request else None
+        launcher_stop_status = os.environ.get("JAWL_LAUNCHER_STOP_STATUS", "").strip()
+        self.launcher_stop_status = Path(launcher_stop_status).resolve() if launcher_stop_status else None
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
+        self._turn_replay = _TurnReplayCache()
         self._avatar_audio_lock = threading.Lock()
         self._avatar_audio = {
             "schema_version": 1,
@@ -402,6 +438,25 @@ class CompanionServer(ThreadingHTTPServer):
         }
         if tls_context is not None:
             self.socket = tls_context.wrap_socket(self.socket, server_side=True)
+
+    def doctor_report(self) -> dict[str, Any]:
+        """One live readiness snapshot shared by /api/health and /api/doctor."""
+        return build_doctor_report(
+            gateway=self.gateway,
+            hostos=self.hostos,
+            vision=self.vision,
+            voice_mem=self.voice_mem,
+            asr=self.asr,
+            tts=self.tts,
+            ambient_memory=self.ambient_memory,
+            ambient_audio=self.ambient_audio,
+            resource_governor=self.resources,
+            streaming_asr=self.streaming_asr,
+            visual_sensor=self.visual_sensor,
+            helper_urls=self.helper_urls,
+            sensory_ingestor=self.sensory_ingestor,
+            gigaam_transcriber=getattr(self, "gigaam_transcriber", None),
+        )
 
     def origin_allowed(self, origin: str | None, host_header: str | None) -> bool:
         """Require an exact same-origin request, including scheme and port."""
@@ -429,8 +484,6 @@ class CompanionServer(ThreadingHTTPServer):
             return False
         return (origin_host, origin_port) == _host_header_parts(host_header, self.url_scheme)
 
-    def set_presentation_url(self, url: str) -> None:
-        self.presentation_url = str(url).strip() or None
 
     def _load_presence_preferences(self) -> None:
         if self.presence_file is None or not self.presence_file.exists():
@@ -472,39 +525,8 @@ class CompanionServer(ThreadingHTTPServer):
             except OSError:
                 pass
 
-    def presentation_state(self) -> dict[str, Any]:
-        """Return only the ephemeral state allowed on the unprivileged origin."""
-        state = self.gateway.state()
-        turn = state.get("last_turn") if isinstance(state, dict) else None
-        response = turn.get("response") if isinstance(turn, dict) else None
-        if not isinstance(response, dict):
-            response = {}
-        emotion = response.get("emotion")
-        avatar = response.get("avatar")
-        if not isinstance(emotion, dict):
-            emotion = {"id": "neutral", "intensity": 0.0, "confidence": 1.0}
-        if not isinstance(avatar, dict):
-            avatar = {"expression": "neutral", "motion": "idle", "state": "idle"}
-        return {
-            "schema_version": 1,
-            "response_id": str(response.get("response_id") or ""),
-            "turn_id": str(response.get("turn_id") or ""),
-            "subtitle": str(response.get("text") or "")[:280] if response.get("speak") else "",
-            "speak": bool(response.get("speak", False)),
-            "emotion": {
-                "id": str(emotion.get("id") or "neutral")[:128],
-                "intensity": max(0.0, min(1.0, float(emotion.get("intensity", 0.0) or 0.0))),
-            },
-            "avatar": {
-                "expression": str(avatar.get("expression") or "neutral")[:128],
-                "motion": str(avatar.get("motion") or "idle")[:128],
-                "state": str(avatar.get("state") or "idle")[:32],
-            },
-            "avatar_audio": self.avatar_audio(),
-        }
-
     def set_avatar_audio(self, amplitude: float, speaking: bool, timestamp_ms: int) -> dict[str, Any]:
-        """Keep only a short-lived presentation signal; never persist audio."""
+        """Keep only a short-lived avatar/lip-sync signal; never persist audio."""
         with self._avatar_audio_lock:
             if timestamp_ms >= int(self._avatar_audio["timestamp_ms"]):
                 self._avatar_audio.update({
@@ -531,44 +553,151 @@ class CompanionServer(ThreadingHTTPServer):
             snapshot["speaking"] = False
         return snapshot
 
+    # ADR-045 appearance surface: bounded, read-only, wardrobe-only.
+    AVATAR_WARDROBE_MAX_MODELS = 64
+    AVATAR_WARDROBE_MAX_BYTES = 200 * 1024 * 1024
+
+    def avatar_wardrobe(self) -> dict[str, Any]:
+        """List the VRM models the agent may wear (bounded, no arbitrary paths)."""
+        models: list[dict[str, Any]] = []
+        root = self.avatar_wardrobe_dir
+        if root.is_dir():
+            for entry in sorted(root.iterdir()):
+                if not entry.is_file() or entry.suffix.lower() != ".vrm":
+                    continue
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    continue
+                if size > self.AVATAR_WARDROBE_MAX_BYTES:
+                    continue
+                models.append({
+                    "model": entry.stem,
+                    "file": entry.name,
+                    "size_bytes": size,
+                })
+                if len(models) >= self.AVATAR_WARDROBE_MAX_MODELS:
+                    break
+        return {
+            "schema_version": 1,
+            "root": "runtime/vrm-models",
+            "count": len(models),
+            "models": models,
+        }
+
     _SCREEN_QUERY = re.compile(
-        r"(экран|скрин|монитор|что\s+(сейчас\s+)?(происходит|видно)|опиши\s+(что|экран|кадр))",
+        r"(\u044d\u043a\u0440\u0430\u043d|\u0441\u043a\u0440\u0438\u043d|\u043c\u043e\u043d\u0438\u0442\u043e\u0440|\u0447\u0442\u043e\s+(\u0441\u0435\u0439\u0447\u0430\u0441\s+)?(\u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442|\u0432\u0438\u0434\u043d\u043e)|\u043e\u043f\u0438\u0448\u0438\s+(\u0447\u0442\u043e|\u044d\u043a\u0440\u0430\u043d|\u043a\u0430\u0434\u0440)|"
+        r"what(?:'s| is)?\s+on\s+(?:the\s+)?(?:screen|display)|"
+        r"what\s+(?:do\s+you|can\s+you)\s+see|what\s+is\s+visible|"
+        r"describe\s+(?:the\s+)?(?:current\s+)?(?:screen|scene|frame|gameplay)|"
+        r"(?:current|currently|right\s+now).{0,32}(?:screen|scene|frame|gameplay)|"
+        r"what\s+changed\s+(?:in|between)\s+(?:the\s+)?(?:scene|screen|game))",
+        re.IGNORECASE,
+    )
+    _PERCEPTION_HISTORY_QUERY = re.compile(
+        r"(\u0447\u0442\u043e\s+(\u0438\u0437\u043c\u0435\u043d\u0438\u043b\u043e\u0441\u044c|\u0431\u044b\u043b\u043e\s+\u0440\u0430\u043d\u044c\u0448\u0435|\u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u043b\u043e\s+\u0434\u043e\s+\u044d\u0442\u043e\u0433\u043e)|"
+        r"\u0440\u0430\u043d\u044c\u0448\u0435|\u043f\u0440\u0435\u0436\u0434\u0435|\u0434\u043e\s+\u044d\u0442\u043e\u0433\u043e|\u043c\u0435\u0436\u0434\u0443|\u0441\u0432\u044f\u0437\u044c|\u0441\u0432\u044f\u0437\u0430\u043d\u043e|"
+        r"what\s+changed|earlier|before\s+that|timeline|temporal\s+link|how\s+.*relate)",
+        re.IGNORECASE,
+    )
+    _SENSORY_HISTORY_QUERY = re.compile(
+        r"(\u0438\u0441\u0442\u043e\u0440\u0438\u044f|\u0438\u0441\u0442\u043e\u0440\u0438\u044e|"
+        r"\u0437\u0430\s+(\u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439\s+)?\u0447\u0430\u0441|"
+        r"\u0437\u0430\s+\u043d\u0435\u0434\u0435\u043b\w*|\u043d\u0435\u0434\u0435\u043b\w*\s+\u0440\u0430\u0431\u043e\u0442|"
+        r"\u043c\u0438\u043d\u0443\u0442\w*\s+\u043d\u0430\u0437\u0430\u0434|\u0447\u0430\u0441\w*\s+\u043d\u0430\u0437\u0430\u0434|"
+        r"\u0432\u0441\u0451\s+\u0432\u0440\u0435\u043c\u044f|\u0437\u0430\s+\u0432\u0441\u0451\s+\u0432\u0440\u0435\u043c\u044f|"
+        r"\u0447\u0442\u043e\s+\u0431\u044b\u043b\u043e|\u0447\u0442\u043e\s+\u0432\u0438\u0434\u0435\u043b\u0430|"
+        r"\u0447\u0442\u043e\s+\u044f\s+(\u0434\u0435\u043b\u0430\u043b|\u0441\u043c\u043e\u0442\u0440\u0435\u043b)|"
+        r"week|weekly|last\s+hour|minutes?\s+ago|\d+\s*minutes?\s+ago|\d+\s*hours?\s+ago|"
+        r"what\s+(?:did\s+you|have\s+you)\s+(?:seen|heard)|what\s+happened\s+(?:earlier|before))",
         re.IGNORECASE,
     )
 
     # Spoken preface gate: explicit screen nouns only (narrower than the
     # background-enrichment regex) and only for a just-finished utterance.
     PREFACE_SCREEN_QUERY = re.compile(
-        r"(экран|скрин|монитор|дисплей|кадр)",
+        r"(\u044d\u043a\u0440\u0430\u043d|\u0441\u043a\u0440\u0438\u043d|\u043c\u043e\u043d\u0438\u0442\u043e\u0440|\u0434\u0438\u0441\u043f\u043b\u0435\u0439|\u043a\u0430\u0434\u0440)",
         re.IGNORECASE,
     )
     PREFACE_MAX_SILENCE_MS = 4500.0
 
     def enrich_turn_text(self, text: str) -> str:
-        """Ground turn text: mid-turn note + freshest perception observation."""
+        """Attach the ready AV observation once, outside the conversational text."""
+        from .perception_packet import attach_packet, make_packet, render_packet
+
         clean = str(text or "").strip()
         if not clean:
             return clean
-        prefix = ""
         try:
             active = self.gateway.arbiter.state().get("active")
-        except Exception:  # noqa: BLE001 - enrichment is best-effort
+        except Exception:
             active = None
         if isinstance(active, dict) and active.get("priority") == "USER_FINAL" and not active.get("cancelled"):
-            prefix = (
-                "[Примечание: это сообщение пришло, пока предыдущий ответ ещё готовился; "
-                "предыдущая реплика и это сообщение — один контекст.]\n"
-            )
+            clean = "[Сообщение продолжает предыдущую реплику, ответ на которую ещё готовится.]\n" + clean
         fusion = self.perception_fusion
-        if fusion is None or not self._SCREEN_QUERY.search(clean):
-            return prefix + clean
+        if fusion is None:
+            return clean
+        history_requested = bool(
+            getattr(self, "_PERCEPTION_HISTORY_QUERY", CompanionServer._PERCEPTION_HISTORY_QUERY).search(clean)
+            or getattr(self, "_SENSORY_HISTORY_QUERY", CompanionServer._SENSORY_HISTORY_QUERY).search(clean)
+        )
+        week_requested = bool(re.search(r"недел\w*|\bweek\b|\bweekly\b", clean, re.IGNORECASE))
+        snapshot = {}
+        observation = ""
         try:
-            observation = fusion.compose()
-        except Exception:  # noqa: BLE001 - enrichment is best-effort
-            observation = ""
-        if not observation:
-            return prefix + clean + "\n\n[Свежих наблюдений восприятия нет: экран не наблюдался в последние минуты.]"
-        return prefix + clean + "\n\n[ВНУТРЕННИЕ НАБЛЮДЕНИЯ ВОСПРИЯТИЯ (фон, не цитировать дословно): " + observation[:900] + "]"
+            snapshot_fn = getattr(fusion, "compose_snapshot", None)
+            if callable(snapshot_fn):
+                try:
+                    snapshot = snapshot_fn(include_visual_history=history_requested)
+                except TypeError:
+                    snapshot = snapshot_fn()
+                observation = str(snapshot.get("text") or "")
+            else:
+                observation = fusion.compose()
+        except Exception:
+            pass
+        history_text = ""
+        history_warning = ""
+        sensory_history = getattr(self, "sensory_history", None)
+        if history_requested:
+            if sensory_history is None:
+                history_warning = (
+                    "SENSORY HISTORY UNAVAILABLE: durable audiovisual history is not configured. "
+                    "Do not infer that unlisted events did not happen."
+                )
+            else:
+                try:
+                    focus = _history_focus_seconds_ago(clean)
+                    lookback = 7 * 24 * 3600 if week_requested else min(7 * 24 * 3600, max(300, focus + 30)) if focus is not None else 3600
+                    history_text = sensory_history.context_text(
+                        seconds=lookback, include_week=week_requested, focus_seconds_ago=focus,
+                        focus_window_seconds=60.0, max_chars=5600 if week_requested else 4200,
+                    )
+                except Exception:  # noqa: BLE001 - disclose missing history to the brain
+                    history_warning = (
+                        "SENSORY HISTORY UNAVAILABLE: durable history retrieval failed. "
+                        "Do not infer that unlisted events did not happen."
+                    )
+        if history_requested and not history_text:
+            visual_fallback = "\n".join(
+                f"{event.get('age_s', 0):.1f} с назад: {event.get('text', '')}"
+                for event in snapshot.get("recent_visual_events", []) if isinstance(event, dict)
+            )
+            if visual_fallback:
+                history_text = (
+                    (history_warning + " ") if history_warning else ""
+                ) + (
+                    "Fallback includes only short-lived visual events, not a complete "
+                    "audio/video history:\n" + visual_fallback
+                )
+            elif history_warning:
+                history_text = history_warning
+        packet = make_packet(snapshot, fallback=observation, history=history_text)
+        if not render_packet(packet):
+            if not self._SCREEN_QUERY.search(clean):
+                return clean
+            packet["summary"] = "Свежего наблюдения экрана нет; текущее изображение неизвестно."
+        return attach_packet(clean, packet)
 
     def voice_preface(self, partial: str, *, silence_ms: float | None = None) -> str:
         """Build a short speakable provisional line from fresh perception.
@@ -596,8 +725,8 @@ class CompanionServer(ThreadingHTTPServer):
         if not observation:
             return ""
         clause = observation.split(". ", 1)[0].strip()
-        clause = re.sub(r"^(?:Экран|Окно|Звук|Музыка|Слышно)\s*:\s*", "", clause, flags=re.IGNORECASE).strip()
-        clause = clause.strip("«»\"' .;:,-")
+        clause = re.sub(r"^(?:\u042d\u043a\u0440\u0430\u043d|\u041e\u043a\u043d\u043e|\u0417\u0432\u0443\u043a|\u041c\u0443\u0437\u044b\u043a\u0430|\u0421\u043b\u044b\u0448\u043d\u043e)\s*:\s*", "", clause, flags=re.IGNORECASE).strip()
+        clause = clause.strip("\u00ab\u00bb\"\' .;:,-")
         if not clause:
             return ""
         if len(clause) > 140:
@@ -667,6 +796,10 @@ class CompanionServer(ThreadingHTTPServer):
             step("responder", responder_close)
         if self.screen_watcher is not None:
             step("screen_watcher", self.screen_watcher.stop)
+        if self.streaming_perception is not None:
+            step("streaming_perception", self.streaming_perception.stop)
+        if self.visual_sensor is not None:
+            step("visual_sensor", self.visual_sensor.stop)
         if self.ambient_audio is not None:
             step("ambient_audio", self.ambient_audio.stop)
         step("playback_suppression", self.playback_suppression.end)
@@ -757,6 +890,14 @@ class CompanionServer(ThreadingHTTPServer):
         resources = self.resources.state() if self.resources is not None else None
         sensory_state = self.sensory_ingestor.state() if self.sensory_ingestor is not None else None
         screen_state = self.screen_watcher.state() if self.screen_watcher is not None else None
+        visual_state = self.visual_sensor.state() if self.visual_sensor is not None else None
+        capture_state = self.voice_capture.state() if self.voice_capture is not None else None
+        ambient_audio_state = self.ambient_audio.state() if self.ambient_audio is not None else None
+        ambient_audio_bridge_state = (
+            ambient_audio_state.get("bridge")
+            if isinstance(ambient_audio_state, dict) and isinstance(ambient_audio_state.get("bridge"), dict)
+            else {}
+        )
         streaming_state = self.streaming_asr.snapshot() if self.streaming_asr is not None else None
         chat_status = getattr(self.gateway, "chat_status", None)
         chat_status = chat_status() if callable(chat_status) else "starting"
@@ -803,11 +944,122 @@ class CompanionServer(ThreadingHTTPServer):
                 "running": bool(sensory_state.get("running")) if sensory_state else False,
                 "lines": sensory_state.get("counters", {}).get("lines", 0) if sensory_state else 0,
             },
+            "capture": {
+                "sensory_history": (
+                    self.perception_fusion.history_health()
+                    if self.perception_fusion is not None
+                    and callable(getattr(self.perception_fusion, "history_health", None))
+                    else None
+                ),
+                "microphone_owner": capture_state.get("owner") if capture_state else None,
+                "microphone_expires_in_ms": capture_state.get("expires_in_ms", 0) if capture_state else 0,
+                "loopback_configured": bool(ambient_audio_state and ambient_audio_state.get("configured")),
+                "loopback_enabled": bool(ambient_audio_state and ambient_audio_state.get("enabled")),
+                "loopback_paused": bool(ambient_audio_state and ambient_audio_state.get("paused")),
+                "loopback_running": bool(
+                    ambient_audio_state
+                    and isinstance(ambient_audio_state.get("capture"), dict)
+                    and ambient_audio_state["capture"].get("running")
+                ),
+                "loopback_device": (
+                    ambient_audio_state.get("capture", {}).get("device")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_device_index": (
+                    ambient_audio_state.get("capture", {}).get("device_index")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_host_api_index": (
+                    ambient_audio_state.get("capture", {}).get("host_api_index")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_sample_rate": (
+                    ambient_audio_state.get("capture", {}).get("sample_rate")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_channels": (
+                    ambient_audio_state.get("capture", {}).get("channels")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_error": (
+                    ambient_audio_state.get("capture", {}).get("last_error")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_last_chunk_age_ms": (
+                    ambient_audio_state.get("capture", {}).get("last_chunk_age_ms")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_signal_window_state": (
+                    ambient_audio_state.get("capture", {}).get("signal_window_state", "unknown")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else "unknown"
+                ),
+                "loopback_signal_window_rms": (
+                    ambient_audio_state.get("capture", {}).get("signal_window_rms")
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else None
+                ),
+                "loopback_signal_window_duration_ms": (
+                    ambient_audio_state.get("capture", {}).get("signal_window_duration_ms", 0)
+                    if ambient_audio_state and isinstance(ambient_audio_state.get("capture"), dict)
+                    else 0
+                ),
+                "ambient_asr_mode": ambient_audio_bridge_state.get("mode"),
+                "ambient_asr_transcripts": int(ambient_audio_bridge_state.get("transcripts", 0) or 0),
+                "ambient_asr_noise_filtered": int(ambient_audio_bridge_state.get("asr_noise_filtered", 0) or 0),
+                "ambient_asr_last_age_ms": ambient_audio_bridge_state.get("transcript_last_age_ms"),
+                "ambient_asr_last_fresh": bool(ambient_audio_bridge_state.get("transcript_last_fresh")),
+                "soundscape_configured": bool(ambient_audio_bridge_state.get("soundscape_configured")),
+                "soundscape_count": int(ambient_audio_bridge_state.get("soundscape_count", 0) or 0),
+                "soundscape_errors": int(ambient_audio_bridge_state.get("soundscape_errors", 0) or 0),
+                "soundscape_latency_ms_p95": ambient_audio_bridge_state.get("soundscape_latency_ms_p95"),
+                "soundscape_last_kind": ambient_audio_bridge_state.get("soundscape_last_kind"),
+                "soundscape_last_tags": list(ambient_audio_bridge_state.get("soundscape_last_tags") or [])[:4],
+                "soundscape_last_age_ms": ambient_audio_bridge_state.get("soundscape_last_age_ms"),
+                "soundscape_last_fresh": bool(ambient_audio_bridge_state.get("soundscape_last_fresh")),
+                "audio_description_configured": bool(ambient_audio_bridge_state.get("audio_description_configured")),
+                "audio_description_provider": ambient_audio_bridge_state.get("audio_description_provider"),
+                "audio_description_count": int(ambient_audio_bridge_state.get("audio_description_count", 0) or 0),
+                "audio_description_errors": int(ambient_audio_bridge_state.get("audio_description_errors", 0) or 0),
+                "audio_description_skipped": int(ambient_audio_bridge_state.get("audio_description_skipped", 0) or 0),
+                "audio_description_latency_ms_p95": ambient_audio_bridge_state.get("audio_description_latency_ms_p95"),
+                "audio_description_last_kind": ambient_audio_bridge_state.get("audio_description_last_kind"),
+                "audio_description_last_age_ms": ambient_audio_bridge_state.get("audio_description_last_age_ms"),
+                "audio_description_last_fresh": bool(ambient_audio_bridge_state.get("audio_description_last_fresh")),
+            },
             "screen": {
                 "running": bool(screen_state.get("running")) if screen_state else False,
                 "next_wait_seconds": screen_state.get("next_wait_seconds") if screen_state else None,
                 "idle_polls": screen_state.get("idle_polls") if screen_state else None,
                 "event_count": screen_state.get("event_count", 0) if screen_state else 0,
+            },
+            "visual": {
+                "running": bool(visual_state.get("running")) if visual_state else False,
+                "captures": visual_state.get("captures", 0) if visual_state else 0,
+                "submits": visual_state.get("submits", 0) if visual_state else 0,
+                "delivered": visual_state.get("delivered", 0) if visual_state else 0,
+                "dropped_scene_change": visual_state.get("dropped_scene_change", 0) if visual_state else 0,
+                "dropped_stale": visual_state.get("dropped_stale", 0) if visual_state else 0,
+                "capture_errors": visual_state.get("capture_errors", 0) if visual_state else 0,
+                "error_active": bool(visual_state.get("last_error")) if visual_state else False,
+                "scene_changes": visual_state.get("scene_changes", 0) if visual_state else 0,
+                "dirty": bool(visual_state.get("dirty")) if visual_state else False,
+                "dirty_reason": visual_state.get("dirty_reason") if visual_state else None,
+                "latest_age_ms": visual_state.get("latest_age_ms") if visual_state else None,
+                "caption_fresh": visual_state.get("caption_fresh") if visual_state else None,
+                "caption_age_ms": visual_state.get("caption_age_ms") if visual_state else None,
+                "caption_confirmed_age_ms": visual_state.get("caption_confirmed_age_ms") if visual_state else None,
+                "age_ms_p50": visual_state.get("age_ms_p50") if visual_state else None,
+                "age_ms_p95": visual_state.get("age_ms_p95") if visual_state else None,
+                "last_submit_reason": visual_state.get("last_submit_reason") if visual_state else None,
+                "scene_id": visual_state.get("scene_id") if visual_state else None,
             },
             "voice": {
                 "tts": self.tts is not None,
@@ -831,31 +1083,73 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path == "/api/health":
+            doctor = self.server.doctor_report()
             health = self.server.gateway.health()
+            components = dict(health.get("components", {}))
+            components.update({item["id"]: item["status"] for item in doctor["checks"]})
+            health["components"] = components
+            health["status"] = doctor["status"]
+            health["optional_off"] = doctor["optional_off"]
             health["runtime_instance_id"] = self.server.runtime_instance_id
             health["resources"] = self.server.resources.state()
             self._json(health)
+            return
+        if path == "/api/profile/stop/status":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            status_path = self.server.launcher_stop_status
+            if status_path is None:
+                self._json({"ok": False, "error": "managed profile stop is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                status = json.loads(status_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                self._json({"ok": True, "status": "waiting_for_launcher"})
+                return
+            acknowledged = (
+                isinstance(status, dict)
+                and status.get("schema_version") == 1
+                and status.get("runtime_instance_id") == self.server.runtime_instance_id
+                and isinstance(status.get("request_id"), str)
+                and status.get("status") == "stopping"
+            )
+            self._json({
+                "ok": True,
+                "status": "stopping" if acknowledged else "waiting_for_launcher",
+                "request_id": status.get("request_id") if acknowledged else None,
+            })
+            return
+        if path == "/api/voice/capture":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            hub = self.server.config_hub
+            if hub is None:
+                self._json({"ok": False, "error": "config hub is unavailable", "settings_writable": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                config = hub.read_voice_capture()
+                settings = VoiceCaptureSettings.from_mapping(config["settings"])
+                self.server.voice_capture.set_settings(settings)
+                self._json({
+                    **self.server.voice_capture.state(),
+                    "settings": settings.as_settings_dict(),
+                    "revision": config["revision"],
+                    "settings_writable": True,
+                })
+            except Exception as exc:  # noqa: BLE001 - expose invalid/unavailable config to the UI
+                self._json({"ok": False, "error": capture_config_error(exc), "settings_writable": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         if path == "/api/resources":
             self._json(self.server.resources.state())
             return
         if path == "/api/doctor":
-            self._json(build_doctor_report(
-                gateway=self.server.gateway,
-                hostos=self.server.hostos,
-                vision=self.server.vision,
-                voice_mem=self.server.voice_mem,
-                asr=self.server.asr,
-                tts=self.server.tts,
-                avatar_assets=self.server.avatar_assets,
-                ambient_memory=self.server.ambient_memory,
-                ambient_audio=self.server.ambient_audio,
-                resource_governor=self.server.resources,
-                streaming_asr=self.server.streaming_asr,
-                helper_urls=self.server.helper_urls,
-                sensory_ingestor=self.server.sensory_ingestor,
-                gigaam_transcriber=getattr(self.server, "gigaam_transcriber", None),
-            ))
+            self._json(self.server.doctor_report())
             return
         if path == "/api/proactive":
             try:
@@ -899,6 +1193,41 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001 - the hint is best-effort
                 draft = ""
             self._json({"configured": True, "draft": draft[:1200]})
+            return
+        if path == "/api/sensory-history":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            store = self.server.sensory_history
+            if store is None:
+                self._json({"configured": False, "status": "not_configured"})
+                return
+            self._json({
+                "configured": True,
+                "state": store.state(),
+                "last_hour": store.context_text(seconds=3600, max_chars=6000),
+                "week": store.context_text(seconds=7 * 24 * 3600, include_week=True, max_chars=6000),
+            })
+            return
+        if path == "/api/perception/stream":
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            stream = self.server.streaming_perception
+            if stream is None:
+                self._json({"configured": False, "running": False})
+                return
+            try:
+                self._json({"configured": True, **stream.snapshot(seconds=30.0, limit=20)})
+            except Exception as exc:  # noqa: BLE001 - sensor status is best-effort
+                self._json(
+                    {"configured": True, "running": False, "error": f"{type(exc).__name__}: {exc}"[:300]},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
             return
         if path == "/api/session":
             self._json(
@@ -990,7 +1319,17 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             status = self.server.vision.status()
             if self.server.screen_watcher is not None:
                 status["watcher"] = self.server.screen_watcher.state()
+            if self.server.visual_sensor is not None:
+                status["visual_sensor"] = self.server.visual_sensor.state()
             status["attention"] = self.server.attention.state()
+            fusion = getattr(self.server, "perception_fusion", None)
+            cortex = getattr(fusion, "eg2", None) if fusion is not None else None
+            if cortex is None and hasattr(fusion, "eg2_cortex"):
+                cortex = fusion.eg2_cortex()
+            status["eg2"] = {
+                "configured": cortex is not None,
+                "model_root": str(getattr(cortex, "model_root", "")) if cortex is not None else None,
+            }
             self._json(status)
             return
         if path == "/api/vision/events":
@@ -1031,6 +1370,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 "state": state,
                 "observations": self.server.ambient_memory.observations(),
                 "episodes": self.server.ambient_memory.episodes(),
+                "sensory_history": self.server.sensory_history.state() if self.server.sensory_history is not None else None,
             })
             return
         if path == "/api/ambient-audio":
@@ -1053,9 +1393,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             result: dict[str, Any] = {"configured": True}
             if self.server.voice_mem is not None:
                 try:
-                    voicemem = self.server.voice_mem.health()
-                except VoiceMemUnavailable as exc:
-                    voicemem = {"status": "degraded", "reason": str(exc)}
+                    # This is a polling UI endpoint. Read process/request
+                    # state only; a sidecar health RPC can sit behind a long
+                    # audio inference on the same JSONL pipe.
+                    voicemem = self.server.voice_mem.state()
+                except Exception:  # noqa: BLE001 - status polling must not stall the control plane
+                    voicemem = {"status": "degraded", "running": False, "ready": False}
                 result.update(voicemem)
                 result["voicemem"] = voicemem
                 if self.server.voice_mem_async is not None:
@@ -1074,14 +1417,67 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json(self.server.tts.health())
             return
         if path == "/api/avatar/config":
-            config = self.server.avatar_assets.config() if self.server.avatar_assets else {
-                "enabled": False, "runtime_url": None, "model_url": None, "adapter": None,
-            }
-            config["presentation_url"] = self.server.presentation_url
-            self._json(config)
+            # ADR-045: the Live2D asset store is removed; the 3D VRM avatar
+            # lives in the Electron shell. Keep the endpoint for the panel's
+            # OBS card with a deprecation payload.
+            self._json({
+                "enabled": False,
+                "deprecated": "live2d",
+                "note": "3D VRM avatar lives in the desktop shell (desktop/)",
+                "obs_mode_url": "/app?mode=obs",
+            })
+            return
+        if path == "/api/avatar/wardrobe":
+            # ADR-045 appearance surface (bounded): the VRM models the agent
+            # may swap into, served from the project's wardrobe directory.
+            # No arbitrary paths, no uploads; the list is what exists on disk.
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            self._json(self.server.avatar_wardrobe())
+            return
+        if path.startswith("/api/avatar/model/"):
+            # ADR-046 single-window app: serve a wardrobe .vrm file so the
+            # embedded scene (same origin) can load models without a
+            # file:// detour. Session-gated, wardrobe-bounded, size-capped.
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            name = path[len("/api/avatar/model/"):]
+            if not re.fullmatch(r"[A-Za-z0-9_-]+\.vrm", name):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            candidate = (self.server.avatar_wardrobe_dir / name).resolve()
+            if self.server.avatar_wardrobe_dir not in candidate.parents or not candidate.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            try:
+                if candidate.stat().st_size > CompanionServer.AVATAR_WARDROBE_MAX_BYTES:
+                    self.send_error(HTTPStatus.FORBIDDEN, "model too large")
+                    return
+                body = candidate.read_bytes()
+            except OSError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_response(HTTPStatus.OK)
+            _security_headers(self)
+            self.send_header("Content-Type", "model/gltf-binary")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if path in {
-            "/api/jawl/status", "/api/jawl/overview", "/api/jawl/memory",
+            # Product API facade (ADR-041): canonical service endpoints. UI and
+            # internal code call these; JAWL/VoiceMem stay engines behind them.
+            "/api/memory", "/api/tasks", "/api/character", "/api/runtime/status",
+            "/api/capabilities",
+            # Legacy engine-specific aliases (kept for compatibility).
+            "/api/jawl/status", "/api/jawl/activity", "/api/jawl/overview", "/api/jawl/memory",
             "/api/jawl/persona", "/api/jawl/hostos", "/api/jawl/journal",
         }:
             try:
@@ -1090,19 +1486,63 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
                 return
             adapter = self.server.gateway.jawl_web
-            if adapter is None:
+            if adapter is None and path.startswith("/api/jawl/"):
                 self._json({"configured": False, "status": "not_configured"})
                 return
             try:
-                if path == "/api/jawl/status":
-                    self._json({"configured": True, "status": adapter.status()})
-                elif path == "/api/jawl/memory":
-                    self._json(adapter.memory())
-                elif path == "/api/jawl/persona":
-                    self._json(adapter.persona())
-                elif path == "/api/jawl/hostos":
-                    self._json({**adapter.hostos(), "control_enabled": self.server.jawl_hostos_control})
-                elif path == "/api/jawl/journal":
+                # Canonical Product API routes carry the service envelope; the
+                # legacy /api/jawl/* aliases keep their original response shape
+                # byte-for-byte, because they are a compatibility contract.
+                if path in ("/api/jawl/status", "/api/runtime/status"):
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    status = adapter.status()
+                    if path == "/api/runtime/status":
+                        self._json({
+                            "ok": True,
+                            "schema_version": 1,
+                            "service": "runtime",
+                            "configured": True,
+                            "status": status,
+                        })
+                    else:
+                        self._json({"configured": True, "status": status})
+                elif path == "/api/jawl/activity":
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured", "running": False})
+                        return
+                    self._json(adapter.activity())
+                elif path in ("/api/jawl/memory", "/api/memory"):
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    payload = adapter.memory()
+                    self._json({**payload, "service": "memory"} if path == "/api/memory" else payload)
+                elif path in ("/api/jawl/persona", "/api/character"):
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    payload = adapter.persona()
+                    self._json({**payload, "service": "character"} if path == "/api/character" else payload)
+                elif path in ("/api/jawl/hostos", "/api/capabilities"):
+                    if path == "/api/capabilities":
+                        if adapter is None:
+                            self._json({
+                                "service": "capabilities",
+                                "configured": False,
+                                "status": "not_configured",
+                                "control_enabled": self.server.jawl_hostos_control,
+                            })
+                            return
+                        self._json({
+                            "service": "capabilities",
+                            "control_enabled": self.server.jawl_hostos_control,
+                            **adapter.hostos(),
+                        })
+                    else:
+                        self._json({**adapter.hostos(), "control_enabled": self.server.jawl_hostos_control})
+                elif path in ("/api/jawl/journal", "/api/tasks"):
                     values = parse_qs(
                         urlsplit(self.path).query, keep_blank_values=True
                     )
@@ -1131,30 +1571,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                             status=HTTPStatus.BAD_REQUEST,
                         )
                         return
-                    self._json(adapter.autonomy_journal(limit=limit, state=state))
+                    if adapter is None:
+                        self._json({"configured": False, "status": "not_configured"})
+                        return
+                    payload = adapter.autonomy_journal(limit=limit, state=state)
+                    self._json({**payload, "service": "tasks"} if path == "/api/tasks" else payload)
                 else:
                     self._json(adapter.overview())
             except JawlWebUnavailable as exc:
                 self._json({"configured": True, "status": "offline", "error": str(exc)})
-            return
-        asset_prefix = "/avatar-assets/"
-        if self.server.legacy_presentation and path.startswith(asset_prefix) and self.server.avatar_assets is not None:
-            asset = self.server.avatar_assets.resolve_public(path[len(asset_prefix):])
-            if asset is None:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            try:
-                body = asset.read_bytes()
-            except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            self.send_response(HTTPStatus.OK)
-            _security_headers(self)
-            self.send_header("Content-Type", self.server.avatar_assets.content_type(asset))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
             return
         if path == "/api/hostos/approvals":
             try:
@@ -1181,16 +1606,94 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if path in ("/", "/index.html", "/avatar", "/avatar.html"):
-            if path in ("/avatar", "/avatar.html") and not self.server.legacy_presentation:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            filename = "avatar.html" if path in ("/avatar", "/avatar.html") else "index.html"
-            index_path = self.server.frontend_dir / filename
+        # ADR-046: the single compact desktop app (chat + 3D character +
+        # all settings in one window). Served from the pinned desktop/
+        # directory; app.html is the entry, app.js/app-scene.js its modules.
+        # The scene loads three.js through its own import map from
+        # node_modules under desktop/ (read-only assets, no uploads).
+        if path == "/avatar":
+            # ADR-052: the avatar/OBS surface is the single app window in
+            # ?mode=obs; the separate presentation origin is removed. This
+            # alias keeps old pet-window and OBS links working.
+            self.send_response(HTTPStatus.FOUND)
+            _security_headers(self)
+            self.send_header("Location", "/app?mode=obs")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        APP_FILES = {
+            "/app": ("app.html", "text/html; charset=utf-8"),
+            "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+            "/app-settings.js": ("app-settings.js", "text/javascript; charset=utf-8"),
+            "/app-scene.js": ("app-scene.js", "text/javascript; charset=utf-8"),
+            "/avatar-motion.js": ("avatar-motion.js", "text/javascript; charset=utf-8"),
+            "/avatar-physics.js": ("avatar-physics.js", "text/javascript; charset=utf-8"),
+            "/speech-stream.js": ("speech-stream.js", "text/javascript; charset=utf-8"),
+            "/voice-input.js": ("voice-input.js", "text/javascript; charset=utf-8"),
+            "/voice-draft.js": ("voice-draft.js", "text/javascript; charset=utf-8"),
+        }
+        if path in APP_FILES or path.startswith("/app/node_modules/") or path.startswith("/app/runtime/"):
+            name, content_type = APP_FILES.get(path, (None, None))
+            if name is None:
+                # module assets (three.js etc.) - resolve inside the app dirs.
+                # ES modules REQUIRE a JS MIME type: the browser rejects
+                # application/octet-stream with "Failed to fetch dynamically
+                # imported module".
+                if path.startswith("/app/node_modules/"):
+                    relative = path[len("/app/node_modules/"):]
+                    allowed_roots = ((self.server.desktop_dir / "node_modules").resolve(),)
+                    allowed_suffixes = {".js", ".json", ".wasm"}
+                elif path.startswith("/app/runtime/vrm-models/"):
+                    relative = path[len("/app/runtime/vrm-models/"):]
+                    allowed_roots = ((self.server.desktop_dir.parent / "runtime" / "vrm-models").resolve(),)
+                    allowed_suffixes = {".vrm"}
+                else:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                candidate = None
+                for root in allowed_roots:
+                    probe = (root / relative).resolve()
+                    if root in probe.parents and probe.is_file() and probe.suffix.lower() in allowed_suffixes:
+                        candidate = probe
+                        break
+                if candidate is None:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                suffix_types = {
+                    ".js": "text/javascript; charset=utf-8",
+                    ".json": "application/json; charset=utf-8",
+                    ".wasm": "application/wasm",
+                    # GLTFLoader sniffs the container; octet-stream avoids the
+                    # blob-texture path that model/gltf-binary triggered.
+                    ".vrm": "application/octet-stream",
+                }
+                content_type = suffix_types.get(candidate.suffix.lower(), "application/octet-stream")
+                body = candidate.read_bytes()
+            else:
+                app_path = self.server.desktop_dir / name
+                try:
+                    body = app_path.read_bytes()
+                except OSError:
+                    self.send_error(HTTPStatus.NOT_FOUND, "desktop app is not installed")
+                    return
+            self.send_response(HTTPStatus.OK)
+            _security_headers(self)
+            self.send_header("Content-Type", content_type or "application/octet-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path in ("/", "/index.html"):
+            # ADR-046: the single-window desktop app (chat + 3D VRM character +
+            # all settings) is the only UI. The legacy two-window shell
+            # (frontend/index.html + avatar.html) was removed in H1
+            # (docs/history/2026-10-16-h1-ui-defrag/).
+            app_path = self.server.frontend_dir.parent / "desktop" / "app.html"
             try:
-                body = index_path.read_bytes()
+                body = app_path.read_bytes()
             except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND, "frontend is not installed")
+                self.send_error(HTTPStatus.NOT_FOUND, "desktop app is not installed")
                 return
             self.send_response(HTTPStatus.OK)
             _security_headers(self)
@@ -1209,6 +1712,33 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._require_browser_session()
             payload = self._read_json()
+            if self.path == "/api/profile/stop":
+                if payload:
+                    raise ValueError("profile stop request body must be empty")
+                target = self.server.launcher_stop_request
+                if target is None:
+                    self._json({"ok": False, "error": "managed profile stop is unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                request = {
+                    "schema_version": 1,
+                    "runtime_instance_id": self.server.runtime_instance_id,
+                    "request_id": uuid4().hex,
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                }
+                temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    temporary.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+                    os.replace(temporary, target)
+                except OSError:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    self._json({"ok": False, "error": "launcher stop request could not be recorded"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return
+                self._json({"ok": True, "status": "stop_requested", "request_id": request["request_id"]}, status=HTTPStatus.ACCEPTED)
+                return
             if self.path == "/api/config-hub/save":
                 hub = self.server.config_hub
                 if hub is None:
@@ -1241,6 +1771,66 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "avatar_audio": self.server.set_avatar_audio(
                     float(amplitude), speaking, timestamp_ms,
                 )})
+                return
+            if self.path == "/api/voice/capture":
+                action = payload.get("action")
+                if action == "configure":
+                    if set(payload) - {"action", "settings", "expected_revision"}:
+                        raise ValueError("unknown voice capture request keys")
+                    hub = self.server.config_hub
+                    if hub is None:
+                        self._json({"ok": False, "error": "config hub is unavailable", "settings_writable": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                        return
+                    expected_revision = payload.get("expected_revision")
+                    if not isinstance(expected_revision, str) or not expected_revision:
+                        raise ValueError("expected_revision must be a non-empty string")
+                    try:
+                        current_state = hub.read_voice_capture()
+                        current_settings = VoiceCaptureSettings.from_mapping(current_state["settings"])
+                    except Exception as exc:  # noqa: BLE001 - bad persisted config and I/O failures are visible
+                        self._json({"ok": False, "error": capture_config_error(exc), "settings_writable": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        return
+                    requested = VoiceCaptureSettings.from_request(payload.get("settings"), current_settings)
+                    try:
+                        saved = hub.write_voice_capture(requested.as_settings_dict(), expected_revision)
+                    except Exception as exc:  # noqa: BLE001 - bad persisted config and I/O failures are visible
+                        self._json({"ok": False, "error": capture_config_error(exc), "settings_writable": False}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        return
+                    if saved.get("status") == "conflict":
+                        self._json({"ok": False, **saved, "settings_writable": True}, status=HTTPStatus.CONFLICT)
+                        return
+                    self.server.voice_capture.set_settings(requested)
+                    self._json({
+                        "ok": True,
+                        "settings": requested.as_settings_dict(),
+                        "revision": saved["revision"],
+                        "settings_writable": True,
+                        "restart_required": False,
+                        "restart_policy": "next_capture",
+                    })
+                    return
+                owner, capture_id = payload.get("owner"), payload.get("capture_id")
+                operations = {
+                    "acquire": self.server.voice_capture.acquire,
+                    "renew": self.server.voice_capture.renew,
+                    "release": self.server.voice_capture.release,
+                }
+                if action not in operations:
+                    raise ValueError("action must be acquire, renew, release or configure")
+                if action == "acquire" and self.server.config_hub is not None:
+                    try:
+                        self.server.voice_capture.set_settings(read_config_hub_settings(self.server.config_hub))
+                    except Exception as exc:  # noqa: BLE001 - persisted config errors must be visible
+                        self._json({"ok": False, "error": capture_config_error(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                        return
+                result = operations[action](owner, capture_id)
+                if action == "release":
+                    scope_id = self._voice_asr_scope({"capture_id": capture_id})
+                    if self.server.asr is not None:
+                        result["asr"] = self.server.asr.discard_scope(scope_id)
+                    if self.server.streaming_asr is not None:
+                        result["streaming_asr"] = self.server.streaming_asr.discard_scope(scope_id)
+                self._json(result)
                 return
             if self.path == "/api/chat":
                 if self.server.timeline is not None:
@@ -1309,54 +1899,64 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json(self._feed_voice_chunk(payload))
                 return
             if self.path == "/api/voice/draft":
-                if self.server.asr is None and self.server.streaming_asr is None:
-                    self._json({"ok": False, "draft": "", "error": "ASR is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                capture_cancel = self.server.voice_capture.authorize_stream(payload)
+                if self.server.streaming_asr is None:
+                    # Partials have exactly one owner: the CrispASR streaming
+                    # bridge. Without it there is no draft lane at all - the
+                    # removed provider re-transcription of the buffer was a
+                    # second representation of the same speech.
+                    self._json({"ok": True, "draft": "", "mode": "unavailable"})
                     return
-                session_id = str(payload.get("session_id") or self.server.session_token)[:200]
-                # Streaming lane first: sub-second partials + adaptive endpoint
-                # policy. Falls back to the slower draft re-transcription.
-                if self.server.streaming_asr is not None:
-                    snapshot = self.server.streaming_asr.snapshot()
-                    text = str(snapshot.get("text") or "").strip()
-                    if snapshot.get("active") and text:
-                        if not is_meaningful_transcript(text):
-                            self._json({"ok": True, "draft": "", "mode": "streaming", "hold": False,
-                                        "silence_ms": snapshot.get("silence_ms"), "required_ms": turn_policy.BASE_SILENCE_MS})
-                            return
-                        decision = turn_policy.decide(text, float(snapshot.get("silence_ms") or 0.0))
-                        self._json({
-                            "ok": True, "draft": text, "mode": "streaming",
-                            "hold": bool(decision["hold"]),
-                            "silence_ms": snapshot.get("silence_ms"),
-                            "required_ms": decision["required_ms"],
-                        })
+                # Streaming lane: sub-second partials + adaptive endpoint policy.
+                scope_id = self._voice_asr_scope(payload)
+                session_id = self._voice_asr_session(payload)
+                snapshot = self.server.streaming_asr.snapshot(scope_id=scope_id, session_id=session_id)
+                if capture_cancel is not None and capture_cancel.is_set():
+                    self._json({"ok": True, "draft": "", "mode": "streaming", "status": "cancelled"})
+                    return
+                text = str(snapshot.get("text") or "").strip()
+                assistant_speaking = payload.get("assistant_speaking") is True
+                extended_used = payload.get("extended_used") is True
+                if snapshot.get("active") and text:
+                    if not is_meaningful_transcript(text):
+                        self._json({"ok": True, "draft": "", "mode": "streaming", "hold": False,
+                                    "silence_ms": snapshot.get("silence_ms"), "required_ms": turn_policy.BASE_SILENCE_MS})
                         return
-                if self.server.asr is None:
-                    self._json({"ok": True, "draft": "", "mode": "streaming"})
+                    decision = turn_policy.decide(
+                        text,
+                        float(snapshot.get("silence_ms") or 0.0),
+                        extended_used,
+                        assistant_speaking=assistant_speaking,
+                    )
+                    self._json({
+                        "ok": True, "draft": text, "mode": "streaming",
+                        "hold": bool(decision["hold"]),
+                        "silence_ms": snapshot.get("silence_ms"),
+                        "required_ms": decision["required_ms"],
+                        "duplex_token": decision.get("duplex_token"),
+                        "duplex_action": decision.get("duplex_action"),
+                        "avatar_gesture": decision.get("avatar_gesture"),
+                    })
                     return
-                try:
-                    draft = self.server.asr.draft(session_id)
-                except Exception as exc:  # noqa: BLE001 - drafts never break capture
-                    self._json({"ok": False, "draft": "", "error": str(exc)[:300]})
-                    return
-                text = str(draft.get("text") or "").strip()
-                if not is_meaningful_transcript(text):
-                    self._json({"ok": True, "draft": "", "mode": "external_final_utterance"})
-                    return
-                decision = turn_policy.decide(text, 0.0)
-                self._json({"ok": True, "draft": text, "mode": "external_final_utterance",
-                            "hold": bool(decision["hold"]), "required_ms": decision["required_ms"]})
+                self._json({"ok": True, "draft": "", "mode": "streaming"})
                 return
             if self.path == "/api/voice/preface":
                 # A short provisional phrase (no LLM) that can be spoken while
                 # the JAWL turn is still thinking; the authoritative answer
                 # follows it. Explicit screen questions only, best-effort.
+                capture_cancel = self.server.voice_capture.authorize_stream(payload)
                 snapshot: dict[str, Any] = {}
                 if self.server.streaming_asr is not None:
                     try:
-                        snapshot = self.server.streaming_asr.snapshot()
+                        snapshot = self.server.streaming_asr.snapshot(
+                            scope_id=self._voice_asr_scope(payload),
+                            session_id=self._voice_asr_session(payload),
+                        )
                     except Exception:  # noqa: BLE001 - the preface is optional
                         snapshot = {}
+                if capture_cancel is not None and capture_cancel.is_set():
+                    self._json({"ok": True, "text": "", "status": "cancelled"})
+                    return
                 partial = ""
                 silence_ms: float | None = None
                 if isinstance(snapshot, dict) and snapshot.get("active"):
@@ -1366,6 +1966,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     except (TypeError, ValueError):
                         silence_ms = None
                 text = self.server.voice_preface(partial, silence_ms=silence_ms)
+                if capture_cancel is not None and capture_cancel.is_set():
+                    self._json({"ok": True, "text": "", "status": "cancelled"})
+                    return
                 if text:
                     log_event("voice_preface", text=text, partial=partial[:160])
                 self._json({"ok": True, "text": text})
@@ -1404,7 +2007,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 if emotion is not None and not isinstance(emotion, dict):
                     raise ValueError("emotion must be an object or null")
                 audio = self.server.tts.synthesize(
-                    text, voice=voice, speed=float(speed), emotion=emotion
+                    text, voice=voice, speed=float(speed), emotion=emotion,
+                    **self._speech_request_kwargs(payload),
                 )
                 self._audio(audio)
                 return
@@ -1422,11 +2026,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("speed must be a number")
                 if emotion is not None and not isinstance(emotion, dict):
                     raise ValueError("emotion must be an object or null")
-                self._stream_tts(text, voice=voice, speed=float(speed), emotion=emotion)
+                self._stream_tts(text, voice=voice, speed=float(speed), emotion=emotion,
+                                 **self._speech_request_kwargs(payload))
                 return
             if self.path == "/api/tts/cancel":
+                request_kwargs = self._speech_request_kwargs(payload)
                 if self.server.tts is not None:
-                    self.server.tts.cancel()
+                    self.server.tts.cancel(**request_kwargs)
                 self._json({"ok": True, "status": "cancelled"})
                 return
             if self.path == "/api/hostos/execute":
@@ -1485,6 +2091,27 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     session_id=self.server.session_token,
                 )
                 self._json({"ok": result["status"] in {"ok", "unchanged"}, "result": result})
+                return
+            if self.path == "/api/vision/describe-displays":
+                max_displays = payload.get("max_displays", 2)
+                if isinstance(max_displays, bool) or not isinstance(max_displays, int):
+                    raise ValueError("max_displays must be an integer")
+                max_displays = max(1, min(max_displays, 4))
+                audio_wav_bytes = None
+                audio_b64 = payload.get("audio_wav_base64")
+                if isinstance(audio_b64, str) and audio_b64:
+                    try:
+                        import base64
+
+                        audio_wav_bytes = base64.b64decode(audio_b64)
+                    except Exception:  # noqa: BLE001
+                        audio_wav_bytes = None
+                result = self.server.vision.describe_displays(
+                    max_displays=max_displays,
+                    session_id=self.server.session_token,
+                    audio_wav_bytes=audio_wav_bytes,
+                )
+                self._json({"ok": result.get("status") == "ok", "result": result})
                 return
             if self.path == "/api/vision/execute":
                 if payload.get("confirm") is not True:
@@ -1731,7 +2358,16 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "status": "promoted", "episode": marked, "memory": stored})
                 return
             if self.path == "/api/ambient-memory/clear":
-                self._json(self.server.ambient_memory.clear())
+                result = self.server.ambient_memory.clear()
+                if self.server.sensory_history is not None:
+                    result["sensory_history"] = self.server.sensory_history.clear()
+                self._json(result)
+                return
+            if self.path == "/api/ambient-memory/pause":
+                self._json({"ok": True, "state": self.server.ambient_memory.pause()})
+                return
+            if self.path == "/api/ambient-memory/resume":
+                self._json({"ok": True, "state": self.server.ambient_memory.resume()})
                 return
             if self.path == "/api/ambient-memory/config":
                 mode = str(payload.get("mode") or "set").strip()
@@ -1742,6 +2378,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                         self.server.ambient_audio.stop()
                     self.server.ambient_memory.set_enabled(False)
                     erased = self.server.ambient_memory.clear()
+                    if self.server.sensory_history is not None:
+                        erased["sensory_history"] = self.server.sensory_history.clear()
                     self._json({
                         "ok": True,
                         "mode": mode,
@@ -1770,6 +2408,18 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     return
                 self._json({"ok": True, "state": self.server.ambient_audio.stop()})
                 return
+            if self.path == "/api/ambient-audio/pause":
+                if self.server.ambient_audio is None:
+                    self._json({"error": "system audio is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._json({"ok": True, "state": self.server.ambient_audio.pause()})
+                return
+            if self.path == "/api/ambient-audio/resume":
+                if self.server.ambient_audio is None:
+                    self._json({"error": "system audio is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._json({"ok": True, "state": self.server.ambient_audio.resume()})
+                return
             if self.path == "/api/ambient-audio/playback":
                 active = payload.get("active")
                 if not isinstance(active, bool):
@@ -1786,9 +2436,12 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+        except CaptureLeaseError as exc:
+            result: dict[str, Any] = {"ok": False, "error": exc.code}
+            if exc.owner is not None:
+                result["owner"] = exc.owner
+            self._json(result, status=HTTPStatus.CONFLICT)
         except VoiceMemUnavailable as exc:
-            self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
-        except ASRUnavailable as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except AmbientAudioDisabled as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.CONFLICT)
@@ -1829,6 +2482,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         if length < 0 or length > MAX_BODY_BYTES:
             raise ValueError("request body is too large")
         raw = self.rfile.read(length)
+        self._request_body_consumed = True
         decoded = json.loads(raw.decode("utf-8")) if raw else {}
         if not isinstance(decoded, dict):
             raise ValueError("JSON body must be an object")
@@ -1882,6 +2536,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         except ValueError:
             length = 0
         body = self.rfile.read(length) if length > 0 else None
+        self._request_body_consumed = True
         headers = {"Host": urlsplit(adapter.base_url).netloc}
         if adapter.token:
             headers["X-Console-Token"] = adapter.token
@@ -2007,17 +2662,82 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             send({"type": "voice_final", **self._finish_voice_turn(payload)})
             return
         if action == "voice_reset":
+            capture_cancel = self.server.voice_capture.authorize_stream(payload)
             if self.server.streaming_asr is not None:
                 try:
-                    self.server.streaming_asr.reset_utterance()
+                    if capture_cancel is None or not capture_cancel.is_set():
+                        self.server.streaming_asr.reset_utterance(
+                            scope_id=self._voice_asr_scope(payload),
+                            session_id=self._voice_asr_session(payload),
+                        )
                 except Exception:
                     pass
             send({"type": "voice_reset_ack"})
             return
+        if action in {"speak_delta", "speak_finish", "speak_cancel"}:
+            self._handle_live_speech(connection, payload, action, send)
+            return
         send({"type": "error", "error": "unsupported_action"})
+
+    def _handle_live_speech(
+        self,
+        connection: WebSocketConnection,
+        payload: dict[str, Any],
+        action: str,
+        send: Any,
+    ) -> None:
+        """Speech-first duplex lane: stream the reply and speak it sentence by sentence.
+
+        The client pushes the reply as it arrives (text or the raw JAWL JSON
+        envelope).  Every finished sentence is synthesized immediately and
+        pushed back as the same NDJSON audio events the desktop player already
+        consumes, so the first sound starts before the answer is complete.
+        """
+        if action == "speak_cancel":
+            session = getattr(self, "_live_speech", None)
+            if session is not None:
+                session.cancel()
+                self._live_speech = None
+            send({"type": "speech_cancelled"})
+            return
+        if self.server.tts is None:
+            send({"type": "error", "error": "tts_not_configured"})
+            return
+        session = getattr(self, "_live_speech", None)
+        if session is None:
+            mode = "envelope" if payload.get("mode") == "envelope" else "text"
+            session = LiveSpeechSession(
+                self.server.tts,
+                voice=payload.get("voice"),
+                speed=float(payload.get("speed") or 1.0),
+                request_id=payload.get("request_id"),
+                mode=mode,
+            )
+            session.start()
+            self._live_speech = session
+        if action == "speak_delta":
+            session.feed(str(payload.get("text") or ""))
+            chunks = session.poll_audio(timeout=0.05)
+        else:
+            session.finish(payload.get("text"))
+            chunks = session.drain_all()
+            self._live_speech = None
+        index = 0
+        for audio in chunks:
+            send({
+                "type": "audio",
+                "index": index,
+                "media_type": "audio/wav",
+                "data_base64": base64.b64encode(audio).decode("ascii"),
+            })
+            index += 1
+        if action == "speak_finish":
+            state = session.state()
+            send({"type": "done", "count": state["audio_chunks"], "state": state})
 
     def _feed_voice_chunk(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Shared voice-chunk ingestion for /api/voice/audio and the WS transport."""
+        capture_cancel = self.server.voice_capture.authorize_stream(payload)
         if self.server.voice_mem is None:
             return {"ok": False, "error": "VoiceMem sidecar is not configured"}
         encoded = payload.get("pcm16_base64", "")
@@ -2034,19 +2754,23 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         if isinstance(channels, bool) or not isinstance(channels, int):
             raise ValueError("channels must be an integer")
         session_id = str(payload.get("session_id") or self.server.session_token)[:200]
-        self.server.prefetch_asr_model(session_id)
-        if self.server.streaming_asr is not None:
-            try:
-                self.server.streaming_asr.feed(pcm16, sample_rate=sample_rate, channels=channels)
-            except Exception:
-                pass  # the streaming lane is an accelerator, never a blocker
+        scope_id = self._voice_asr_scope(payload)
         if self.server.asr is not None:
             buffered = self.server.asr.feed_audio(
-                pcm16, sample_rate=sample_rate, channels=channels, session_id=session_id
+                pcm16, sample_rate=sample_rate, channels=channels, session_id=session_id,
+                scope_id=scope_id, cancel_event=capture_cancel,
+            )
+            self.server.prefetch_asr_model(session_id)
+            self._feed_streaming_asr(
+                pcm16, sample_rate, channels, scope_id, session_id, capture_cancel,
             )
             return {"ok": True, "mode": "external_final_utterance", "events": [], "responses": [], "buffer": buffered}
         events = self.server.voice_mem.feed_audio(
             pcm16, sample_rate=sample_rate, session_id=session_id
+        )
+        self.server.prefetch_asr_model(session_id)
+        self._feed_streaming_asr(
+            pcm16, sample_rate, channels, scope_id, session_id, capture_cancel,
         )
         responses = self._voice_turn_responses(events, session_id)
         return {
@@ -2056,47 +2780,73 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         }
 
     def _finish_voice_turn(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Shared utterance finalization for /api/voice/end and the WS transport."""
+        """Shared utterance finalization for /api/voice/end and the WS transport.
+
+        A transport retry carrying the same client ``correlation_id`` replays
+        the cached result instead of dispatching the utterance to the brain a
+        second time. Cancelled and failed attempts are never cached, so a
+        retry after an error or cancellation may still complete normally.
+        """
+        cache = getattr(self.server, "_turn_replay", None)
+        replay_key: str | None = None
+        raw_correlation = str(payload.get("correlation_id") or "").strip()
+        if cache is not None and raw_correlation:
+            session_id = str(payload.get("session_id") or self.server.session_token)[:200]
+            replay_key = f"{session_id}|{raw_correlation[:128]}"
+            replayed = cache.get(replay_key)
+            if replayed is not None:
+                return {**replayed, "replay": True}
+        result = self._finish_voice_turn_once(payload)
+        if (
+            replay_key is not None
+            and isinstance(result, dict)
+            and result.get("ok")
+            and result.get("status") != "cancelled"
+        ):
+            cache.put(replay_key, result)
+        return result
+
+    def _finish_voice_turn_once(self, payload: dict[str, Any]) -> dict[str, Any]:
+        capture_cancel = self.server.voice_capture.authorize_stream(payload)
         if self.server.voice_mem is None:
             return {"ok": False, "error": "VoiceMem sidecar is not configured"}
         session_id = str(payload.get("session_id") or self.server.session_token)[:200]
         if self.server.asr is not None:
-            batch_text = ""
-            transcriber = getattr(self.server, "gigaam_transcriber", None)
-            if transcriber is not None:
-                wav_bytes = b""
+            # GigaAM (crispasr file mode) is the canonical and only ASR engine:
+            # the buffered utterance goes straight to it, and a failure is
+            # reported instead of being masked by a second engine.
+            try:
+                finish_microphone = (
+                    getattr(self.server.asr, "finish_microphone", None)
+                    if getattr(self.server, "voice_delivery_enabled", False) else None
+                )
+                if callable(finish_microphone):
+                    transcription = finish_microphone(
+                        session_id, scope_id=self._voice_asr_scope(payload),
+                    )
+                else:
+                    # Keep injected ASR adapters compatible; the production
+                    # UtteranceBuffer uses finish_microphone above.
+                    transcription = self.server.asr.finish(session_id, scope_id=self._voice_asr_scope(payload))
+            except Exception as exc:  # noqa: BLE001 - bounded failure report
+                return {"ok": False, "error": f"ASR unavailable: {type(exc).__name__}"}
+            asr_source = "gigaam"
+            if transcription.get("status") == "cancelled" or (capture_cancel is not None and capture_cancel.is_set()):
+                return {
+                    "ok": True, "status": "cancelled", "mode": "external_final_utterance",
+                    "transcript": "", "events": [], "responses": [],
+                }
+            if transcription.get("status") in {"unavailable", "failed"}:
+                return {
+                    "ok": False,
+                    "error": str(transcription.get("error") or "ASR unavailable")[:300],
+                }
+            if self.server.streaming_asr is not None and (capture_cancel is None or not capture_cancel.is_set()):
                 try:
-                    wav_bytes = self.server.asr.to_wav(session_id)
-                except Exception:  # noqa: BLE001 - batch lane is an accelerator
-                    wav_bytes = b""
-                if wav_bytes:
-                    # Free the live buffer before the (possibly slow) batch
-                    # transcription: a resumed (interjecting) utterance keeps
-                    # buffering in the same session and must never be dropped
-                    # by a late discard from this request.
-                    try:
-                        self.server.asr.discard(session_id)
-                    except Exception:
-                        pass
-                    try:
-                        batch_text = str(transcriber.transcribe(wav_bytes) or "").strip()[:12_000]
-                    except Exception:  # noqa: BLE001
-                        batch_text = ""
-            if batch_text and is_meaningful_transcript(batch_text):
-                # GigaAM (Sber) file-mode transcription of the complete
-                # buffered utterance: measured faster and more accurate than
-                # the Qwen fallback; the buffer was already dropped above.
-                transcription = {"status": "transcribed", "text": batch_text}
-                asr_source = "gigaam"
-            else:
-                try:
-                    transcription = self.server.asr.finish(session_id)
-                except Exception as exc:  # noqa: BLE001 - the fallback lane may be offline
-                    return {"ok": False, "error": f"ASR fallback failed: {type(exc).__name__}"}
-                asr_source = "qwen"
-            if self.server.streaming_asr is not None:
-                try:
-                    self.server.streaming_asr.reset_utterance()
+                    self.server.streaming_asr.reset_utterance(
+                        scope_id=self._voice_asr_scope(payload),
+                        session_id=self._voice_asr_session(payload),
+                    )
                 except Exception:
                     pass
             if transcription["status"] in {"empty", "no_speech"}:
@@ -2109,6 +2859,48 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     "transcript": "", "events": [], "responses": [],
                     "filtered": "asr_noise_hallucination",
                 }
+            # A draft is provisional. Confirm acknowledgements using canonical
+            # ASR before dropping them, after consuming/resetting both buffers.
+            # This suppresses only this overlapping utterance, never a goal/TTS.
+            if payload.get("suppress_backchannel") is True and is_user_backchannel(text):
+                return {
+                    "ok": True, "mode": "external_final_utterance",
+                    "transcript": "", "events": [], "responses": [],
+                    "filtered": "user_backchannel",
+                }
+            delivery = transcription.get("voice_delivery")
+            fusion = self.server.perception_fusion
+            if isinstance(delivery, dict) and fusion is not None:
+                parts = ["Измеренные акустические признаки микрофонной речи; это не распознавание эмоций"]
+                median = delivery.get("pitch_median_hz")
+                low = delivery.get("pitch_p10_hz")
+                high = delivery.get("pitch_p90_hz")
+                if all(isinstance(value, (int, float)) for value in (median, low, high)):
+                    parts.append(f"оценка высоты голоса: медиана {median:.0f} Гц, диапазон p10–p90 {low:.0f}–{high:.0f} Гц")
+                level_low = delivery.get("signal_level_p10_dbfs")
+                level_high = delivery.get("signal_level_p90_dbfs")
+                if all(isinstance(value, (int, float)) for value in (level_low, level_high)):
+                    parts.append(f"уровень сигнала p10–p90 {level_low:.1f}–{level_high:.1f} dBFS")
+                voiced_ratio = delivery.get("voiced_frame_ratio")
+                if isinstance(voiced_ratio, (int, float)):
+                    parts.append(f"периодические голосовые кадры {voiced_ratio * 100:.0f}%")
+                fusion.note(
+                    "voice_delivery",
+                    "; ".join(parts),
+                    now=(
+                        float(delivery["observed_monotonic"])
+                        if isinstance(delivery.get("observed_monotonic"), (int, float))
+                        else None
+                    ),
+                    metadata={
+                        "source": "direct_microphone",
+                        "verified": False,
+                        "emotion_inferred": False,
+                        "raw_audio_persisted": False,
+                        "duration_ms": delivery.get("duration_ms"),
+                        "pitch_estimate_method": delivery.get("pitch_estimate_method"),
+                    },
+                )
             log_event("asr_final", text=text, session=session_id[:40], source=asr_source)
             if self.server.timeline is not None:
                 self.server.timeline.record("conversation", f"user_voice:{asr_source}", text[:120])
@@ -2138,6 +2930,28 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             "events": events,
             "responses": responses,
         }
+
+    @staticmethod
+    def _voice_asr_scope(payload: dict[str, Any]) -> str:
+        capture_id = payload.get("capture_id")
+        return f"capture:{capture_id}" if capture_id is not None else "voice:legacy"
+
+    def _voice_asr_session(self, payload: dict[str, Any]) -> str:
+        return str(payload.get("session_id") or self.server.session_token)[:200]
+
+    def _feed_streaming_asr(
+        self, pcm16: bytes, sample_rate: int, channels: int,
+        scope_id: str, session_id: str, cancel_event: Any,
+    ) -> None:
+        if self.server.streaming_asr is None or (cancel_event is not None and cancel_event.is_set()):
+            return
+        try:
+            self.server.streaming_asr.feed(
+                pcm16, sample_rate=sample_rate, channels=channels,
+                scope_id=scope_id, session_id=session_id, cancel_event=cancel_event,
+            )
+        except Exception:
+            pass  # streaming ASR accelerates the canonical accepted PCM lane
 
     def _require_browser_session(self) -> None:
         presented_session = self.headers.get("X-Companion-Session")
@@ -2188,6 +3002,36 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _discard_rejected_body(self) -> None:
+        """Drain only small rejected requests, with a total time/byte bound.
+
+        Closing a Windows socket with unread POST bytes can reset the peer
+        before it receives our 403. Never parse or execute rejected content.
+        """
+        if self.command not in {"POST", "PUT", "PATCH", "DELETE"} or getattr(self, "_request_body_consumed", False):
+            return
+        self.close_connection = True
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return
+        if not 0 < length <= MAX_BODY_BYTES or self.headers.get("Transfer-Encoding"):
+            return
+        timeout = self.connection.gettimeout()
+        deadline = time.monotonic() + 0.2
+        try:
+            while length and (remaining := deadline - time.monotonic()) > 0:
+                self.connection.settimeout(remaining)
+                chunk = self.rfile.read1(min(length, 8192))
+                if not chunk:
+                    break
+                length -= len(chunk)
+            self._request_body_consumed = length == 0
+        except OSError:
+            pass
+        finally:
+            self.connection.settimeout(timeout)
+
     def _json(
         self,
         payload: dict[str, Any],
@@ -2195,6 +3039,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         *,
         set_session_cookie: bool = False,
     ) -> None:
+        if status >= HTTPStatus.BAD_REQUEST:
+            self._discard_rejected_body()
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         _security_headers(self)
@@ -2219,6 +3065,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @staticmethod
+    def _speech_request_kwargs(payload: dict[str, Any]) -> dict[str, str]:
+        # An explicit null/empty/invalid ID must fail, not become global Stop.
+        if "request_id" not in payload:
+            return {}
+        return {"request_id": validate_speech_request_id(payload["request_id"])}
+
     def _stream_tts(
         self,
         text: str,
@@ -2226,6 +3079,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         voice: str | None,
         speed: float,
         emotion: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> None:
         """Send sentence WAVs as newline-delimited JSON without buffering the reply."""
         self.send_response(HTTPStatus.OK)
@@ -2237,7 +3091,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         stream = self.server.tts.stream(
-            text, voice=voice, speed=speed, emotion=emotion
+            text, voice=voice, speed=speed, emotion=emotion,
+            **({"request_id": request_id} if request_id is not None else {}),
         )
         try:
             count = 0
@@ -2284,7 +3139,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         return value[:128] if value else f"turn-{uuid4().hex}"
 
     def _stream_chat(self, text: str, correlation_id: str | None = None) -> None:
-        """Stream text deltas and one final ResponseEnvelope as NDJSON."""
+        """Stream text deltas, early speech audio and one final envelope as NDJSON."""
         self.send_response(HTTPStatus.OK)
         _security_headers(self)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -2292,18 +3147,76 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("Connection", "close")
         self.end_headers()
+        speech = None
+        audio_index = 0
+        completed = False
+        stream_lock = threading.Lock()
+
+        def send_event(payload: dict[str, Any]) -> None:
+            with stream_lock:
+                self._stream_event(payload)
+
+        def on_audio(audio: bytes) -> None:
+            # Called from the synthesis worker the moment a sentence WAV is
+            # ready, so audio overtakes the still-running text stream.
+            nonlocal audio_index
+            with stream_lock:
+                payload = {
+                    "type": "audio",
+                    "index": audio_index,
+                    "media_type": "audio/wav",
+                    "data_base64": base64.b64encode(audio).decode("ascii"),
+                }
+                audio_index += 1
+                self._stream_event(payload)
+
         try:
             for event in self.server.gateway.stream_text(
                 self.server.enrich_turn_text(text), session_id=self.server.session_token, correlation_id=correlation_id,
             ):
-                self._stream_event(event)
+                if event.get("type") == "speech_delta":
+                    # Early reply sentence from the owned brain streaming hook.
+                    # Forward the text and synthesize it immediately; the worker
+                    # pushes the WAV through on_audio as soon as it exists.
+                    send_event({
+                        "type": "speech_delta",
+                        "text": str(event.get("text") or ""),
+                    })
+                    if self.server.tts is not None:
+                        if speech is None:
+                            speech = LiveSpeechSession(
+                                self.server.tts, mode="text", on_audio=on_audio
+                            )
+                            speech.start()
+                        speech.feed(str(event.get("text") or ""))
+                    continue
+                send_event(event)
+                if event.get("type") == "final":
+                    completed = True
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             return
         except Exception as exc:  # noqa: BLE001 - report provider failures in-band
             try:
-                self._stream_event({"type": "error", "error": str(exc)[:500]})
+                send_event({"type": "error", "error": str(exc)[:500]})
             except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
                 return
+        finally:
+            if speech is not None:
+                if completed:
+                    try:
+                        speech.finish()
+                        deadline = time.monotonic() + 60.0
+                        while not speech.done and time.monotonic() < deadline:
+                            time.sleep(0.02)
+                        send_event({
+                            "type": "speech_done",
+                            "count": audio_index,
+                            "state": speech.state(),
+                        })
+                    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
+                        pass
+                else:
+                    speech.cancel()
 
     def _stream_event(self, payload: dict[str, Any]) -> None:
         body = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
@@ -2372,172 +3285,6 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         ]
 
 
-class CompanionPresentationServer(ThreadingHTTPServer):
-    """Unprivileged loopback origin for the avatar/OBS surface."""
-
-    allow_reuse_address = True
-
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        companion: CompanionServer,
-        tls_context: ssl.SSLContext | None = None,
-        presentation_access_token: str | None = None,
-    ):
-        self.companion = companion
-        self.frontend_dir = companion.frontend_dir
-        self.avatar_assets = companion.avatar_assets
-        self.tls_enabled = tls_context is not None
-        self.url_scheme = "https" if self.tls_enabled else "http"
-        self.remote_access = not is_loopback_host(server_address[0])
-        self.presentation_access_token = (
-            _validate_lan_access_token(presentation_access_token)
-            if self.remote_access
-            else ""
-        )
-        super().__init__(server_address, CompanionPresentationRequestHandler)
-        if tls_context is not None:
-            self.socket = tls_context.wrap_socket(self.socket, server_side=True)
-
-
-class CompanionPresentationRequestHandler(BaseHTTPRequestHandler):
-    server: CompanionPresentationServer
-
-    def _require_presentation_access(self) -> bool:
-        """Authenticate remote presentation reads without affecting loopback OBS."""
-        if not self.server.remote_access:
-            return True
-        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-        candidate = self.headers.get("X-Companion-Presentation-Token") or (
-            query.get("token", [""])[0]
-        )
-        expected = self.server.presentation_access_token
-        if expected and hmac.compare_digest(str(candidate), expected):
-            return True
-        self.send_error(HTTPStatus.FORBIDDEN, "presentation access token required")
-        return False
-
-    def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
-        path = urlsplit(self.path).path
-        if not self._require_presentation_access():
-            return
-        if path == "/api/presentation/state":
-            self._json(self.server.companion.presentation_state())
-            return
-        if path == "/api/presentation/config":
-            config = self.server.avatar_assets.config() if self.server.avatar_assets else {
-                "enabled": False,
-                "runtime_url": None,
-                "model_url": None,
-                "adapter": None,
-                "capabilities": {
-                    "expressions": 0,
-                    "motion_groups": [],
-                    "physics": False,
-                    "pose": False,
-                    "display_info": False,
-                    "lip_sync": True,
-                    "fallback_expressions": [
-                        "neutral", "attentive", "concerned", "confused",
-                        "happy", "sad", "angry", "surprised",
-                    ],
-                },
-            }
-            self._json(config)
-            return
-        asset_prefix = "/avatar-assets/"
-        if path.startswith(asset_prefix) and self.server.avatar_assets is not None:
-            asset = self.server.avatar_assets.resolve_public(path[len(asset_prefix):])
-            if asset is None:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            try:
-                body = asset.read_bytes()
-            except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            self.send_response(HTTPStatus.OK)
-            _security_headers(self, presentation=True)
-            self.send_header("Content-Type", self.server.avatar_assets.content_type(asset))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if path in {"/", "/avatar", "/avatar.html"}:
-            index_path = self.server.frontend_dir / "avatar.html"
-            try:
-                body = index_path.read_bytes()
-            except OSError:
-                self.send_error(HTTPStatus.NOT_FOUND, "frontend is not installed")
-                return
-            self.send_response(HTTPStatus.OK)
-            _security_headers(self, presentation=True)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        self.send_error(HTTPStatus.NOT_FOUND)
-
-    def do_POST(self) -> None:  # noqa: N802 - read-only presentation API
-        self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
-
-    def log_message(self, format: str, *args: Any) -> None:
-        return
-
-    def _json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        _security_headers(self, presentation=True)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-
-def _local_url(host: str, port: int, path: str) -> str:
-    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    return f"http://{host_part}:{port}{path}"
-
-
-def create_presentation_server(
-    companion: CompanionServer,
-    host: str = "127.0.0.1",
-    port: int = 8766,
-    *,
-    lan_mode: bool = False,
-    tls_cert_file: str | os.PathLike[str] | None = None,
-    tls_key_file: str | os.PathLike[str] | None = None,
-    access_token: str | None = None,
-) -> CompanionPresentationServer:
-    """Create the isolated avatar/OBS server without exposing control state.
-
-    A remote presentation bind gets its own read-only bearer token.  The token
-    is intentionally separate from the control-plane LAN credential so an OBS
-    or tablet link cannot be upgraded into a control session.
-    """
-    host = require_bind_host(host, lan_mode=lan_mode)
-    tls_context = create_tls_context(tls_cert_file, tls_key_file)
-    if not is_loopback_host(host) and tls_context is None:
-        raise ValueError("non-loopback LAN presentation requires a trusted TLS certificate and private key")
-    remote_token = access_token or (secrets.token_urlsafe(24) if not is_loopback_host(host) else None)
-    server = CompanionPresentationServer(
-        (host, port),
-        companion,
-        tls_context=tls_context,
-        presentation_access_token=remote_token,
-    )
-    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    url = f"{server.url_scheme}://{host_part}:{server.server_port}/avatar"
-    if server.remote_access:
-        url += "?token=" + quote(server.presentation_access_token, safe="")
-    companion.set_presentation_url(url)
-    return server
-
-
 def create_server(
     host: str = "127.0.0.1",
     port: int = 2367,
@@ -2549,7 +3296,6 @@ def create_server(
     screen_watch_interval: float = 10.0,
     voice_mem: VoiceMemProcessClient | None = None,
     tts_service: TTSService | None = None,
-    avatar_assets: AvatarAssetStore | None = None,
     jawl_event_dir: Path | None = None,
     attention: AttentionPresence | None = None,
     activity_provider: Callable[[], dict[str, Any]] | None = None,
@@ -2559,16 +3305,17 @@ def create_server(
     resource_governor: ResourceGovernor | None = None,
     jawl_hostos_control: bool = False,
     audit_file: Path | None = None,
-    asr_service: ExternalASRService | None = None,
+    asr_service: UtteranceBuffer | None = None,
     streaming_asr: Any | None = None,
     gigaam_transcriber: Any | None = None,
     helper_urls: dict[str, str] | None = None,
     proactive_feed: Any | None = None,
     sensory_ingestor: Any | None = None,
     perception_fusion: Any | None = None,
+    streaming_perception: Any | None = None,
+    visual_sensor: Any | None = None,
     config_hub: Any | None = None,
     log_dir: Path | None = None,
-    legacy_presentation: bool = True,
     presence_file: Path | None = None,
     stream_chat: StreamChatIngestor | None = None,
     stream_chat_event_sink: Callable[[dict[str, Any]], Any] | None = None,
@@ -2578,6 +3325,7 @@ def create_server(
     tls_context: ssl.SSLContext | None = None,
     tls_cert_file: str | os.PathLike[str] | None = None,
     tls_key_file: str | os.PathLike[str] | None = None,
+    voice_delivery_enabled: bool = False,
 ) -> CompanionServer:
     host = require_bind_host(host, lan_mode=lan_mode)
     if lan_mode:
@@ -2616,6 +3364,7 @@ def create_server(
         active_executor,
         describer=vision_describer,
         plan_executor=plan_executor,
+        perception_fusion=perception_fusion,
     )
     event_sink = JawlEventFileSink(jawl_event_dir) if jawl_event_dir else None
     active_attention = attention or AttentionPresence(
@@ -2632,7 +3381,7 @@ def create_server(
         if perception_fusion is not None and isinstance(event, dict):
             payload = event.get("payload")
             if isinstance(payload, dict):
-                perception_fusion.note("screen", str(payload.get("summary") or ""))
+                perception_fusion.note("eg2_media", str(payload.get("summary") or ""))
         return active_attention.consume(event)
 
     watcher = (
@@ -2655,7 +3404,6 @@ def create_server(
         watcher,
         voice_mem,
         tts_service,
-        avatar_assets,
         active_attention,
         ambient_memory=ambient_memory,
         sensory_ingestor=sensory_ingestor,
@@ -2669,9 +3417,10 @@ def create_server(
         helper_urls=helper_urls,
         proactive_feed=proactive_feed,
         perception_fusion=perception_fusion,
+        streaming_perception=streaming_perception,
+        visual_sensor=visual_sensor,
         config_hub=config_hub,
         log_dir=log_dir,
-        legacy_presentation=legacy_presentation,
         resource_governor=resource_governor,
         presence_file=presence_file,
         stream_chat=stream_chat,
@@ -2680,6 +3429,7 @@ def create_server(
         lan_access_token=lan_access_token,
         lan_auth_user=lan_auth_user,
         tls_context=tls_context,
+        voice_delivery_enabled=voice_delivery_enabled,
     )
     if watcher is not None:
         watcher.start()

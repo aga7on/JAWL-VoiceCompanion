@@ -1,5 +1,274 @@
 # Repository Research
 
+> **Research archive — recommendations are not implementation.** This file
+> records dated candidate reviews and historical measurements; it does not
+> define the active provider stack or work queue. See [current state](STATE.md),
+> [current queue](../TODO.md), and the [documentation map](README.md).
+
+## 2026-10-13 — Micro-turn и EmbeddingGemma 2
+
+[Отдельный обзор](RESEARCH_MICROTURN_EMBEDDINGGEMMA2.md): RU ограничения,
+границы turn-taking/мультимодальных эмбеддингов, CPU/RAM и критерии сравнительных
+тестов. Research-only: без скачиваний, смены stack и заявлений о локальной скорости.
+
+## 2026-09-19 — R2T2 (Confucius4-R2T2): true-streaming ASR кандидат
+
+Запрос владельца: r2t2.ai — тестировать. Модель от NetEase Youdao.
+
+**Что это:** open-source **true streaming ASR** (Real Real-Time Transcription) на
+базе **Qwen3-ASR-1.7B**. Append-only вывод: текст коммитится по мере речи и
+**никогда не перезаписывается** (Longest Stable Prefix) — 200–600 мс latency,
+chunk 80 мс–2 с настраивается. Это ровно закрывает две известные проблемы
+нашего ASR-контура: «фраза отправляется до того, как я её договорил» и «слов
+в транскрипте меньше, чем я сказал» — за счёт инкрементальности и стабильности.
+
+**Code:** Apache 2.0. **Weights:** NetEase Model Use License Agreement
+(ограничения: >100M MAU / >1 млрд ¥ — нужен отдельный license §2.2; §3.4(c) —
+нельзя использовать для улучшения AI-моделей кроме R2T2/non-commercial;
+юрисдикция КНР, zh-версия преобладает §6/§9). Для локального личного
+использования приемлемо; для закрытого коммерческого продукта — юридическая
+зона внимания.
+
+**Backends:** vLLM (рекомендован, требует CUDA+PyTorch матрицу) или
+transformers; есть готовый WebSocket-сервер (`ws_server.py`, порт 8272,
+`/asr_stream_api_v1`: PCM 16k mono int16 → incremental JSON text). Python 3.12.
+
+**Языки:** оптимизирован под Chinese/English; русский — в списке
+«cross-lingual» (retains useful capability) БЕЗ опубликованной оценки.
+Это ключевой риск: наш контур русский, канонический ASR — GigaAM v3
+(crispasr, batch-final) и он теперь **единственный** движок (ADR-044:
+provider-путь и фолбэк удалены).
+
+**Бенчи** (по их таблицам): R2T2 160 мс ≈ Qwen3-ASR offline 2 с с небольшим
+проигрышем (AMI 9.25→11.37, LS-clean 1.67→2.13, SPGI 2.90→3.00) — отличный
+trade-off за 20× меньшую латентность, но цифр по-русски нет.
+
+**План проверки (gate, без зряшного скачивания 4–8 ГБ):**
+1. RU-фикстура: маленький русский WAV → hosted demo r2t2.youdao.com/demo
+   с русским промптом (бесплатно). Если качество по-русски слабое → REJECT
+   по RU_NATURAL_SPEECH_ASR, как с Qwen3-ASR-0.6B было.
+2. Если RU приемлемо → целевая связка, повторяющая текущий путь:
+   **R2T2 = streaming partials** (инкрементальные коммиты в `/api/ws`),
+   **GigaAM = final** (batch over buffered utterance). Та же архитектура, что
+   уже есть (streaming_asr + giga_final), но streaming-слой с append-only
+   стабильностью вместо rollback-партиалов.
+3. License + RU вывод зафиксировать здесь же.
+
+## 2026-09-19 — R2T2 RU-smoke: заблокирован перегруженным демо
+
+Hosted demo (`r2t2.youdao.com/demo` и HF Space `netease-youdao/confucius4-r2t2-demo`)
+стабильно отдаёт `event: error, {"error": null}` **даже на собственном английском
+семпле** (`librispeech_sample.wav`) — GPU-слот ZeroGPU не выделяется («heavy loads»
+на странице демо). Это не про наш русский WAV, а про недоступность инференса.
+RU-качество R2T2 **НЕ проверено**. Локальная проверка требует vLLM/transformers
+env + 4 ГБ весов (Python 3.12) — по гейту не ставится до RU-smoke. Статус:
+**pending — повторить демо позже / локальный RU-smoke после решения по env.**
+
+### Вердикт R2T2 ОТДЕЛЬНО (2026-09-21, локально, ПРОВЕРЕНО)
+
+Инфраструктура: веса `runtime/models/r2t2/model.safetensors` скачаны
+параллельным загрузчиком (4 076 191 640 байт), целостность проверена
+`scripts/verify_safetensors.py` — точный размер + разбор заголовка + **707
+тензоров / 2.038e9 элементов** (PASS). Инференс: transformers-бэкенд
+(`R2T2ASRModel.from_pretrained`), CPU, `qwen_asr` в vision-venv;
+скрипт `scripts/run_r2t2_ru_smoke.py`, лог `runtime/r2t2-ru-smoke-20260921.log`.
+
+**RU-качество: сравнительный прогон на трёх фикстурах (baseline — канонический
+GigaAM v3 через `scripts/gigaam_baseline_fixtures.py`, тот же WAV, тот же бокс).**
+
+| фикстура (длит.) | GigaAM v3 (batch, сек) | R2T2 (one-shot, сек) |
+|---|---|---|
+| voice-native-ru-clean (6.5 с) | «Создай в папке SandBox File проверка, запиши в него слово «готово», прочитай файл и сообщи содержимое.» — 0.5 с | «Создай в папке sandbox файл проверка, запиши в него слово готово, прочитай файл и сообщи содержимое» — 10.1 с |
+| voice-native-command (8.9 с) | «Создай в Sunbox File Voice Neat Pruft с точным содержимым Vassinativog. Затем прочитай его и сообщи результат.» — 0.4 с | «Создай в Sunbox файл voice не proof текст с точным содержимым в исключительном, затем прочитай его и сообщи результат» — 8.3 с |
+| ref_ru (5.9 с) | «Это голосовой помощник, который читает данные с экрана.» — 0.3 с | «Это голосовой помощник, который читает данные с экрана.» — 4.5 с |
+
+Выводы (числа, не впечатления):
+1. **Чистый русский — на уровне канонического ASR**: на первой фикстуре R2T2
+   дал даже аккуратнее (нижний регистр «sandbox», «файл» вместо «File», без
+   лишних кавычек); смысл совпадает с задокументированными native-действиями
+   (`sandbox/проверка` = `готово` в acceptance-файлах). На третьей фикстуре
+   **оба транскрипта совпали дословно** — сильное взаимное подтверждение.
+2. **Смешанные RU/EN токены ломают обе модели**: «sandbox» → «Sunbox» у обоих;
+   английская вставка передана как «Voice Neat Pruft» (GigaAM) vs «voice не
+   proof» (R2T2). То есть RU+EN code-switching — общая слабость, не специфика
+   R2T2. Это ровно тот пункт гейта, который владелец назвал заранее.
+3. **Скорость на CPU (one-shot) непригодна для интерактива**: R2T2 ~1× реального
+   времени (10.1/8.3/4.5 с), GigaAM batch — 0.3–0.5 с (**~20× быстрее**).
+4. **Главный блокер — платформенный, а не качественный**: streaming в R2T2
+   (append-only stable prefix, 200–600 мс) работает **только на vLLM-бэкенде**
+   (`r2t2/r2t2_asr.py`: «Streaming ASR is supported ONLY for vLLM backend»), а
+   vLLM 0.29.0 на PyPI публикует **только manylinux-колёса** (aarch64/x86_64) —
+   Windows-колёс нет (проверено через PyPI JSON API). Значит на этой машине
+   streaming-путь R2T2 достижим только через WSL2/Linux-воркер.
+
+**Вердикт R2T2 отдельно: RU-качество — PASS (не хуже канонического GigaAM);
+ценность замысла (streaming) — НЕ ПРОВЕРЕНА, гейт заблокирован платформой.**
+Решение о внедрении принимать нельзя до замера именно того, ради чего R2T2
+нужен: стабильного префикса и латентности партиалов (сейчас у нас rollback-
+партиалы без стабильного final — см. `streaming_asr.py`/`giga_final.py`).
+Варианты: (а) поставить WSL2/Linux-воркер и замерить streaming там (тогда
+сравнивать ещё и с GPU main-LLM за VRAM); (б) отложить R2T2 и оставить
+GigaAM каноническим. Требует решения владельца — меняет deployment shape.
+
+## 2026-09-19 — Laya: System-1 decision engine (routing перед LLM)
+
+Запрос владельца: laya.convaiinnovations.com — изучить.
+
+**Что это:** не-авторегрессионная **System-1 decision model** Family от ConvAI
+Innovations (открытая альтернатива закрытому Jev от TypeSafe AI). Один forward
+pass, **никакой text generation** — только вероятности по структурированным
+схемам (нечему галлюцинировать, malformed JSON невозможны). Три примитива:
+`choice` (выбор из критериев, распределение по всем опциям + калиброванная
+уверенность), `score` (ординальная шкала), `noul` (P(true)/P(false)).
+Латентность **32.8 мс/вопрос** на GPU (7.2 мс batched) — 6–8× быстрее Jev,
+0$ inference, Apache-2.0, commercial-use.
+
+**Чекпойнты (HF `convaiinnovations/`):**
+- `laya` — ModernBERT-large 421M, ctx 512, English (triage/guardrails/email);
+- `laya-multilingual` — mmBERT-base 322M, ctx 1024, **100+ языков, русский в
+  списке**, 2.2× быстрее — «use this for anything that is not English»;
+- `laya-typed-decisions` — ModernBERT-large 421M, ctx 1024, agent workflows.
+
+**Router:** авто-выбор чекпойнта по скрипту ввода (ru → multilingual),
+`preload` нескольких — потом только forward passes.
+
+**Кейс для нас:** System-1 слой ДО глубокого LLM — routing темы сообщения
+(задача/вопрос/поручение), фильтр спама/jailbreak, эмоция — за ~30 мс локально,
+с калиброванной уверенностью, без токенов и без жёсткого ожидания LLM.
+Загрузка: `runtime/models/laya-multilingual` (snapshot скачан). Требует
+`pip install laya` + transformers; RU-смок на наших фикстурах — следующий шаг.
+
+### Вердикт RU-smoke (2026-09-21, локально, ПРОВЕРЕНО)
+
+Веса `laya-multilingual/model.safetensors` (643.8 MB, dl_parallel ✓) + `laya`
+0.3.4 в vision-venv (transformers 4.57.6). Прогон `scripts/laya_ru_latency.py`,
+CPU, mmBERT-base, 5 русских обращений, вопрос-схема `department` (choice).
+
+**Результаты:**
+- accuracy **4/5**: technical 0.979/0.988, billing 0.998 ✓; граничный кейс
+  «Сколько стоит годовая подписка?» → billing 0.896 (ожидалось sales —
+  «подписка» перевесила «цены»; семантическая граница критериев, не отказ).
+- **warm p50 = 54 ms / max 65 ms** на CPU (без GPU, без батча) — укладывается
+  в голосовой цикл; на GPU по паспорту ещё быстрее.
+- Первичный смок (браузер-завис → technical 0.99, возврат денег → billing
+  0.97) — то же качество.
+
+**Вердикт: PASS как локальный System-1 слой.** То, что Needle3 не может на
+русском (см. ниже), Laya делает корректно за ~54 мс и без генерации. Кандидат
+для routing темы сообщения (задача/вопрос/поручение/эмоция) до глубокого LLM,
+с калиброванной уверенностью: conf < порога → эскалация на LLM. Пограничные
+критерии надо писать раздельно (явления при покупке ≠ вопросы о цене), при
+нужде — 2-вопросная схема.
+
+**Уточнение (ADR-043, 2026-09-21): качество ≠ необходимость.** Тест выше
+проверял **русский текст** — то есть путь до cognition boundary, где русский
+обязателен (ADR-042). В целевой схеме System-1 стоит уже **после** границы и
+получает канонический typed state; там русский у Laya — бонус, а не
+преимущество. Плюс измеренный признак overconfidence: неверный ответ
+«billing» при confidence `0.896`, тогда как README `laya-multilingual` прямо
+предупреждает, что финальная калибровка в чекпойнт не входит. Поэтому Laya
+**не интегрируется сейчас**: 600+ MB и ещё один dependency/ownership boundary
+должны быть оправданы тем, что Needle не справляется на нашем датасете
+событий; иначе получается третий пересекающийся слой вместо удаления
+инфраструктуры.
+
+## 2026-09-19 — Needle 3: крошечный tool-calling субагент
+
+Запрос владельца: найти и скачать needle 3 — кандидат субагента для связей.
+
+**Cactus-Compute/needle3** (Apache-2.0, 36k downloads): **микро-модель
+function-calling** для on-device/edge (мобилки, роботы, edge). Не генеративный
+чат: выбирает инструменты и заполняет аргументы из фразы, один JSON
+`function_calls` + `reasoning` + калиброванная `confidence`; запрос вне
+покрытия → пустой список (не догадка). Есть structured extraction и embedding.
+Arch: Laddered Simple Attention Network (GQA + Monarch MLP + engram n-gram),
+121M params; `needle3.cact` (2-бит, 33.7 MB) + движок на платформу
+(`windows-x86_64/needle.exe` 1.2 MB) + safetensors 230.8 MB для fine-tune.
+
+**CLI (в README):** `needle --model needle3.cact --tools tools.json --prompt "..."`;
+`--serve` — режим сервера. Confidence позволяет act/confirm/refuse. Fine-tune:
+LoRA + `needle build --layers N` (субсеть 2–20 слоёв, от 29M параметров).
+
+**Кейс для нас:** локальный tool-caller в swarm — выбор native-инструмента IAWL
+по фразе (связка с hostos/native policy), экономия LLM-токенов, офлайн.
+Скачано в `runtime/models/needle3/` (exe, .cact 33.7 MB, header, config,
+tokenizer, LICENSE, README). **RU-качество не заявлено/не проверено** — нужен
+RU-смок; если русский слаб → только английский tool-path или REJECT для
+RU-контура (как с другими EN-only кандидатами).
+
+### Аудио-входа нет (2026-09-21, ПРОВЕРЕНО по четырём независимым признакам)
+
+Владелец предполагал у Needle 3 «аудио-слой для инпута». Проверено — **нет**:
+1. `llms.txt` (официальная API-документация репо): «**Text goes in**, a JSON
+   tool call comes back».
+2. `windows-x86_64/needle.h` экспортирует только `needle_load`, `needle_init`,
+   `needle_complete`, `needle_embed`, `needle_reset`, `needle_last_error` —
+   аудио-символов нет.
+3. `needle.exe --help`: флаги `--model/--tools/--system/--prompt/--serve/
+   --port/--max/--depth/--threads/--forced/--fail-input-overflow/--tool-index`
+   — ни одного аудио-флага.
+4. Дерево репозитория (73 пути, `truncated=false`) — ни одного audio/wav/pcm/
+   mel/speech-пути.
+
+Вероятный источник воспоминания — соседний стек того же вендора:
+`cactus-compute/voice-agents-hack` («Cactus × DeepMind × YC — Gemma 4 Voice
+Agents»), где аудио идёт через **отдельный STT**, а не через Needle3. Ссылка
+`needle/blob/main/doc/apis.md` устарела: каталога `doc/` в репозитории нет
+(404 и в raw, и в blob); актуальная документация API — `llms.txt`.
+
+### Вердикт (2026-09-21, локально, ПРОВЕРЕНО)
+
+Инфраструктура: `needle3.cact` + `windows-x86_64/needle.exe` + Python
+`cactus-needle` (vision-venv). Две независимые серии тестов.
+
+**(A) RU-команды → tool call** (`scripts/run_needle3_ru_smoke.py`,
+`needle3_ru_verdict.py`, 4 инструмента, свежий агент на запрос):
+
+- EN "Set a timer for five minutes" → `timer_set{minutes:5}` conf 1.0 — **PASS**
+  (повторён после исправления схемы — стабильно).
+- RU "Поставь таймер на пять минут" / "Запомни, что я люблю кофе" / "Запусти
+  браузер" → **вызова нет вообще** (пустой `function_calls`).
+- RU "Отправь Пете сообщение: привет" → **`UnicodeDecodeError`** в движке
+  (invalid continuation byte на кириллице).
+- Промежуточный прогон со **сломанной схемой** (нестандартный `properties` на
+  верхнем уровне вместо канонического `parameters.properties` с `enum`) давал
+  «прилипание к send_message с искажёнными аргументами» — **это артефакт
+  схемы**, а не поведение модели; после исправления схемы EN снова идеален,
+  а RU даёт отказ. Важно для дисциплины: сначала валидировать схему, потом
+  судить модель.
+- CLI-передача `--prompt` с кириллицей через консоль Windows ломается на cp866
+  → мусор-токены; `--serve` на этом билде не применяет `--tools` (даже EN даёт
+  «No tool available...») — оба пути для RU непригодны.
+
+**(B) Роль System-1: состояние системы → типизированное решение**
+(`config/needle_system1_seed.jsonl` — 20 событий Companion, канонические
+ключи/enums, английский; метки — детерминированная политика автора, **не**
+разметка владельца; метрики по ADR-043):
+
+| вход | результат |
+|---|---|
+| `agent.run` + сырое состояние (JSON) | 0 вызовов, conf ~0.2 |
+| `agent.run` + англ. инструкция + состояние | 0 вызовов |
+| `agent.run` + прозаическая формулировка | 0 вызовов (даже при conf 0.988) |
+| `agent.run` + `triggers` (regex принуждает вызов) | вызывает, но **0/20** полных, `false_memory_promotion=10`, `missed_important=5`, confidence на ошибках **0.93** |
+| `needle.extract(state, schema)` — документированный путь классификации | **20/20 `None`**, 203 мс |
+
+**Вердикты (по отдельности, без связки):**
+- **EN tool-calling — PASS, отличный**: 121M, ~80 MB RAM, ~1.1k tps CPU, точные
+  аргументы, честная confidence на своём распределении.
+- **RU-reflex-путь — REJECT**: отказа от вызова + `UnicodeDecodeError` на
+  кириллице; без EN-моста/транслита непригоден.
+- **Роль System-1-решателя — REJECT на текущих данных**: это **не** языковая
+  проблема (тесты были на английском каноническом состоянии, ADR-042 тут ни
+  при чём) — модель обучена отображать «запрос пользователя → вызов
+  предложенной функции» и отказывается выносить решение по состоянию системы;
+  при принуждении (triggers) отвечает уверенно и неверно. Confidence
+  калибрована на dispatch, не на риск решения (0.93 на ошибочных ответах).
+
+Следствие для ADR-043: тезис «Needle может заменить Laya» на текущих данных
+**не подтверждён**; Needle остаётся кандидатом на tool-*retrieval* и разбор
+явных EN-команд, но не на attention/triage-решения.
+
 ## 2026-09-17 — LFM2.5-Audio-1.5B: пригодность для русского голосового дуплекса
 
 Запрос владельца: проверить поддержку русского, наличие русских файнтюнов,

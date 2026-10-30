@@ -15,11 +15,21 @@ from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
 from jawl_voicecompanion.gateway import validate_response_envelope  # noqa: E402
 from jawl_voicecompanion.jawl_web import JawlWebUnavailable  # noqa: E402
 from jawl_voicecompanion.web import (  # noqa: E402
-    create_presentation_server,
+    CompanionServer,
     create_server,
     is_meaningful_transcript,
     voice_memory_block,
 )
+from jawl_voicecompanion.perception_fusion import PerceptionFusion  # noqa: E402
+from jawl_voicecompanion.perception_packet import split_packet, render_packet
+
+
+def _stop_test_http_server(server, thread):
+    server.shutdown()
+    thread.join(timeout=2)
+    if thread.is_alive():
+        raise AssertionError("test HTTP server thread did not stop")
+    server.server_close()
 
 
 class MeaningfulTranscriptTests(unittest.TestCase):
@@ -29,7 +39,6 @@ class MeaningfulTranscriptTests(unittest.TestCase):
             "嗯嗯",
             "嗯",
             "嗯哼",
-            "Transcribe the audio exactly as spoken.",
             "啊！",
             "ммм",
             "ааа",
@@ -49,6 +58,30 @@ class MeaningfulTranscriptTests(unittest.TestCase):
             "привет, как дела?",
             "Пойдём гулять",
             "Windows не отвечает",
+        ):
+            with self.subTest(speech=speech):
+                self.assertTrue(is_meaningful_transcript(speech))
+
+    def test_rejects_repeated_filler_runs(self):
+        for junk in (
+            "ага ага ага",
+            "Ага. Ага. Ага. Ага!",
+            "угу угу угу угу",
+            "мгм мгм мгм",
+            "ага угу ага угу",
+            "хм хм хм",
+        ):
+            with self.subTest(junk=junk):
+                self.assertFalse(is_meaningful_transcript(junk))
+
+    def test_keeps_short_filler_acknowledgements_and_real_repetition(self):
+        for speech in (
+            "ага",
+            "угу, понятно",
+            "ага ага",  # two acks: real backchannel, not a hallucination run
+            "да да, конечно",
+            "ну и ну",
+            "очень очень хорошо",
         ):
             with self.subTest(speech=speech):
                 self.assertTrue(is_meaningful_transcript(speech))
@@ -108,6 +141,43 @@ class _FakeJawlMemory:
         }
 
 
+class _FakeProductApi:
+    """JAWL adapter stub matching JawlWebAdapter's read-only surface used by
+    the Product API facades (ADR-041): status, memory, persona, hostos,
+    autonomy_journal, overview."""
+
+    def __init__(self):
+        self.calls = []
+
+    def status(self):
+        self.calls.append("status")
+        return "online"
+
+    def memory(self):
+        self.calls.append("memory")
+        return {"configured": True, "status": "ok", "database": {"rows": 7}}
+
+    def persona(self):
+        self.calls.append("persona")
+        return {"configured": True, "status": "ok", "settings": {"name": "Luna"}}
+
+    def hostos(self):
+        self.calls.append("hostos")
+        return {"configured": True, "status": "ok", "access_level": 2, "access_name": "OPERATOR"}
+
+    def autonomy_journal(self, limit=20, state=None):
+        self.calls.append(("journal", limit, state))
+        return {
+            "configured": True,
+            "status": "ok",
+            "plans": [{"plan_id": "p1", "state": state or "completed"}],
+        }
+
+    def overview(self):
+        self.calls.append("overview")
+        return {"configured": True, "status": "ok"}
+
+
 class _UnavailableJawlControl:
     token = "native-token"
 
@@ -125,9 +195,9 @@ class _UnavailableJawlControl:
 
 
 class WebTests(unittest.TestCase):
-    def test_default_ports_keep_control_and_presentation_separate(self):
+    def test_default_control_port_is_2367(self):
         self.assertEqual(inspect.signature(create_server).parameters["port"].default, 2367)
-        self.assertEqual(inspect.signature(create_presentation_server).parameters["port"].default, 8766)
+
 
     def setUp(self):
         self.server = create_server(port=0, frontend_dir=Path(__file__).parents[1] / "frontend", gateway=TextGateway())
@@ -140,9 +210,7 @@ class WebTests(unittest.TestCase):
         }
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def get_json(self, path):
         with urlopen(self.base + path, timeout=2) as response:
@@ -152,6 +220,23 @@ class WebTests(unittest.TestCase):
         request = Request(self.base + path, headers=self.session_headers)
         with urlopen(request, timeout=2) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
+
+    def test_avatar_wardrobe_is_bounded_and_session_gated(self):
+        # ADR-045 appearance surface: only .vrm files from the wardrobe dir,
+        # session-gated, no arbitrary paths in the payload.
+        request = Request(self.base + "/api/avatar/wardrobe")
+        with self.assertRaises(HTTPError) as context:
+            urlopen(request, timeout=2)
+        self.assertEqual(context.exception.code, 403)
+        context.exception.close()
+        status, wardrobe = self.get_json_auth("/api/avatar/wardrobe")
+        self.assertEqual(status, 200)
+        self.assertEqual(wardrobe["schema_version"], 1)
+        self.assertIn("runtime/vrm-models", wardrobe["root"])
+        for item in wardrobe["models"]:
+            self.assertNotIn("/", item["model"])
+            self.assertNotIn("\\", item["model"])
+            self.assertLessEqual(item["size_bytes"], 200 * 1024 * 1024)
 
     def post_json(self, path, payload):
         request = Request(
@@ -163,6 +248,79 @@ class WebTests(unittest.TestCase):
         with urlopen(request, timeout=2) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
+    def test_managed_profile_stop_requires_session_and_records_atomic_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "launcher-stop.request"
+            status_target = Path(directory) / "launcher-stop.status"
+            self.server.launcher_stop_request = target
+            self.server.launcher_stop_status = status_target
+            status, result = self.post_json("/api/profile/stop", {})
+            self.assertEqual(status, 202)
+            self.assertEqual(result["ok"], True)
+            self.assertEqual(result["status"], "stop_requested")
+            request = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(request["schema_version"], 1)
+            self.assertEqual(request["runtime_instance_id"], self.server.runtime_instance_id)
+            self.assertRegex(request["request_id"], r"^[0-9a-f]{32}$")
+            self.assertEqual(result["request_id"], request["request_id"])
+            self.assertIn("requested_at", request)
+
+            status_code, pending = self.get_json_auth("/api/profile/stop/status")
+            self.assertEqual(status_code, 200)
+            self.assertEqual(pending["status"], "waiting_for_launcher")
+            status_target.write_text(json.dumps({
+                "schema_version": 1,
+                "runtime_instance_id": self.server.runtime_instance_id,
+                "request_id": request["request_id"],
+                "status": "stopping",
+            }), encoding="utf-8")
+            status_code, acknowledged = self.get_json_auth("/api/profile/stop/status")
+            self.assertEqual(status_code, 200)
+            self.assertEqual(acknowledged["status"], "stopping")
+            self.assertEqual(acknowledged["request_id"], request["request_id"])
+
+            status_target.write_text(json.dumps({
+                "schema_version": 1,
+                "runtime_instance_id": "0" * 32,
+                "request_id": request["request_id"],
+                "status": "stopping",
+            }), encoding="utf-8")
+            _, mismatched = self.get_json_auth("/api/profile/stop/status")
+            self.assertEqual(mismatched["status"], "waiting_for_launcher")
+
+            unauthenticated = Request(
+                self.base + "/api/profile/stop",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as denied:
+                urlopen(unauthenticated, timeout=2)
+            self.assertEqual(denied.exception.code, 403)
+            denied.exception.close()
+
+            unauthenticated_status = Request(self.base + "/api/profile/stop/status")
+            with self.assertRaises(HTTPError) as denied_status:
+                urlopen(unauthenticated_status, timeout=2)
+            self.assertEqual(denied_status.exception.code, 403)
+            denied_status.exception.close()
+
+    def test_managed_profile_stop_fails_closed_when_not_owned_by_launcher(self):
+        self.server.launcher_stop_request = None
+        self.server.launcher_stop_status = None
+        request = Request(
+            self.base + "/api/profile/stop",
+            data=b"{}",
+            headers={"Content-Type": "application/json", **self.session_headers},
+            method="POST",
+        )
+        with self.assertRaises(HTTPError) as unavailable:
+            urlopen(request, timeout=2)
+        self.assertEqual(unavailable.exception.code, 503)
+        payload = json.loads(unavailable.exception.read().decode("utf-8"))
+        self.assertEqual(payload["error"], "managed profile stop is unavailable")
+        unavailable.exception.close()
+
     def test_health_and_browser_are_available(self):
         status, health = self.get_json("/api/health")
         self.assertEqual(status, 200)
@@ -171,71 +329,44 @@ class WebTests(unittest.TestCase):
         _, second_health = self.get_json("/api/health")
         self.assertEqual(health["runtime_instance_id"], second_health["runtime_instance_id"])
         self.assertEqual(health["resources"]["profile"], "standard")
-        with urlopen(self.base + "/", timeout=2) as response:
+        _, doctor = self.get_json("/api/doctor")
+        self.assertEqual(health["status"], doctor["status"])
+        for check in doctor["checks"]:
+            self.assertEqual(health["components"][check["id"]], check["status"])
+        with urlopen(self.base + "/app", timeout=2) as response:
             frontend = response.read()
-            self.assertIn(b"JAWL VoiceCompanion", frontend)
-            self.assertIn(b"ambient-audio-toggle", frontend)
-            self.assertIn(b"ambient-memory-enabled", frontend)
-            self.assertIn(b"ambient-triage", frontend)
-            self.assertIn(b"ambient-clear", frontend)
-            self.assertIn(b"ambient-disable-erase", frontend)
-            self.assertIn(b"quiet-hours", frontend)
-            self.assertIn(b"unattended", frontend)
-            self.assertIn(b"save-denylist", frontend)
-            self.assertIn(b"/api/tts/cancel", frontend)
-            self.assertIn(b"/api/tts/stream", frontend)
-            self.assertIn(b"/api/ambient-audio/playback", frontend)
-            self.assertIn(b"ReadableStream", frontend)
-            self.assertIn(b"decodeAudioData", frontend)
-            self.assertIn(b"/api/chat/stream", frontend)
-            self.assertIn(b"streamChat", frontend)
-            self.assertIn(b"pushSpeechDelta", frontend)
-            self.assertIn(b"finishSpeechSession", frontend)
-            self.assertIn(b"discard_deltas", frontend)
-            self.assertIn(b"closest('.message')", frontend)
-            self.assertIn(b"AbortController", frontend)
-            self.assertIn(b"bargeInTriggered", frontend)
-            self.assertIn(b"speechPlaybackActive", frontend)
-            self.assertIn(b"(currentAudio || speechPlaybackActive)", frontend)
-            self.assertIn(b"prefaceVoiceTurn", frontend)
-            self.assertIn(b"speakProvisional", frontend)
-            self.assertIn(b"/api/voice/preface", frontend)
-            self.assertIn(b"shell-rail", frontend)
-            self.assertIn(b"pollShellStatus", frontend)
-            self.assertIn(b"runtime_instance_id", frontend)
-            self.assertIn("Контур перезапущен; старое аудио остановлено.".encode("utf-8"), frontend)
-            self.assertIn(b"hands-free", frontend)
-            self.assertIn(b"updateVoiceVad", frontend)
-            self.assertIn(b"mic-gate", frontend)
-            self.assertIn(b"mic-calibrate", frontend)
-            self.assertIn(b"passThroughMicGate", frontend)
-            self.assertIn(b"autoGainControl: false", frontend)
-            self.assertIn(b"requestAnimationFrame", frontend)
-            self.assertIn(b"tts-voice", frontend)
-            self.assertIn(b"tts-speed", frontend)
-            self.assertIn(b"emotion", frontend)
-            self.assertIn(b"/api/jawl/journal?limit=10", frontend)
-            self.assertIn(b"jawl-journal", frontend)
-            self.assertIn(b"voice: ttsVoice.value.trim()", frontend)
-            self.assertIn(b"Analyser", frontend)
-            self.assertIn(b"/api/avatar/audio", frontend)
-            self.assertIn(b"dispatchLocalSlashCommand", frontend)
-            self.assertIn(b"/goal", frontend)
-            self.assertIn(b"/tab home|voice|perception|memory|access|system", frontend)
-            self.assertIn(b"/api/hostos/approvals/", frontend)
-            self.assertIn(b"/execute", frontend)
-            self.assertIn("Выполнить предложение".encode("utf-8"), frontend)
+            self.assertIn(b"JAWL Companion", frontend)
+            self.assertIn(b"hud-mic", frontend)
+            self.assertIn(b"hud-senses", frontend)
+            self.assertIn(b"hud-dnd", frontend)
+            self.assertIn(b"hud-pin", frontend)
+            self.assertIn(b"compact-mode", frontend)
+        with urlopen(self.base + "/app.js", timeout=2) as response:
+            js = response.read()
+            self.assertIn(b"/api/attention", js)
+            self.assertIn(b"/api/tts/stream", js)
+            self.assertIn(b"/api/ambient-memory", js)
+            self.assertIn(b"toggleSenses", js)
+            self.assertIn(b"response.body.getReader()", js)
+            self.assertIn(b"/api/chat/stream", js)
+            self.assertIn(b"cancelSpeechPlayback", js)
+            self.assertIn(b"AbortController", js)
+            self.assertIn(b"requestAnimationFrame", js)
+            self.assertIn(b"emotion", js)
+            self.assertIn(b"Analyser", js)
+        # ADR-052: /avatar is the alias of the single app's ?mode=obs surface
+        # (the separate presentation origin is removed); old OBS links follow
+        # the redirect to the renderer-only app window.
         with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
-            self.assertIn(b"JAWL Avatar", response.read())
+            self.assertEqual(response.status, 200)
+            self.assertIn("mode=obs", response.geturl())
+            self.assertIn(b"JAWL Companion", response.read())
         with urlopen(self.base + "/mic-processor.js", timeout=2) as response:
             self.assertEqual(response.status, 200)
             self.assertIn(b"AudioWorkletProcessor", response.read())
         vision_script = (Path(__file__).parents[1] / "scripts" / "run_vision_server.ps1").read_bytes()
-        asr_script = (Path(__file__).parents[1] / "scripts" / "run_asr_server.ps1").read_bytes()
         self.assertIn(b"VLM-RealTime-Bench\\runtime\\llama-b10738-cpu", vision_script)
         self.assertIn(b"VLM-RealTime-Bench\\models\\Qwen3-VL-2B", vision_script)
-        self.assertIn(b"VLM-RealTime-Bench\\runtime\\llama-b10738-cpu", asr_script)
-        self.assertIn(b"VLM-RealTime-Bench\\models\\qwen3-asr", asr_script)
 
     def test_doctor_reports_mock_text_mode_without_secrets(self):
         status, doctor = self.get_json("/api/doctor")
@@ -336,6 +467,18 @@ class WebTests(unittest.TestCase):
         self.assertFalse(vision["configured"])
         self.assertEqual(vision["plan_execution"], "local_hostos")
         self.assertIn("attention", vision)
+        class _VisualSensor:
+            def state(self):
+                return {"caption_fresh": False, "caption_age_ms": 5100.0, "caption_ttl_ms": 5000.0}
+
+            def stop(self):
+                return None
+
+        self.server.visual_sensor = _VisualSensor()
+        status, vision = self.get_json("/api/vision/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(vision["visual_sensor"]["caption_fresh"], False)
+        self.assertEqual(vision["visual_sensor"]["caption_age_ms"], 5100.0)
         self.post_json("/api/hostos/level", {"level": 1})
         status, result = self.post_json("/api/vision/look", {"prompt": "Что видно?"})
         self.assertEqual(status, 200)
@@ -402,6 +545,25 @@ class WebTests(unittest.TestCase):
         self.assertFalse(status["configured"])
         self.assertEqual(status["status"], "not_configured")
 
+        class _AmbientAudio:
+            def state(self):
+                return {
+                    "audio_description_configured": True,
+                    "audio_description_count": 2,
+                    "audio_description_latency_ms_p50": 1800.0,
+                    "audio_description_latency_ms_p95": 2600.0,
+                }
+
+            def stop(self):
+                return None
+
+        self.server.ambient_audio = _AmbientAudio()
+        request = Request(self.base + "/api/ambient-audio", headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            status = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(status["audio_description_count"], 2)
+        self.assertEqual(status["audio_description_latency_ms_p95"], 2600.0)
+
     def test_tts_playback_marker_is_ephemeral(self):
         status, started = self.post_json(
             "/api/ambient-audio/playback", {"active": True, "ttl_seconds": 5}
@@ -422,6 +584,46 @@ class WebTests(unittest.TestCase):
         self.assertTrue(enabled["state"]["enabled"])
         _, disabled = self.post_json("/api/ambient-memory/config", {"enabled": False})
         self.assertFalse(disabled["state"]["enabled"])
+
+    def test_ambient_memory_pause_and_resume_require_browser_session(self):
+        for suffix in ("pause", "resume"):
+            request = Request(
+                self.base + f"/api/ambient-memory/{suffix}",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request, timeout=2)
+            self.assertEqual(context.exception.code, 403)
+            context.exception.close()
+
+    def test_ambient_memory_pause_blocks_ingest_until_resume(self):
+        self.server.ambient_memory.set_enabled(True)
+        _, paused = self.post_json("/api/ambient-memory/pause", {})
+        self.assertTrue(paused["state"]["paused"])
+        rejected = self.server.ambient_memory.ingest_system_audio(
+            "Не должно попасть", confidence=0.9, event_id="paused-ingest"
+        )
+        self.assertEqual(rejected["status"], "paused")
+        _, resumed = self.post_json("/api/ambient-memory/resume", {})
+        self.assertFalse(resumed["state"]["paused"])
+        accepted = self.server.ambient_memory.ingest_system_audio(
+            "Должно попасть", confidence=0.9, event_id="resumed-ingest"
+        )
+        self.assertNotEqual(accepted["status"], "paused")
+        self.assertEqual(self.server.ambient_memory.state()["observation_count"], 1)
+
+    def test_ambient_audio_pause_and_resume_report_unconfigured(self):
+        for suffix in ("pause", "resume"):
+            request = Request(
+                self.base + f"/api/ambient-audio/{suffix}",
+                data=b"{}",
+                headers={"Content-Type": "application/json", **self.session_headers},
+            )
+            with self.assertRaises(HTTPError) as context:
+                urlopen(request, timeout=2)
+            self.assertEqual(context.exception.code, 503)
+            context.exception.close()
 
     def test_ambient_disable_and_erase_requires_confirmation_and_clears(self):
         self.server.ambient_memory.set_enabled(True)
@@ -446,7 +648,7 @@ class WebTests(unittest.TestCase):
         native = _FakeJawlMemory()
         self.server.gateway.jawl_web = native
         self.server.ambient_memory.set_enabled(True)
-        self.server.ambient_memory.ingest_system_audio(
+        self.server.ambient_memory.ingest_visual(
             "Важный дедлайн, запомни эту цель.",
             confidence=0.95,
             event_id="episode-promote",
@@ -478,6 +680,24 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(voice["configured"])
         self.assertEqual(voice["status"], "not_configured")
+
+    def test_voice_status_uses_nonblocking_process_snapshot(self):
+        class BusyVoiceMem:
+            def state(self):
+                return {"status": "running", "running": True, "ready": True, "pid": 17}
+
+            def health(self):
+                raise AssertionError("status polling must not send a blocking health RPC")
+
+            def close(self):
+                return None
+
+        self.server.voice_mem = BusyVoiceMem()
+        status, voice = self.get_json("/api/voice/status")
+        self.assertEqual(status, 200)
+        self.assertTrue(voice["configured"])
+        self.assertEqual(voice["voicemem"]["status"], "running")
+        self.assertTrue(voice["voicemem"]["ready"])
 
     def test_chat_and_level_change_work(self):
         status, response = self.post_json("/api/chat", {"text": "Привет"})
@@ -531,15 +751,14 @@ class WebTests(unittest.TestCase):
         try:
             with self.assertRaises(HTTPError) as context:
                 urlopen(request, timeout=2)
-            body = json.loads(context.exception.read().decode("utf-8"))
-            self.assertEqual(context.exception.code, 503)
-            self.assertFalse(body["ok"])
-            self.assertTrue(body["policy"]["emergency_stop"])
-            self.assertEqual(body["jawl_policy"]["status"], "offline")
+            with context.exception as error:
+                body = json.loads(error.read().decode("utf-8"))
+                self.assertEqual(error.code, 503)
+                self.assertFalse(body["ok"])
+                self.assertTrue(body["policy"]["emergency_stop"])
+                self.assertEqual(body["jawl_policy"]["status"], "offline")
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=2)
+            _stop_test_http_server(server, thread)
 
     def test_hostos_registry_is_visible_and_requests_use_server_policy(self):
         status, tools = self.get_json("/api/hostos/tools")
@@ -593,9 +812,7 @@ class WebTests(unittest.TestCase):
             self.assertTrue(payload["native"])
             self.assertEqual(native.calls[0][0], "HostOSReader.read_file_range")
         finally:
-            bridge.shutdown()
-            bridge.server_close()
-            thread.join(timeout=2)
+            _stop_test_http_server(bridge, thread)
 
     def test_browser_approval_queue_is_server_side_and_one_shot(self):
         self.post_json("/api/hostos/level", {"level": 3})
@@ -708,6 +925,77 @@ class WebTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 400)
         context.exception.close()
 
+    def test_product_api_facades_are_session_bound_and_versioned(self):
+        native = _FakeProductApi()
+        self.server.gateway.jawl_web = native
+        # No session -> 403, same as the legacy JAWL inspection routes.
+        for path in ("/api/memory", "/api/tasks", "/api/character",
+                     "/api/runtime/status", "/api/capabilities"):
+            with self.subTest(path=path):
+                try:
+                    urlopen(self.base + path, timeout=2)
+                except HTTPError as error:
+                    with error:
+                        self.assertEqual(error.code, 403)
+                else:
+                    self.fail(f"{path} should return HTTP 403 without a session")
+
+    def test_product_api_facades_expose_service_and_data(self):
+        native = _FakeProductApi()
+        self.server.gateway.jawl_web = native
+        status, body = self.get_json_auth("/api/runtime/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["service"], "runtime")
+        self.assertEqual(body["schema_version"], 1)
+        self.assertEqual(body["status"], "online")
+        self.assertIn("status", native.calls)
+
+        status, memory = self.get_json_auth("/api/memory")
+        self.assertEqual(status, 200)
+        self.assertEqual(memory["service"], "memory")
+        self.assertEqual(memory["database"]["rows"], 7)
+
+        status, character = self.get_json_auth("/api/character")
+        self.assertEqual(status, 200)
+        self.assertEqual(character["service"], "character")
+        self.assertEqual(character["settings"]["name"], "Luna")
+
+        status, tasks = self.get_json_auth("/api/tasks?limit=5&state=completed")
+        self.assertEqual(status, 200)
+        self.assertEqual(tasks["service"], "tasks")
+        self.assertEqual(tasks["plans"][0]["state"], "completed")
+        self.assertEqual(native.calls[-1], ("journal", 5, "completed"))
+
+        status, capabilities = self.get_json_auth("/api/capabilities")
+        self.assertEqual(status, 200)
+        self.assertEqual(capabilities["service"], "capabilities")
+        self.assertEqual(capabilities["access_name"], "OPERATOR")
+
+    def test_product_api_facades_report_not_configured_without_engine(self):
+        # No JAWL adapter: canonical facades stay explicit instead of crashing.
+        self.server.gateway.jawl_web = None
+        for path in ("/api/memory", "/api/tasks", "/api/character", "/api/runtime/status"):
+            with self.subTest(path=path):
+                status, body = self.get_json_auth(path)
+                self.assertEqual(status, 200)
+                self.assertEqual(body["configured"], False)
+                self.assertEqual(body["status"], "not_configured")
+        status, capabilities = self.get_json_auth("/api/capabilities")
+        self.assertEqual(status, 200)
+        self.assertEqual(capabilities["status"], "not_configured")
+
+    def test_legacy_jawl_aliases_keep_their_contract(self):
+        native = _FakeProductApi()
+        self.server.gateway.jawl_web = native
+        # Legacy names must route through the same engine surface.
+        status, body = self.get_json_auth("/api/jawl/persona")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["settings"]["name"], "Luna")
+        status, body = self.get_json_auth("/api/jawl/hostos")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["access_level"], 2)
+        self.assertIn(body["control_enabled"], (True, False))
+
     def test_audit_without_session_is_rejected(self):
         try:
             urlopen(self.base + "/api/audit", timeout=2)
@@ -756,96 +1044,36 @@ class WebTests(unittest.TestCase):
         self.assertIn("draft", payload)
 
 
-class PresentationWebTests(unittest.TestCase):
+class ObsSurfaceTests(unittest.TestCase):
+    """ADR-052: one origin — the app serves both the panel and ?mode=obs."""
+
     def setUp(self):
         self.control = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
             gateway=TextGateway(),
-            legacy_presentation=False,
         )
-        self.presentation = create_presentation_server(self.control, port=0)
         self.control_thread = threading.Thread(target=self.control.serve_forever, daemon=True)
-        self.presentation_thread = threading.Thread(target=self.presentation.serve_forever, daemon=True)
         self.control_thread.start()
-        self.presentation_thread.start()
-        self.base = f"http://127.0.0.1:{self.presentation.server_port}"
+        self.base = f"http://127.0.0.1:{self.control.server_port}"
 
     def tearDown(self):
-        self.presentation.shutdown()
-        self.presentation.server_close()
-        self.control.shutdown()
-        self.control.server_close()
-        self.presentation_thread.join(timeout=2)
-        self.control_thread.join(timeout=2)
-
-    def test_presentation_origin_has_only_bounded_read_only_state(self):
-        with urlopen(self.base + "/api/presentation/state", timeout=2) as response:
-            state = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
-            # The avatar page is the OBS source and may be embedded only by
-            # loopback control origins; framing stays denied everywhere else.
-            self.assertIn(
-                "frame-ancestors http://127.0.0.1:* http://localhost:*",
-                response.headers["Content-Security-Policy"],
-            )
-            self.assertNotIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
-        self.assertEqual(state["schema_version"], 1)
-        self.assertIn("avatar", state)
-        self.assertIn("subtitle", state)
-        self.assertIn("avatar_audio", state)
-        for secret_field in ("session_token", "csrf_token", "policy", "last_turn", "recent_turns"):
-            self.assertNotIn(secret_field, state)
+        _stop_test_http_server(self.control, self.control_thread)
 
     def test_control_origin_denies_frame_ancestors(self):
-        with urlopen(f"http://127.0.0.1:{self.control.server_port}/", timeout=2) as response:
+        with urlopen(self.base + "/app", timeout=2) as response:
             self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
-    def test_presentation_origin_serves_avatar_but_cannot_mutate_control(self):
+    def test_avatar_alias_serves_the_obs_mode_app_on_the_same_origin(self):
         with urlopen(self.base + "/avatar", timeout=2) as response:
-            self.assertIn(b"JAWL Avatar", response.read())
-        request = Request(
-            self.base + "/api/presentation/state",
-            data=b"{}",
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with self.assertRaises(HTTPError) as context:
-            urlopen(request, timeout=2)
-        self.assertEqual(context.exception.code, 405)
-        context.exception.close()
-        with self.assertRaises(HTTPError) as context:
-            urlopen(f"http://127.0.0.1:{self.control.server_port}/avatar", timeout=2)
-        self.assertEqual(context.exception.code, 404)
-        context.exception.close()
+            self.assertEqual(response.status, 200)
+            self.assertIn(b"JAWL Companion", response.read())
+            self.assertIn("mode=obs", response.geturl())
 
-    def test_remote_presentation_origin_requires_its_read_only_token(self):
-        # Use the loopback test server but force the same handler policy as a
-        # remote TLS bind; this avoids generating certificates in the unit
-        # suite while exercising the actual authorization boundary.
-        self.presentation.remote_access = True
-        self.presentation.presentation_access_token = "presentation-test-token"
-        with self.assertRaises(HTTPError) as context:
-            urlopen(self.base + "/api/presentation/state", timeout=2)
-        self.assertEqual(context.exception.code, 403)
-        context.exception.close()
-        with urlopen(
-            self.base + "/api/presentation/state?token=presentation-test-token",
-            timeout=2,
-        ) as response:
-            state = json.loads(response.read().decode("utf-8"))
-        self.assertEqual(state["schema_version"], 1)
-        with urlopen(
-            self.base + "/avatar?token=presentation-test-token",
-            timeout=2,
-        ) as response:
-            self.assertIn(b"JAWL Avatar", response.read())
-
-    def test_http_servers_reject_non_loopback_binds(self):
+    def test_http_server_rejects_non_loopback_binds(self):
         with self.assertRaises(ValueError):
             create_server(host="0.0.0.0", port=0, gateway=TextGateway())
-        with self.assertRaises(ValueError):
-            create_presentation_server(self.control, host="0.0.0.0", port=0)
+
 
 class _FakeStreamingAsr:
     def __init__(self, text="", active=True, silence_ms=800.0):
@@ -853,7 +1081,7 @@ class _FakeStreamingAsr:
         self.active = active
         self.silence_ms = silence_ms
 
-    def snapshot(self):
+    def snapshot(self, *, scope_id=None, session_id=None):
         return {"active": self.active, "text": self.text, "silence_ms": self.silence_ms}
 
 
@@ -868,6 +1096,314 @@ class _FakeFusion:
         return self.line
 
 
+class CurrentPerceptionEnrichmentTests(unittest.TestCase):
+    def test_current_scene_question_gets_atomic_frame_provenance_and_history_guard(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        fusion = PerceptionFusion()
+        capture_time = time.monotonic()
+        fusion.observe_caption(
+            "Earth from space with illuminated city lights.",
+            captured_at_monotonic=capture_time,
+            captured_at_wall=1_800_000_000.0,
+            frame_id="qwen-frame-62",
+            source="screen:qa-video:roi=0.1,0.1,0.8,0.8",
+            scene_id="scene-7",
+        )
+        ServerContext.perception_fusion = fusion
+
+        enriched = CompanionServer.enrich_turn_text(
+            ServerContext,
+            "Describe the current gameplay scene. Mention the visible characters and setting.",
+        )
+
+        self.assertNotIn("qwen-frame-62", enriched)
+        self.assertNotIn("scene-7", enriched)
+        self.assertNotIn("screen:qa-video", enriched)
+        self.assertIn("Earth from space with illuminated city lights.", enriched)
+        _, packet = split_packet(enriched)
+        self.assertTrue(packet["channels"]["screen"]["hypothesis"])
+        self.assertGreaterEqual(packet["channels"]["screen"]["age_s"], 0)
+
+    def test_retained_system_audio_transcript_is_injected_into_next_brain_turn(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        fusion = PerceptionFusion()
+        fusion.note("speech", "System-audio transcript: The quest marker moved to the north gate.")
+        ServerContext.perception_fusion = fusion
+
+        enriched = CompanionServer.enrich_turn_text(ServerContext, "What changed in the game?")
+
+        self.assertIn("What changed in the game?", enriched)
+        self.assertIn("System-audio transcript: The quest marker moved to the north gate.", enriched)
+
+    def test_brain_context_carries_shared_audio_video_timing_and_source_ids(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        fusion = PerceptionFusion()
+        captured = time.monotonic()
+        fusion.observe_caption(
+            "The current frame shows a teacher in a classroom.",
+            captured_at_monotonic=captured,
+            captured_at_wall=time.time(),
+            frame_id="frame-17",
+            source="screen:target-visible",
+            scene_id="scene-4",
+        )
+        fusion.note(
+            "ocr", "Quest: enter the observatory", now=captured - 0.1,
+            metadata={"source": "windows_ocr", "verified": False, "frame_id": "frame-17"},
+        )
+        fusion.note(
+            "speech",
+            "System-audio transcript: The sun is dying.",
+            now=captured - 0.4,
+            metadata={
+                "source": "system_audio_loopback",
+                "segment_id": "audio-segment-9",
+                "duration_ms": 15000,
+                "segment_started_monotonic": captured - 16.0,
+                "segment_ended_monotonic": captured - 1.0,
+                "confidence": 0.7,
+                "confidence_calibrated": False,
+            },
+        )
+        fusion.note(
+            "audio_description",
+            "A tense orchestral cue rises under the narration.",
+            now=captured - 0.8,
+            metadata={"source": "eg2-audio", "audio_kind": "music", "verified": False},
+        )
+        fusion.note(
+            "music",
+            "Music detected by YAMNet.",
+            now=captured - 1.2,
+            metadata={
+                "source": "system_audio_loopback",
+                "segment_id": "audio-segment-9",
+                "detector": "yamnet-onnx-cpu",
+                "duration_ms": 15000,
+                "model_score": 0.34,
+                "calibrated": False,
+                "music_state": "music",
+                "segment_started_monotonic": captured - 16.0,
+                "segment_ended_monotonic": captured - 1.2,
+                "candidate_tags": ["Saxophone", "Electronic music"],
+                "candidate_tags_calibrated": False,
+                "music_windows": 3,
+                "windows": 5,
+                "rms_dbfs": -24.5,
+                "energy_trend": "rising",
+            },
+        )
+        fusion.note(
+            "audio_candidates",
+            "Possible music style: cinematic orchestral.",
+            now=captured - 1.1,
+            metadata={
+                "source": "eg2-audio", "audio_kind": "music", "verified": False,
+                "segment_started_monotonic": captured - 8.0,
+                "segment_ended_monotonic": captured - 1.1,
+            },
+        )
+        fusion.note(
+            "audio_event_candidates",
+            "Possible YAMNet sound event: impact.",
+            now=captured - 0.7,
+            metadata={"source": "yamnet-onnx-cpu", "verified": False},
+        )
+        ServerContext.perception_fusion = fusion
+
+        enriched = CompanionServer.enrich_turn_text(ServerContext, "What is happening now?")
+
+        clean, packet = split_packet(enriched)
+        self.assertEqual(clean, "What is happening now?")
+        channels = packet["channels"]
+        self.assertIn("teacher in a classroom", channels["screen"]["text"])
+        self.assertIn("quest", channels["ocr"]["text"].lower())
+        self.assertIn("The sun is dying", channels["speech"]["text"])
+        self.assertEqual(channels["speech"]["duration_s"], 15)
+        self.assertGreaterEqual(channels["speech"]["age_s"], 1)
+        self.assertIn("orchestral cue", channels["audio_description"]["text"])
+        self.assertTrue(channels["audio_description"]["hypothesis"])
+        self.assertIn("cinematic orchestral", channels["audio_candidates"]["text"])
+        self.assertIn("Possible YAMNet", channels["audio_event_candidates"]["text"])
+        self.assertTrue(channels["music"]["hypothesis"])
+        self.assertEqual(channels["music"]["candidate_tags"], ["Saxophone", "Electronic music"])
+        for diagnostic in ("frame-17", "scene-4", "audio-segment-9", "rms_dbfs", "music_windows", "model_score"):
+            self.assertNotIn(diagnostic, enriched)
+        self.assertIn("Saxophone", render_packet(packet))
+        self.assertIn("orchestral cue", render_packet(packet))
+        self.assertIn("cinematic orchestral", render_packet(packet))
+        self.assertIn("impact", render_packet(packet))
+
+    def test_unverified_audio_tag_warning_requires_fresh_uncalibrated_candidates(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        cases = (
+            ("calibrated", 0.0, True, ["Saxophone"], False),
+            ("no-tags", 0.0, False, [], False),
+            ("stale", 25.0, False, ["Saxophone"], False),
+            ("fresh-unverified", 0.0, False, ["Saxophone"], True),
+        )
+        warning = "\u0410\u0443\u0434\u0438\u043e\u0442\u0435\u0433\u0438 \u043a\u0430\u043d\u0434\u0438\u0434\u0430\u0442\u043d\u044b\u0435 \u0438 \u043d\u0435 \u043a\u0430\u043b\u0438\u0431\u0440\u043e\u0432\u0430\u043d\u044b"
+        for label, age_s, calibrated, tags, expected in cases:
+            with self.subTest(label=label):
+                fusion = PerceptionFusion()
+                now = time.monotonic()
+                fusion.note(
+                    "music",
+                    "Music detected by YAMNet.",
+                    now=now - age_s,
+                    metadata={
+                        "candidate_tags": tags,
+                        "candidate_tags_calibrated": calibrated,
+                    },
+                )
+                ServerContext.perception_fusion = fusion
+                enriched = CompanionServer.enrich_turn_text(ServerContext, "What is two plus two?")
+                _, packet = split_packet(enriched)
+                rendered = render_packet(packet)
+                self.assertEqual(bool(packet.get("channels", {}).get("music", {}).get("hypothesis")) and "Saxophone" in rendered, expected)
+
+    def test_current_screen_question_does_not_mix_old_visual_history(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+            _PERCEPTION_HISTORY_QUERY = CompanionServer._PERCEPTION_HISTORY_QUERY
+
+        fusion = PerceptionFusion()
+        now = time.monotonic()
+        fusion.record_visual_event(
+            "An older shot shows the Sun.",
+            captured_at_monotonic=now - 4.0,
+            captured_at_wall=time.time() - 4.0,
+            frame_id="old-frame",
+            source="screen:test",
+            scene_id="old-scene",
+            now=now,
+        )
+        fusion.observe_caption(
+            "The current frame shows a classroom.",
+            captured_at_monotonic=now,
+            captured_at_wall=time.time(),
+            frame_id="current-frame",
+            source="screen:test",
+            scene_id="current-scene",
+            now=now,
+        )
+        fusion.note(
+            "speech",
+            "Current audio observation.",
+            now=now,
+            metadata={"source": "system_audio_loopback", "segment_id": "audio-current"},
+        )
+        ServerContext.perception_fusion = fusion
+
+        current = CompanionServer.enrich_turn_text(ServerContext, "What is visible on the screen now?")
+        historical = CompanionServer.enrich_turn_text(ServerContext, "What changed between the scenes?")
+
+        self.assertIn("The current frame shows a classroom.", current)
+        self.assertIn("Current audio observation.", current)
+        self.assertNotIn("An older shot shows the Sun.", current)
+        self.assertIn("An older shot shows the Sun.", historical)
+
+
+class SensoryHistoryEnrichmentTests(unittest.TestCase):
+    def test_recent_and_weekly_sensory_queries_receive_compact_history(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class History:
+            def __init__(self):
+                self.calls = []
+
+            def context_text(self, **kwargs):
+                self.calls.append(kwargs)
+                return "SENSORY HISTORY: recorded scene and audio event"
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+            _PERCEPTION_HISTORY_QUERY = CompanionServer._PERCEPTION_HISTORY_QUERY
+            _SENSORY_HISTORY_QUERY = CompanionServer._SENSORY_HISTORY_QUERY
+            perception_fusion = PerceptionFusion()
+            sensory_history = History()
+
+        recent = CompanionServer.enrich_turn_text(ServerContext, "What happened two minutes ago?")
+        recent_ru = CompanionServer.enrich_turn_text(ServerContext, "Что происходило две минуты назад?")
+        weekly = CompanionServer.enrich_turn_text(ServerContext, "Summarize the weekly history")
+
+        self.assertIn("SENSORY HISTORY: recorded scene and audio event", recent)
+        self.assertIn("SENSORY HISTORY: recorded scene and audio event", recent_ru)
+        self.assertIn("SENSORY HISTORY: recorded scene and audio event", weekly)
+        self.assertEqual(ServerContext.sensory_history.calls[0]["seconds"], 5 * 60)
+        self.assertEqual(ServerContext.sensory_history.calls[0]["focus_seconds_ago"], 120.0)
+        self.assertEqual(ServerContext.sensory_history.calls[1]["focus_seconds_ago"], 120.0)
+        self.assertEqual(ServerContext.sensory_history.calls[2]["seconds"], 7 * 24 * 3600)
+        self.assertEqual(ServerContext.sensory_history.calls[2]["focus_seconds_ago"], None)
+        self.assertTrue(ServerContext.sensory_history.calls[2]["include_week"])
+
+    def test_history_failure_is_disclosed_to_brain_instead_of_silent_visual_fallback(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class BrokenHistory:
+            @staticmethod
+            def context_text(**kwargs):
+                raise OSError("unavailable")
+
+        class ServerContext:
+            gateway = type("Gateway", (), {"arbiter": Arbiter()})()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+            _PERCEPTION_HISTORY_QUERY = CompanionServer._PERCEPTION_HISTORY_QUERY
+            _SENSORY_HISTORY_QUERY = CompanionServer._SENSORY_HISTORY_QUERY
+            perception_fusion = PerceptionFusion()
+            sensory_history = BrokenHistory()
+
+        enriched = CompanionServer.enrich_turn_text(ServerContext, "What happened two minutes ago?")
+
+        self.assertIn("SENSORY HISTORY UNAVAILABLE: durable history retrieval failed", enriched)
+        self.assertIn("Do not infer that unlisted events did not happen", enriched)
+
+
 class VoicePrefaceTests(unittest.TestCase):
     def _start_server(self, *, partial, fusion, silence_ms=800.0):
         server = create_server(
@@ -879,9 +1415,7 @@ class VoicePrefaceTests(unittest.TestCase):
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
-        self.addCleanup(thread.join, 2)
+        self.addCleanup(_stop_test_http_server, server, thread)
         self.base = f"http://127.0.0.1:{server.server_port}"
         self.session_headers = {
             "X-Companion-Session": server.session_token,
@@ -904,49 +1438,50 @@ class VoicePrefaceTests(unittest.TestCase):
 
     def test_screen_question_returns_bounded_preface(self):
         self._start_server(
-            partial="Компаньон, что сейчас происходит на экране?",
-            fusion=_FakeFusion("Экран: окно OpenCode с таблицей логов. Звук: тишина"),
+            partial="\u041a\u043e\u043c\u043f\u0430\u043d\u044c\u043e\u043d, \u0447\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442 \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435?",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode \u0441 \u0442\u0430\u0431\u043b\u0438\u0446\u0435\u0439 \u043b\u043e\u0433\u043e\u0432. \u0417\u0432\u0443\u043a: \u0442\u0438\u0448\u0438\u043d\u0430"),
         )
         status, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertEqual(data["text"], "Смотрю: окно OpenCode с таблицей логов.")
+        self.assertEqual(data["text"], "\u0421\u043c\u043e\u0442\u0440\u044e: \u043e\u043a\u043d\u043e OpenCode \u0441 \u0442\u0430\u0431\u043b\u0438\u0446\u0435\u0439 \u043b\u043e\u0433\u043e\u0432.")
 
     def test_non_screen_question_has_no_preface(self):
         self._start_server(
-            partial="Напиши короткое письмо коллеге",
-            fusion=_FakeFusion("Экран: окно OpenCode"),
+            partial="\u041d\u0430\u043f\u0438\u0448\u0438 \u043a\u043e\u0440\u043e\u0442\u043a\u043e\u0435 \u043f\u0438\u0441\u044c\u043c\u043e \u043a\u043e\u043b\u043b\u0435\u0433\u0435",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode"),
         )
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_broad_phrase_without_screen_noun_is_not_spoken(self):
         self._start_server(
-            partial="Что сейчас происходит?",
-            fusion=_FakeFusion("Экран: окно OpenCode"),
+            partial="\u0427\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u043f\u0440\u043e\u0438\u0441\u0445\u043e\u0434\u0438\u0442?",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode"),
         )
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_stale_partial_is_never_spoken(self):
         self._start_server(
-            partial="Что сейчас на экране?",
-            fusion=_FakeFusion("Экран: окно OpenCode"),
+            partial="\u0427\u0442\u043e \u0441\u0435\u0439\u0447\u0430\u0441 \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435?",
+            fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e OpenCode"),
             silence_ms=30000.0,
         )
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_missing_or_broken_perception_is_soft(self):
-        self._start_server(partial="что на экране", fusion=_FakeFusion(error=True))
+        self._start_server(partial="\u0427\u0442\u043e \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435", fusion=_FakeFusion(error=True))
         _, data = self._post("/api/voice/preface", {"session_id": "s1"})
         self.assertEqual(data["text"], "")
 
     def test_preface_requires_browser_session(self):
-        self._start_server(partial="что на экране", fusion=_FakeFusion("Экран: окно"))
+        self._start_server(partial="\u0427\u0442\u043e \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435", fusion=_FakeFusion("\u042d\u043a\u0440\u0430\u043d: \u043e\u043a\u043d\u043e"))
         with self.assertRaises(HTTPError) as context:
             self._post("/api/voice/preface", {"session_id": "s1"}, headers={})
-        self.assertEqual(context.exception.code, 403)
+        with context.exception:
+            self.assertEqual(context.exception.code, 403)
 
 
 class VoiceMemoryBlockTests(unittest.TestCase):
@@ -1016,9 +1551,7 @@ class ShellStatusTests(unittest.TestCase):
         }
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def test_shell_status_is_light_and_bounded(self):
         request = Request(self.base + "/api/shell/status", headers=self.session_headers)
@@ -1033,11 +1566,68 @@ class ShellStatusTests(unittest.TestCase):
         self.assertFalse(data["sensory"]["running"])
         self.assertFalse(data["screen"]["running"])
         self.assertFalse(data["voice"]["tts"])
+        self.assertFalse(data["visual"]["error_active"])
+        self.assertIsNone(data["capture"]["microphone_owner"])
+        self.assertFalse(data["capture"]["loopback_configured"])
+        self.assertFalse(data["capture"]["loopback_running"])
 
     def test_shell_status_requires_browser_session(self):
         with self.assertRaises(HTTPError) as context:
             urlopen(self.base + "/api/shell/status", timeout=2)
-        self.assertEqual(context.exception.code, 403)
+        with context.exception:
+            self.assertEqual(context.exception.code, 403)
+
+    def test_shell_status_reports_active_capture_sources(self):
+        self.server.voice_capture.acquire("desktop", "capture-test")
+        self.server.ambient_audio = type(
+            "AmbientAudioState",
+            (),
+            {
+                "state": lambda _self: {
+                    "configured": True,
+                    "enabled": True,
+                    "paused": False,
+                    "capture": {"running": True, "device": "DigitalOutput (2- NVIDIA High Definition Audio) [Loopback]", "device_index": 38, "host_api_index": 2, "sample_rate": 48000, "channels": 2, "last_error": None, "last_chunk_age_ms": 123.0, "signal_window_state": "digital_silence", "signal_window_rms": 0.0, "signal_window_duration_ms": 1000.0},
+                    "bridge": {"soundscape_configured": True, "soundscape_count": 1, "soundscape_errors": 0, "soundscape_latency_ms_p95": 24.0, "soundscape_last_kind": "music", "soundscape_last_tags": ["Saxophone"], "soundscape_last_age_ms": 800.0, "soundscape_last_fresh": True, "audio_description_configured": True, "audio_description_provider": "qwen3-omni", "audio_description_count": 3, "audio_description_errors": 1, "audio_description_skipped": 0, "audio_description_latency_ms_p95": 940.0, "audio_description_last_kind": "music", "audio_description_last_age_ms": 2500.0, "audio_description_last_fresh": True},
+                },
+                "stop": lambda _self: None,
+            },
+        )()
+        self.server.visual_sensor = type(
+            "VisualSensorState",
+            (),
+            {
+                "state": lambda _self: {"running": True, "latest_age_ms": 800, "caption_fresh": False, "caption_age_ms": 7000},
+                "stop": lambda _self: None,
+            },
+        )()
+        request = Request(self.base + "/api/shell/status", headers=self.session_headers)
+        with urlopen(request, timeout=2) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(data["capture"]["microphone_owner"], "desktop")
+        self.assertTrue(data["capture"]["loopback_configured"])
+        self.assertTrue(data["capture"]["loopback_running"])
+        self.assertEqual(data["capture"]["loopback_last_chunk_age_ms"], 123.0)
+        self.assertEqual(data["capture"]["loopback_device"], "DigitalOutput (2- NVIDIA High Definition Audio) [Loopback]")
+        self.assertEqual(data["capture"]["loopback_device_index"], 38)
+        self.assertEqual(data["capture"]["loopback_host_api_index"], 2)
+        self.assertEqual(data["capture"]["loopback_sample_rate"], 48000)
+        self.assertEqual(data["capture"]["loopback_channels"], 2)
+        self.assertEqual(data["capture"]["loopback_signal_window_state"], "digital_silence")
+        self.assertEqual(data["capture"]["loopback_signal_window_rms"], 0.0)
+        self.assertEqual(data["capture"]["loopback_signal_window_duration_ms"], 1000.0)
+        self.assertEqual(data["capture"]["soundscape_last_kind"], "music")
+        self.assertEqual(data["capture"]["soundscape_last_tags"], ["Saxophone"])
+        self.assertEqual(data["capture"]["soundscape_last_age_ms"], 800.0)
+        self.assertTrue(data["capture"]["soundscape_last_fresh"])
+        self.assertEqual(data["capture"]["audio_description_provider"], "qwen3-omni")
+        self.assertEqual(data["capture"]["audio_description_count"], 3)
+        self.assertEqual(data["capture"]["audio_description_errors"], 1)
+        self.assertEqual(data["capture"]["audio_description_last_kind"], "music")
+        self.assertEqual(data["capture"]["audio_description_last_age_ms"], 2500.0)
+        self.assertTrue(data["capture"]["audio_description_last_fresh"])
+        self.assertFalse(data["visual"]["caption_fresh"])
+        self.assertEqual(data["visual"]["caption_age_ms"], 7000)
 
 
 class AgentLogTests(unittest.TestCase):
@@ -1050,9 +1640,7 @@ class AgentLogTests(unittest.TestCase):
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
-        self.addCleanup(thread.join, 2)
+        self.addCleanup(_stop_test_http_server, server, thread)
         self.base = f"http://127.0.0.1:{server.server_port}"
         self.session_headers = {
             "X-Companion-Session": server.session_token,
@@ -1073,7 +1661,10 @@ class AgentLogTests(unittest.TestCase):
             log = log_dir / "main.log"
             log.write_text(
                 "\n".join(f"line-{index}" for index in range(1, 21))
-                + "\nAuthorization: Bearer sk-abcdef1234567890abcdef\n",
+                # Deliberately fake credential: this fixture proves the log-tail
+                # endpoint redacts secrets.
+                + "\nAuthorization: Bearer sk-abcdef1234567890abcdef\n"  # secret-scan: allow
+                ,
                 encoding="utf-8",
             )
             self._server(log_dir=log_dir)
@@ -1174,9 +1765,7 @@ class SettingsHubUITests(unittest.TestCase):
         }
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def _post(self, payload):
         request = Request(
@@ -1329,9 +1918,7 @@ class PutProxyTests(unittest.TestCase):
         self.base = f"http://127.0.0.1:{self.server.server_port}"
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=2)
+        _stop_test_http_server(self.server, self.thread)
 
     def test_put_requires_session_and_proxies_console_paths(self):
         request = Request(
@@ -1342,7 +1929,8 @@ class PutProxyTests(unittest.TestCase):
         )
         with self.assertRaises(HTTPError) as context:
             urlopen(request, timeout=3)
-        self.assertEqual(context.exception.code, 403)
+        with context.exception:
+            self.assertEqual(context.exception.code, 403)
 
     def test_put_outside_console_paths_is_method_not_allowed(self):
         request = Request(
@@ -1357,7 +1945,8 @@ class PutProxyTests(unittest.TestCase):
         )
         with self.assertRaises(HTTPError) as context:
             urlopen(request, timeout=3)
-        self.assertEqual(context.exception.code, 405)
+        with context.exception:
+            self.assertEqual(context.exception.code, 405)
 
 
 if __name__ == "__main__":

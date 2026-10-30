@@ -1,12 +1,39 @@
 # Sensory stack design — streaming perception for the companion (2026-09-10)
 
-Adopted principle (matches the full-duplex research pattern): **fast
+Historical research/benchmark note, reviewed 2026-10-10. Its dated measurements
+below are retained as historical evidence and do not define today's selected
+workers, runtime defaults or production acceptance. Latest saved runtime
+evidence is 2026-10-05. Current product state: GigaAM v3 is the only ASR;
+ASR is not a captioner or affect reader. Bonsai vision on 8986 is configured,
+not accepted for all OCR/grounding. T1/T2 memory is process-local; manual JAWL
+promotion exists and durable automatic consolidation remains OPEN. See
+[README.md](README.md), [STATE.md](STATE.md), and current [TODO.md](../TODO.md).
+
+The architecture below is a target/research design. Historical model names,
+cadences and measurements must not be read as current defaults or acceptance.
+
+## Current canonical model roles — 2026-10-29
+
+The adopted daily role set is recorded in [ADR-048](DECISIONS.md#adr-048--canonical-daily-model-roles):
+Gemini 3.8 Flash via the local relay for the brain; Qwen3.5-0.8B Q4 on CPU for
+scene descriptions; Windows OCR/UIA for visible text and UI structure; GigaAM
+v3 q8 on CPU for ASR; EmbeddingGemma 2 ONNX and YAMNet ONNX on CPU for audio
+features, descriptions and sound-event hypotheses; multilingual MiniLM ONNX on
+CPU for semantic-memory vectors; and OmniVoice 0.6B on CUDA 1 for speech output.
+
+This is the project model canon, not a claim that all lanes have passed live
+acceptance. In the latest recorded profile, ambient loopback was waiting for
+audio samples. Music style, grounded sound-event descriptions, live brain
+uptake, sustained resources, and integrated-duration acceptance remain open.
+The historical proposals below are retained as research history only.
+
+Historical research principle (not an adopted full-duplex capability): **fast
 specialized models run constantly, heavy VLM runs periodically, the LLM never
 sees raw media** — it reads compact `MusicState` / `VisualState` /
 `SpeechState` JSON. Realtime budget is reserved for conversation; sensory
 context may lag seconds.
 
-## Audio stack (desktop loopback → MusicState)
+## Historical audio-stack proposal (desktop loopback → MusicState)
 
 | Tier | Cadence | Component | Produces | Measured |
 |---|---|---|---|---|
@@ -28,7 +55,7 @@ context may lag seconds.
  "notes_top": [{"note": "D#4", "confidence": 0.59}, ...]}
 ```
 
-## Screen stack (desktop capture → VisualState)
+## Historical screen-stack proposal (desktop capture → VisualState)
 
 | Tier | Cadence | Component | Produces | Measured/notes |
 |---|---|---|---|---|
@@ -44,7 +71,7 @@ optional caption + optional OCR strings, all with timestamps.
 
 ## Fusion
 
-`sensory_worker` merges screen+audio events in a sliding window into typed
+Target only: a `sensory_worker` would merge screen+audio events in a sliding window into typed
 sensory observations (L0 ring buffer 60–120 s) → VoiceMem/ambient path →
 JAWL. The composer layer (Gemma/JAWL) turns `MusicState`+`VisualState`+
 `SpeechState` into natural RU context understanding; structured facts stay
@@ -124,7 +151,11 @@ hallucination (whisper «Редактор субтитров…» on instrumenta
 speech lane must additionally gate through the existing ASR-noise filter
 and/or reject when SER says `other`; not yet wired.
 
-## Adoption order
+## Historical adoption order (2026-09-10)
+
+This list records that date's proposal, not the current queue. Current work is
+tracked only at the top of [TODO.md](../TODO.md); historical entries do not
+reopen completed work or override today's selected profile.
 
 1. MusicState T1/T2 (librosa + Basic Pitch) — done, benches recorded.
 2. CLAP T3 worker (GPU1, rare cadence) — bench done; wrap into worker.

@@ -1,42 +1,42 @@
-# Передача работы — 2026-09-06
+# Передача работы — 21 октября 2026
 
-Начать с AGENTS.md → docs/PRODUCT.md → docs/STATE.md → TODO.md →
-docs/TECHNICAL_AUDIT.md → [docs/RECOVERY_PLAN.md](docs/RECOVERY_PLAN.md).
-Последний документ задаёт порядок R1 → R4 и готовую формулировку goal.
+> Актуальный статус продолжения на 24 октября: используйте [docs/STATE.md](docs/STATE.md)
+> и [runtime/active-goal-addendum-20261024.md](runtime/active-goal-addendum-20261024.md).
+> Этот handoff сохраняет историческую очередь на 21 октября; пункты ниже могли
+> быть закрыты или изменены последующими проверками.
 
-Срез аудита: HEAD `1bb3117` плюс R1-правки. Используется owned snapshot
-`runtime/jawl-sources/jawl-20260906-daily-v2` (348 файлов). Глобальная HostOS
-blocklist и запрет discovery удалены из owned snapshot/config; повреждённый
-context patch удалён. Последний full gate `20260906T021700Z` зелёный, но это
-не live voice acceptance.
+Ветка `dev/daily-companion-20261014`, dirty worktree владельца сохранён.
+Очередь — [TODO](TODO.md), факты — [STATE](docs/STATE.md), вход — [AGENTS](AGENTS.md).
+Pinned snapshot `runtime/jawl-sources/jawl-20260906-daily-v2` не менять.
 
-Один live gateway pass (~48 с) сохранён. Пять свежих recall-попыток failed;
-связанный голос/память/поручение не принят. Нельзя продолжать с утверждением
-«модель и память уже работают». Проверить конкретные turn IDs и содержательный
-результат. Historical mock/browser/full-gate не доказывают live daily scenario.
+## Где находимся
 
-prepare_daily_profile копирует только отсутствующие файлы. До эксперимента
-сравнить effective config/prompt с источником и построить корректную миграцию.
-Выбранная локальная модель и контекст требуют readiness; суффикс LM Studio
-`:2` не считать постоянным. Ошибку контекста и tool loop исследовать отдельно.
+- **H4-Grounding live PASS**: UIA-клик, OCR-canvas клик и Stop без двойного
+  эффекта проверены `scripts/live_grounding_acceptance.py`. OCR работает через
+  Windows.Media.Ocr без tesseract (`windows_ocr.py`).
+- **D5-01 live PASS**: `--suite agent-work` 7/7 — file write/read с точным
+  SHA, browser navigate+extract и form save, memory revision/restart/recall,
+  sandbox denial. Startup `SYSTEM_CORE_START` ограничен schema-bound, иначе
+  2048-token completion обрывал JSON до готовности.
+- **TTS per-request cancel** реализован и покрыт focused tests; живая проверка
+  Stop во время реального OmniVoice-синтеза отложена по решению владельца.
+- **voice_end → ASR** измерен: warm p50 0.307с, p95 0.408с; GigaAM/crispasr.
+- Гейт на 21Oct: 1175 passed + 281 subtests, JS 102 passed.
 
-Следующие исполнители могут параллельно взять: R1 delivery/tools, R2 turn/memory,
-R3 browser/audio acceptance с непересекающимися файлами. Координатор принимает
-изменения и запускает R4 integrated acceptance. Не урезать права ради latency.
+## Открытые хвосты
 
-Рабочее репо только G:\AI\JAWL-VoiceCompanion; protected JAWL-Coding/VoiceMem/RE
-read-only. Не читать секреты, не менять чужие процессы. Синтетические live
-проверки не требуют присутствия владельца; физический микрофон/OBS — отдельные
-приёмки. Vision не выбирать.
+- D5-02: memory revision/restart/recall уже PASS в live agent-work; остаются
+  задачи через Stop речи и controlled provider fault без дубля эффекта.
+- D6-02: `native_goal_completion_repair.py` реализован и покрыт unit/probe;
+  новый 8-часовой soak после repair ещё не прогонялся. Короткий прогон не
+  выдавать за 8h acceptance.
+- D2/D1: физический микрофон Fifine, 20 голосовых ходов, provider error/recovery
+  и barge-in через колонки остаются интерактивными.
+- TTS first chunk ~1.19с — главный оставшийся latency floor; оптимизация позже.
 
-Goal `01a058db-f310-7d03-bbb3-63eba8ba78a5` зарегистрирован и активен.
-Не закрывать его до связанного live-сценария: memory recall, три browser voice
-turns, native disposable action с postcondition/recovery и реального Live2D.
+## Запуск и проверка
 
-## Актуальная поправка аудита — 2026-09-06
-
-Текущий HEAD — `5f5ec7f`, а не исторический `1bb3117`; рабочее дерево содержит
-незакоммиченные изменения. Snapshot `jawl-20260906-daily-v2` проверен digest
-`7c2d3f1814c67dc7c8ae8c0ed3d1dee183380f54177b691f1f5825dbb3d10422`.
-MiniCPM-o 4.5 не входит в RU production gate. Для следующих мультимодальных
-кандидатов обязателен `docs/MULTIMODAL_MODEL_GATE.md` до скачивания полного веса.
+Запуск стека — по `docs/DAILY_RUNBOOK.md` и `scripts/run_local_bonsai_integrated.ps1`.
+Перед live-прогоном заново проверить ports/ownership; cleanup receipt не
+описывает процессы, запущенные позже. Тесты: `python -X utf8 -m pytest tests/ -q`
+и desktop node tests. Не коммитить и не делать reset без явной просьбы владельца.

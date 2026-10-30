@@ -1,5 +1,12 @@
 # JAWL bridge contract
 
+Reviewed 2026-10-12 against inspected source/API descriptions; fresh evidence
+includes isolated Tera CPU and native SDK/loopback probes, not whole-profile
+acceptance. Route names below are version-dependent native
+contracts, not a claim that every route or capability passed fresh live
+acceptance. See [README.md](../README.md), [STATE.md](../STATE.md), and
+[TODO.md](../../TODO.md).
+
 JAWL is the only owner of persona, Heartbeat, ReAct, HostOS side effects and
 durable memory. Companion never opens JAWL SQLite/Vector/Graph storage and
 never runs a second model/tool loop.
@@ -37,7 +44,9 @@ Supported types are `turn.started`, `assistant.delta`, `tool.requested`,
 `tool.started`, `tool.completed`, `assistant.final`, `turn.cancelled` and
 `turn.error`. `assistant.final` is emitted once and carries one strict
 `ResponseEnvelope`. `POST /api/companion/cancel` addresses exactly one
-`turn_id`; it cannot cancel another turn by text or sequence guess.
+`turn_id`; it cannot cancel another turn by text or sequence guess. Cancelling
+speech/turn transport must preserve an unrelated durable JAWL task and its
+checkpoint; this endpoint is not a task deletion/completion operation.
 
 The Companion parser rejects unknown fields, malformed IDs, oversized payloads,
 model-supplied access levels and final events for another turn. JAWL keeps a
@@ -64,6 +73,195 @@ local model must satisfy JAWL's own provider/tool contract; Companion receives
 only the native event/envelope.
 
 ## Native control routes
+
+### Owned brain startup identity and local JSON wire format (15Oct)
+
+The brain entrypoint validates all isolated profile paths before protected
+imports. After strict snapshot verification and hook installation it atomically
+writes `logs/owned-brain-startup.json`: actual interpreter PID/creation time,
+parent PID, source SHA and actual native-class hook identities. No prompt,
+thought, token or environment dump enters this receipt. The live acceptance
+driver checks the PID's exact launcher Job and creation time while it is alive.
+Windows venv redirector PID is distinct from the actual interpreter PID.
+
+Owned supervisor readback (16Oct) uses `owned-supervisor-identity.json` under
+the owned instances root, plus the native `supervisor.pid` marker. The receipt
+contains PID/creation time and the expected owned entrypoint/root; the process
+must still match. No native command-line fallback runs. The actual supervisor
+publishes the bounded atomic receipt only after acquiring the native exclusive
+lock and removes it before releasing that lock. Failed acquisition/write,
+PID reuse, malformed receipts and foreign roots cannot report running=true.
+After forced Job drain, acceptance cleanup removes a stale receipt only if it
+matches the identity captured while that supervisor belonged to the exact Job.
+
+The owned `native_jawl_json_format.py` corrects only local OpenAI-compatible
+`json_envelope` requests with the single native `execute_skill` SDK wrapper
+and automatic tool choice. It constrains the outer JSON object through
+`response_format.json_schema` and avoids offering a second SDK representation
+of the same envelope. The wire grammar imposes no action/argument whitelist.
+Native discovery, arguments, Goal Protocol v2 and ledger fields remain available;
+JAWL still validates, parses and executes every action.
+Remote/native-tool/explicit-format requests keep their existing behavior.
+
+The installed llama.cpp maps plain `json_object` to an empty schema, which some
+template branches do not treat as constrained output. A schema combined with
+the wrapper failed sampler initialization on this build. A full-schema trial
+produced repetitive actions and exhausted the output budget. The current wire
+format is probed against the actual server before model acceptance; this is
+not permission to repair arbitrary generated actions or speak private fields.
+The [llama.cpp server contract](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+documents schema-constrained response formats. Current live results belong in
+[STATE](../STATE.md), separately from controlled regression tests.
+
+### Owned cycle delivery boundary (13Oct)
+
+`scripts/run_owned_jawl_console.py` verifies isolation and the pinned snapshot
+before installing `native_jawl_delivery.py` in process. Protected sources remain
+immutable. A valid correlated ReAct cycle that returns without a confirmed
+native terminal event emits a bounded fixed-reason `turn.error`; ending a cycle
+is not itself delivery. Native exceptions propagate, cancellation is preserved,
+and this boundary does not finish/delete durable goals or fabricate a reply.
+
+The pinned no-action completion method saves private thoughts in native tick
+storage. Its correlated thoughts-as-final envelope is suppressed at the owned
+EventBus publication boundary; background tick publication and native status
+remain. Only actual successful native terminal delivery counts as an answer.
+Failed error emission is not reported as successful delivery. Installation is
+process-local/idempotent, not persistent exactly-once execution.
+
+Within an active correlated cycle the first confirmed terminal event wins.
+Concurrent/repeated terminal emits are serialized; an unconfirmed failed emit
+allows retry. Repeated terminal tool broadcasts are suppressed before history
+and legacy writer side effects, not just before SSE. Native action execution
+and goal state stay authoritative. This guards a native batch containing several
+terminal actions; it does not deduplicate arbitrary native effects after restart.
+
+Evidence:11 controlled/snapshot and12 launcher checks on3.14/3.11, actual isolated
+console startup/import/auth/cancel probe, full regression844/66/16 plus browser
+stages. This is not yet full real-model conversation/latency acceptance; see
+[STATE](../STATE.md). The guard removes an indefinite wait after native cycle
+termination, not the underlying provider planning failure.
+
+### Correlated context continuation (14Oct)
+
+Native heartbeat formatting intentionally archives the original trigger after
+step1 and labels CURRENT as HEARTBEAT. The owned launcher installs
+`native_jawl_turn_context.py`: a fixed-size INTERFACES provider registered through
+the native registry before native build/compaction. It activates only when the
+validated payload turn ID matches the native active-turn accessor. No user text,
+private thoughts, permissions or memory state are interpolated into this block.
+Background/mismatched contexts remain empty. Native budgets remain authoritative;
+tight budgets can truncate this guidance, so retention/model compliance is not
+guaranteed by the controlled tests or console import probe.
+
+### Turn admission and cancellation (12Oct)
+
+Synchronous and streaming clients share one admission lock per adapter. Waiters
+start no producer/native request before admission. The admitted producer owns
+transport cleanup and releases the lock only afterwards; a paused/closed
+consumer cannot release an in-flight POST early. Its event queue is bounded
+to32; waiting is cancel-aware. Queue/Event allocation precedes admission, and
+thread construction/start failures release the lock. Outgoing IDs use the same
+strict1–128-character grammar as incoming events: no coercion or truncation.
+
+The turn POST is attempted once. HTTP409/offline, a lost ACK or invalid ACK
+does not prove non-admission: native `ChatBridge.send` writes before awaiting
+`drain`. Such outcomes are explicit errors, never blind replay. Cleanup sends
+best-effort cancellation for that exact ID only. Reconnecting read-only SSE
+does not re-submit the turn.
+
+Owned daily/integrated launchers now use `scripts/run_owned_jawl_console.py`.
+It validates isolated instance/registry paths, verifies the immutable snapshot,
+and explicitly wraps native `make_app` inside that process. Native auth remains
+outermost. Only the two Companion POST routes and the read-only capability
+endpoint are intercepted; native ChatBridge/Heartbeat/persona/memory/tools remain
+the owners. There is no copied brain or protected source patch. The extension
+loads directly from its file, not Companion's full import graph. Startup console
+tokens are redacted (including split writes); console output is bounded UTF8.
+
+`native_jawl_admission.py` keeps at most1024 ID entries for300s after HTTP cleanup.
+Pending entries never expire/evict; capacity fails503 without dispatch. Duplicate
+IDs fail409 even after an uncertain ACK. Cancellation records a tombstone before
+awaiting native forward, so a readiness waiter or scheduled dispatch task cannot
+later send that ID. It checks client disconnect immediately before the pinned
+bridge's synchronous write-before-first-await. Bridge acquisition/release is
+balanced; body128KiB/1s total, readiness5s, send2s and cancel-forward1s defaults.
+Strict IDs/text/unknown fields/duplicate JSON keys fail before native IO.
+
+Cancellation ALWAYS attempts exact-ID native forward, including unknown/expired
+HTTP history: missing local history is not proof that a long native turn never
+started. `local_dispatch_prevented:true` describes only the local tombstone;
+`forwarded` reports bridge ACK, not completed native computation. Authenticated
+`GET /api/companion/admission-capabilities` reports the version, actual process
+ID, bounds and `durable:false`/`exactly_once:false`. Integrated startup requires
+that capability. Direct `python -m src.web.server` lacks this owned extension.
+
+The canonical default HTTP(S) client uses `http_lifecycle.read_scoped` for turn
+and cancel POSTs. Each call owns its socket before connect/TLS handshake; an
+absolute configured deadline (not a resetting inactivity timeout) covers headers
+and body. Turn cancellation aborts only that socket. Cancel forwarding has its
+own independent deadline, not the already-set old turn event. No system proxy,
+DNS, redirects or mutation replay; TLS certificate verification remains enabled.
+ACK bodies remain bounded to128KiB. Cleanup joins the call's watchdog before
+returning; the native producer retains its admission lease through cleanup.
+
+OPEN: process restart/TTL/other native transports do not have durable request
+idempotency. Cancel ACK or server-observed socket EOF is not compute-release
+evidence. Opaque/non-cooperative injected openers may outlive local cancellation:
+no forced reap is claimed, and the native producer retains admission until its
+transport really settles. Default transport loopback tests do not prove remote
+inference/goal/device behaviour.
+
+Native client diagnostics are per-admission-owner fenced: stale consumers,
+errors and pre-cancelled waiters cannot overwrite replacement status/error.
+The7 diagnostic function tests are explicitly included in the pytest gate.
+
+The previous53-test client/SDK slice is preserved in STATE. New HTTP/entry/
+diagnostic boundary tests and actual owned-console probe are also recorded there.
+`runtime/llm-cancel-sdk-20261012-r2.json` exercises the pinned native provider
+with installed OpenAI SDK3.8.0/httpx0.28.1 against an owned fake loopback server:
+preheader/midstream/concurrent-A cancel closes the server-observed connection,
+no retry, concurrent-B and same-client follow-up succeed. This does not test
+selected model computation, native HTTP admission, durable goal continuity or
+acoustic barge-in. See STATE for exact measurements and cleanup evidence.
+
+The two actual selected-Hikari CPU runs did not reach required observed
+prefill/generation progress within35s; they are FAIL, not a model release proof.
+Owned server cleanup succeeded. The diagnostic harness and limits are in
+[LLM_MODEL_CANCEL_BENCHMARK](../LLM_MODEL_CANCEL_BENCHMARK.md). Canonical GPU1,
+full JAWL context/persona/task and physical voice acceptance remain unchanged/open.
+
+### Client stream lifecycle (12Oct)
+
+The SSE reader bounds each line and cumulative data packet to128KiB and the
+packet queue to64. Overflow/invalid JSON fails explicitly. Header establishment
+is limited to1s; the full configured idle read timeout is restored afterwards.
+Stop shuts down only its owned socket before buffered close, drains pending
+events and joins for1.25s, returning actual thread-exit evidence. Late openers
+cannot publish after Stop. A custom opener that ignores timeout can outlive
+that join; this is not reported as a reaped thread.36 focused chat/SSE tests
+include real loopback stalled responses; remote LLM compute release remains OPEN.
+
+Supervisor process proof uses the exact owned Windows Job, including Python
+venv redirector children, not a parent PID guess or membership in any Job.
+The query is read-only and fails closed; see the
+[Windows API contract](https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob).
+3 real cheap ownership tests and16 supervisor tests PASS; not whole-profile acceptance.
+
+13Oct: RuntimeSupervisor Windows start/restart uses STARTUPINFOEX/JOB_LIST to
+create DEVNULL workers inside the Job before execution, not Popen then assignment.
+Only NUL is inherited, not the parent's KILL_ON_CLOSE Job handle. Membership
+verification uses the retained creation handle. API failure rejects startup with
+no unsafe fallback; POSIX remains unchanged. This is containment, not a sandbox
+or policy bypass. Direct PIPE owners and per-worker restart descendant teardown
+remain separate OPEN work; see [current evidence](../STATE.md).
+
+Later13Oct: per-worker descendant teardown is now implemented for RuntimeSupervisor
+Windows workers via nested global+worker JOB_LIST. TerminateJobObject targets only
+the worker; ActiveProcesses0 is required before closing its handle/replacement.
+Dead-root generations are cleaned too. Restart teardown errors retain ownership
+and refuse replacement. Direct PIPE/POSIX/model cancellation remain separate OPEN
+acceptance; latest tests/gate boundaries are in STATE.
 
 JAWL's web console proxies these authenticated actions through the native
 localhost control socket:

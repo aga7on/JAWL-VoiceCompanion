@@ -24,6 +24,7 @@ class HostTerminalEvents:
         self._is_running = False
         self._gateway_event_lock = asyncio.Lock()
         self.bus.subscribe(Events.REACT_TICK_SAVED, self._handle_react_tick)
+        self.bus.subscribe(Events.COMPANION_SPEECH_DELTA, self._handle_speech_delta)
 
     @staticmethod
     def _safe_gateway_id(value: Any, fallback: str) -> str:
@@ -129,6 +130,22 @@ class HostTerminalEvents:
             status=str(kwargs.get("companion_action_status") or "completed")[:64],
             summary=str(kwargs.get("companion_action_summary") or "JAWL reasoning step completed."),
         )
+
+    async def _handle_speech_delta(self, **kwargs: Any) -> None:
+        """Speak one extracted reply sentence before the envelope closes."""
+
+        turn_id = kwargs.get("companion_turn_id")
+        if not isinstance(turn_id, str) or not turn_id.strip():
+            return
+        text = str(kwargs.get("speech_text") or "").strip()[:2000]
+        if not text:
+            return
+        async with self._gateway_event_lock:
+            await self.client.emit_gateway_event(
+                turn_id,
+                "assistant.delta",
+                {"text": text, "format": str(kwargs.get("event_format") or "speech")[:20]},
+            )
 
     async def start(self):
         if self._is_running:

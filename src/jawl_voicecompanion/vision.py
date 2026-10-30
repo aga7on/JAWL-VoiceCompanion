@@ -287,7 +287,19 @@ class VisionActionPlan:
                 idempotency_key=(
                     "vision:" + hashlib.sha256(
                         json.dumps(
-                            {"index": index, "action": action},
+                            {
+                                "index": index,
+                                "action": {
+                                    **action,
+                                    "target": {
+                                        **action["target"],
+                                        # The signed token is volatile; the frame
+                                        # digest is the stable identity of the
+                                        # perceived state behind this action.
+                                        "observation_token": self.observation_digest,
+                                    },
+                                },
+                            },
                             ensure_ascii=False,
                             sort_keys=True,
                             separators=(",", ":"),
@@ -525,6 +537,8 @@ class VisionLookService:
     hostos_executor: Any
     describer: Any | None = None
     plan_executor: Any | None = None
+    perception_fusion: Any | None = None
+    grounding: Any | None = None
     cooldown_seconds: float = 2.5
     _last_seen_digest: str | None = field(default=None, init=False, repr=False)
     _last_described_digest: str | None = field(default=None, init=False, repr=False)
@@ -540,6 +554,7 @@ class VisionLookService:
         profile = screen_adapter.profile() if hasattr(screen_adapter, "profile") else None
         return {
             "configured": self.describer is not None,
+            "describer": type(self.describer).__name__ if self.describer is not None else None,
             "screen_enabled": bool(getattr(screen_adapter, "enabled", False)),
             "hostos_dry_run": bool(getattr(self.hostos_executor, "dry_run", True)),
             "plan_execution": "native_jawl" if self.plan_executor is not None else "local_hostos",
@@ -633,6 +648,8 @@ class VisionLookService:
         self._last_described_digest = digest
         self._last_prompt = clean_prompt
         self._last_description = description
+        describer_name = type(self.describer).__name__
+        eg2_describer = describer_name == "Eg2VisionDescriber"
         return {
             "status": "ok",
             "description": description,
@@ -640,9 +657,185 @@ class VisionLookService:
             "observation_token": observation_token,
             "observation_digest": observation_digest,
             "changed": True,
-            "vlm_called": True,
+            "vlm_called": not eg2_describer,
+            "describer": describer_name,
             "persisted": False,
         }
+
+    def describe_displays(self, *, max_displays: int = 2, session_id: str = "local", audio_wav_bytes: bytes | None = None) -> dict[str, Any]:
+        """Describe all visible displays and system audio with EG2 (no VLM, no raw archive)."""
+        adapter = getattr(self.hostos_executor, "screen_capture", None)
+        if adapter is None or not hasattr(adapter, "capture_displays"):
+            return {"status": "degraded", "reason": "screen_capture_not_configured", "persisted": False}
+        captures = adapter.capture_displays(max_displays=max_displays)
+        images: list[bytes] = []
+        for capture in captures:
+            if not isinstance(capture, dict) or capture.get("status") != "verified":
+                continue
+            image = capture.get("image")
+            if not isinstance(image, dict):
+                continue
+            encoded = image.get("data_base64")
+            if not isinstance(encoded, str) or not encoded:
+                continue
+            try:
+                import base64
+
+                images.append(base64.b64decode(encoded))
+            except Exception:  # noqa: BLE001
+                continue
+        if not images:
+            return {"status": "degraded", "reason": "no_verified_display_captures", "persisted": False}
+
+        cortex = None
+        fusion = getattr(self, "perception_fusion", None)
+        if fusion is not None and hasattr(fusion, "eg2_cortex"):
+            cortex = fusion.eg2_cortex()
+        if cortex is None:
+            try:
+                from .eg2_sensory import DEFAULT_EG2_ONNX_ROOT, EmbeddingGemmaSensoryCortex
+
+                if (DEFAULT_EG2_ONNX_ROOT / "onnx" / "model_q4.onnx").is_file():
+                    cortex = EmbeddingGemmaSensoryCortex(DEFAULT_EG2_ONNX_ROOT)
+            except Exception:  # noqa: BLE001
+                cortex = None
+        if cortex is None or not hasattr(cortex, "describe_displays"):
+            return {"status": "degraded", "reason": "eg2_not_configured", "persisted": False}
+
+        describer = getattr(fusion, "describer", None) if fusion is not None else None
+        try:
+            if describer is not None and hasattr(describer, "describe_displays_detailed"):
+                description = str(describer.describe_displays_detailed(images) or "").strip()[:4000]
+            else:
+                description = str(cortex.describe_displays(images) or "").strip()[:4000]
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "degraded", "reason": str(exc)[:200], "persisted": False}
+
+        audio_description = ""
+        vibe = None
+        if audio_wav_bytes:
+            try:
+                audio_obs = cortex.classify_audio_wav(audio_wav_bytes)
+                audio_description = f"Звук: {audio_obs.top_label} ({audio_obs.top_score:.2f})"
+                if hasattr(cortex, "vibe_fusion") and images:
+                    try:
+                        vibe = cortex.vibe_fusion(images[0], audio_wav_bytes)
+                    except Exception:  # noqa: BLE001
+                        vibe = None
+            except Exception as exc:  # noqa: BLE001
+                audio_description = f"Звук: ошибка ({str(exc)[:80]})"
+        if audio_description:
+            description = (description + "; " + audio_description)[:4000]
+        if vibe and isinstance(vibe, dict):
+            mood = vibe.get("mood")
+            etiquette = vibe.get("co_watching_etiquette")
+            vibe_score = vibe.get("vibe_score")
+            extra = []
+            if mood:
+                extra.append(f"настроение={mood}")
+            if isinstance(vibe_score, (int, float)):
+                extra.append(f"vibe={float(vibe_score):.3f}")
+            if etiquette:
+                extra.append(f"этикет={etiquette}")
+            if extra:
+                description = (description + " (" + ", ".join(extra) + ")")[:4000]
+
+        if fusion is not None and hasattr(fusion, "observe_displays"):
+            try:
+                fusion.observe_displays(images, cortex=cortex, audio_wav_bytes=audio_wav_bytes)
+            except Exception:  # noqa: BLE001
+                pass
+        return {
+            "status": "ok",
+            "description": description,
+            "displays": len(images),
+            "audio_described": bool(audio_wav_bytes),
+            "persisted": False,
+        }
+
+    def grounding_service(self) -> Any:
+        if self.grounding is not None:
+            return self.grounding
+        from .grounding import GroundingService
+
+        return GroundingService(
+            uia=getattr(self.hostos_executor, "ui_automation", None),
+            screen=getattr(self.hostos_executor, "screen_capture", None),
+        )
+
+    def ground(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        min_confidence: float | None = None,
+        observation: Any | None = None,
+    ) -> dict[str, Any]:
+        """Rank grounded UIA/OCR candidates for one spoken target."""
+        return {
+            "status": "ok",
+            "query": str(query or "").strip()[:240],
+            "candidates": self.grounding_service().find(
+                query,
+                observation=observation,
+                min_confidence=min_confidence,
+                limit=limit,
+            ),
+        }
+
+    def ground_plan(
+        self,
+        action: str,
+        query: str,
+        *,
+        value: str | None = None,
+        postcondition: Any | None = None,
+        min_confidence: float | None = None,
+        observation: Any | None = None,
+    ) -> dict[str, Any]:
+        """Build a strict ``VisionActionPlan`` payload from a grounded target."""
+        return self.grounding_service().plan(
+            action,
+            query,
+            observation=observation,
+            value=value,
+            postcondition=postcondition,
+            min_confidence=min_confidence,
+        )
+
+    def execute_grounded(
+        self,
+        action: str,
+        query: str,
+        *,
+        value: str | None = None,
+        postcondition: Any | None = None,
+        min_confidence: float | None = None,
+        observation: Any | None = None,
+        session_id: str = "local",
+        turn_id: str | None = None,
+        has_approval: bool = False,
+        postcondition_verifier: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Ground a spoken target, then execute it through the plan executor."""
+        planned = self.ground_plan(
+            action,
+            query,
+            value=value,
+            postcondition=postcondition,
+            min_confidence=min_confidence,
+            observation=observation,
+        )
+        if planned.get("status") != "ok":
+            return {**planned, "actions": []}
+        result = self.execute_plan(
+            planned["plan"],
+            session_id=session_id,
+            turn_id=turn_id,
+            has_approval=has_approval,
+            postcondition_verifier=postcondition_verifier,
+        )
+        return {**result, "candidate": planned.get("candidate")}
 
     def execute_plan(
         self,

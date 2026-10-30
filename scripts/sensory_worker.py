@@ -1,8 +1,8 @@
 """Streaming sensory worker prototype: desktop screen + system audio.
 
 Produces typed sensory events as NDJSON lines. Fast extractors run
-constantly on CPU; CLAP/whisper/VLM are consumed over HTTP from their
-existing sidecar endpoints so this process stays light. This is a
+constantly on CPU; heavyweight perception models are consumed over HTTP from
+their sidecar endpoints so this process stays light. This is a
 capability worker: it never writes canonical memory or touches JAWL
 policy; consumers own integration.
 
@@ -250,14 +250,26 @@ class SpeechEmotionGate:
 
 
 def speech_gate_loop(ring: AudioRing, out_stream, stop: threading.Event,
-                     interval: float, asr_url: str) -> None:
-    """Silero VAD gate on the ring; on speech, POST the tail to whisper."""
+                     interval: float, crispasr_exe: str, gigaam_model: str) -> None:
+    """Silero VAD gate on the ring; on speech, transcribe the tail with GigaAM.
+
+    GigaAM (crispasr file mode) is the only ASR engine in the product, and it is
+    a per-utterance CLI rather than an HTTP service, so the ambient lane calls it
+    in-process through the same transcriber the voice lane uses.
+    """
     import io
-    import urllib.request
     import wave as wavemod
     import numpy as np
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    try:
+        from jawl_voicecompanion.giga_final import CrispASRFileTranscriber
+        if not Path(crispasr_exe).exists() or not Path(gigaam_model).exists():
+            raise FileNotFoundError(f"GigaAM resources missing: {crispasr_exe} / {gigaam_model}")
+        transcriber = CrispASRFileTranscriber(crispasr_exe, gigaam_model)
+    except Exception as exc:
+        emit(out_stream, {"type": "speech_gate_disabled", "ts": now(), "error": str(exc)[:200]})
+        return
     try:
         import torch
         from silero_vad import load_silero_vad, get_speech_timestamps
@@ -283,13 +295,8 @@ def speech_gate_loop(ring: AudioRing, out_stream, stop: threading.Event,
                 f.setsampwidth(2)
                 f.setframerate(SR)
                 f.writeframes((y * 32767).astype("<i2").tobytes())
-            data = buf.getvalue()
-            boundary = b"--sb\r\nContent-Disposition: form-data; name=\"file\"; filename=\"tail.wav\"\r\nContent-Type: audio/wav\r\n\r\n".join(
-                [b"--sb\r\n", data]) + b"\r\n--sb--\r\n"
-            req = urllib.request.Request(asr_url, data=boundary,
-                                         headers={"Content-Type": "multipart/form-data; boundary=sb"})
-            text = json.loads(urllib.request.urlopen(req, timeout=60).read()).get("text", "")
-            if text.strip():
+            text = str(transcriber.transcribe(buf.getvalue()) or "").strip()
+            if text:
                 tail = y[-10 * SR:]
                 if not gate.is_speech(tail):
                     emit(out_stream, {"type": "speech_filtered", "ts": now(),
@@ -308,7 +315,10 @@ def main() -> None:
     parser.add_argument("--screen-cadence", type=float, default=0.5)
     parser.add_argument("--music-cadence", type=float, default=5.0)
     parser.add_argument("--speech-cadence", type=float, default=5.0)
-    parser.add_argument("--asr-url", default="http://127.0.0.1:8984/v1/audio/transcriptions")
+    parser.add_argument("--crispasr-exe", default=r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe",
+                        help="GigaAM (crispasr) executable used for ambient speech")
+    parser.add_argument("--gigaam-model", default=r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf",
+                        help="GigaAM GGUF model used for ambient speech")
     args = parser.parse_args()
 
     out_path = Path(args.out)
@@ -327,7 +337,7 @@ def main() -> None:
         threading.Thread(target=audio_capture_loop, args=(ring, stop, raw_sink), daemon=True),
         threading.Thread(target=screen_capture_loop, args=(out_stream, stop, args.screen_cadence), daemon=True),
         threading.Thread(target=music_state_loop, args=(ring, out_stream, stop, args.music_cadence), daemon=True),
-        threading.Thread(target=speech_gate_loop, args=(ring, out_stream, stop, args.speech_cadence, args.asr_url), daemon=True),
+        threading.Thread(target=speech_gate_loop, args=(ring, out_stream, stop, args.speech_cadence, args.crispasr_exe, args.gigaam_model), daemon=True),
     ]
     for t in threads:
         t.start()

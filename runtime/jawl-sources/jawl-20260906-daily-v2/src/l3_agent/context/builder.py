@@ -16,6 +16,7 @@ from src.l0_state.agent.state import AgentState
 from src.utils.logger import agent_logger
 from src.utils.settings import ContextBudgetConfig, SubconsciousConfig
 
+from src.l3_agent.context import companion as companion_context
 from src.l3_agent.context.registry import ContextRegistry, ContextSection
 from src.l3_agent.hooks.lifecycle import HookContext, HookPhase, LifecycleHooks
 from src.l3_agent.skills.registry import get_skills_library
@@ -82,6 +83,7 @@ class ContextBuilder:
             str: Compiled and formatted Markdown context block for the LLM.
         """
 
+        payload = companion_context.prepare_companion_context(self, payload)
         blocks = await self.registry.gather_all(
             event_name=event_name,
             payload=payload,

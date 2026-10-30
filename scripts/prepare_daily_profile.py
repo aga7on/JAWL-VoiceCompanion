@@ -17,13 +17,22 @@ import tempfile
 from pathlib import Path
 
 try:
+    from native_context_budget import approved_profile_budget, budget_for_window
+except ModuleNotFoundError:
+    from scripts.native_context_budget import approved_profile_budget, budget_for_window
+
+try:
     import yaml
 except ImportError:  # pragma: no cover - the managed runtime includes PyYAML
     yaml = None
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_ROOT = REPO_ROOT / "runtime" / "jawl-sources" / "jawl-20260906-daily-v2"
+SOURCE_SNAPSHOTS_ROOT = (REPO_ROOT / "runtime" / "jawl-sources").resolve()
+_source_override = os.environ.get("JAWL_SOURCE_ROOT", "").strip()
+SOURCE_ROOT = Path(_source_override).resolve() if _source_override else (SOURCE_SNAPSHOTS_ROOT / "jawl-20260906-daily-v2").resolve()
+if SOURCE_ROOT == SOURCE_SNAPSHOTS_ROOT or not SOURCE_ROOT.is_relative_to(SOURCE_SNAPSHOTS_ROOT):
+    raise ValueError("JAWL_SOURCE_ROOT must resolve inside runtime/jawl-sources")
 CONFIG_ROOT = REPO_ROOT / "config" / "jawl"
 PROFILE_NAME = os.environ.get("JAWL_PROFILE_NAME", "daily").strip() or "daily"
 if Path(PROFILE_NAME).name != PROFILE_NAME or PROFILE_NAME in {".", ".."}:
@@ -96,6 +105,12 @@ def _is_jawl_generated_config(source: Path, target: Path) -> bool:
             if isinstance(enabled, bool):
                 expected_broker["enabled"] = enabled
         expected = normalized
+        if os.environ.get("JAWL_NATIVE_BROWSER_ENABLED") == "1":
+            actual_web = actual.get("web", {})
+            actual_browser = actual_web.get("browser", {}) if isinstance(actual_web, dict) else None
+            if not isinstance(actual_browser, dict) or actual_browser.get("enabled") is not True:
+                return False
+            expected.setdefault("web", {}).setdefault("browser", {})["enabled"] = True
     # The launcher may deliberately select another provider model for a
     # disposable profile.  Keep that one leaf as an approved runtime
     # override, but only when the override is explicit in this process and
@@ -103,6 +118,21 @@ def _is_jawl_generated_config(source: Path, target: Path) -> bool:
     # Without the environment marker an unexplained model edit remains a
     # fail-closed profile conflict.
     if source.name == "settings.yaml":
+        if isinstance(expected, dict) and isinstance(actual, dict):
+            candidates = [approved_profile_budget(target.parent.parent)]
+            try:
+                window = int(os.environ.get("JAWL_CONTEXT_WINDOW_TOKENS", "0"))
+                candidates.append(budget_for_window(window))
+            except ValueError:
+                return False
+            actual_budget = actual.get("system", {}).get("context_depth", {}).get("budget", {})
+            if not isinstance(actual_budget, dict):
+                return False
+            for candidate in candidates:
+                if candidate and all(actual_budget.get(key) == value for key, value in candidate.items()):
+                    expected = copy.deepcopy(expected)
+                    expected.setdefault("system", {}).setdefault("context_depth", {}).setdefault("budget", {}).update(candidate)
+                    break
         override = os.environ.get("JAWL_MODEL_OVERRIDE", "").strip()
         temperature_override = os.environ.get("JAWL_TEMPERATURE_OVERRIDE", "").strip()
         if override and isinstance(expected, dict) and isinstance(actual, dict):

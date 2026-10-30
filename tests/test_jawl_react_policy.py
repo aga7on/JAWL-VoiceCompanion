@@ -17,10 +17,32 @@ class JawlReactPolicyTests(unittest.TestCase):
             / "jawl-20260906-daily-v2"
         )
         cls._old_bytecode = os.environ.get("PYTHONDONTWRITEBYTECODE")
-        cls._old_log_dir = os.environ.get("JAWL_LOG_DIR")
+        cls._old_jawl = {
+            key: os.environ.get(key)
+            for key in (
+                "JAWL_INSTANCE_ID", "JAWL_INSTANCE_HOME", "JAWL_INSTANCES_ROOT",
+                "JAWL_DATA_DIR", "JAWL_CONFIG_DIR", "JAWL_LOG_DIR",
+                "JAWL_CACHE_DIR", "JAWL_PROMPT_DIR", "JAWL_SANDBOX_DIR",
+                "JAWL_ENV_FILE",
+            )
+        }
         cls._temp = tempfile.TemporaryDirectory()
+        instance = Path(cls._temp.name) / "instance"
+        for name in ("data", "config", "logs", "cache", "prompts", "sandbox"):
+            (instance / name).mkdir(parents=True, exist_ok=True)
+        os.environ.update({
+            "JAWL_INSTANCE_ID": "react-policy-test",
+            "JAWL_INSTANCE_HOME": str(instance),
+            "JAWL_INSTANCES_ROOT": str(Path(cls._temp.name) / "instances"),
+            "JAWL_DATA_DIR": str(instance / "data"),
+            "JAWL_CONFIG_DIR": str(instance / "config"),
+            "JAWL_LOG_DIR": str(instance / "logs"),
+            "JAWL_CACHE_DIR": str(instance / "cache"),
+            "JAWL_PROMPT_DIR": str(instance / "prompts"),
+            "JAWL_SANDBOX_DIR": str(instance / "sandbox"),
+            "JAWL_ENV_FILE": str(instance / ".env"),
+        })
         os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-        os.environ["JAWL_LOG_DIR"] = cls._temp.name
         sys.path.insert(0, str(snapshot))
         loop_module = importlib.import_module("src.l3_agent.react.loop")
         cls.policy = staticmethod(loop_module._empty_goal_action_policy)
@@ -35,10 +57,11 @@ class JawlReactPolicyTests(unittest.TestCase):
             os.environ.pop("PYTHONDONTWRITEBYTECODE", None)
         else:
             os.environ["PYTHONDONTWRITEBYTECODE"] = cls._old_bytecode
-        if cls._old_log_dir is None:
-            os.environ.pop("JAWL_LOG_DIR", None)
-        else:
-            os.environ["JAWL_LOG_DIR"] = cls._old_log_dir
+        for key, value in cls._old_jawl.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         for handler in list(cls._logger_module._file_handlers_registry):
             handler.close()
         cls._temp.cleanup()

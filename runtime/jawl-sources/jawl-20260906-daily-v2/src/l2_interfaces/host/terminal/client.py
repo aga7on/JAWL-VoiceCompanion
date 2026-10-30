@@ -18,6 +18,7 @@ from src.utils.logger import main_logger
 from src.utils.dtime import get_now_formatted
 from src.utils.settings import HostTerminalConfig
 from src.l2_interfaces.host.terminal.state import HostTerminalState
+from src.l2_interfaces.host.terminal import compaction
 from src.l3_agent.companion_gateway import (
     current_companion_turn_id,
     default_response,
@@ -485,6 +486,11 @@ class HostTerminalClient:
         if not time_str:
             time_str = get_now_formatted(self.timezone, "%Y-%m-%d %H:%M:%S")
 
+        # User turns may carry a perception appendix; keep history durable and
+        # lean by storing the clean user text only.
+        if sender == "User":
+            text = compaction._without_sensors(text)
+
         self.state.add_message(sender, text, time_str)
 
         history = self._read_history_file()
@@ -526,4 +532,7 @@ class HostTerminalClient:
             if self.state.is_ui_connected
             else "The terminal window is closed."
         )
-        return f"### HOST TERMINAL [ON]\n{desc}\nStatus: {ui_status}\n\nRecent messages:\n{self.state.formatted_messages}"
+        block = f"### HOST TERMINAL [ON]\n{desc}\nStatus: {ui_status}\n\nRecent messages:\n{self.state.formatted_messages}"
+        # Compact old turns natively so long histories cannot crowd out the
+        # rest of the prompt; recent turns stay verbatim.
+        return compaction.compact_context_block(block, self)

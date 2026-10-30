@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from queue import Empty, Full, Queue
 from threading import Event, RLock, Thread, current_thread
 from time import monotonic
@@ -30,6 +31,7 @@ class _Chunk:
     data: bytes
     sample_rate: int
     channels: int
+    captured_at: float
 
 
 class AmbientSegmenter:
@@ -107,7 +109,14 @@ class AmbientSegmenter:
             worker.start()
             return self.state()
 
-    def submit(self, pcm16: bytes, sample_rate: int, channels: int) -> dict[str, Any]:
+    def submit(
+        self,
+        pcm16: bytes,
+        sample_rate: int,
+        channels: int,
+        *,
+        captured_at: float | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(pcm16, bytes) or not pcm16:
             self._reject(len(pcm16) if isinstance(pcm16, bytes) else 0, "ambient segment input must be non-empty PCM16")
         if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or not 8000 <= sample_rate <= 96000:
@@ -119,7 +128,10 @@ class AmbientSegmenter:
             self._reject(len(pcm16), "ambient segment input is not whole PCM frames")
         if len(pcm16) > self.max_chunk_bytes:
             self._reject(len(pcm16), "ambient segment chunk exceeds byte limit")
-        chunk = _Chunk(bytes(pcm16), sample_rate, channels)
+        capture_end = self._clock() if captured_at is None else float(captured_at)
+        if not math.isfinite(capture_end) or capture_end < 0:
+            self._reject(len(pcm16), "ambient segment capture time is invalid")
+        chunk = _Chunk(bytes(pcm16), sample_rate, channels, capture_end)
         with self._lock:
             queue = self._queue
             if queue is None or self._worker is None or not self._worker.is_alive() or self._stop.is_set():
@@ -202,6 +214,8 @@ class AmbientSegmenter:
         sample_rate = 0
         channels = 0
         started_at = 0.0
+        ended_at = 0.0
+        last_activity_at = 0.0
         sequence = 0
         try:
             while True:
@@ -210,7 +224,7 @@ class AmbientSegmenter:
                 try:
                     chunk = queue.get(timeout=0.05)
                 except Empty:
-                    if buffer and self._clock() - started_at >= self.max_segment_seconds:
+                    if buffer and self._clock() - last_activity_at >= self.max_segment_seconds:
                         sequence = self._emit(
                             buffer,
                             sample_rate,
@@ -218,7 +232,7 @@ class AmbientSegmenter:
                             generation,
                             sequence,
                             started_at,
-                            self._clock(),
+                            ended_at,
                         )
                         buffer.clear()
                     if self._stop.is_set() and queue.empty():
@@ -232,7 +246,9 @@ class AmbientSegmenter:
                         continue
                     if not buffer:
                         sample_rate, channels = chunk.sample_rate, chunk.channels
-                        started_at = self._clock()
+                        bytes_per_second = max(1, sample_rate * channels * 2)
+                        started_at = chunk.captured_at - len(chunk.data) / bytes_per_second
+                        ended_at = chunk.captured_at
                     elif (sample_rate, channels) != (chunk.sample_rate, chunk.channels):
                         sequence = self._emit(
                             buffer,
@@ -241,12 +257,17 @@ class AmbientSegmenter:
                             generation,
                             sequence,
                             started_at,
-                            self._clock(),
+                            ended_at,
                         )
                         buffer.clear()
                         sample_rate, channels = chunk.sample_rate, chunk.channels
-                        started_at = self._clock()
+                        bytes_per_second = max(1, sample_rate * channels * 2)
+                        started_at = chunk.captured_at - len(chunk.data) / bytes_per_second
+                        ended_at = chunk.captured_at
                     offset = 0
+                    bytes_per_second = max(1, sample_rate * channels * 2)
+                    chunk_started_at = chunk.captured_at - len(chunk.data) / bytes_per_second
+                    last_activity_at = self._clock()
                     while offset < len(chunk.data):
                         room = self.max_segment_bytes - len(buffer)
                         take = min(room, len(chunk.data) - offset)
@@ -267,10 +288,11 @@ class AmbientSegmenter:
                         buffer.extend(chunk.data[offset : offset + take])
                         offset += take
                         now = self._clock()
+                        ended_at = chunk_started_at + offset / bytes_per_second
+                        last_activity_at = now
                         audio_seconds = len(buffer) / max(1, sample_rate * channels * 2)
                         if (
                             len(buffer) >= self.max_segment_bytes
-                            or now - started_at >= self.max_segment_seconds
                             or audio_seconds >= self.max_segment_seconds
                         ):
                             sequence = self._emit(
@@ -280,10 +302,10 @@ class AmbientSegmenter:
                                 generation,
                                 sequence,
                                 started_at,
-                                now,
+                                ended_at,
                             )
                             buffer.clear()
-                            started_at = now
+                            started_at = ended_at
                 finally:
                     queue.task_done()
                 if self._stop.is_set() and queue.empty():
@@ -299,7 +321,7 @@ class AmbientSegmenter:
                         generation,
                         sequence,
                         started_at,
-                        self._clock(),
+                        ended_at,
                     )
         except Exception as exc:
             with self._lock:

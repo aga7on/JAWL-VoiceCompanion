@@ -1,6 +1,10 @@
 # Prompt-архитектура JAWL и её перенос в Companion
 
-Актуально: 2026-09-05.
+Исследовательская заметка по исходникам на 2026-09-05; пересверена
+документационно 2026-10-10. Последнее runtime evidence — 2026-10-05.
+Схемы prompt/context ниже описывают наблюдавшийся JAWL source contract и
+согласованную архитектуру, а не свежую runtime-приёмку. См. [README.md](README.md),
+[STATE.md](STATE.md) и текущую очередь [TODO.md](../TODO.md).
 
 Этот документ фиксирует выводы по read-only изучению `G:\AI\JAWL-Coding`.
 `G:\AI\JAWL-Coding` остаётся protected reference: файл не является разрешением
@@ -89,7 +93,7 @@ LLM request → tool/action → новый snapshot → следующий LLM r
 4. Native JAWL response сохраняется целиком: текст, emotion/voice/avatar,
    actions, ошибки, `response_id` и корреляция. Plain text допускается только
    для отдельного non-agentic тестового adapter.
-5. Любое наблюдение проходит один согласованный цикл:
+5. Любое наблюдение должно проходить один согласованный цикл (target boundary):
 
 ```text
 sensor → bounded observation → attention/context → JAWL decision
@@ -127,6 +131,12 @@ sensor → bounded observation → attention/context → JAWL decision
 оставаться достаточной для корректного поведения.
 
 ## Минимальные acceptance-проверки
+
+Native policy, SOUL/context assembly, discovery и уровни доступа 0–3 остаются
+владением JAWL; сокращение prompt-каталога не должно отключать discovery или
+подменять native policy. Interrupt/cancel останавливает устаревшую речь и
+транспорт, сохраняя JAWL task/checkpoint. Это требование не означает, что
+любой provider worker уже отменяется.
 
 До production-ready нужно доказать через один и тот же Companion:
 

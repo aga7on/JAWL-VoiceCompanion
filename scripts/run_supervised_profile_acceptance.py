@@ -65,13 +65,15 @@ def main() -> int:
     parser.add_argument("--run-seconds", type=int, default=12)
     parser.add_argument("--console-port", type=int, default=8798)
     parser.add_argument("--control-port", type=int, default=2398)
-    parser.add_argument("--presentation-port", type=int, default=8799)
+    parser.add_argument("--model-override", default="")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if not args.live:
         parser.error("live supervisor acceptance requires --live")
     if args.run_seconds < 5 or args.run_seconds > 600:
         parser.error("--run-seconds must be between 5 and 600")
+    if len(args.model_override) > 200 or "\n" in args.model_override or "\r" in args.model_override:
+        parser.error("--model-override must be a bounded single-line model id")
 
     profile = "supervised-acceptance-" + uuid4().hex[:10]
     if not PROFILE_PATTERN.fullmatch(profile):
@@ -86,12 +88,20 @@ def main() -> int:
         "-ProfileName", profile,
         "-JawlConsolePort", str(args.console_port),
         "-ControlPort", str(args.control_port),
-        "-PresentationPort", str(args.presentation_port),
         "-NoBrowser", "-NoLive2D", "-EnableSupervisor",
         "-NativeAccessLevel", "3", "-RunSeconds", str(args.run_seconds),
         "-StartupTimeoutSeconds", "180", "-JawlChatTimeoutSeconds", "60",
     ]
+    if args.model_override:
+        command.extend(("-JawlModelOverride", args.model_override))
     env = os.environ.copy()
+    source_override = env.get("JAWL_SOURCE_ROOT", "").strip()
+    if source_override:
+        snapshots_root = (ROOT / "runtime" / "jawl-sources").resolve()
+        source_path = Path(source_override).resolve()
+        if source_path == snapshots_root or not source_path.is_relative_to(snapshots_root):
+            raise AcceptanceFailure("JAWL_SOURCE_ROOT must resolve inside runtime/jawl-sources")
+        command.extend(("-JawlSourceRoot", str(source_path)))
     env.setdefault("LLM_API_URL", "http://127.0.0.1:11434/v1")
     env.setdefault("LLM_API_KEY_1", "local-loopback")
     env.setdefault("LLM_REASONING_EFFORT", "none")
@@ -100,6 +110,7 @@ def main() -> int:
     output = ""
     exit_code: int | None = None
     cleanup_error = ""
+    brain_receipt = None
     try:
         completed = subprocess.run(
             command,
@@ -118,29 +129,40 @@ def main() -> int:
         output = f"{type(exc).__name__}: {exc}"
     finally:
         try:
+            receipt_path = INSTANCES / profile / "logs" / "owned-brain-startup.json"
+            if receipt_path.is_file():
+                brain_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             remove_disposable_state(profile)
         except Exception as exc:  # noqa: BLE001 - preserve primary evidence
             cleanup_error = f"{type(exc).__name__}: {exc}"
 
     supervisor_ready = "Integrated profile ready:" in output and "supervisor=" in output
+    heartbeat_timeout = "JAWL startup heartbeat did not complete within" in output
     ports_clear = not any(
         port_is_listening(port)
-        for port in (args.console_port, args.control_port, args.presentation_port)
+        for port in (args.console_port, args.control_port)
     )
     markers_clear = not any(
         path.exists() for path in (INSTANCES / "supervisor.pid", INSTANCES / "supervisor.lock")
     )
     state_clear = profile not in registry_payload().get("profiles", {}) and not (INSTANCES / profile).exists()
-    passed = bool(exit_code == 0 and supervisor_ready and ports_clear and markers_clear and state_clear and not cleanup_error)
+    hooks_verified = bool(brain_receipt and brain_receipt.get("instance_id") == profile
+                          and brain_receipt.get("bootstrap_only") is False
+                          and brain_receipt.get("hooks") == {"delivery_guard": True})
+    passed = bool(exit_code == 0 and supervisor_ready and hooks_verified and ports_clear and markers_clear and state_clear and not cleanup_error)
     report = {
         "schema_version": 1,
         "test": "integrated_native_supervisor_start_and_intentional_stop",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "duration_seconds": round(time.monotonic() - started, 3),
         "profile": profile,
+        "model_override": args.model_override or None,
         "command": command,
         "exit_code": exit_code,
         "supervisor_ready": supervisor_ready,
+        "brain_startup_receipt": brain_receipt,
+        "hooks_verified": hooks_verified,
+        "startup_heartbeat_timeout": heartbeat_timeout,
         "ports_clear": ports_clear,
         "supervisor_markers_clear": markers_clear,
         "registry_and_profile_clear": state_clear,

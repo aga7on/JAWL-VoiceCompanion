@@ -33,7 +33,7 @@ class RuntimeProfileTests(unittest.TestCase):
             self.assertEqual(paths["sandbox"], (Path(root) / "runtime/sandbox").resolve())
         summary = profile.summary()
         self.assertNotIn("absolute", str(summary))
-        self.assertEqual(summary["ports"], {"control": 2367, "presentation": 8766})
+        self.assertEqual(summary["ports"], {"control": 2367})
 
     def test_rejects_traversal_absolute_paths_and_port_collisions(self):
         for value in ("../outside", str(Path.cwd().anchor)):

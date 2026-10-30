@@ -50,10 +50,13 @@ def main() -> int:
     sys.path.insert(0, str(source))
     from src.instances.manager import InstanceManager  # noqa: E402
 
+    owned_brain_script = (
+        Path(__file__).resolve().parents[1] / "scripts" / "run_owned_jawl_brain.py"
+    ).resolve(strict=True)
     manager = InstanceManager(
         source,
         python_executable=args.python_executable.resolve(strict=True),
-        entrypoint=source / "src" / "main.py",
+        entrypoint=owned_brain_script,
         instances_root=instances_root,
         shared_sandbox=sandbox_root,
     )

@@ -10,13 +10,12 @@
   },
   "ports": {
     "control": 2367,
-    "presentation": 8766,
     "reserved": [8765]
   },
   "components": {
     "jawl": {"enabled": false, "version": "pending-owned-runtime", "provider": "configured-in-jawl"},
     "voicemem": {"enabled": false, "version": "pending", "provider": "sidecar"},
-    "asr": {"enabled": false, "version": "Qwen3-ASR-0.6B", "provider": "local-http"},
+    "asr": {"enabled": false, "version": "gigaam-v3", "provider": "crispasr-cli"},
     "tts": {"enabled": false, "version": "Qwen3-TTS-0.6B", "provider": "local-http"},
     "vision": {"enabled": false, "version": "deferred", "provider": "none"}
   },

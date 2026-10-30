@@ -1,1527 +1,739 @@
-# TODO — единый агент-компаньон
-
-## Приоритет: Фаза D — нативный аватар (ночь 2026-09-18)
-
-- [x] D2: эмоции прямыми параметрами с фейдом (evidence: pixel-diff happy 597/surprised 832/angry 512)
-- [x] D3: idle motion + physics + pose каждый кадр
-- [x] D4: turn-recovery — fast-fail + один ресабмит после рестарта транспорта;
-  anti-repeat исключение для прямых запросов (config/jawl синхронизирован).
-  Тесты 11/11 terminal, 78/78 web. Live-проверка после рестарта стека.
-- [x] D5: OBS chroma-key `--obs` (evidence: 87% keyable фон в headless-кадре)
-- [ ] D1-остаток: blendshapes moc3 v5 в Mocari (вендоринг + патч keyform/mesh
-  пути), чтобы mao_pro снова стал основной моделью. Обход: дефолт Hiyori (v3),
-  `JAWL_AVATAR_MODEL` переопределяет; WebView2-окно как fallback полного качества.
-
-## Приоритет: Phase A — coherence E2E и episodic timeline — 2026-09-17
-
-Зафиксировано в ADR-036..039 (docs/DECISIONS.md): Rust-клиент как audio owner
-и Live2D-хост, deepseek-v4-flash как мозг через OpenCode-релей с заменяемым
-провайдером, единый episodic timeline как TimeService, Bonsai на GPU1.
-
-- [x] A0: U6 — живая браузерная приёмка на живом профиле, все карточки
-  «Настроек» кликабельны и пишут через hub.
-  - 2026-09-17: `scripts/run_settings_browser_acceptance.py` против живого
-    профиля (control 2367) — panel load, session, settings load, cards
-    rendered, hub revision, save→profile file, restore, shell rail — **PASS**
-    (`runtime/settings-browser-acceptance.json`). Два реальных дефекта
-    исправлены: telegram-секция IFACE_SECTIONS использовала `keys:` вместо
-    `fields:` (save падал «spec.fields is not iterable»), и timezone писался
-    строкой вместо int (постоянный «грязный» readback drift).
-- [x] A1: episodic timeline — единый TimeService с границами эпизодов
-  (разговор/фокус/тишина/сон), один источник «сейчас/недавно/давно» для
-  Heartbeat, памяти, внимания и аватара.
-  - 2026-09-17 live: `/api/timeline` отдаёт эпизоды, chat-turn перерезал
-    idle → conversation; тесты 8/8.
-- [x] A2: coherence E2E — три инварианта в одном сценарии: факт из вчерашнего
-  эпизода меняет сегодняшний ответ (recall с источником); голосовое поручение
-  проходит native policy → инструмент → postcondition → задача меняет статус;
-  текст/просодия/аватар выражают одно состояние.
-  - 2026-09-17 live: факт сохранён/отозван; `HostOSSearch.list_directory`
-    вызван по промпт-фиксу, postcondition из лога; envelope text+emotion+avatar.
-- [x] A3: SLO интерактивного контура — warm turn ≤ 6 с, first-audio ≤ 10 с,
-  cold старт с честным «просыпаюсь»; динамический буфер playback, barge-in
-  без потери контекста.
-  - 2026-09-17 live: warm turn→audio p50 6.9 с, max 8.4 с; cold 8.9 с.
-    Barge-in (playback_suppression) реализован; live voice E2E в бэклоге R3.
-- [x] A4: ресурсы — Bonsai на GPU1, on-demand unload, целевой профиль ≤ 8 ГБ
-  RAM, кванты только через MULTIMODAL_MODEL_GATE.
-  - 2026-09-17: Bonsai подтверждён на GPU1 (VRAM 13.4/16 GB, util 94%).
-    Профиль без Bonsai ≈ 4 GB committed RAM — в бюджете ≤8 GB. 17 GB «private»
-    Bonsai — reclaimable mmap page cache (WS→240 MB после trim). dio/no-mmap не
-    применён (риск скорости vision). Открытый follow-up: VLM 27B слишком медленный
-    для постоянного watching (~100 с/скриншот) — рассмотреть лёгкую модель зрения.
-- [x] A5: Rust-клиент (audio owner + Live2D + окно + OBS) как отдельный
-  прототип поверх существующего профиля; браузерный голос не удалять до
-  live-приёмки нативного контура.
-  - 2026-09-17: `rust-client/` — минимальный нативный клиент (cpal + ureq +
-    winit). Live-проверено: связь с `/api/health` (jawl_terminal_gateway) и
-    открытие реального микрофона (Chat-Audeze Maxwell, 48000 Hz). Это фундамент
-    ADR-036; браузерный голос не тронут. Следующий слой: нативный Cubism SDK
-    поверх окна + стрим аудио в companion.
-  - [!] Открытый follow-up из A4: VLM зрения (Bonsai 27B Q1) даёт ~100 с на
-    скриншот на 16-GB карте — слишком медленно для «постоянного» watching.
-    Рассмотреть лёгкую VLM (например, Qwen3-VL-2B) как активное зрение, а 27B
-    оставить для тяжёлого анализа по запросу.
-
-## Приоритет: единая панель — 2026-09-15
-
-План: [UNIFIED_UI_INTEGRATION_PLAN](docs/UNIFIED_UI_INTEGRATION_PLAN.md).
-Это очередь следующей UI-интеграции; старые отметки про console/iframe не означают
-полной parity. Незакрытые runtime gates ниже сохраняются.
-
-- [x] Установить 19 UX/UI skills и составить групповую карту переноса JAWL.
-- [ ] U0: полный field/action inventory оригинала и owned версии, baseline UI/tests.
-  - [x] Машинный реестр: `docs/ui-registry/registry.json` (213 data-cfg,
-    206 схемных ключей, 31 эндпоинт, 42 вызова UI компаньона) +
-    `docs/ui-registry/UI_REGISTRY.md` (группы, владельцы, вердикты,
-    критичные эндпоинты, дубли компаньона). Регенерация:
-    `python scripts\ui-registry\extract_ui_registry.py && python scripts\ui-registry\generate_registry_md.py`.
-  - [x] Открытые вопросы реестра задокументированы в
-    `docs/ui-registry/CONFIG_CONTRACTS.md`: секреты отдаются в открытом виде
-    (GET), ревизий/конфликтов нет (last-write-wins), restartRequired всегда
-    пуст, drives живут в SQLite через `/api/drives`, бэкапов writer не делает
-    (только артефакты снапшотера) — контракты для U1 сформулированы.
-  - [x] Живой baseline: `docs/ui-registry/baseline/` — 11 скринов (7 вкладок
-    компаньона + 5 экранов консоли через iframe) + `manifest.json`; стек
-    перезапущен, агент восстановлен после утреннего agent.stop.
-- [ ] U1: единые config/capability contracts, writer, secrets, revision/readback.
-  - [x] Срез 1 (2026-09-15): `config_hub.py` — ревизии (хэш трёх файлов,
-    конфликт при расхождении), маскирование секретов (`__SET__`),
-    ротируемые pre-save бэкапы (5 слотов), unknown-key отчёт, readback.
-    `GET /api/config-hub` + `POST /api/config-hub/save` (сессия+CSRF);
-    лаунчер передаёт JAWL_CONFIG_DIR/JAWL_ENV_FILE. 6 тестов.
-  - [x] U1 срез 2 (2026-09-15): restart-карта подтверждена по коду
-    (агент читает конфиг один раз; политика agent_restart, промпты остаются
-    единственными живыми входами), two-client conflict fixture, хаб развёрнут
-    живьём (--jawl-config-dir в ARGS, GET отдаёт revision+masked, гейт
-    снапшота цел).
-  - [ ] U1 остаток: effective-состояние после записи (нужен агент-side
-    аудит по-ключ), UI-слою настроек подключить hub (draft/save/conflict UX).
-- [ ] U2: общие tokens и shell: Компаньон / Задачи / Память / Настройки.
-  - [x] Срез 1 (2026-09-15): полный токен-слой в :root (статусы, spacing,
-    radius, motion, control-height, focus-ring) с привязкой горячих правил;
-    hashchange → табы (back/forward), Alt+1..7 — клавиатурная навигация.
-  - [ ] U2 остаток: regroup навигации в 4 раздела (после U4-контента),
-    settings search, сохранение draft/focus, адаптивность по реальным данным.
-- [ ] U3: единые status, logs, catalog, диагностика и reconnect.
-  - [x] Срез 1 (2026-09-15): `GET /api/shell/status` — лёгкая телеметрия из
-    памяти (агент/внимание/proactive/ресурсы/сенсорика/экран/голос); статус-рейл
-    в топбаре с bounded-опросом (10с, 15с на hidden, мгновенно на visible,
-    stale-состояние). Тяжёлые проверки остаются в doctor по требованию.
-  - [x] Срез 2 (2026-09-15): `GET /api/logs/agent?tail=N` — хвост main.log
-    с клампом 10..500 строк, redaction секретов в строках (bearer,
-    api_key/token/password/secret, sk-/rk-), карточка «Логи агента» в Системе
-    (загрузка при открытии вкладки + кнопка); лаунчер передаёт JAWL_LOG_DIR.
-  - [ ] U3 остаток: tick/journal surfaces в UI (рейл уже покрывает фазу),
-    состояния loading/empty/failed для остальных панелей, reconnect-проверки.
-- [ ] U4: все настройки/память/интеграции с проверкой round-trip и effective state.
-  - [x] Срез 1 (2026-09-15): вкладка «Настройки» — редактор ядра (имя, модель,
-    температура, мин-интервал, max шагов, язык) через config hub: ревизия,
-    conflict-UX с авто-перечиткой, unknown-ключи, readback, подсказка рестарта.
-    HTTP round-trip тесты (запись → readback → смена ревизии → конфликт).
-  - [x] Срез 2 (2026-09-15): карточка «Такт и контекст» — continuous_cycle,
-    heartbeat_interval, timezone, critical_multiplier, RAG depth/vector
-    лимиты, swarm-воркеры (тот же ревизионный write + readback).
-  - [x] Срез 3 (2026-09-15): карточка «Память и подсознание» — similarity
-    threshold, граф-потолок, задачи/заметки максимум, гипотезы, ToT
-    (вкл/ветви/симуляции), подсознание. Итого 23 скаляра в «Настройках».
-  - [x] Срез 4 (2026-09-15): карточка «Мотивация» — 14 ключей drives через
-    hub (DRIVES_FIELDS; значения в settings.yaml, состояния драйвов остаются
-    в SQLite /api/drives). Итого 37 скаляра.
-  - [x] Срез 5 (2026-09-15): evidence-строка в записях памяти (источник,
-    уверенность, ревизия, время, provenance.actor/day) + действие «В архив»
-    (native archive); редактор уже был (list/filter/search/revise/forget
-    через native API), закрыт пробел evidence-отображения. Live-проверено
-    (50 записей, emerald с confidence/revision).
-  - [x] Срез 6 (2026-09-15): карточка «Интеграции и секреты» — все 16 env-
-    полей динамически (секреты как password с placeholder «сохранено» и
-    бейджем «установлен»), keep-семантика хаба проверена HTTP-тестом
-    (пустое поле не стирает секрет, замена работает).
-  - [ ] U4 остаток: lifecycle/HostOS/DB-wipe отдельными блоками (уровни и
-    emergency уже есть во вкладке Доступ; wipe требует отдельного решения).
-- [ ] U5: связанный chat/voice/goal/memory/Live2D сценарий; один audio owner.
-  - [x] Срез 1 (2026-09-15): фон-уведомления — терминальный гейт ловит legacy
-    broadcast'ы автономных циклов (окно 20), shell/status отдаёт
-    background{count,last_text,last_ts}, рейл показывает каждую новую
-    как «Фон» в чате (дедуп по ts).
-  - [x] Срез 2 (2026-09-15): сводка планов в shell/status (in_progress,
-    last id/state через journal-адаптер, optional при сбое) — tooltip рейла
-    показывает «задач в работе: N». Срез 1 развёрнут живьём.
-  - [x] Срез 3 (2026-09-15): reconnect-сценарий живьём — stop → offline
-    (reconnect-луп гейта), start → connected за ~5с; планы отражают
-    «последняя завершена». Попутно починен рейл: CompanionGateway не
-    выставлял chat_status (transport всегда «starting» даже при связи) —
-    делегирование к responder-статусу, проверено до и после drill.
-  - [ ] U5 остаток: повторный ход без двойного эффекта (покрыто дедупом
-    фоновых сообщений; наблюдение в проде).
-- [ ] U6: 100% parity, удаление iframe после gates, rollback, полная приёмка.
-  - [x] Шаг 1 (2026-09-15): parity-сверка — `docs/ui-registry/U6_PARITY_STATUS.md`.
-    Покрыто 39 скаляров настроек + память + логи + рейл; осталось 127
-    interfaces-интеграционных полей, custom-drives CRUD, решение по DB-wipe.
-    Iframe не удаляется до 100% (консоль остаётся rollback-путём).
-  - [x] Шаг 2-4 (2026-09-15): все interfaces-группы перенесены порциями
-    (Telegram 17, блок-A 17, MCP/Debug/Multimodal/Voice 36, Web 24, Host 33 —
-    с float-типом); **187/213 контролов (88%)**. Полный набор **512/512
-    тестов OK**, стек стабилен 7.5+ мин после развёртывания.
-  - [x] Финал (2026-09-15): объектные списки (feeds/MCP/профили coding) через
-    hub, редактор своих мотиваторов через drives API, **iframe выведен из
-    навигации** (флаг возврата `localStorage['jawl-embed']='1'`, консоль
-    остаётся на /console/). Deferred rows не осталось; **65/65 web тестов**.
-  - [x] Аудит 2026-09-16: исправлены все 5 дефектов (drives save по id+decayRate/
-    decayIntervalSec через do_PUT; позиционный merge секретов и удаление «-»;
-    блокировка конкурентной записи; конфликт сохраняет черновик и сохраняет
-    только изменённые поля; добавлены subagent_model/ToT mode+model/subconscious
-    model). Тесты: hub 11/11, web 67/67.
-  - [ ] Живая браузерная приёмка U6 (все карточки «Настройок» на живом профиле),
-    затем ночной soak и удаление прокси-консоли.
-  - [!] Запуск стека выполнять ИЗ ОБЫЧНОГО ОКНА PowerShell (не из сессий
-    агента): в сессиях агента фон-запуски лаунчера снимаются очисткой
-    процессов обёртки (ложные «Unknown: ChildProcess.kill»). Порядок: сначала
-    `scripts\run_coding_server.ps1`, затем каноническая команда выше.
-  - [!] Проверка «лончер жив» по строке команды ловит саму проверяющую
-    команду (её строка содержит путь скрипта) — состояние стека проверять
-    ТОЛЬКО по портам и boot-маркерам.
-  - [ ] Owner-решения: DB-wipe поверхность; запуск ночного soak (команда готова).
-  - [ ] После решения: удаление iframe → финальная приёмка.
-
-Следующий срез — U0, не массовая перепись фронтенда. Детальные критерии и
-проверки каждой фазы находятся в плане. Runtime в этом docs-only срезе не менялся.
-
-## Канонический запуск фреймворка (2026-09-13, всё выключено)
-
-1. Убить сирот при необходимости (включая `voicemem_sidecar`, `src\main.py`,
-   дубли релея) и дождаться `runtime\instances\daily\run.lock`.
-2. Одна команда (релей и воркеры поднимаются сами; `-UseOpenCodeRelay`
-   стартует релей из auth.json):
-   `powershell -File scripts\run_integrated_profile.ps1 -ProfileName daily -StartLocalAudio -UseVoiceMem -AsrBackend gigaam -TtsProvider tera -EnableProsodyPlanner -EnableStreamingAsr -UseOpenCodeRelay -EnableScreenWatch -EnableSensoryWorker -AmbientTriageSeconds 300 -NoBrowser -SensoryFile runtime\sensory-events.ndjson -JawlModelOverride deepseek-v4-flash -StartupTimeoutSeconds 420`
-3. Reflection-цикл (вручную): `scripts\run_voice_reflection.ps1` каждые 20 мин.
-
-## Голосовые фазы — 2026-09-13
-
-- [x] Sber GigaAM — канонический финальный ASR (batch через crispasr);
-  Qwen-сервер выведен из эксплуатации (`-AsrBackend gigaam` по умолчанию),
-  RAM −1.4 ГБ. Doctor: `asr=gigaam`.
-- [x] **Оценка качества ASR системно**: 10 TTS-фраз с эталоном → WER/CER
-  (GigaAM 0.079/0.039 против Qwen 0.099/0.024 после нормализации чисел;
-  у GigaAM 0 ошибок распознавания, у Qwen реальные «пизцу»/«Петер»/
-  «всем вечером»), плюс аудио-судья Qwen2.5-Omni-3B (локально, GPU1):
-  слух судьи совпал с клипами; «пиццу» подтверждено, «всем вечером» —
-  артикуляционный нюанс TTS. Итог: GigaAM — канон, Qwen — опция.
-- [ ] Гигиена рестарта: в kill-фильтр добавить `voicemem_sidecar`
-  (залипший сайдкар ломает warmup: `voicemem_warmup_failed`).
-
-## По мотивам разбора N.E.K.O — 2026-09-12
-
-Разбор: [docs/NEKO_DEEP_ANALYSIS.md](docs/NEKO_DEEP_ANALYSIS.md). Их
-гладкость — пять паттернов, которых нет у нас; приоритеты:
-
-- [x] **P0. Прямой постоянный сокет Companion ↔ агент JAWL** — собран
-  2026-09-12 (jawl_terminal.py, тесты 4/4, mode=jawl_terminal_gateway).
-- [x] **P1-lite. Ограничение очереди арбитра + circuit breaker** терминала
-  (4 отказа → кулдаун 30с) + eager-connect; тесты arbiter 2/2, terminal 5/5.
-  Полный session coordinator (поколения/восстановление) — по мере надобности.
-- [x] **P2. Один WebSocket браузер↔Companion** для чата и аудио: `/api/ws`
-  (stdlib RFC 6455, actions chat/voice_chunk/voice_end/voice_reset/ping),
-  фронтенд-транспорт opt-in (`localStorage['jawl-ws']='1'`; HTTP — дефолт).
-  Тесты 3/3, живой зонд: 101, pong, чат-стрим 9.8с, voice_reset. Осталось:
-  включить флагом и погонять голос на WS, затем сделать дефолтом.
-- [x] **P3. Durable outbox проактива** — очередь персистится и переживает
-  рестарт (тест в proactive 12/12).
-- [x] **P4. Анти-повтор** — правило `ZZ_ANTI_REPEAT.md`.
-- [x] Активное зрение на постоянке: watcher+VLM(Bonsai)+fusion+гейт+мост
-  событий в JAWL+правило комментариев; сенсорный воркер автостартует;
-  ambient-триаж 300с. Живой лог: `runtime/voice-events.ndjson`.
-
-## Night session — 2026-09-11
-
-- [x] Эмодзи запрещены в речи: `strip_decorations` во всех TTS-путях +
-  правило в `config/jawl/prompts/custom/RESPOND_DIRECTLY.md`.
-- [x] SER-гейт сенсорики: музыка больше не превращается в speech-события
-  (`scripts/sensory_worker.py::SpeechEmotionGate`, проверено на клипах).
-- [x] ASR живого контура — Qwen3-ASR (RTF 0.14); whisper отставлен.
-- [x] Вердикты моделей: TAARDIS REJECT (RU + код 0/3); GSQ-RCO RU-pass,
-  но движок медленный (24/19 t/s) — reference; **Bonsai-27B Q1: RU +
-  vision + код 3/3 PASS на 101-104 t/s — остаётся мозгом**; локальный
-  кодер через его llama.cpp endpoint (8986).
-- [x] Регресс-гейт ночи: 396 + 16 тестов, exit 0.
-- [x] Память: JAWL 54 МБ / Companion 30 МБ (свежие); миф про 6.8 ГБ
-  развеян; рефакторинг «в один процесс» отклонён по замерам.
-- [x] Reflection-слой реализован (2026-09-12): сегментная консолидация
-  (`scripts/voice_reflection.py`), запись в каноническую память JAWL
-  (43 structured-записи), чекпойнт + журнал + 20-мин цикл.
-- [ ] Проактивный канал: v0 реализован 2026-09-12 (см. ниже); остаётся
-  EOPA-гейт: временные якоря + прототипы активностей + порог, обучаемый
-  на фидбеке.
-- [ ] Фазовый план UI/портов из [COMPANION_VISION_REVIEW.md](COMPANION_VISION_REVIEW.md) §6
-  (единый origin Companion'а как reverse-proxy; консолидация навигации;
-  режим ревизии памяти) — после подтверждения оператора. Фаза 1
-  (видимость сервисов) закрыта 2026-09-12; фаза 2 (единый origin
-  консоли JAWL) закрыта 2026-09-12 (см. ниже); консолидация навигации
-  и режим ревизии памяти — дальше.
-- [ ] Персона: слот оставлен пустым до синтеза натальной карты.
-
-## Ночная сессия — 2026-09-12 (фазы 2/3/5)
-
-- [x] Ф5 coding lane: `scripts/run_coding_server.ps1` (Bonsai-27B Q1 на
-  8986), провайдер `bonsai-local` в `~/.config/opencode/opencode.json`;
-  сервер проверен онлайн через doctor.
-- [x] Ф3 фаза 1: единая видимость сервисов — `/api/doctor` агрегирует
-  streaming ASR (idle/online), planner (8987), coding (8986), relay
-  (8891); панель Doctor в UI показывает всё автоматически. Хелперские
-  пробы bounded (1.5с, fail-soft).
-- [x] Ф2 v0 «Проактивный канал»: `src/jawl_voicecompanion/proactive.py` —
-  поллер истории JAWL (`JawlWebClient.chat_history`), baseline-засев без
-  выброса старых сообщений, отсев эхо-ответов компаньона, гейт простоя
-  (45с после хода), лимиты (5 мин между сообщениями, 6/час), очередь (20),
-  переключатели «тишина» и «озвучивать»; `/api/proactive` (poll+state),
-  `/api/proactive/settings` (CSRF); карточка «Инициатива JAWL» в системной
-  вкладке UI; тесты 7/7, test_web 41/41. Автоозвучка доставленного
-  отложена до тюнинга барж-ина.
-- [x] Корень фантомных падений heartbeat: осиротевшие `src/main.py`
-  (JAWL-агент из прошлых сессий) переживают убийство консоли, новая
-  консоль «прицепляется» к старому агенту, чей цикл не даёт свежий
-  маркер за 300с. Гигиена перезапуска: перед стартом убивать
-  `jawl-sources\...\src\main.py` и дубли релея; после чистки zen-session7
-  поднялась штатно (READY).
-- [x] Живая сессия zen-session7: Companion 2367 READY, JAWL online,
-  doctor зелёный по всем воркерам.
-- [x] Ф4: сенсорный мост `sensory_ingest.py` — хвост NDJSON
-  (screen_frame/music_state/speech) → ambient-память, дедуп музыки,
-  фильтр приватности, тесты 8/8; флаг `--sensory-file` прокинут в
-  лаунчер (`-SensoryFile`); живой прогон: реальный воркер (91 кадр →
-  2 changed, музыка 4, речь 1, ошибок 0) → 7 наблюдений в памяти;
-  doctor показывает `sensory_ingest=online`.
-- [x] Полный гейт после всех фаз: 12/12 шагов PASS (основной батч
-  тестов, e2e, браузерный E2E, mic gate, парсинг ps1, git diff);
-  повторный прогон после Ф3-2/EOPA — снова 12/12.
-- [x] Ф3 фаза 2: единый origin консоли JAWL — reverse-proxy
-  `/console/` + `/console-api/` в web.py (инъекция X-Console-Token,
-  перезапись `"/api/` → `"/console-api/` в JS, SSE-релей, гейт по
-  сессионной cookie); карточка «Консоль JAWL» в UI; тест в test_web
-  (42/42); live: консоль полностью работает на 2367/console/.
-- [x] EOPA-lite для проактивного канала: активные часы по истории
-  (час с перепиской на 2+ разных дня, кэш 10 мин), фидбек
-  «полезно/шум» (+/- кнопки в UI, экспоненциальный кулдаун до 4 ч,
-  персист в runtime/proactive-state.json), подавление повторов
-  текста за 24 ч; тесты proactive 11/11, test_web 42/42.
-- [x] CodeSee внедрён (2026-09-12): клон `G:\AI\codeSee`, установка в репо
-  (`.codesee/`, AGENTS.md-секция, `.agents/skills/codesee`), сгенерирован
-  `.codesee/features.json` (7 эпиков, 18 фич, валидатор пройден),
-  локальный вьюер на `http://localhost:5173/`. Дальше: sync графа после
-  изменений кода (см. AGENTS.md).
-
-## Architecture decision — one product, one UI, modular runtime
-
-- [x] Confirmed the target is one JAWL Companion product: JAWL owns persona,
-  goals, reasoning, native policy and canonical memory; VoiceMem is a bounded
-  sensory/working-memory adapter, optionally isolated as a sidecar.
-- [x] Confirmed the browser control surface is the primary lightweight UI for
-  desktop/tablet/phone/LAN. No Electron or second desktop UI is planned.
-- [x] Confirmed the avatar/OBS page is not a second application: it is a
-  read-only presentation surface started by the same runtime and kept on a
-  separate origin only to protect the control plane.
-- [x] Extracted component construction from `__main__.py` into
-  `composition.py`, while preserving the public server factories and keeping
-  JAWL as the only cognition/policy owner. Focused compile, CLI and 394-test
-  regression evidence passed.
-- [ ] Reduce the user-facing surface to one navigation, one chat/history,
-  one avatar scene and one settings/control area; keep capability pages as
-  contextual panels rather than parallel consoles.
-
-## Latest live finding — 2026-09-09
-
-Latest repository gate: 394 Python tests, 16 HTTP E2E, six-view browser,
-synthetic microphone, Node mic gate and diff check — all passed.
-
-- [x] Introduced `CompanionRuntime` as the single control/presentation
-  lifecycle boundary. It does not create a second cognition layer: JAWL still
-  owns identity, reasoning, goals, canonical memory and native actions; the
-  existing ASR/TTS/VoiceMem/ambient adapters remain replaceable components.
-  Focused runtime tests passed. Component construction is now in the same
-  composition root; the next refactor slice is UI consolidation without
-  changing public server factories.
-
-The latest pinned-JAWL source digest is
-`fa7587eb0d202e44a72d71d3c9d823a76a3b3f4a84cbc4547f5037757da1df33`.
-
-### Fresh connected voice evidence — 2026-09-09
-
-- [x] Local VoiceMem ingest now uses the profile's loopback OpenAI-compatible
-  endpoint and no longer inherits a SOCKS proxy for local requests. The
-  previously reproducible `voicemem_stream_failed` path is fixed; the live r2
-  profile stayed `ready` with `accepted=6`, `completed=6`, `failed=0`.
-- [x] Connected Qwen profile passed 3/3 Russian browser voice turns, canonical
-  memory revise/recall, native SHA-verified write/read, JAWL restart and
-  recoverable cleanup:
-  `runtime/connected-daily-qwen-local-bounded-r2-20260909.json`.
-- [x] Strict browser barge-in passed at gap=9 with cancellation during first
-  speech, two TTS streams and two scheduled audio buffers:
-  `runtime/browser-barge-in-qwen-bounded-r2-gap9-rerun-20260909.json`.
-  Gap=2 remains a negative latency diagnostic and is not counted as a product
-  failure of the bounded Qwen acceptance.
-- [x] Barge-in acceptance now waits a bounded 30 seconds for second playback;
-  it still fails closed when the second audio buffer never starts.
-- [x] Release wheel was rebuilt and hashed after the connected-voice changes:
-  `dist/wheel/jawl_voicecompanion-0.1.0-py3-none-any.whl` with
-  `dist/SHA256SUMS.txt`; a fresh target install passed package import and
-  untruncated CLI `--help`. This is package evidence only; worker/model/assets
-  clean-install and rollback acceptance remain open.
-- [x] Release secret scan passed with 0 findings over 1192 source/config/docs
-  files; a fresh isolated venv installed the wheel and ran package import plus
-  CLI help outside the source cwd. Evidence: `runtime/release-secret-scan.json`
-  and `dist/clean-venv-20260909-180821-unique`.
-- [x] Real Windows WASAPI loopback smoke passed through `pyaudiowpatch`: the
-  default Game-Audeze Maxwell loopback produced 93 bounded chunks at 48 kHz,
-  2 channels, with zero drops and `raw_persisted=false`:
-  `runtime/system-audio-loopback-20260909.json`. Physical microphone/AEC,
-  speech attribution and long ambient capture remain separate gates.
-- [x] Real browser memory acceptance passed on disposable connected Qwen r3:
-  create and revise a preference through the Memory tab, native JAWL restart,
-  recall of the revised value and cleanup. Evidence:
-  `runtime/memory-ui-qwen-r3-20260909.json`.
-- [x] The first fresh unattended Qwen probe recorded negative provider
-  compliance: cycle 1 passed, cycle 2 was `blocked` after the model omitted
-  the required terminal Goal ledger. Evidence:
-  `runtime/unattended-qwen-local-3cycle-20260909.json`.
-- [x] The unattended soak harness now performs recoverable native cleanup when
-  a cycle is blocked/failed and records it in the cycle report. Focused tests
-  and the fixed connected rerun passed 3/3 with lease revoke:
-  `runtime/unattended-qwen-local-3cycle-rerun-20260909.json`.
-- [x] The same 3-cycle unattended acceptance passed through the persistent
-  Ollama OpenAI-compatible endpoint on `11434` using
-  `qwen3.8-27b-abliterated:latest`; native write/read, postcondition,
-  recoverable cleanup and unattended lease revoke all passed:
-  `runtime/unattended-qwen-ollama-3cycle-20260909.json`.
-- [x] After correcting the direct Goal-v2 protocol instruction, the connected
-  Qwen smoke passed 2/2 cycles with independently verified terminal ledgers,
-  exact writes, SHA/postconditions, cleanup and lease revoke:
-  `runtime/unattended-qwen-ollama-smoke-v2-20260909.json`.
-- [x] Added and smoke-tested a reproducible long-run orchestrator:
-  `scripts/run_long_unattended_acceptance.ps1`. Its 90-second smoke completed
-  3 cycles, wrote separate profile/soak logs and verified owned-port cleanup.
-  The first requested 8-hour attempt ran 11 cycles before stopping fail-closed;
-  ten cycles passed, while cycle 11 exposed a provider protocol-variance
-  blocker. The disposable profile, owned ports and unattended lease were
-  cleaned up successfully. Evidence:
-  `runtime/unattended-qwen-ollama-8h-20260909.json`.
-- [x] Added an explicit disposable-profile temperature override. The corrected
-  smoke `qwen-ollama-unattended-smoke-v3-20260909` passed 2/2 cycles at
-  `temperature=0.2`, with independent terminal-ledger checks, native
-  write/read, cleanup and unattended lease revoke:
-  `runtime/unattended-qwen-ollama-smoke-v3-20260909.json`.
-- [!] Eight-hour unattended soak remains open as a duration claim. The v3 run
-  at `temperature=0.2` stopped fail-closed at cycle 39 after the provider
-  first called forbidden `GoalSkills.update_goal`, then repeated the write as
-  an idempotent no-op. The native postcondition was correct, but this is not
-  compliant provider behavior and is not an eight-hour production claim.
-  Evidence: `runtime/unattended-qwen-ollama-8h-v3-20260909.json`. A
-  corrected-harness 30-minute variant at `temperature=0.0` then PASSED
-  34/34 cycles (zero forbidden actions, zero no-op retries, one real write
-  per cycle, 34/34 SHA postconditions and cleanups, lease revoked):
-  `runtime/qwen-ollama-unattended-30m-v4-20260909.json`. The 8-hour rerun is
-  still required before this checkbox can be closed.
-- [x] Corrected the soak evidence gate to count only non-idempotent successful
-  writes and to reject forbidden legacy Goal actions recorded in durable Goal
-  evidence. Focused harness tests pass; a new long-run is required before this
-  checkbox can be closed.
-
-### Provider recovery harness
-
-- [x] Added `scripts/run_unattended_provider_recovery.py` on the proven native
-  Goal/Heartbeat path. It is operator-driven, profile-scoped, and verifies
-  durable-write-before-outage, provider restoration, JAWL restart, native
-  readback, `(action_id, tool)` reconciliation, exactly-one real write,
-  cleanup and lease revocation. Live acceptance is closed by
-  `runtime/unattended-provider-recovery-live31-20260909.json`.
-
-### Latest Goal safety finding — 2026-09-09
-
-- [x] Explicit Goal Protocol v2 `state=done` is now fail-closed: an active Goal
-  needs a terminal durable ledger and a successful recorded action batch;
-  otherwise JAWL blocks it instead of creating false `complete` state.
-- [x] Negative live14 safety acceptance: native write/read succeeded, the
-  provider omitted the terminal ledger patch, and JAWL correctly returned
-  `blocked`. Evidence:
-  `runtime/unattended-goal-soak-live14-20260909.json`.
-- [x] One-cycle live15 acceptance passed with local Ollama: native write/read,
-  terminal ledger, `state=done`, SHA/postcondition and native cleanup; no
-  unexpected tools, lease revoked. Evidence:
-  `runtime/unattended-goal-soak-live15-20260909.json`.
-- [x] Two-cycle unattended soak passed with the real local provider: each cycle
-  used exactly one native write/read pair, terminal ledger, SHA/postcondition,
-  native cleanup and lease revocation; no unexpected tools. Evidence:
-  `runtime/unattended-goal-soak-live22-20260909.json`.
-- [x] Complete unattended provider restart/failure recovery. Live31 proved
-  provider outage after a durable native write, same-endpoint restoration,
-  JAWL restart with the Goal active, native SHA readback, reconciliation,
-  exactly one non-idempotent write, cleanup and lease revocation.
-- [x] Repeat the provider outage gate with a hard stop of the disposable
-  provider process after the native write is durable. Evidence:
-  `runtime/unattended-provider-recovery-live31-20260909.json`; live30-r2/r3
-  remain negative safety diagnostics where malformed completion was blocked.
-- [x] Recovery harness now fails closed when the durable write boundary is not
-  reached; it records a negative report and never attributes a later heartbeat
-  or readback to the aborted turn. `live26` remains negative provider-schema
-  evidence, not a recovery pass.
-- [x] Live16 negative liveness run captured a provider empty response that
-  otherwise stranded the Goal in `waiting` until timeout; no false completion
-  occurred. Evidence: `runtime/unattended-goal-soak-live16-20260909.json`.
-- [x] Active Goals without an explicit `state=wait` now receive at most three
-  bounded provider-repair wakes before `blocked`; explicit `state=wait` remains
-  the supported indefinite-wait path. Focused policy tests: 9 passed.
-- [x] Communication-only terminal wrappers are excluded from Goal completion
-  evidence. A terminal message containing `state=done` cannot substitute for
-  a successful native action. Live21 exposed this path; the regression fix is
-  covered by `test_terminal_message_wrapper_is_not_action_evidence`.
-- [x] Re-ran the multi-cycle unattended acceptance after the communication-only
-  completion fix; live22 passed both cycles. Live21 remains a negative
-  diagnostic, not a production pass.
-
-### Latest presentation evidence — 2026-09-09
-
-- [x] Real isolated Live2D browser smoke passed on disposable Companion
-  ports `2467/8866`: Mao Pro asset validation was renderable with no missing
-  references; browser reported expression, motion and lip-sync capabilities;
-  presentation release profile passed; POST mutation was rejected with 405 and
-  privileged fields were absent. Evidence:
-  `runtime/live2d-smoke-production-slice-20260909.png` and
-  `runtime/target-release-live2d-20260909.json`.
-- [x] Repeated the renderer check after composition extraction on disposable
-  ports `2399/8877`: Mao Pro manifest had 20 referenced files with zero missing;
-  browser loaded the model and reported `Live2D e:on m:on l:on`. Evidence:
-  `runtime/live2d-composition-smoke-20260909.png`.
-- [ ] Run acceptance against an installed OBS Browser Source. OBS was not
-  found on the target machine during the latest check, so capture, alpha
-  compositing, click-through, DPI/multi-monitor behavior and long presentation
-  soak are not claimed. Do not replace this with a browser screenshot.
-
-- [x] Unattended provider-failure/restart recovery is closed for the current
-  local provider by live31. The older live12 GPU1 Gemma run remains historical
-  negative evidence and is not used as the pass artifact.
-- [x] Added a fail-closed fallback for a legacy empty envelope and explicit
-  `state=done`: completion is
-  allowed only for a terminal durable ledger with no pending/next action/blocker
-  and a fully successful last action batch. Nine focused policy tests passed;
-  snapshot digest: `fa7587eb0d202e44a72d71d3c9d823a76a3b3f4a84cbc4547f5037757da1df33`.
-- [x] Live18 verified bounded repair wake in a real integrated profile: the
-  provider omitted the first terminal ledger, JAWL continued, then accepted
-  the completed ledger with native postcondition and cleanup. Evidence:
-  `runtime/unattended-goal-soak-live18-20260909.json`.
-- [x] Live17 startup latency is recorded separately: the provider exceeded the
-  180-second heartbeat budget and Companion was never exposed. Evidence:
-  `runtime/instances/goal-live17/logs/main.log`.
-- [x] Mobile browser acceptance was corrected: the chat composer remains
-  inside the first viewport at 320x740 while message history stays scrollable.
-  The full gate now passes all six viewport checks.
-- [x] Chat slash-command UX is now functional: `/help`, `/status`, `/stop`,
-  `/clear` and `/tab …` are handled locally; `/goal …` and unknown commands
-  remain in the JAWL conversation so native GoalSkills/policy stay authoritative.
-  Browser interaction E2E covers `/help` and `/tab voice`.
-
-## Текущий срез — 2026-09-09 (источник истины)
-
-Последние live-отчёты 2026-09-08 supersede старые формулировки ниже, где
-connected voice/native/memory ещё помечены как незавершённые. Не удаляем
-историю, но при проверке используем только эту секцию и свежие evidence.
-
-- [x] Connected Companion → pinned JAWL → local Ollama → native disposable
-  action: text turn, write/read с совпавшим SHA-256 и recoverable cleanup.
-  Evidence: `runtime/latency-gate-20260908.json` и
-  `runtime/connected-native-action-p0-local2-v4.json`.
-- [x] Browser voice: 3 русских synthetic turns через capture/gate → ASR →
-  JAWL → TeraTTS → единый playback/avatar path с correlation IDs.
-  Свежий повтор после исправления duplicate speech owner: `runtime/browser-voice-e2e-20260909-r2.json`;
-  базовый evidence: `runtime/browser-voice-e2e.json` и
-  `runtime/voice-native-correlation-acceptance-20260907.json`.
-- [x] Memory API slice: remember → revise → restart → recall на canonical
-  JAWL memory с актуальным значением после restart.
-  Evidence: `runtime/memory-restart-acceptance-20260906.json`.
-- [x] Strict browser barge-in: старый playback отменяется, второй voice turn
-  проходит, stale audio не засчитывается.
-  Evidence: `runtime/browser-barge-in-20260907-strict-retry3-gap9.json`.
-- [x] Restart during inference и provider failure после durable native effect:
-  correlated terminal error, recovery, точный readback и exactly-one journal
-  write на локальном baseline.
-  Свежий live rerun после Goal Ledger changes также прошёл: `runtime/restart-inference-acceptance-2026013829Z.json`.
-  Evidence: `runtime/restart-inference-acceptance-2026160037Z.json` и
-  `runtime/provider-failure-native-recovery-current-v11.json`.
-- [x] Clean installed wheel smoke и full Python regression: последний полный gate
-  после durable Goal Ledger intent/reconciliation и integrated-native launcher
-  изменений — `369 tests passed`, 16 HTTP E2E,
-  browser interaction, synthetic mic и diff check; live profile reports остаются
-  отдельными acceptance-доказательствами.
-- [x] Optional VoxCPM2 native streaming/cancel backend добавлен; TeraTTSv2
-  остаётся default. См. [VOXCPM integration](docs/VOXCPM_INTEGRATION_20260909.md).
-- [x] Native gateway Companion принимает опциональные `assistant.delta`,
-  сверяет их с authoritative `assistant.final` и удаляет provisional UI при
-  mismatch/provider failure. Pinned JAWL пока публикует только final event;
-  token-level realtime поэтому остаётся открытым acceptance gate.
-- [x] Integrated launcher теперь выбирает Qwen3-ASR-0.6B по умолчанию из
-  `G:\\AI\\VLM-RealTime-Bench`; старый Whisper оставлен через
-  `-AsrBackend whisper`. Свежий Qwen-профиль 3/3 прошёл:
-  `runtime/browser-voice-e2e-20260909-qwen-asr.json`.
-- [x] Локальный Gemma-профиль подтверждён на физической GPU1 через отдельный
-  Ollama `11435` (`CUDA_VISIBLE_DEVICES=1`, GPU1 ~8.5 GB, GPU0 не обслуживал
-  модель). Browser voice 3/3 прошёл после исправления legacy-обёртки:
-  однозначный `execute_skill` Goal-v2 payload разворачивается в canonical
-  actions, а неизвестный `SQLTasks.*` по-прежнему отклоняется registry/policy.
-  Evidence: `runtime/browser-voice-e2e-20260909-gpu1-schema.json`, snapshot
-  digest `54648188b51153c9bb3e9e60b572026e152a4f08c199c0015a39cdff4b879ef6`.
-- [x] Единый connected daily acceptance прошёл на одном реальном профиле:
-  canonical memory remember → revise → 3 browser voice turns → native write
-  с проверкой диска → JAWL restart → memory recall → native read →
-  recoverable cleanup. После restart acceptance ждёт native memory projection,
-  поэтому optional VoiceMem/TTS в агрегированном health=`degraded` не маскирует
-  готовность самого JAWL control plane. Evidence:
-  `runtime/connected-daily-acceptance-20260909-r3.json` и
-  `runtime/connected-daily-voice-20260909-r3.json`.
-- [x] Representative Full Access matrix прошёл через native JAWL: уровни
-  `0..2` проверили sandbox/framework read semantics, level `3` проверил
-  реальный write, emergency-stop block/reset и bounded ROOT autonomy lease
-  issue/revoke. Native catalog и read-only namespace probes включили
-  HostOS/HostTerminal/DebugBroker; в disposable profile Debug Broker был
-  включён только для этого acceptance и отключается в обычном профиле.
-  Evidence: `runtime/native-policy-levels-0-2-20260909.json`,
-  `runtime/native-policy-level-3-20260909.json`,
-  `runtime/native-catalog-matrix-full-access-20260909-r2.json`,
-  `runtime/native-namespace-full-access-20260909-r2.json`.
-- [x] Integrated launcher получил явные `-NativeAccessLevel 0..3` и
-  `-EnableDebugBroker`: меняется только disposable JAWL config, отдельного
-  executor не создаётся. Реальный level-3 launch, полный каталог 93 skills и
-  8 native namespace probes прошли. Evidence:
-  `runtime/native-catalog-full-access-launcher-20260909-r2.json` и
-  `runtime/native-namespace-full-access-launcher-20260909-r2.json`.
-- [x] Opt-in `-EnableSupervisor` теперь использует native JAWL InstanceManager
-  и `src.instances.supervisor`: registry/sandbox совпадают с launcher profile,
-  web start/stop не создаёт второго executor, startup race не роняет профиль,
-  а stale supervisor markers очищаются после force-stop. Live acceptance:
-  `runtime/supervised-profile-acceptance-20260909-r3.json`.
-- [x] Native supervisor crash gate: при действующем ROOT lease disposable child
-  перезапускается ровно один раз; после revoke lease следующий crash переводит
-  профиль в `crashed` и не запускает третье поколение. Это lifecycle proof, не
-  доказательство reconciliation произвольного syscall/checkpoint. Evidence:
-  `runtime/supervised-recovery-acceptance-20260909.json`.
-- [x] Goal Ledger сохраняет identity native action как `in_flight` до dispatch
-  и при restart переводит незавершённый batch в `needs_reconciliation`; replay
-  без postcondition запрещён recovery-контуром. `ledger.reconcile_actions`
-  теперь явно фиксирует `confirmed`/`not_applied`, а ложный `done` при
-  нерешённом исходе отклоняется. Unit evidence:
-  `tests/test_jawl_goal_recovery.py`; snapshot digest обновлён до
-  `8469b4a5f23fb2fb…`.
-- [x] Исправлено сохранение recovery intent при повторном локальном id:
-  последующий read/completion action больше не затирает старый `(tool, action_id)`,
-  а повтор того же unresolved native identity блокируется. Live crash-boundary
-  acceptance после этого исправления принят; свежий evidence указан ниже.
-- [x] Fresh live Goal Ledger crash-boundary acceptance passed on the updated
-  snapshot: real native action interruption, restart recovery, independent
-  postcondition/SHA verification, premature-completion guard, reconciliation,
-  completion, and recoverable cleanup. Evidence:
-  `runtime/goal-reconciliation-live-20260909T024434Z.json`.
-
-Остаются настоящие production blockers, а не «недостающие галочки»:
-
-- [x] Свести перечисленные acceptance в один свежий связанный daily profile:
-  память → голос → native action → verified result → restart/recovery.
-  Повторяемый startup race в первом acceptance зафиксирован и исправлен в
-  harness; failure-отчёты `...-20260909.json` и `...-r2.json` сохранены как
-  диагностика, pass — `...-r3.json`.
-- [ ] Снизить и измерить cold/warm first-audio и total latency; свежий
-  Qwen-ASR browser repeat дал `9.7–24.9 s` до первого audio buffer (старый
-  Whisper repeat: `15.8–37.2 s`), а
-  connected route `5.085/5.944 s` не является first-audio SLO.
-  Свежий срез 2026-09-09/10 (VoxCPM2 + whisper-turbo, Gemma на Ollama):
-  worker-уровень first-audio warm `0.152–0.175 s`, RTF `0.87`; browser
-  voice E2E дал `turn_to_first_audio 15.4–26.9 s`, где `voice_end →
-  tts_headers` = `14–34 ms`, а whisper `turn_to_voice_end` (ASR + JAWL
-  route) = `12–27 s` — узкое место подтверждено в LLM-роуте, не в TTS.
-  Barge-in c whisper требует gap `≥ end-обработки (~16 s)`: gap=9 упал,
-  gap=20 passed. Реальный realtime SLO всё ещё не выбран.
-- [ ] Проверить физический микрофон, AEC/echo, hardware/software gate и
-  partial ASR; synthetic capture не заменяет реальное устройство.
-- [x] Закрыть Full Access 0–3 representative policy/catalog matrix и
-  native HostOS/HostTerminal/DebugBroker namespace probes.
-- [ ] Закрыть unattended heartbeat, live task-ledger postcondition reconciliation
-  при crash/provider failure и 8-hour disposable soak. Durable checkpoint и
-  explicit `reconcile_actions` contract покрыты unit/regression; остаётся live
-  side-effect reconciliation на реальном JAWL turn и долговременная работа.
-  Native-lease harness зафиксировал provider blocker: `jawl-gemma4-it`
-  оставил Goal в `waiting` без native action; evidence:
-  `runtime/unattended-goal-soak-live2-20260909-r2.json`. После этого в pinned
-  JAWL добавлен bounded empty-action guard: при заполненном `next_action`
-  теперь идут максимум три repair-cycle, затем `blocked`; требуется live rerun
-  на новом snapshot до закрытия пункта.
-- [x] Сделать смену модели воспроизводимой только для disposable-профиля:
-  launcher `-JawlModelOverride` проходит native profile configuration и не
-  ослабляет managed-config conflict guard. Проверка на
-  `gemma-4-12b-coder-fable5-composer2.5-v1:latest` отвергнута provider gate:
-  Ollama показывал имя в списке, но `/v1/chat/completions` и `/api/chat`
-  возвращали `model not found`; отсутствующие blobs не докачивались.
-- [ ] Завершить memory layers/erasure/consolidation, ambient/system audio и
-  screen perception после выбора VLM; Vision остаётся deferred.
-- [ ] Завершить Live2D/OBS presentation privacy, transparent window,
-  DPI/multimonitor и reconnect soak; текущий Live2D — smoke, не RC.
-- [!] Clean install срез 2026-09-10: wheel пересобран
-  (`dist/SHA256SUMS.txt`, hash совпадает), release secret scan 0 находок
-  (1196 файлов), fresh isolated venv install → import + полный CLI help вне
-  source cwd, rollback-переустановка из того же wheel проходит. Манифест
-  воркеров/assets с SHA-256 и лицензиями:
-  `runtime/workers-manifest-20260909.json` (whisper-turbo, Qwen3-ASR,
-  TeraTTSv2, VoxCPM2, Live2D Mao Pro + LICENSE-Live2D.md). Остаются:
-  пользовательская приёмка чистой установки на другой машине и полный
-  rollback воркеров (external gate).
-
-## Последняя проверка 2026-09-08
-
-- [x] P0-B native provider-failure recovery accepted on the local Gemma
-  baseline: after a durable native write, the isolated Ollama `11435` was
-  stopped; Companion received correlated terminal `error` plus a non-speakable
-  `final`; the provider was restored, JAWL restarted, native readback returned
-  the matching SHA-256, the journal recorded exactly one real write, and
-  recoverable cleanup removed the file. Evidence:
-  `runtime/provider-failure-native-recovery-current-v11.json`.
-- [x] Critical terminal delivery fixed in the owned JAWL snapshot: `turn.error`
-  is now emitted as a typed gateway event; gateway socket drain and EventBus
-  terminal flush are bounded so a broken local writer cannot hold ReAct until
-  the browser timeout. Snapshot verification passes with digest
-  `8f6dfc5f31ad31ee98b11ec6d1a800ff95f52528f58ab3de50efb59955b1a8c8`.
-- [!] v6–v10 remain diagnostics, not acceptance: v6/v7 exposed missing
-  terminal delivery, v8/v9 stopped the provider after turn A had already
-  completed, and v10 exposed the unbounded terminal-writer wait. Do not use
-  their `pass` fields as product evidence.
-
-- [x] CosyVoice3 `Fun-CosyVoice3-0.5B` скачан во внешнюю рабочую папку
-  `G:\\AI\\CozyVoice` и проверен отдельно на CPU. Русская речь генерируется,
-  но 36,2 с аудио заняли 126,7 с (RTF 3,50), первый чанк также пришёл через
-  126,7 с. Это экспериментальный backend качества/клонирования, не realtime
-  TTS и не замена TeraTTSv2 в основном conversational path.
-- [x] Результат и воспроизводимые условия зафиксированы в
-  [COSYVOICE3_CPU_BENCHMARK](docs/COSYVOICE3_CPU_BENCHMARK.md). Исходники
-  внешнего `G:\\AI\\CozyVoice` не изменялись.
-- [ ] Не подключать CosyVoice3 в production launcher до отдельного warm-start,
-  streaming и GPU/CPU acceptance; основной быстрый TTS остаётся TeraTTSv2,
-  Qwen3-TTS — opt-in quality/clone backend.
-
-- [x] P0 restart-during-inference acceptance принят на локальном
-  Gemma E2B: перезапуск попадает в активный inference, JAWL возвращается online,
-  durable sandbox-файл переживает restart, а action journal показывает ровно одну
-  реальную запись. Финальный envelope вернул SHA-256, совпадающий с диском.
-Evidence: `runtime/restart-inference-acceptance-2026160037Z.json`.
-
-- [x] P0-B provider-failure acceptance закрыт. Частичный stream после delta не
-  обрывается SSE-исключением: Companion выдаёт один `error` с
-  `discard_deltas=true` и финальный error envelope с `speak=false`. Empty/invalid
-  JSON даёт такой же bounded terminal result, а следующий turn успешно
-  восстанавливается. Evidence:
-  `runtime/provider-failure-acceptance-20260908T163148Z.json`.
-- [x] Полный regression после исправления provider failure: `369 passed, 46
-  subtests passed`. Pytest теперь ограничен `tests/`; внешние Crane-тесты из
-  `runtime/crane-repo` запускаются только в их собственном окружении и не
-  загрязняют gate нашего приложения.
-
-- [x] P0-B connected local acceptance закрыт на восстановленном локальном
-  baseline: Companion `2367` → pinned JAWL `8767` → Ollama `11434` → Gemma 4
-  Q4_0. Через реальный text lane получен `CONNECTED_TEXT_OK`, затем через тот
-  же Companion native route выполнены `HostOSWriter.create_directories` и
-  `write_file`, `HostOSReader.read_file` с совпавшим SHA-256 и recoverable
-  cleanup. Профиль штатно остановлен; `8770` не использовался, FoxMCP `8765`
-  не затронут. Evidence:
-  `runtime/connected-native-action-p0-local2-v4.json`.
-- [x] Восстановлен отсутствовавший Ollama blob `jawl-gemma4-it` из уже
-  существующего LM Studio GGUF через
-  [`config/ollama/jawl-gemma4-it.Modelfile`](config/ollama/jawl-gemma4-it.Modelfile).
-  GPU1-only placement по-прежнему не заявляется и отдельно требует
-  acceptance.
-
-- [x] Временный Ollama-инстанс для GPU1-проверки закрыт; `127.0.0.1:8770` не
-  слушается. Оставлен только внешний FoxMCP на `8765` и основной Ollama на
-  `11434`. Изоляция Ollama по физической GPU1 не подтверждена: backend всё ещё
-  загрузил часть модели на GPU0.
-- [x] Локальный импорт `jawl-gemma4-it` из Gemma 4 Q4_0 прошёл connected text и
-  native side-effect пробы после delivery override и sandbox path fix. Он всё
-  ещё не является production baseline до voice/memory/restart acceptance.
-- [x] Исправлено разрешение логического пути `sandbox/...` в named profile:
-  native HostOSWriter теперь направляет его в profile sandbox, а не в immutable
-  pinned source. Snapshot manifest обновлён; side-effect E2E нужно повторить.
-
-- [x] Исправлен `JawlWebChatAdapter`: начальный `cursor.gap=true` bounded-stream больше не ошибочно отклоняет новый коррелированный turn.
-- [x] Регрессия native gateway: 4 теста прошли; HostOS policy E2E прошёл отдельно.
-- [x] При terminal timeout Companion отправляет best-effort cancel для своего correlated JAWL turn; regression покрывает timeout→cancel.
-- [x] Реальный Live2D browser smoke прошёл на `127.0.0.1:8766`: `ready=true`, Mao загружен, canvas видим, `e/m/l` активны.
-- [!] Connected UI→JAWL turn принят Companion и опубликован в JAWL, но финал не получен: живой JAWL занят старым ReAct-циклом `turn-0644aaba85b4408996a09822d136af4b`, повторяющим SQLNotes. Нужно исправить bounded scheduling/cancellation в JAWL profile или корректно завершить зависший turn, затем повторить acceptance.
-- [!] Новый isolated connected profile на `2368/8767` стартует с pinned JAWL и
-  `big-pickle`, но OpenCode Zen отклонил startup/user turns с HTTP 429
-  `FreeUsageLimitError`. Ключ не сохранён; нужен доступный provider/model для
-  сквозной voice acceptance.
-- [x] Полный regression/mock gate `runtime/full-gate-20260906T075243Z.*` прошёл: exit 0, 16 HTTP E2E и browser responsive checks.
-- [x] Managed launcher lifecycle исправлен: учитывает уже запущенный agent, не мутирует pinned source cwd, а JAWL prompt dumps уходят в instance logs; boot→shutdown verifier подтверждён.
-- [x] После lifecycle/profile fixes полный gate `runtime/full-gate-20260906T081224Z.*` прошёл (`331` non-E2E, `16` HTTP E2E); synthetic ASR limitation сохранена явно.
-- [x] Финальный gate после всех текущих правок `runtime/full-gate-20260906T081634Z.*` прошёл с exit 0; snapshot/preflight подтверждены после gate.
-- [x] Исправлена UTF-8 сериализация JSON в Windows PowerShell: три Tera WAV
-  теперь корректно генерируются и транскрибируются Qwen3-ASR (`35/55/53`
-  символа, median RTF `0.132`).
-- [x] Реальный browser voice E2E прошёл все 3 turn через capture/gate→Qwen
-  ASR→JAWL/локальный Gemma→Tera TTS→playback/avatar: `runtime/browser-voice-e2e.json`.
-- [x] Исправлена и реально проверена загрузка AudioWorklet `/mic-processor.js`; browser capture теперь выходит в `Microphone listening`. Осталась связка с JAWL и playback acceptance.
-- [x] Полный gate после исправления AudioWorklet прошёл: `runtime/full-gate-20260906T082927Z.*`, exit 0.
-- [x] Полный gate после исправления ScreenDelta IPC race и capability-фильтра
-  вложений прошёл: `runtime/full-gate-20260906T084311Z.*`, exit 0.
-- [x] Повторный полный gate после переключения owned provider baseline на
-  `big-pickle` прошёл: `runtime/full-gate-20260906T085413Z.*`, exit 0.
-- [x] После обнаружения generated logs/pyc в pinned snapshot выполнена очистка
-  только этих артефактов; `verify_jawl_snapshot.py` и preflight снова проходят
-  с исходным digest `fd1bb8…`.
-- [x] Integrated launcher теперь передаёт обязательные browser voice
-  expectations; default не маскирует отсутствие transcript, но не подменяет
-  отдельную проверку семантического качества ASR.
-- [ ] Не объявлять voice, semantic memory, native action и production-ready завершёнными до связанного connected сценария.
-
-Актуально после аудита 2026-09-06 (HEAD `1bb3117` + dirty config/profile tooling).
-Правильный путь и evidence: [RECOVERY_PLAN](docs/RECOVERY_PLAN.md).
-Один live gateway turn пройден; memory recall, browser voice и native
-поручение как единый сценарий остаются открытыми.
-Старые подробные журналы находятся в Git; они не заменяют текущую приёмку.
-
-`[ ]` не принято; `[~]` есть частичная реализация/evidence;
-`[!]` требуется внешнее решение/ресурс; `[x]` выполнен указанный срез.
-
-## Первая очередь после аудита
-
-- [x] R1: устранены глобальная HostOS blocklist и запрет discovery в owned
-  snapshot/config/prompt; полномочия остаются у JAWL policy 0–3. Требуется live
-  приёмка native поручения.
-- [x] R1: повреждённый context patch удалён, оригинальные adaptive context
-  rules восстановлены. Новый v2 snapshot проверен по 348 файлам и digest.
-- [~] R1: effective model/context readiness, instance sandbox paths и
-  startup verification проходят локальный preflight; live provider/model
-  handshake и stale-port lifecycle ещё требуют acceptance.
-- [ ] R2: расследовать пять failed recall attempts; bounded turn/scheduling;
-  UI revise → смысловой ответ → restart → актуальный recall.
-- [ ] R3: реальный browser capture/playback/аватар, три RU synthetic вопроса,
-  проверка error envelope/семантики, cold/warm timings и interruption.
-- [ ] R4: UI/голос → native поручение → disposable effect → postcondition →
-  task recovery; расследовать исходный неожиданный 503; весь required gate.
-- [x] Документально зафиксировать регрессии и правильную очередь.
-  Это не закрывает ни один runtime-пункт.
-- [x] Новый goal зарегистрирован и активен; полный scope описан в
-  RECOVERY_PLAN. Не закрывать до связанной live приёмки.
-
-## Активная цель — первый связный ежедневный сценарий
-
-Приоритет: P0-A → P0-B + P0-C в одном воспроизводимом профиле.
-Результат должен быть доступен из обычной панели приложения.
-
-1. Зафиксировать совместимую поставку JAWL и собственные config/data/log/cache;
-   подключить manifest к launcher, readiness и остановке всей платформы.
-2. Провести минимум три русских синтетических аудиовопроса через браузерный
-   путь ASR → тот же JAWL с реальной LLM → TTS → один playback/аватар.
-   Измерить cold/warm задержки по стадиям; физический микрофон принять отдельно.
-3. Сохранить факт/предпочтение, исправить его через панель и доказать влияние
-   на следующий ответ и recall после перезапуска без второй памяти личности.
-4. Из панели/голоса выполнить поручение через native JAWL: изменить disposable
-   файл/состояние тестового приложения, проверить результат и показать артефакт.
-5. Проверить interruption, provider failure и restart: нет повторного действия,
-   устаревшей озвучки или потерянной задачи; итог и причина отказа видны в UI.
-6. Пройти browser interaction E2E, сохранить изображения ключевых состояний,
-   полный gate и отчёт связанного сценария с версиями и correlation IDs.
-
-Закрытие этой цели требует всех перечисленных результатов. Независимые smoke,
-новая документация и зелёный fake gate её не закрывают. P1–P3 (автопамять,
-ночной Full Access, настоящий Live2D/OBS, чат/соцсети и поставка) сохраняются
-в общей очереди. Vision ждёт выбора владельца. Отсутствующий live ресурс
-фиксировать как незавершённую проверку; не подменять его mock.
-
-## D0 — вернуть документацию к замыслу
-
-- [x] Зафиксировать одну платформу, Full Access/unattended, память, голос,
-  2D/OBS и мятный Aero UX; разделить намерение, код и evidence.
-- [x] Убрать преждевременный RC-статус и дубли текущего плана, сохранить историю.
-- [x] Уточнить Qwen основной / Tera быстрый fallback, Vision deferred,
-  software mic gate, ASR отдельно от понимания звука.
-- [x] Записать protected-upstream границу и недостатки test harness.
-- [ ] Реализация исправлений ниже. Аудит документов сам по себе их не исправляет.
-
-### Техническое уточнение по продолженному срезу
-
-- [~] Добавлен секрет-free versioned runtime manifest
-  [`config/profile.example.json`](config/profile.example.json) и безопасный
-  валидатор [`scripts/validate_profile.py`](scripts/validate_profile.py):
-  проверяются bounded paths, порты `2367/8766`, резерв `8765`, компоненты и
-  consent-флаги без запуска сервисов и без записи секретов. Интеграция профиля
-  с launcher/installer, pinned JAWL runtime и полный startup/shutdown lifecycle
-  ещё не закрыты.
-- [~] Добавлен разбор prompt-архитектуры JAWL в
-  [JAWL_PROMPT_ARCHITECTURE.md](docs/JAWL_PROMPT_ARCHITECTURE.md): `SOUL`,
-  `INSTRUCTIONS`, выбранный function-call protocol и optional modules теперь
-  считаются частью versioned профиля JAWL, а не второй логикой Companion.
-- [~] Bounded stream-chat ingestion/API и запись наблюдения в JAWL event sink
-  добавлены; реальный polling Twitch/YouTube/Restream, moderation/attention,
-  URL metadata policy, аккаунты и UI остаются незакрытыми P1.
-- [~] Native response preservation, terminal error semantics, reconnect с
-  cursor и cancellation теперь покрыты HTTP E2E через тот же Companion с
-  typed native fixture; сквозной прогон через конкретный live JAWL profile,
-  tool outcome и production transport всё ещё требуется до закрытия P0-B.
-
-## Принцип выполнения плана: согласованное поведение
-
-Подсистемные галочки не равны готовому организму. Каждый срез должен замыкать
-хотя бы один путь observation → attention/state → decision → action/expression →
-verified feedback → memory/task update. Использовать существующие механизмы,
-не плодить агентов/«отделы мозга» ради биологической аналогии.
-
-- [~] Статическая карта перекрытий Heartbeat/Attention/TurnArbiter, VoiceMem
-  recall/JAWL RAG, persona/affect/avatar state и episode/durable memory
-  завершена в [CORE_OWNERSHIP.md](docs/CORE_OWNERSHIP.md); baseline packaging
-  decision и live integration остаются pending. Для каждого механизма нужен
-  один owner, вход/выход, что выключено и зачем.
-- [ ] Минимальный общий bounded context/state snapshot и event correlation:
-  focus/task/session/observations/response state, без второй mutable persona DB.
-- [ ] Coherence E2E: фоновое наблюдение → поздний recall с источником;
-  поручение → interruption → продолжение той же задачи → verified result;
-  исправление предпочтения → согласованные текст/голос/аватар после restart.
-- [ ] Проверить отсутствие двойного ответа, двойного tool execution,
-  конкурирующих wake loops и расхождения эмоции между тремя представлениями.
-- [ ] Любой новый psychological/biological-inspired механизм обосновать
-  измеряемой пользой, лимитами ресурсов и сценарием. Не добавлять «самоэволюцию
-  кода» или самоповышение полномочий как следствие этой аналогии.
-
-## P0-A — воспроизводимая основа без изменения upstream
-
-- [~] Инвентаризировать требуемые native JAWL additions и версии зависимостей:
-  что в Companion, что в dirty JAWL, какие gateway/policy/memory capabilities
-  требуются. Не назначать авторство по timestamps и не откатывать чужие diff.
-  Read-only карта routes/owners, HEAD, MIT, выборочные хеши и опасные bootstrap
-  defaults зафиксированы в [JAWL_RUNTIME_INVENTORY.md](docs/JAWL_RUNTIME_INVENTORY.md).
-  Полное замыкание поставки и dependency lock ещё не выполнены.
-  Source snapshot из 348 файлов сохранён в `runtime/jawl-sources/jawl-20260906-daily-v2`;
-  хеши сверены, compileall копии и 2 теста сборщика прошли. Далее собственные
-  config/SOUL и owned requirements добавлены; исходная зависимость имела
-  конфликт aiogram 3.17 с Pydantic 2.11. Конфликт исправлен в owned profile;
-  Python 3.11 environment установлено, `pip check` прошёл, lock сохранён.
-  Далее runtime import/readiness,
-  затем launcher integration.
-- [!] Согласовать способ поставки совместимого JAWL (зафиксированная dependency/
-  owned fork с лицензиями) и runtime location. `G:\AI\JAWL-Coding` не менять,
-  не писать туда тестовые state/config/logs, не запускать там автозаписывающий код.
-- [ ] Заменить машинно-зависимые профили собственными config/data/log/cache
-  и явными версиями. Изолировать тестовые credentials/environment;
-  запретить запуск Telethon/MCP/debug auto-start из скопированной рабочей конфигурации.
-- [~] Исправить `run_target_jawl_smoke.ps1` до любого следующего запуска:
-  отдельный runtime, live opt-in, fail-path отчёт, уникальный run ID,
-  allowlisted environment, токен не в argv/log, process identity + creation
-  time вместо убийства любого нового владельца порта. Третий revision принят
-  main как PARTIAL offline safety slice: unittest 8 OK без skips, PS AST pass,
-  diff pass; AST-extracted PS helpers проверены для CreateNew nonoverwrite,
-  containment и отказа файла под junction. Убраны unsafe defaults/token argv/
-  arbitrary port-owner killing; добавлены env allowlist, protected paths,
-  explicit Live/owned marker и bounded profile deadline. LIVE запуск запрещён до
-  owner-approved runtime/loader review и полной isolated process lifecycle
-  validation; parent-exit cleanup race может оставить orphan, A3 не закрыт.
-- [~] Сделать readiness по активному профилю и фактическому JAWL instance:
-  версия, provider, policy authority, memory capabilities. Ни `configured`,
-  ни HTTP 200 недостаточны. Demo/partial/ready должны различаться в UI.
-  Частичный срез: configured больше не подтверждает JAWL/Vision/ambient ready;
-  dependency health проверяет положительные маркеры, policy — native authority.
-  Identity и proof-of-path остаются открытыми.
-- [ ] Сохранённый профиль запуска/остановки всей платформы: порядок сервисов,
-  readiness/warmup, занятый порт/нет весов/нет места, graceful shutdown,
-  только собственные процессы. Не устанавливать лишние модели автоматически.
-
-Последняя проверка после добавления manifest/validator: полный gate
-`runtime/full-gate-20260905T101615Z.log` завершился с `exit_code: 0` — 299
-non-E2E и 16 HTTP E2E тестов, compileall/py_compile, synthetic mic gate,
-Node mic check и `git diff --check`. Это локальное fake/synthetic evidence;
-оно не закрывает live JAWL, реальный provider, физический микрофон, OBS или
-production startup.
-
-Приёмка: из чистого runtime запускается известная конфигурация, журнал связывает
-Companion с конкретным JAWL и выбранными workers; protected repo и FoxMCP
-не изменены. Отказ зависимости виден и не подменяется mock.
-
-## P0-B — первый целый сценарий: общение и поручение
-
-- [~] Native Gateway/JSON correlation/reconnect/cancel есть; повторно проверить
-  **через тот же Companion**, а не прямыми независимыми запросами к JAWL.
-  Убедиться в сохранении текста, emotion/voice/avatar, tool errors.
-- [~] Локальная LM Studio LLM дала один gateway pass. Принять выбранный
-  provider через Companion: text/JSON/tools/empty final/timeout и содержательный
-  результат. Big Pickle остаётся допустимой временной альтернативой.
-- [ ] Смена provider через JAWL, capability-driven native tools/JSON envelope;
-  regression для QWB-JAWL и local adapter без дублирования памяти/личности.
-  Реальный QWB endpoint проверить при доступности, не блокируя остальные срезы.
-- [ ] Персона/черты/важные факты редактируются в панели через JAWL, отражаются
-  в следующем разговоре и переживают restart. История одна для текста и голоса.
-- [ ] Пройти реальное безопасное поручение: открыть тестовое приложение,
-  изменить disposable файл, проверить состояние, получить честный итог в чате.
-  Инструменты — JAWL, не local fallback.
-- [ ] Проверить Heartbeat инициативу и задачу без открытой панели;
-  DND подавляет разговорную инициативу, не теряет согласованную работу.
-- [ ] Тайм-аут/пустой JSON/provider outage дают terminal error и восстановление,
-  не бесконечное ожидание и не придуманный успех.
-
-Приёмка: одно связное общение с фактом памяти → поручение → native action →
-проверенный результат → повторное обращение после restart. Затем 100-turn
-profile с восстановлением соединения; прежний live Big Pickle результат
-сохраняется как evidence своего отдельного окружения, не обнуляется.
-
-## P0-C — голос и реальный UX этого сценария
-
-- [~] Gate/пики/калибровка/hands-free и Qwen final-ASR существуют.
-  Прогнать синтетические 2–3 слова/с, паузы, тихую речь, шум, конец фразы,
-  переполнение очереди, disconnect, несколько фраз подряд.
-- [ ] Для каждого turn измерить endpoint delay, ASR, LLM TTFT/final,
-  TTS first audible и total p50/p95, отдельно cold/warm. Принять профиль по
-  полной задержке, не сравнивать RTF с количеством слов пользователя.
-- [ ] Закрепить Qwen основной / Tera low-latency fallback в конфиге и UI.
-  Показать реальный provider/capabilities/клон/ограничения. Автопереключение
-  включать только по заданной политике; не обещать Qwen real-time на CPU.
-- [ ] Сопоставить эмоции ответа с реально поддерживаемой просодией/выражениями;
-  отдельная RU оценка качества, unsupported style → neutral с диагностикой.
-- [ ] Barge-in: быстро остановить playback, отменить/освободить inference,
-  не озвучить stale audio; отличить уточнение, backchannel и новый запрос.
-- [~] VoiceMem async queue не блокирует ASR turn; проверить downstream ingest,
-  retrieval, ошибку/перегрузку и restart, а не только `status=queued`.
-- [!] Позже с владельцем: dynamic mic, AEC/эхо, разрешения браузера, устройства.
-  До этого продолжать синтетику, не называть её физическим микрофоном.
-- [~] Aero-основа и CSS 2D есть. Довести сцену+чат+задачу, ясные настройки
-  персонажа/голоса/памяти/доступа, loading/error/empty/save states,
-  keyboard/focus, контраст, scaling 100/150%. Визуальная оценка владельцем.
-- [ ] Browser E2E кликает реальные controls, проверяет сохранение и видимый
-  результат. Скриншоты главных состояний; DOM-marker smoke оставить узким.
-- [x] До выбора Vision/мультимодальных обработчиков capability-фильтр вложений
-  ограничен TXT/MD. UI больше не обещает PDF/изображения/аудио/видео; расширять
-  список только вместе с реальным обработчиком и E2E-приёмкой.
-
-Приёмка: 3+ синтетических вопроса через browser audio routes → реальный JAWL →
-выбранный TTS → единственный playback + avatar; затем настоящий микрофон.
-Целевые задержки выбрать по измерениям и ощущениям, не объявлять SLO выполненным заранее.
-
-## P1-A — Full Access и нативные инструменты
-
-- [ ] Полезный default sandbox: отдельный CDP browser и workspace, явные
-  filesystem/process/network capabilities; доказать изоляцию, а не только
-  отдельный browser profile. Проверить поиск, навигацию, download и deny выхода
-  за scope. Общий desktop — по native уровням, без скрытого повышения прав.
-- [ ] Социальные аккаунты персонажа: подключение владельцем, отдельные scopes
-  read/draft/publish, unattended policy, секреты вне model context, preview,
-  журнал и reconciliation после неопределённого результата публикации.
-- [ ] Будущий livestream chat: принимать заданный владельцем chat/Restream URL;
-  передавать bounded viewer text в то же JAWL attention для редких контекстных
-  реакций, с rate limit, DND и moderation. Viewer text — untrusted и не имеет
-  authority на ПК; подключение аккаунта сейчас не добавлять.
-
-- [~] Levels 0–3/catalog/read-only/filesystem slice проверялись отдельно.
-  Собрать capability/parity таблицу всех нужных JAWL namespaces, включая
-  MCP/browser и `G:\RE`, с accepted/unsupported/error и причиной.
-- [ ] На уровне 3 разрешённые нативные инструменты доступны без второго
-  фильтра/песочницы Companion. На 0–2 проверить expected deny/approval.
-- [ ] Проверить representative safe fixtures по рискам: filesystem, execution,
-  GUI, terminal, coding, MCP/browser, Debug Broker. Для каждого — успешный
-  результат, отказ, cancel, stop, audit; не исполнять разрушительные операции
-  на рабочем ПК ради галочки «все skills протестированы».
-- [ ] Ночной unattended profile: срок покрывает выбранный интервал, без
-  per-action prompts на разрешённые задачи, видимая expiry/renewal,
-  stop/revoke/downgrade, crash recovery только по действующей политике.
-- [ ] Durable task checkpoints и сверка уже выполненных действий после сбоя.
-  Replay событий не считать exactly-once mutations; неопределённый итог
-  требует проверки, а не автоматического повторения.
-- [ ] Утренний журнал: результат, артефакты, незавершённое, причина остановки.
-  Не раскрывать секреты, raw TTD и скрытые рассуждения.
-- [ ] 8-часовой профиль автономной работы на disposable заданиях, с измерением
-  ресурсов/ошибок и отказами провайдера. Один пятицикловый startup smoke не подходит.
-
-## P1-B — память и окружающий контекст
-
-- [ ] Обычный профиль с включёнными микрофоном/системным звуком/экраном после
-  first-run выбора источников и OS/browser permissions. Persisted preferences,
-  visible capture/pause/revoke, missing device/model и отказ разрешения;
-  не включать отсутствующую VLM фиктивно. Проверить restart и приватный режим.
-- [ ] Автоматическая запись attributed observations по мере поступления;
-  отделить регистрацию эпизода от canonical fact и постоянного хранения raw.
-  Контекст возможностей/сбоев/фокуса общий для JAWL и UI; неизвестное не выдумывать.
-- [~] Ambient-сегментация ротирует ограниченные PCM-фрагменты по времени и
-  размеру, учитывает idle, backpressure и generation при Start/Stop. 33 ambient
-  теста и финальный full gate прошли; остаются физический loopback, длительный
-  soak, per-app attribution и live provider acceptance.
-
-- [~] JAWL structured memory/daily journal API описан и частично проверен.
-  Принять persona/facts/revise/forget/validity/recall после restart на выбранном
-  SQLite/vector/graph runtime; реальные capabilities, не import-only stub.
-- [ ] Различить forget/archive и физическое erasure; консистентно чистить recall/
-  embeddings/derived summaries по выбранной политике. Не заявлять удаление,
-  если осталось append-only содержимое.
-- [~] Self-TTS suppression и WASAPI synthetic slice есть; измерить эхо,
-  наложение двух источников и потери. Не приписывать mixed loopback активному
-  приложению; приватные источники требуют надёжного исключения или паузы.
-- [ ] T1 → T2 → JAWL: короткие наблюдения, сжатие, TTL, объединение дубликатов,
-  противоречия, рестарт. Полчаса/неделя — настраиваемые ориентиры.
-- [ ] В обычном настроенном профиле добавить автоматическую консолидацию JAWL,
-  ручной review оставить режимом. Ambient не порождает команды/факты о
-  владельце без источника, не меняет persona сам.
-- [~] AudioDescriptionService — только seam. Позже выбрать/проверить
-  sound/music captioner и affect/speaker capabilities; Qwen3-ASR не captioner.
-- [ ] Одновременные user turn/ambient/triage/игра: speech priority,
-  измеренные CPU/RAM/VRAM бюджеты и visible dropped/degraded metrics.
-
-## P1-C — 2D персонаж, окно и OBS
-
-- [x] Remote presentation origin now requires a separate read-only token for
-  LAN binds; the control-plane credential is never exposed to OBS. Loopback
-  presentation remains open for local OBS. Real OBS capture, DPI/multimonitor
-  and long-run presentation acceptance remain separate gates.
-
-- [ ] Stream-профиль: приватные чат/память/уведомления не попадают на presentation
-  страницу и в публичную речь; публичный/частный вывод различимы. Проверить
-  reconnect/ошибки/смену сцены и отсутствие control credentials в OBS.
-
-- [x] Separate presentation origin/URL/fallback и реальный Live2D model3
-  smoke работают; `mao_pro` прошёл проверку ссылок, runtime локальный.
-- [~] Внешний bundle выбран для текущего smoke с сохранённой лицензией;
-  коммерческая/стриминговая юридическая приёмка и собственный финальный
-  персонаж остаются отдельным решением. 3D не добавлять.
-- [~] Один renderer/state contract для панели, отдельного окна и OBS;
-  expression fallback, lip-sync от фактического playback, одна audio authority.
-- [ ] Проверить transparent OBS, drag/click-through/topmost, DPI/multimonitor,
-  reconnect, закрытие панелей, 8-часовое представление без утечек.
-  Указывать фактические возможности browser shell, не обещать native compositing.
-
-## P2 — Vision после решения владельца
-
-- [ ] До любого большого скачивания применять `docs/MULTIMODAL_MODEL_GATE.md`:
-  обязательны `RU_SCREEN_OCR`, `RU_NATURAL_SPEECH_ASR`,
-  `RU_AUDIO_VISION_BINDING` и `RU_REALTIME_LATENCY`.
-
-- [ ] Evaluate MiniCPM5-1B separately as an optional CPU/RAM text worker;
-  it is text-only and cannot replace Vision, ASR, TTS or JAWL.
-
-- [x] Download official MiniCPM-o 4.5 Q4_K_M and required sidecars into the
-  owned runtime model area; verify size, SHA-256 and license.
-- [~] Download only Q4_0 and Q5_K_M as comparison points if ever needed; not
-  fetched because the RU scenario is closed and the model is EN-only.
-- [x] Obtain a CUDA-capable llama.cpp-omni/PyTorch runtime and prove GPU1
-  isolation with `nvidia-smi`; the bundled llama.cpp binary is CPU-only.
-  Built with CUDA 13.3 backend; GPU1 isolation via `CUDA_VISIBLE_DEVICES=1`
-  verified (physical GPU1 peak 10995 MiB, GPU0 untouched). See
-  `docs/MINICPM_O45_BENCHMARK.md`.
-- [x] EN-screen/OCR and audio smoke: pass (OCR ~100-140 ms encode, reads UI
-  strings/status; audio TTS first response ~500 ms, repeatable).
-- [x] RU acceptance tests: FAIL both channels (Cyrillic screen text and
-  Russian speech are not recognized; model answers in Chinese). Protocol in
-  `docs/MINICPM_O45_BENCHMARK.md`; the model is kept only as an opt-in EN
-  sensory coprocessor on GPU1.
-- [ ] Evaluate IQ2/IQ1 conversion only from F16 with an imatrix and documented
-  calibration data; never accept it without beating the official baseline.
-- [!] Keep MiniCPM isolated as a sensory worker. It must not own JAWL
-  persona, memory, policy, heartbeat or native actions.
-
-- [!] Получить окончательный выбор VLM. Не скачивать/включать новую модель
-  вместо владельца; Qwen3-VL-2B остаётся сильным кандидатом.
-- [~] UIA/capture/plan seam есть. Проверить свежие observations после каждого
-  действия, калибровку/DPI, stale rejection и app-level postcondition.
-- [ ] Подключить отложенные visual episodes к той же памяти/Attention,
-  описания по запросу и rate-limited изменения экрана; privacy/data-class consent.
-- [ ] Принять VLM closed loop отдельно от CLI/UIA действий, не тормозить ими
-  полезную автономность без VLM.
-
-## P3 — приёмка заявленной версии и поставка
-
-- [ ] Закрыть все применимые строки [матрицы](docs/TECHNICAL_AUDIT.md#приёмочная-матрица).
-  Major runtime update: full regression + browser E2E + затронутые live profiles.
-- [x] Сохранён полный gate `20260905T101615Z`: exit 0, 299 non-E2E и 16 HTTP
-  E2E, compile/syntax, mic/Node/diff. Приёмка относится к этому срезу кода.
-- [ ] Расследовать единичный HTTP 503 в native-policy E2E (лог
-  `runtime/full-gate-20260905T101053Z.log`): причина не установлена.
-  Успешный повтор не доказывает устранение дефекта; не добавлять слепые retries
-  к управляющим операциям без проверки их последствий.
-- [ ] Clean install вне source cwd: весь выбранный профиль, workers/assets,
-  backup/schema migration/rollback, а не только import и CLI --help.
-- [ ] Манифест версий/хешей/лицензий и отсутствие секретов в логах/артефактах.
-- [!] Владелец отзывает опубликованные в чате ключи TokenRouter и OpenCode;
-  агент не печатает, не копирует и не отзывает их сам.
-- [ ] RC только после полного ежедневного сценария; production-ready только
-  после выбранной feature matrix, долгого профиля и пользовательской приёмки.
-
-Следующий implementation slice — **P0-A**, затем **P0-B + P0-C**.
-Не повторять сборку или один и тот же зелёный smoke без нового изменения/гипотезы.
-Если блокируется внешняя модель/ассет, делать доступные независимые задачи;
-не расширять полномочия ради «не останавливаться».
-
-## Latest runtime evidence — 2026-09-06
-
-- [x] Full regression re-run: `353 passed, 28 subtests passed` in 1:44.
-- [x] JAWL `8770` was confirmed closed; FoxMCP `8765` was not modified.
-- [!] Local Ollama OpenAI-compatible handshake succeeded, but the connected native user turn did not produce a correlated final event: the selected model repeated/invalidly invoked JAWL tools. The profile was stopped and this is not accepted as voice, memory, native-action, or production evidence.
-- [!] LM Studio/Ollama physical GPU1 isolation is not yet reproducible on this host; an exact temporary Ollama test loaded across/onto GPU0 and was stopped.
-- [!] Switching the owned profile from `auto` to canonical `json_envelope` is now applied and verified in JAWL startup logs, but the local coder model still concludes with empty actions without emitting a Companion final. Provider/model compatibility remains open.
-- [x] Owned JAWL delivery fix now terminates a correlated no-tool Companion completion with one final or explicit error; real browser stream reduced the former wait to ~13 s. This does not make an incompatible provider/model acceptable.
-- [!] TokenRouter model discovery succeeds, but both `z-ai/glm-5.3-free` (120 s) and `z-ai/glm-5.3-flash` (40 s) timed out before a completion. No provider key is stored; this route is not acceptance evidence.
-- [x] Internal-thought leakage from the no-tool fallback is now blocked by the owned terminal event bridge; unsafe completion becomes correlated `turn.error`.
-- [x] The earlier `jawl-gemma4-it` no-terminal probe was superseded: after the companion-delivery override, a connected text turn produced one terminal delivery and a native side-effect turn completed successfully.
-- [x] Live browser chat probe after the leakage fix returned `native_turn_failed` plus the Companion error envelope in ~15 s; no internal reasoning was exposed and no indefinite wait remained.
-- [x] Local Gemma connected text turn now succeeds after the companion-delivery
-  prompt override: JAWL sent one `HostTerminalMessages` action and Companion
-  returned `delta` + `final` with `speak=true` in ~12 s.
-- [x] Connected native side-effect E2E now passes after profile sandbox path fix:
-  JAWL created/read/verified `sandbox/native-proof.txt` (`NATIVE_OK`, SHA-256
-  `3ca5c1e51ffd4450d2df06df2cfa51436ab6233a88674c9df865cef291257254`) and
-  quarantined it on deletion at policy 0.
-- [x] Three semantic synthetic browser voice turns now pass the connected
-    capture→ASR→JAWL→TTS→avatar path. Memory revise/recall, interruption/restart,
-    and the final production gate remain open.
-
-### Diagnostic correction — synthetic Tera/Qwen voice slice
-
-- [x] Root cause of the earlier empty synthetic transcripts was Windows
-  PowerShell sending the JSON body with the wrong encoding; the request is now
-  sent as explicit UTF-8 bytes and the prior ASR/browser blocker is cleared.
-- [ ] Keep semantic transcript assertions and rerun the same browser E2E after
-  any TTS/ASR/provider change; do not accept only WAV peak/RMS.
-- [x] A bounded Tera seed scan (distilled and teacher) ruled out a simple fixed
-  seed issue: the tested long Russian utterances remained empty or unusable to
-  Qwen3-ASR. The wrapper now accepts a bounded request seed for diagnostics,
-  but production must still validate transcript content.
-- [x] Temporary diagnostic listeners `8985` and managed profile ports
-  (`8770`, `2367`, `8766`, `8984`, `9889`) are closed. FoxMCP `8765` and the
-  user's main Ollama `11434` remain untouched.
-- [x] Live memory `remember`→`revise` succeeded through `/api/jawl/memory`
-  (revision 2, supersedes revision 1).
-- [!] Semantic recall through the current local Gemma profile is not accepted:
-  a follow-up Russian chat was answered as if the input were corrupted, despite
-  the HTTP request being UTF-8. Investigate provider/JAWL context serialization
-  and repeat recall after restart before calling memory production-ready.
-
-### Live correction — 2026-09-06
-
-- [x] Pinned JAWL SQLite runtime now enables WAL and `busy_timeout=30000`; the
-  source manifest and snapshot verifier are green. This is a storage robustness
-  fix, not a second memory/database owner.
-- [x] Native gateway cancellation acceptance: the replacement turn cancelled
-  the active native turn and completed normally; no new SQLite lock appeared.
-  Evidence: `runtime/interrupt-acceptance-20260906.json`. This is not browser
-  audio barge-in acceptance.
-- [x] The previously observed provider outage was reproduced as a bounded
-  Ollama transport failure and then cleared by restoring the service; no blind
-  retry or duplicate side effect was introduced. The historical HTTP 503 in the
-  policy test is not reproduced: current `tests/test_e2e.py` passes 16/16, but
-  its original external cause remains unproven and stays a diagnostic risk.
-- [ ] Still required before RC: task checkpoint/recovery, provider-failure/
-  restart stale-speech acceptance, clean-profile semantic memory browser flow,
-  cold/warm timings and complete connected production gate.
-- [x] Hardened voice-to-native acceptance on a fresh managed profile: the
-  ASR-safe Russian command drove native write→read→additional disposable write,
-  the readback SHA-256/postcondition matched, the correlated native journal was
-  captured, and native recoverable cleanup removed both targets. Evidence:
-  `runtime/voice-native-correlation-acceptance-20260907.json`.
-- [x] Strict connected voice→native disposable probe now passes in an empty
-  profile: JAWL wrote/read exact `готово` at `sandbox/проверка`, then native
-  cleanup quarantined it. Evidence:
-  `runtime/voice-native-strict-acceptance-20260906.json`.
-- [ ] Keep the broader hardening item open for production: exact transcript
-  assertion, task checkpoint/recovery and restart/interruption side-effect
-  semantics still need a dedicated acceptance run.
-- [x] Synthetic browser audio barge-in now passes on a fresh integrated
-  profile: two Russian voice turns, two TTS streams, two started WebAudio
-  buffers, cancellation after playback began and before the second voice turn
-  completed, plus both transcript markers. Evidence:
-  `runtime/browser-barge-in-20260907-strict-retry3-gap9.json`. This accepts
-  browser playback interruption only; token-level LLM streaming and
-  restart/stale-task recovery remain separate production gates.
-- [x] Companion-only restart soak passes 3/3 graceful cycles with no port
-  leaks. Evidence: `runtime/restart-soak-20260907.json`.
-- [ ] Extend restart acceptance to the managed JAWL + ASR + TTS profile: cancel
-  stale speech, preserve/cancel the right task checkpoint, and prove no
-  duplicate native side effect after provider failure.
-- [x] One shared correlation envelope now reaches the native action journal:
-  browser voice session → Companion `correlation_id`/native turn ID → JAWL
-  `companion_turn_id` on plan/action events. Evidence:
-  `runtime/voice-native-correlation-acceptance-20260907.json`.
-- [x] Resource-key implementation now resolves logical `sandbox/...` against
-  the injected profile sandbox; pinned snapshot manifest/verifier are green.
-- [x] Repeat a fresh native action and inspect its journal after the resource
-  projection fix. The journal now points to the isolated profile sandbox and
-  cleanup leaves no target. Evidence:
-  `runtime/resource-key-acceptance-20260906.json`.
-- [x] Regression gate redirects JAWL fallback logs into its isolated profile;
-  a fresh full run leaves the pinned snapshot immutable and verifier-green.
-- [~] Bounded `correlation_id` now flows through chat/voice transport, gateway
-  state, and native submission (same value as native JAWL `turn_id`); gateway
-  regression and full gate pass. Live browser→native journal proof remains.
-- [!] Live correlation acceptance is blocked by the currently selected local
-  `jawl-gemma4-it`: invalid-response retry/no terminal browser voice turn.
-  Select or configure a provider/model that completes the existing JAWL JSON
-  envelope contract, then rerun the unchanged acceptance.
-- [!] `gemma-4-12b-obliterated:latest` passes an isolated JSON probe but stalls
-  JAWL startup at ~8.3k context before readiness. Profile startup must gain a
-  bounded readiness/heartbeat strategy or use a model that completes this
-  context within the allowed deadline; do not claim voice acceptance.
-- [x] Integrated launcher now prevents duplicate managed-profile process trees
-  with an OS-held exclusive `runtime/instances/<profile>/run.lock`; recovery
-  after an interrupted Codex run was verified. A stronger post-heartbeat JAWL
-  readiness signal is now enforced by a bounded wait for the current startup
-  ReAct cycle to conclude; a live acceptance run is still required.
-- [x] Local Ollama empty-content failure was traced to provider-side thinking
-  consuming the bounded completion. Loopback profiles now send
-  `LLM_REASONING_EFFORT=none`; the same coder model returned a real Russian
-  Companion response through JAWL after the fix. Evidence:
-  `runtime/reasoning-effort-acceptance-20260907.json`. This does not yet accept
-  the full voice/native gate.
-- [x] Added simulated response streaming for the JSON-envelope path: bounded
-  phrase chunks feed one cancellable TTS queue, and voice audio chunks no
-  longer restart speech independently. This improves first-audio and
-  barge-in behavior, but is explicitly not token-level LLM streaming.
-- [x] Added a bounded WebAudio jitter-buffer for simulated speech: playback
-  starts with a small lead and never schedules more than ~850 ms ahead. The
-  active speech session owns every source, so barge-in can discard the
-  unsaid tail immediately; real first-audio/barge-in timing still requires a
-  clean live acceptance run.
-- [ ] Implement explicit fast-chat vs `goal_execution` reasoning policy:
-  detect a confirmed goal/task intent, request elevated reasoning only for
-  planning/tool steps, and expose only compact checkpoints to TTS. Keep
-  reasoning/tool traces in chat and JAWL journal; accept forced-thinking
-  providers without pretending `none` is available. Add restart, duplicate
-  side-effect and barge-in acceptance for this mode split. See
-  `docs/REASONING_POLICY.md`.
-- [x] Audited the full canonical JAWL-Coding arsenal: GoalManager/task ledger,
-  thinking policy, Swarm, ToT, subconscious, SkillCatalog, HostOS/native
-  discovery, Heartbeat and built-in voice plugins remain upstream-owned. The
-  managed baseline now fixes `thinking_policy: first_step` and a real
-  temporary Swarm model instead of `unknown`; do not replace this with a
-  parallel Companion cognition layer. See
-  `docs/JAWL_CANONICAL_CAPABILITIES.md`.
-- [x] Revalidated the canonical audit changes: pinned JAWL verifier is green
-  (`570acb8a...`, 348 files), daily profile migration reports no conflict, and
-  the full local gate exits 0. Evidence:
-  `runtime/verify-after-canonical-audit.log`,
-  `runtime/full-gate-after-canonical-audit.log`.
-- [x] Fresh `canonical-check-3` profile now provisions its own embedding file,
-  passes preflight, starts JAWL + Companion + Qwen ASR + TeraTTS + VoiceMem,
-  reaches readiness and shuts down cleanly (`PROFILE_EXIT=0`). Evidence:
-  `runtime/canonical-profile-check-20260907.log`.
-- [x] Corrected the owned JAWL delivery prompt with the actual structured
-  memory skill names (`SQLStructuredMemory.*`) after live logs showed the
-  model inventing `SVM_Preference`; daily profile is synchronized and native
-  adapter tests pass. This is prompt hardening, not semantic-memory proof.
-- [x] Corrected the memory UI layer selector to match canonical JAWL
-  `SQLStructuredMemory` kinds (`fact`, `trait`, `preference`, `summary`).
-  Ambient episodes remain a separate VoiceMem buffer and use explicit promote
-  into JAWL; they are not falsely presented as editable structured rows.
-- [ ] Run a fresh live three-turn voice acceptance after the simulated-stream
-  and action-alias fixes; assert first-audio timing, one playback owner,
-  barge-in cancellation, native postcondition and correlated evidence.
-- [~] Live three-turn browser voice path now passes capture/gate → Qwen ASR →
-  JAWL → TeraTTS with correlation IDs and screenshots; report:
-  `runtime/browser-voice-e2e.json`. The run exposed an unrelated autonomous
-  `HOST_TERMINAL_MESSAGE`/memory cycle after the turns and was stopped manually;
-  first-audio timing, true barge-in and native side-effect assertions remain.
-
-## Verified slice — 2026-09-07
-
-- [x] Real browser memory acceptance: create/revise a Russian preference,
-  stop/start the complete isolated managed profile, recall the revised value,
-  and clean up through the canonical native JAWL memory API. Reports:
-  `runtime/memory-ui-write-20260907.json` and
-  `runtime/memory-ui-verify-20260907.json`.
-- [x] Native-agent restart memory lifecycle is accepted separately from the
-  full-process persistence check; stale-speech/task-recovery restart behavior
-  remains a separate P0 investigation.
-- [x] Native-agent restart memory acceptance subsequently passed after awaiting
-  the dashboard refresh Promise: `runtime/memory-ui-all-20260907.json`. Keep
-  stale-speech/task-recovery restart tests separate.
-- [x] Fresh connected 3-turn browser voice acceptance passed through capture,
-  gate, Qwen3-ASR, the same JAWL/local LLM, TeraTTS stream, playback and avatar
-  state: `runtime/voice-connected-e2e-20260907.json`.
-- [x] Voice E2E now records per-turn cold/warm timing, first TTS and first audio
-  buffer: `runtime/voice-timing-e2e-20260907.json`.
-- [ ] Reduce cold first-audio latency (~124 s) and warm latency (~12 s), then
-  rerun the same connected gate; green transport alone is not realtime quality.
-- [x] Full local regression gate rerun after memory/timing changes: 336 tests,
-  16 HTTP E2E, browser responsive, mic-gate and snapshot checks passed.
-
-## Restart-safe speech guard — 2026-09-07
-
-- [x] Added a process-scoped, non-persistent `runtime_instance_id` to
-  `/api/health`; the dashboard probes it and stops local WebAudio/TTS when the
-  Companion process changes. This protects against stale buffered speech even
-  when the old backend is already unavailable. `tests/test_web.py`: 36 passed.
-- [x] Integrated restart-during-inference acceptance now passes: recover the JAWL task
-  checkpoint and prove no duplicate native side effect. The harness now also
-  requires exactly one successful marker write in the durable action journal.
-  Evidence: `runtime/restart-inference-acceptance-2026160037Z.json`.
-- [!] 2026-09-08 live retry blocked before turn A: local `11434` serves
-  `/api/tags`, but `/api/chat`, `/api/generate` and `/v1/chat/completions`
-  return 404. Resolve the provider endpoint/model contract, then rerun the
-  strict acceptance; do not weaken the gate or count old evidence.
-- [x] 2026-09-08 CPU Gemma E2B run reached the real restart scenario and proved
-  durable file recovery plus an idempotent replay, but the old 120 s chat
-  timeout prevented the final SHA assertion. The bounded per-profile timeout,
-  exact journal counter, and delivery rule were corrected; the final live run
-  returned the disk SHA and passed the exactly-once gate.
-
-## Current status override — 2026-09-08
-
-The older dated entries above are historical observations and may describe
-blockers that were later superseded. Current accepted evidence is authoritative:
-
-- Connected three-turn voice path, memory revise/recall after restart,
-  voice-to-native postcondition, strict browser barge-in, Companion restart
-  soak, active-inference recovery, and provider failure after a durable native
-  effect are accepted in the reports referenced below.
-- Current remaining blockers are: cold/warm latency; clean-install/manifest
-  acceptance; the unresolved historical 503 cause; and broader crash-during-
-  syscall, long unattended, and full production UX acceptance.
-- [x] The managed restart-during-inference gate and provider-failure-after-
-  durable-effect gate now pass on the local Gemma baseline. The strict
-  provider-failure evidence is `runtime/provider-failure-native-recovery-
-  current-v11.json`; earlier timeout/fabrication diagnostics remain historical.
-- Do not use the old `live correlation blocked` or `single connected turn`
-  entries as the current state; they remain for provenance only.
-- [x] Native identical-write guard added after a real profile exposed repeated
-  `HostOSWriter.write_file` calls. Exact content now returns an explicit
-  idempotent no-op; this is narrower than a blanket exactly-once guarantee.
-- [x] Native `GoalManager` checkpoint survives a provider-failure cycle and
-  fresh-instance restart with pending work and a new lane epoch. Evidence:
-  `runtime/native-goal-provider-failure-recovery-20260907.json`.
-- [x] Managed `/api/jawl/restart` was exercised against a live profile and
-  returned only after a fresh native JAWL instance became ready; a subsequent
-  native write/read postcondition passed. This does not close the separate
-  crash-during-side-effect gate.
-- [!] Live provider compatibility finding: the selected local Gemma profile
-  acknowledged an explicit Russian durable-goal request but emitted no
-  canonical `GoalSkills.create_goal` action and persisted no active goal.
-  Do not count that response as goal creation or add a Companion-side owner;
-  rerun the recovery gate with a provider/model that honors JAWL tool calls.
-- [x] After restoring the canonical adaptive context namespaces, live JAWL
-  created a Goal through `GoalSkills.create_goal`, survived owned restart with
-  `lane_epoch=2`, read the native artifact post-restart, and completed via
-  `GoalSkills.update_goal`. Evidence:
-  `runtime/goal-restart-live-acceptance-20260907.json`. The prior finding is
-  superseded by this corrected-context run; arbitrary uncertain side-effect
-  crash recovery remains a separate gate.
-- [x] Reran the three-turn browser voice gate after the context correction:
-  3/3 Russian transcripts, Qwen ASR, same JAWL/local LLM, TeraTTS, shared
-  playback/avatar and correlation IDs passed. Evidence:
-  `runtime/browser-voice-e2e.json` (profile URL `2396`).
-- [ ] Reduce the measured first-audio timings of 13.9 s / 22.5 s / 49.4 s;
-  the transport gate is green but this is not yet realtime-quality latency.
-- [x] Tested a tighter JAWL context budget for latency; correctness remained
-  green but latency and tool-name reliability did not improve, so the change
-  was reverted. Evidence and rationale: `docs/STATE.md` context-budget
-  experiment section.
-- [x] Added one bounded compatibility alias for the observed stale terminal
-  namespace `HostOSJournalMessages.send_message_to_terminal`; it resolves to
-  the existing canonical terminal skill and does not add a new execution path.
-  Unknown/ambiguous names remain rejected.
-- [!] Fresh managed startup with local Gemma failed readiness because the
-  `SYSTEM_CORE_START` cycle repeated terminal actions through all 15 ReAct
-  steps. Launcher correctly failed closed; validate a provider/model with
-  canonical startup termination before production release.
-## P0 gate update — 2026-09-08
-
-- [x] Clean managed profile acceptance passed. A new profile was prepared
-  outside the daily profile, its 348-file pinned JAWL snapshot and manifest
-  matched, the embedding cache was provisioned, and preflight returned
-  `ok=true`. Evidence: `runtime/instances/clean-manifest-20260908` and the
-  snapshot digest `8f6dfc5f31ad31ee98b11ec6d1a800ff95f52528f58ab3de50efb59955b1a8c8`.
-- [x] Installed-wheel smoke passed from a clean working directory: CLI help,
-  profile import/validation, control health, control frontend and avatar/OBS
-  frontend. Evidence: `runtime/clean-install-acceptance-20260908.json`.
-- [x] Connected cold/warm route slice passed through the real Companion →
-  pinned JAWL → local Ollama path. The first route turn after profile
-  readiness was `5.085 s`; the second consecutive turn was `5.944 s`. Both
-  performed native disposable write/read/cleanup with correlated final
-  envelopes. Evidence: `runtime/latency-gate-20260908.json`.
-- [!] These timings are not provider cold-load, first-audio, microphone,
-  streaming-TTS, barge-in, or production realtime guarantees: JAWL's startup
-  heartbeat had already warmed the provider/model. Those voice gates remain
-  separate acceptance work.
-### Current verified slice — 2026-09-09
-
-Short unattended functional acceptance now passes on the current pinned JAWL
-snapshot: native ROOT lease issue/revoke, write/read, canonical Goal complete,
-independent marker/SHA verification, and native cleanup. Evidence:
-`runtime/unattended-goal-soak-live4-20260909.json`.
-
-Still open: 8-hour soak, provider outage/crash reconciliation, physical audio,
-memory consolidation/erasure, Live2D/OBS hardening, and clean release gate.
-
-### Current verification correction — 2026-09-09
-
-- [x] Full gate rerun passed with exit code 0: 366 non-E2E tests, 16 HTTP
-  E2E tests, six-viewport browser interaction, synthetic microphone gate, Node
-  check and `git diff --check`.
-- [x] Snapshot verifier passes with 348 manifest files and digest
-  `89b73e12f824e843436234b59939996eccdb76b6f9ce0b8693f8006d88c7ed2d`.
-- [x] Real staged Mao Pro presentation smoke passed: visible Live2D canvas,
-  expression, motion and lip-sync capabilities; evidence is
-  `runtime/live2d-smoke-production-slice.png`.
-- [ ] Real transparent desktop window, OBS capture, DPI/multi-monitor,
-  reconnect and extended presentation soak remain release work.
-
-### Current unattended correction — 2026-09-09
-
-- [!] Two-cycle live unattended run is negative evidence:
-  `runtime/unattended-goal-soak-live6-20260909.json`. Cycle 1 passed; cycle 2
-  was rejected by native JAWL because the local provider attempted
-  `GoalSkills.update_goal` while an action remained unresolved.
-- [x] The harness now treats `failed` as a terminal observation instead of
-  waiting through the full timeout and explicitly instructs this disposable
-  task to finish with Goal Protocol v2 `state=done`.
-- [x] Repeated two cycles with the corrected objective in live22 and proved
-  independent postconditions, exactly-once target writes, native cleanup and
-  an empty unresolved-action set. The negative live6 report remains historical
-  evidence, not a pass.
-- [!] A follow-up `live8` profile did not pass strict JAWL startup readiness:
-  the local Gemma repeated greeting actions until the startup heartbeat stayed
-  busy. Companion was not exposed as ready; validate a provider with stable
-  startup termination before release.
-
-## 2026-09-14 follow-ups
-
-- [ ] Start `scripts\run_coding_server.ps1` (8986 Bonsai) before the profile;
-  with 8986 down the vision/screen-watch lane slows companion startup.
-- [ ] Optional: restore the prosody planner (8987, gemma-3-1b-it) or keep it
-  offline for a faster TTS path (A/B the voice-turn latency).
-- [ ] Remove diagnostics once stable if desired: `-u` flag, `companion-debug.txt`
-  dump, and `%TEMP%\companion-boot.log` boot markers.
-- [ ] Speed lane next: re-measure live voice turns after the context trim
-  (baseline best 5.17s; first post-trim text turn 9.06s incl. cold state).
-- [ ] Voice preface (2026-09-14): verify live — ASR final → immediate
-  "Смотрю: ..." speech, then the full answer; check self-hearing under
-  hands-free and confirm barge-in drops the preface. Live check needs the
-  full profile running (Bonsai first).
-- [x] WS protocol tests (frame types: ping/pong/close/fragmentation/masking/
-  oversized): covered 2026-09-14 (13 tests); the lane stays opt-in until a
-  live session runs over WS end to end.
-- [ ] Sensory/memory (2026-09-14): vision back-off, VoiceMem memory_context
-  passthrough and ASR model prefetch are in. Live-verify: voice turn with
-  prefetch (expect the batch final in ~1s after speech ends), then decide
-  whether the canonical lane should query VoiceMem context synchronously
-  (sync feed_partial) or the sidecar stays a write-only enrichment sink.
-- [x] Voice preface retest (2026-09-14 evening): explicit screen questions
-  only, half-volume background playback, `voice_preface` entries in
-  voice-events.ndjson for every spoken preface. Confirmed: one preface per
-  screen question, silence on ordinary turns, no self-hearing.
-- [x] End-to-end acceptance (2026-09-14): conversation and barge-in verified
-  live; memory write fixed via ZZ_MEMORY_WRITES (guard no longer tripped);
-  recall before restart 4.9s, after a full stack restart 8.3s — canonical
-  JAWL memory survives restarts.
-- [x] Turn-taking retest (2026-09-14, user-confirmed): with the backchannel
-  off the voice flow is clean. Companion-side hardening that landed with
-  this round (barge-in keeps the phrase start, uploads resume right after
-  the duck, gate holds ~350ms dips, backchannel off by default and muted
-  during playback/preparation) applies from the next page reload.
-- [ ] Long-monologue retest (2026-09-14): speak continuously for ~30s with
-  breaths; the sent transcript must cover the whole utterance (session
-  rotation at finalize + continuous upload). The HUD partial may still show
-  a shorter rolling window - judge the chat message, not the HUD.
-- [ ] Sensory journal growth (~12 MB/day, no rotation): offset persistence
-  landed 2026-09-14; consider journal rotation/compaction after a live day.
-- [ ] Nightly unattended soak (step 5 of the review), prepared 2026-09-14:
-  `powershell -File scripts\run_long_unattended_acceptance.ps1 -DurationSeconds 28800 -JawlConsolePort 8772 -ControlPort 2368 -PresentationPort 8767`
-  (ports moved off the daily stack; model default `qwen3.8-27b-abliterated:latest`
-  via local Ollama; no voice/vision workers). The runner now injects
-  `ZZ_SOAK_GOALS` into the disposable profile only — the previous 8h-v4 attempt
-  failed cycle 13 by calling the forbidden `GoalSkills.update_goal`. Launch
-  overnight; the report lands in `runtime\qwen-ollama-unattended-<ts>.json`.
-- [ ] VoiceMem weight: with context passthrough only on its own lane, review
-  after the live run whether the sidecar's embedding/graph machinery earns
-  its RAM next to JAWL memory (keep JAWL canonical either way).
+# Единственная очередь — ежедневный компаньон
+
+21 октября 2026. Статусы: [ ] не принято, [~] частично, [x] подтверждено.
+[План](docs/DAILY_PLAN.md) · [приёмка](docs/DAILY_ACCEPTANCE.md) · [факты](docs/STATE.md).
+Старый полный TODO сохранён в архиве; отложенные требования — [BACKLOG](docs/BACKLOG.md).
+
+LFM3-Audio-2B is an audio-only candidate, not approved for daily use. Upstream
+llama.cpp support merged 2026-10-27; the isolated CPU-only build exists, but
+the GGUF probe is still pending download/inference and Russian support is
+unverified. Next gate: isolated Q4 comparison on labeled clips with latency,
+RSS and grounding scores: [research](docs/research/lfm3-audio-cpu-candidate-20261029.md).
+
+## D0 — подготовка новой ветки
+
+29Oct production audio bridge replay: a paced 10.01s local song completed through
+GigaAM + EG2 + YAMNet + in-memory ambient memory + PerceptionFusion. A follow-up
+trailer + song replay round-tripped actual `speech`, `music`, and `audio_candidates`
+through the VA packet; all were fresh. EG2 abstained, transcript accuracy was not
+scored, and no raw audio was persisted. Live loopback, shared-load freshness and
+brain-turn uptake remain OPEN: [report](docs/research/ambient-audio-bridge-paced-replay-20261029.md).
+
+Текущая проверка 29Oct: [ReAct/VA](docs/research/react-perception-audit-20261029.md).
+Native canary подтверждает Goal → heartbeat → проверенный результат. Остаются
+живое выполнение большого поручения, caching relay и отдельная проверка аудио
+при наличии samples; устранение 18K-обрезки само по себе их не закрывает.
+
+- [ ] ADR-048 deployment parity: новый чистый daily launch всё ещё читает
+  `local-hikari` / `local-bonsai2` и visual EG2 из legacy manifest/wrapper.
+  Поднять/проверить профиль Gemini 3.8 Flash relay + Qwen3.5-0.8B CPU,
+  сохранив GigaAM, EG2, YAMNet, MiniLM и OmniVoice; отдельно пройти live
+  audio/video acceptance прежде чем считать model lanes принятыми.
+
+29Oct mic backpressure: исправлено выключение capture при заполнении шести
+audio-запросов; PCM буферизуется и дренируется под прежним turn id. 125/125
+затронутых Node tests PASS. Физический/live-ASR прогон после исправления открыт:
+[отчёт](docs/research/mic-backpressure-audit-20261029.md).
+
+29Oct ambient freshness: loopback capture timestamps now travel through ASR and
+soundscape segment queues; worker wait no longer makes old audio look fresh.
+Segmenter 6/6 + ambient audio 31/31 PASS. Live CPU-load freshness still open:
+[report](docs/research/audio-capture-time-provenance-20261029.md).
+
+29Oct audio-channel isolation: YAMNet presence and caption-model descriptions no
+longer overwrite the same `music` key. Independent `audio_description` and ASR
+channels keep provenance; newer non-music segments invalidate stale captions,
+while out-of-order invalidation cannot stale newer evidence. Focused gate 54/54;
+real loopback quality/load acceptance remains open:
+[report](docs/research/audio-description-channel-20261029.md).
+
+29Oct self-TTS loopback: while the playback marker is active, ambient capture now
+routes only to the independent YAMNet lane; GigaAM/VoiceMem ASR and EG2 caption
+are suppressed, so the companion does not transcribe its own voice and external
+music can still be detected. Focused unit regression passes. A 4s in-memory
+Tera-over-Aqua mix, paced in eight real-time chunks through the production bridge,
+was detected as music on 2/3 YAMNet CPU windows; ASR was called 0 times, with no
+drops/errors/stale results. This directly exercised the marker and model path,
+but not live TTS playback/WASAPI. Live mixed audio during TTS and sound-event false
+positives remain open:
+[session audit](docs/research/live-session-audit-20261029.md).
+
+29Oct audio live cost: active EG2 had no usable grounded music text; fast-path
+genre top-3 matched the FMA catalog proxy in 11/18 clips only. Candidate rankings
+now reach VA only with overlapping positive YAMNet evidence and remain unverified.
+The live PCM path uses one shared full-clip embedding; full temporal windows
+remain available offline. YAMNet cutoff 0.35 preserved 18/18 FMA positives and
+rejected the two-tone false music/tag control; three other synthetic controls
+abstained. Saved 5.99s WAV five-replay latency p50 was 304ms, max 424ms (4
+intra-op threads; 969ms process CPU p50). Five related audio suites: 86 passed,
+1 skipped. Real speech/noise controls, loopback and shared-load acceptance remain
+open: [report](docs/research/audio-description-channel-20261029.md).
+
+29Oct brain handoff audit found `audio_description` and `audio_candidates` were
+missing from the VA packet allowlist. Added both and covered the combined
+screen/OCR/ASR/audio/music/YAMNet payload through actual web turn enrichment:
+packet 9/9, web 85/85, native 17/17, fusion 23/23, ambient audio 32/32,
+YAMNet 10/10. Live audio delivery and real-model uptake remain open:
+[handoff report](docs/research/va-audio-channel-handoff-20261029.md).
+
+29Oct real-content follow-up: CPU replay on five 10s trailer/anime/game/coding/song
+clips showed YAMNet music presence in 4/10, 1/10, 10/10, 10/10, 10/10 windows;
+EG2 marked speech and music likely together on every clip and returned competing,
+unverified genre/mood candidates (about 1.14s wall per 10s clip at one thread).
+GigaAM was nonempty on two clips, but transcript correctness was not scored.
+The active audio path can keep ASR and music presence separate; it still lacks a
+grounded SFX/style description, especially for action-heavy anime. Keep this open;
+research a separate YAMNet sound-event candidate lane against source-disjoint
+speech/noise/music/SFX before exposing tags as facts:
+[real-content replay](docs/research/realclip-audio-describer-20261029.md).
+
+29Oct ASR fixture gate: the live synthetic harness now scores known speech against
+the source transcript (WER ≤0.20) and requires abstention on pure-noise input.
+Current GigaAM CPU replay passed all 9 speech variants, correctly retained both
+consecutive phrases, and abstained on noise-only. A separate Russian SAPI prompt
+with its recorded reference also scored WER 0.000; YAMNet stayed unknown with a
+maximum Music score of 0.0002 on its six windows. Faint/SNR0 cases remain tolerated
+controls rather than accuracy claims. This improves fixture acceptance only;
+independently recorded Russian speech, mixed external media, and live brain uptake
+remain open. A known local Tera TTS WAV (2.76 s) also passed the YAMNet negative
+control (`unknown`, 0/2 music windows, max Music score 0.0001, no event candidates);
+real mixed loopback during JAWL speech remains open.
+
+29Oct follow-up: a narrow YAMNet `audio_event_candidates` lane now reaches the
+brain packet separately from music and ASR. On 181 source-deduplicated clips
+from three ESC-10 folds, the tuned specific-label lane had 171/189 emitted tags
+match the clip class (90.5%); 121/181 clips got an exact category candidate.
+An untouched fold-3 validation gave 58/64 exact labels and 40/65 covered clips.
+The music gate fired on 0/181 non-music clips. Tags remain unverified; the
+corpus does not establish performance on mixed game/music/speech audio. Silence/
+noise controls and live brain uptake remain open:
+[YAMNet SFX lane](docs/research/yamnet-sound-event-candidates-20261029.md).
+
+29Oct scalar WASAPI route check: default output resolved to NVIDIA DigitalOutput
+and opened at 48kHz stereo; the idle 10s sample had zero chunks/callbacks and no
+errors, with PCM discarded. This confirms device selection/open/close, not live
+signal. JAWL/Companion endpoints were down during this check; live sensor and
+brain-uptake acceptance remain open.
+
+29Oct visual freshness: scene-invalidated captions leave current-screen and stay
+only in the short event history; delayed Qwen captions enter history only inside
+its TTL. Qwen sensor 18/18 + fusion 16/16 + now-TTL 2/2 PASS. Live scene-change
+load acceptance remains open: [report](docs/research/visual-stale-context-20261029.md).
+
+29Oct visual archive: late/scene-mismatched captions now persist in the one-hour
+and weekly text-only history without duplicating fresh caption records. Combined
+fusion/Qwen/history/TTL gate: 41 passed. Follow-up compaction now preserves first,
+last and temporally spread salient moments; the rolling-hour prompt budget samples
+middle events and orders late results by capture time. Seven history tests pass,
+including 20-scene flush/reopen and dense 60-event context. Integrated profile
+restart and live recall remain open:
+[report](docs/research/visual-history-archive-20261029.md).
+
+29Oct OCR handoff: Qwen visual capture now requests Windows OCR at startup, after
+visual dirtiness, and on the static interval (not on every 200ms image poll).
+OCR text is a separate redaction-filtered, 5s-current channel in the VA packet;
+screen changes invalidate the prior OCR just like the prior caption. Adapter,
+sensor, fusion, packet, native-context and web gate: 163 passed + 33 subtests.
+The live profile must use `--screen-ocr`; adapter-to-brain handoff passed once
+on display 0 with the real Windows OCR provider and a stub Qwen client. Full
+live CPU Qwen+OCR→VA-packet smoke also passed once on display 0, with 11
+captures, one delivery, and zero capture errors. Caption age was 6.25s and small
+text remained unreliable; this does not accept scene accuracy or full-profile
+uptake. Sustained live-profile acceptance remains open:
+[OCR integration](docs/research/qwen-ocr-channel-20261029.md) ·
+[CPU smoke](docs/research/qwen-screen-ocr-cpu-smoke-20261029.md).
+Selecting `-VisualDescriber qwen` now enables its capture source without also
+starting the legacy ScreenWatch worker; `-EnableScreenOcr` adds OCR. Invalid
+OCR-only launch configuration is rejected instead of silently omitting it.
+
+- [x] Согласовать два Python launcher gate расхождения: llama.cpp test fixture
+  теперь задаёт пустые Transformers-поля, профильный тест проверяет текущий
+  `$nativeProfileArgs` + splatting. Оба точечных теста PASS; полную Python gate
+  после правок не перезапускали, исходная 29Oct gate остаётся не PASS. Шесть
+  Node voice-lifecycle отказов закрыты отдельно: 125/125.
+- [ ] Физическое audio loopback после восстановления профиля и full integrated
+  sensory acceptance остаются открытыми; подробности в отчёте ReAct/VA.
+- [ ] При следующем штатном рестарте Companion применить уточнённый статус
+  invalidated/fresh; наблюдение сохраняется с возрастом. Мозг с capacity fix уже
+  перезапущен отдельно, активная пользовательская Goal сохранена.
+
+- [x] D0-01: создать dev/daily-companion-20261014 без reset/массового commit.
+- [x] D0-02: архивировать старые планы/историю, проверить сохранность и ссылки;
+  старые скрипты переносить только после проверки зависимостей.
+- [x] D0-03: одна короткая очередь, текущий статус и сценарий ежедневной приёмки.
+- [x] D0-04: зарегистрировать новый tool goal после подготовки; если старый
+  незавершённый goal мешает, явно сообщить ограничение, не подделывать completion.
+  14Oct: создание было отклонено старым paused goal. 15Oct: при переносе
+  сессии в Codex tool goal зарегистрирован, status=active; прежняя история сохранена.
+
+## D1 — один надёжный ответ (первый runtime-срез)
+
+- [x] D1-01: ordinary и supervised запускают owned brain entrypoint.
+  15Oct: actual brain PID/create_time/core hooks/source SHA проверены в exact
+  launcher Job с Hikari; оба режима завершили native text20/20. Atomic receipt
+  без secrets/thoughts; порты/markers очищены, supervised desired_state=stopped.
+  Pinned snapshot неизменен. Receipts r5/r6 и checkpoint — в STATE.
+- [~] D1-02: terminal final/error и no-thought-speech guards проверены
+  focused tests и native text серией. Historical connected synthetic-WAV20/20
+  acceptance passed; current-profile provider-fault/recovery and fresh 20-turn
+  connected-voice acceptance remain open.
+  не озвучивать thoughts; harness прекращает ожидание TTS при terminal error.
+  15Oct: native text final/error подтверждены; повтор terminal action внутри
+  batch подавляется до history/SSE. Native provider loss даёт один turn.error,
+  восстановление — один ответ; это не заменяет current-profile connected-voice
+  provider-fault/recovery и свежую 20-turn серию (оба остаются OPEN).
+  18Oct: причина live Empty actions закрыта: enable_thinking=false +
+  actions.minItems grammar + action_repair хук. Два живых хода OK
+  (11.0с/6.6с, terminal Success, thoughts не озвучены). Серия/ошибки OPEN.
+- [~] D1-03: серия text/voice с текущими моделями без исчезновения ответа,
+  reconnect/error/retry без двойной доставки и слепого повтора действий.
+  15Oct:3/3 real-model WAV→/app→JAWL→OmniVoice хода завершены полностью;
+  streaming draft3/3, каждый response body EOF, non-silent playback до конца.
+  Native HTTP/SSE20/20 отдельно PASS в ordinary и supervised: exact turn_id,
+  cancel/reconnect, нет двух terminal events одного хода. Ordinary provider
+  loss/recovery PASS.16Oct ordinary connected WAV voice20/20 PASS: real ASR/
+  brain/TTS и /app, drafts20/20, body EOF/full playback, exact Job/ports cleanup.
+  Три фразы по кругу; владелец сообщил, что ранее проверил Fifine и доволен
+  результатом — повторная физическая проверка не нужна. Историческая synthetic
+  WAV20/20 приёмка остаётся PASS; current-profile voice provider error/recovery
+  и свежая 20-turn серия остаются OPEN.
+  18Oct: живые text-ходы восстановлены после фиксов; серия20 text 20/20 OK
+  (p50=5.33с/p95=12.1с) и WAV-voice серия 5/5 OK (GigaAM точен, end→reply
+  p50=5.16с, runtime/live-*series*.json). Владелец ранее подтвердил Fifine как
+  удовлетворительный; повтор не нужен. Историческая synthetic WAV20/20 остаётся
+  PASS; current-profile серия20 voice и provider error/recovery остаются OPEN.
+
+## D2 — быстрый русский разговор
+
+- [~] D2-01: capture/gate/partials → JAWL → progressive TTS уже реализованы;
+  измерить конец речи→первый звук по стадиям, устранить конкретные задержки
+  (включая `Stream-Before-Close` выдергивание речи из JSON до закрытия `}` и
+  `Speech-First` порядок полей без ожидания длинных `thoughts`).
+  Цель обычных тёплых реплик1–3с; публикация p50/p95 и ошибок, не обещание.
+  15Oct новый voice прогон: dispatch→WebAudio first start≈10.272/9.466/11.373с,
+  sample3; это не измерение физического конца речи. Native LLM2.8–4.8с/step,
+  после voice/end response ещё1.25–2.54с до звука. До цели1–3с далеко.
+  16Oct voice series20: dispatch→first WebAudio p50/p95=8.338/11.964с,
+  min/max6.377/13.286с. Это endpoint proxy, не physical speech-end;
+  first turn отдельно, остальные19 не20 warm sample. Цель1–3с не достигнута.
+  16Oct stage audit:22 LLM calls на20 ходов; LLM total p50=6.226с,
+  ASR/reset/admission HTTP residual0.384с. Cached tokens8017 на всех22 calls;
+  checkpoint spacing1024 вместо8192 — pending benchmark, без runtime change.
+  Opt-in CLI candidate подготовлен в отдельном worktree:13 focused/4 subtests
+  и CodeSee validator PASS, model/GPU/window прежние; real benchmark OPEN.
+  A/B/B/A runner с numeric timings и exact Job RSS подготовлен:30 focused/
+  54 subtests +actual native bootstrap PASS без модели, не runtime promotion.
+  Новый native text20 на режим: ordinary p50/p95=3.596/4.608с,
+  supervised=3.584/6.939с; max7.459с. Это dispatch→terminal без ASR/TTS.
+  18Oct после thinking-off/minItems фиксов: text серия20 20/20, p50=5.33с
+  (тёплые ~5с — включает полный native JSON-конверт с delivery, тяжелее
+  старого native text20); voice end→reply p50=5.16с; TTS first-chunk 1.19с.
+  Диспетч→текст теперь стабилен; полный voice-end→first-audio ≈5.2+1.2с —
+  до цели1–3с нужен Stream-Before-Close/Speech-First (следующий срез).
+  20Oct live повторно: text20/20 без error-envelope, warm p50=5.25с,
+  p95=30.71с из-за холодного первого хода31.78с; WAV-voice5/5, ASR точен,
+  end→reply p50=5.39с (это не замер до первого звука). Fast Lane отдельно
+  измерил dispatch→first-audio 2.47–2.55с warm / 3.39с cold; speech-end→first-
+  audio для этого прогона не измерялся, поэтому D2-01 остаётся OPEN с явным
+  endpoint-разделением.
+- [~] D2-02: простой разговор без ненужных tool loops (`Single-Step Fast-Exit`
+  в `ReactLoop`, если вызван только речевой ответ без `memory/hostos/terminal`);
+  explicit goal сохраняет полноценный агентный арсенал/reasoning и краткие голосовые checkpoints.
+  18Oct: native turn context добавляет fast hint только для conversational turns; native delivery guard подавляет лишний terminal completion; focused tests green. Live 20-turn plain-chat timing still open.
+- [~] D2-03: gate/тихая речь и паузы2–3слова/с; не режет начало/конец.
+  18Oct: streaming capture tests 31 passed; voice capture lease tests green.
+  Владелец ранее проверил Fifine и доволен; физический повтор не запрашивается.
+  Новые gate/тихая речь edge cases остаются OPEN только если не покрыты тестами.
+- [~] D2-04: надёжный Stop/перезапуск речи/нет stale audio; разговор с наушниками
+  первым, acoustic barge-in следующим. Full duplex не blocker первой версии.
+  15Oct: исправлены выключенная ветка smart-barge-in и RU word boundaries.
+  Поддакивание подтверждается canonical ASR без нового JAWL turn; паузы bounded,
+  отмена привязана к playback owner. 36 Node +18 Python PASS; владелец ранее
+  подтвердил Fifine как удовлетворительный — физическую проверку не повторять.
+- [~] D2-05: при ошибке сохранять текст и понятное состояние; речь Stop не теряет goal.
+  18Oct: native delivery guard emits bounded turn.error and preserves goal state; focused tests green. Live provider fault/restart acceptance still open.
+
+## D3 — персонаж постоянно рядом («Окно-Хамелеон», можно параллельно D2)
+
+- [x] D3-01: единое окно `desktop/app.html` в режиме «Хамелеон» (Compact HUD `360×540` поверх окон `Always-on-Top` ↔ выдвижная Studio Drawer `1060×720` с настройками всего фреймворка по клику на ⚙️ и IPC `jawl-window-mode`) реализовано и проверено unit-тестами. 17Oct: добавлены кнопки DND (`🔕`) и Click-through (`👻`) в HUD-dock, IPC `jawl-window-mode` расширен параметром `clickThrough` с `setIgnoreMouseEvents`; hover-логика для временного разрешения кликов при click-through. 18Oct: добавлено сохранение/восстановление позиции окна и режима `compact` в Electron userData; восстановление при запуске; multi-monitor валидация позиции при восстановлении; глобальный хоткей `Ctrl+Shift+G` для выхода из click-through.
+- [~] D3-02: текст над головой из того же ответа, парящий мини-док (`🎙`, `⏹`, `👁`, `🔕`, `👻`, `📌`, `⚙️`) прямо под VRM без панели диагностики, сгруппированные по органам чувств настройки JAWL/VoiceMem/Companion в одном месте реализованы; остаётся live приёмка с реальным стеком. 17Oct: кнопки DND и Click-through подключены к `/api/attention` и `/api/ambient-memory/config`; статус синхронизирован с сервером.
+  24Oct: добавлен компактный HUD состояния mic/screen/loopback и подробная карточка источников в System; OBS overlay скрывается. Live-интеграция и проверка размеров в запущенном окне остаются открыты.
+  24Oct UX follow-up: settings toggles теперь клавиатурно доступны и именованы; ошибка config-hub локализована и получила повтор загрузки. UI E2E: все 6 разделов на 9 размерах, клавиатура и sensor layout PASS. Живая Electron/real-service UX приёмка всё ещё OPEN. Аудит: `docs/research/ui-ux-review-20261024.md`.
+  25Oct UX follow-up: карточка сервисов больше не обещает, что «всё работает», когда отдельные службы могут быть недоступны; тест доступности 4/4 и браузерный E2E с 9 viewport прошли. Это mock-brain проверка; живая Qwen/Electron приёмка, screen-reader и длительная работа остаются OPEN.
+- [x] D3-03: текущий VRM idle/listen/think/speak (включая читаемую позу `thinking/working` и обогащённый липсинк `aa/oh/ee`) связаны с одним turn; единое ядро `app-scene.js` (включая `?mode=obs`). Не делать новый арт условием запуска. 17Oct: добавлена поза `thinking/working` (upperChest lean + forearm/hand pose) в `avatar-motion.js` и `app-scene.js`; липсинк `aa/oh/ee` в `applyLipSync`.
+
+## D4 — видеть, слышать и уместно проявлять инициативу
+
+- [ ] D4-live-29Oct: закрыть подтверждённые дефекты текущего Hikari-сеанса:
+  self-TTS→loopback echo; terminal context_limit=10 при 64K; старый основной
+  caption поверх новых сцен;
+  шесть attention intents при нуле proactive delivery. Отдельно — mic
+  backpressure recovery и живые диагностические логи. [Факты и порядок](docs/research/live-session-audit-20261029.md).
+  Follow-up 29Oct: self-TTS suppression подключён к playback lifecycle для
+  streamed и обычной речи; focused desktop voice lifecycle 30/30 PASS. Это
+  закрывает разрыв в коде, но живой loopback/runtime после рестарта ещё не принят.
+  Follow-up: VA теперь сохраняет ASR до 2400 и audio description до 1600
+  символов в отдельных каналах вместо общей 1200/600 обрезки. Fusion/packet/
+  native-context/web gate: 129 passed + 33 subtests; live prompt readback открыт.
+  После добавления per-channel regression семь смежных audio/fusion/packet/
+  native-context suites: 111 passed, 1 skipped.
+
+- [~] D4-01: screen/system-audio sources после настройки; bounded recent context,
+  timestamps/TTL, ошибки и pause видны; фон уступает разговору/игре. 17Oct: ambient pause/resume (audio+memory+sensory ingest), DND button pauses ambient capture, paused state in sensor status, ResourceGovernor yields_to_game; tests green.
+  18Oct live: describe-displays 0.7с (2 дисплея, EG2-теги в perception_fusion);
+  ambient-audio теперь пробрасывается лаунчером (-EnableAmbientAudio →
+  --ambient-audio --ambient-memory), venv получил PyAudioWPatch; live start OK
+  (backend running, NVIDIA loopback, 48к/2ch).
+  20Oct live: start/pause/resume/stop PASS на pyaudiowpatch, device
+  «Динамики (Game-Audeze Maxwell) [Loopback]»,48к/2ch; тот запуск был при
+  тишине и не подтвердил передачу сигнала. Это историческое ограничение
+  устранено для текущего NVIDIA endpoint ниже.
+  24Oct: shell status теперь безопасно публикует microphone lease, loopback running/error и текущее Qwen freshness состояние; UI показывает paused/off/stale/error отдельно. Реальная совместная проверка с аудио во время 30–60min acceptance остаётся открытой.
+  24Oct follow-up: финальный loopback ASR теперь попадает в `PerceptionFusion`
+  только после retention/privacy gate с provenance и NOW TTL 20с; privacy-
+  suppressed текст не попадает туда или в `stop/flush`. Разрешён только точный
+  tentative rhythm cue (`sound`, confidence=0, verified=false, без tags/mood),
+  TTL 5с; при наличии ASR текста все звуковые метки подавляются как неподтверждённый
+  фон речи. `pause` теперь останавливает capture и отменяет/очищает bridge очередь,
+  инвалидируя старый audio context; `resume` запускает bridge до capture. Сквозные
+  После дополнительной сериализации service pause/resume, очистки streaming
+  audio tap/partial queue, suppression late model results и атомарной
+  transcript→fusion publication: combined contract suite 143 passed + 29
+  subtests; отдельный lifecycle набор 34 passed; py_compile и scoped diff-check
+  проходят. Это подтверждает fake/test lifecycle и privacy plumbing, но не live
+  понимание кино/игр или качество модели. 24Oct: пользователь подтвердил
+  реальный выход DigitalOutput NVIDIA; read-only WASAPI enumeration нашла
+  default output index 27 и точный loopback index 38 (48 kHz stereo). Selector
+  теперь выбирает точное уникальное имя, сообщает device/host API index и
+  отказывает при неоднозначности; system_audio 9/9, ambient_audio 24/24,
+  web 80/80. Выходы NVIDIA различаются: index 38 (имя с префиксом `2-`)
+  остаётся без сигнала, index 39 (`DigitalOutput (NVIDIA High Definition Audio)`)
+  выдаёт поток. 24Oct live: изолированный daily profile выбрал loopback 39,
+  принял 3,806 чанков без потерь/ошибок; GigaAM записал точную тестовую фразу
+  «Какой сегодня статус моего проекта?» в ambient memory. Затем launcher исправлен:
+  `-NoLocalAudio -EnableAmbientAudio` теперь подключает VoiceMem+GigaAM без TTS.
+  Headless health показал `tts=not_configured`; два дополнительных WAV-теста оба
+  распознаны дословно («Запомни… короткие ответы», «Сможешь проверить тестовый
+  файл…»), zero drops/errors. PCM не сохранялся; микрофон не открывался.
+  Отчёт: `runtime/qa-ambient-asr-2phrase-20261024.json`. Подтверждены loopback
+  routing и три короткие известные фразы, но не качество длинного/смешанного
+  аудио; совместная 30–60min приёмка остаётся открытой.
+  24Oct music follow-up: локальная CPU-only оценка YAMNet + HuBERT genre INT8
+  + MERT music-affect ONNX. YAMNet отличил музыку (Bach 0.914, sax 0.755) от
+  речи (Speech 0.950–0.994), тишины (Silence 1.0) и шума; выдаёт широкие
+  теги инструмента. MERT 15s p50 1.874s, но на речи/тишине/шуме тоже даёт
+  валентность/возбуждение — запускать только после устойчивого YAMNet music gate.
+  HuBERT на 5s CPU p50 2.059s уверенно ошибся на речи (hiphop), тишине
+  (hiphop) и шуме (metal), поэтому не подключать в always-on и не публиковать
+  жанр из одного результата. Ничего не подключалось в daily profile.
+  Отчёт: `docs/research/music-sensory-candidate-evaluation-20261024.md`, сырые
+  оценки: `runtime/audio-path-replay/out/music-model-candidate-probe-20261024.json`.
+  29Oct: принятой дорожки интонации/эмоции речи нет; музыкальный mood не
+  заменяет affect говорящего. Aniemore Russian XLS-R int4 CPU probe отвергнут
+  для real-time: 16–24s на 6.5–10s WAV, peak RSS 1.69 GiB; near-certain
+  enthusiasm на обоих neutral instruction controls. Подробности и ограничения:
+  `docs/research/russian-speech-emotion-cpu-candidate-20261029.md`.
+  Acceptance: `docs/DAILY_ACCEPTANCE.md` и
+  `docs/research/russian-speech-emotion-cpu-candidate-20261029.md`.
+  Уточнение для смешанного аудио: на synthetic speech+chord YAMNet вывел Music
+  0.334, но Speech отсутствовал в top-5. ASR не отключает независимый YAMNet,
+  однако EG2 safe-claim отбрасывает детальный music claim при наличии transcript,
+  а EG2 candidates доходят до VA только при positive YAMNet overlap. Поэтому
+  музыка ниже порога может отсутствовать в brain context вместе с EG2 claims.
+  В 2s/1s-hop окнах Bach держал Music 0.90–0.99 после частичного первого
+  окна, sax 0.52–0.90, а synthetic mix давал Music 0.24–0.38 / Speech
+  0.003–0.018. Один порог 0.5 пропустит этот mix, но снижать его пока нельзя
+  без source-disjoint реальных негативных примеров.
+  Следующий шаг — независимые ASR/soundscape tracks с отдельными timestamp и
+  confidence, проверка на нескольких SNR и новых реальных клипах; пороги и
+  production-проводку пока не менять.
+  29Oct follow-up: one in-memory 4s Tera-over-FMA SNR scout (six artist-distinct
+  openings) found YAMNet music at 2/6 for −12/−8 dB, 3/6 at −4 dB, 4/6 at 0 dB;
+  matched music-only baseline was 4/6 but on a different set. Speech-only stayed
+  unknown. Synthetic repeated TTS and short track openings make this exploratory;
+  cutoff/production behavior unchanged. See
+  `docs/research/audio-speech-music-overlap-20261029.md`.
+  24Oct YAMNet broad-style probe на тех же 18 individually licensed,
+  artist-disjoint FMA tracks: 12/18 (66.7%), тот же aggregate, что CLAP;
+  Classical 3/3, Electronic 2/3, Folk 1/3, Hip-Hop 1/3, Jazz 2/3, Rock 3/3.
+  Ошибки иные; median top-style margin 0.02098, поэтому genre/mood нельзя
+  подавать как факт. Модель очень лёгкая (~75.2 MiB isolated RSS; 8s crop
+  p50/p95 21.80/23.16ms), годится только для экспериментальных tags/abstention.
+  Acceptance расширена на external-media ASR, instrument/timbre, vocals,
+  tempo/energy, soundtrack transitions и grounded short description; labels
+  остаются открытыми до listener-verified source-disjoint набора. Скрипт:
+  `scripts/probe_yamnet_fma_styles.py`; артефакт и детали — в music research.
+- [~] D4-02: JAWL получает свежий экран по запросу и изменениям; описывает
+  реальные RU окна. Не отправлять каждый кадр без необходимости. 18Oct: VisionLookService dedup/cooldown, ScreenDeltaWatcher backoff, /api/vision/look, UIA context, perception fusion; tests vision/presence/screen_adapter/e2e зелёные.
+  18Oct live: /api/vision/look 4.6с с реальным VLM-описанием окна;
+  голосовой вопрос «что на экране» → JAWL screen.observe+VLM ответ
+  (live-voice-screen-question.json, end→reply 20.2с). Vision требует
+  mmproj при запуске brain (llama-server флаг). 24Oct: Qwen co-watch pilot
+  подтверждает доставку свежего caption/provenance в brain-bound prompt, но
+  новый replay выявил один прямой конфликт с игровой сценой и одну выдуманную
+  деталь на caption Земли; один abstain был уместным. Внешний Companion
+  `session_id` не сбрасывает native JAWL/provider context. Это grounding fail,
+  а не основание заменить Qwen. Нужен integrated continuous-context replay с
+  exact prompt/history, scene cuts, false premise и user correction.
+   25Oct: экспериментальный профиль использует Qwen3-Omni-30B-A3B-Instruct Q4_K_M как brain endpoint (`local-qwen3-omni`), плюс Qwen visual/audio describers; Hikari не используется. 8h observability-only soak завершён штатно: 960 samples. Аудит: visual fresh 77.6%, age p95 9.58s/max39.41s (906 measured ages), stale gap 23.5min, два outage-окна, minimum free RAM 0.18GiB; per-sample Qwen audio-description success не логировался. Это не 24/7 acceptance. Отчёт: `docs/research/qwen-fullstack-soak-audit-20261028.md`; старые acceleration results: `runtime/qwen3-omni-direct-20261024/ACCELERATION-RESEARCH-20261025.md`.
+  25Oct follow-up: future-launch defaults were changed to 4s static/periodic after old 5/10s cadence showed caption gaps. The completed soak used its already-captured old arguments; post-fix freshness and CPU/GPU impact still require a fresh managed run. Qwen sensor tests 16/16 and launcher tests 18/18 passed at that time.
+
+  25Oct shared-slot smoke: concurrent tiny text/audio requests succeeded on the one-slot Qwen endpoint in 0.890s wall (text 0.885s, audio 0.747s). The post-check kept brain/TTS ready and queues empty. This does not measure a full JAWL user turn under sensory contention; exact queue wait and long-prompt latency remain open.
+
+- [~] D4-03: системная речь отделена от пользователя/собственной TTS,
+  временная память с provenance; перезапуск/TTL/очистка. 18Oct: ambient audio ingests system_audio, playback suppression фильтрует own TTS, TTS endpoints активируют suppression с TTL, source_app=system_audio; tests ambient_audio/web зелёные.
+- [~] D4-04: инициативный комментарий через общий Heartbeat/attention,
+  cooldown/DND/приоритет пользователя, без двойного разговора. 18Oct: AttentionPresence tests 13 passed; web attention tests green; live initiative acceptance remains.
+- [~] D4-05: совместное прослушивание: захват не ломает голос; metadata/речь
+  можно использовать честно. 24Oct: YAMNet CPU lane подключён рядом с GigaAM;
+  музыка и ASR хранятся независимо, музыка не пропадает под речью, устойчивый
+  инструментальный тег выдаётся только при повторяемом сигнале. Это пока
+  soundscape/event-теги, не распознавание жанра или свободное музыкальное
+  описание. Требование приёмки — внешний звук игр/видео целиком: ASR речи плюс
+  отдельные музыкальные признаки (наличие/переходы, стиль и жанровая семья,
+  инструменты/тембр, вокал/инструментальность, энергия/темп) и короткое
+  grounded-описание саундтрека. Настроение и музыкальный сюжет — только после
+  проверки на человеческой разметке; на слабых/противоречивых данных abstain.
+  Следующий шаг — source-labeled game/video clips, сравнение лёгкого
+  zero-shot/tagging кандидата с YAMNet и оценка captioner только по запросу.
+  Жанр, настроение и свободное описание остаются неподтверждёнными без этого
+  gate.
+  25Oct: текущая Qwen3-Omni profile config выбирает `qwen-omni` audio describer и Qwen visual sensor. Добавлены counters успешных Qwen audio descriptions/errors/skips, тип и свежесть последнего результата, p95 latency в `/api/shell/status` и строку статуса в System UI. Живой экземпляр ещё не перезапускался, его восьмичасовой soak не содержит этих метрик; после завершения прогон на реальных loopback clips остаётся открытым: музыка без речи, речь поверх музыки, слова песни и тишина; проверить latency, abstention/grounding и влияние на текущий диалог. OmniVoice оставить без изменений.
+  24Oct: повторный живой capture после сообщения о включённом playback
+  открыл DigitalOutput, но записал только сигнал уровня -101.5 dBFS; YAMNet
+  и GigaAM корректно abstain. Отдельный 14.81s live sample ранее дал Music в
+  13/13 окнах; это подтверждает присутствие на одном участке, но не стиль.
+  Artist-disjoint CLAP research на 18 лицензированных FMA Medium треках получил
+  только 12/18 (66.7%) по слабым catalog labels, Electronic 0/3 и Jazz 1/3;
+  четыре speech/music/noise/silence controls классифицированы правильно.
+  CLAP оставлен research-only; genre, instrument/timbre, vocal, energy/tempo,
+  transitions and grounded description остаются незакрытыми до human-labeled
+  game/video evaluation. См. `docs/research/music-sensory-candidate-evaluation-20261024.md`.
+  18Oct: streaming capture tests 31 passed; voice capture lease tests green;
+  live co-listening acceptance remains open.
+   24Oct sensor UX: System panel now shows fresh YAMNet music/abstention, age, and pause/stale/unavailable state; renderer does not call event tags genres. Browser interaction E2E covers 9 viewports including 720×480 and 320×420 with no horizontal overflow. 24Oct follow-up: Tab/Enter navigation, Space/Enter DND and visible focus passed browser E2E; axe-core 4.14 reported zero WCAG A/AA/2.2 AA violations at 1280×720 and 360×540. This scoped automation is not a full manual WCAG audit; live profile acceptance remains open.
+   24Oct style follow-up: MusicNN (3.18MB weights) ran ~23ms/4s but emitted false genre/instrument tags on speech/noise/silence and used ~770MiB process RSS; rejected for always-on. YAMNet CPU (~71MiB process RSS) detects Bach/sax music, but genre scores were weak (Bach classical .0032, sax jazz .0636); a fresh live DigitalOutput sample also had Electronic/Techno <.03. No style claim. Mood/free-form description remain open; report: `docs/research/music-perception-roadmap-20261024.md`.
+   24Oct captioner follow-up: `cahya/whisper-tiny-audio-captioning-v2.0` was tested CPU/1 thread: 12s crops take 0.69–0.79s, but it gives generic Bach/sax captions, misses music under speech, and hallucinates a male voice on exact silence (RMS 0); isolated PyTorch RSS 829.9MiB. Reject for always-on/current-context description; training-audio terms remain unclear. MAGDA CLAP audio ONNX is CDN-fetched and SHA-verified; its graph needs 48kHz log-mel `[1,1,1001,64]` despite README waveform wording. One-thread 8s audio inference: p50 92ms/p95 95ms; isolated two-encoder RSS ~930MiB including runtime. The 478MiB text encoder is now complete and hash-verified. CLAP correctly retrieved the sax sample and speech/music scene, but both fixed and paraphrased prompts mislabeled the Bach excerpt as sax/jazz; style and grounded caption remain open. No daily-profile integration; see `docs/research/music-perception-roadmap-20261024.md`, `scripts/probe_clap_candidate.py`, and `scripts/probe_clap_prompt_bank.py`.
+  24Oct real-clip audio replay: CPU YAMNet + GigaAM on the five existing 10s local audio cuts (Russian trailer, anime trailer, RTS, coding UI, Aqua). YAMNet saw Music >=.30 in 4/9, 1/9, 9/9, 9/9, and 9/9 rolling windows; the current 2-window gate abstains on anime and passes the other four. GigaAM returned nonempty output only on trailer and song; transcript text/raw PCM were not persisted. YAMNet top style scores stayed weak (below .081), so it supports music presence, not dependable genre or soundtrack description. Single-thread YAMNet took 25–28ms for nine windows; GigaAM 376–395ms per 10s clip. This is local replay, not live capture or source-disjoint acceptance. Artifact: `runtime/audio-path-replay/out/realclip-audio-lanes-20261024.json`; runner: `scripts/probe_realclip_audio_lanes.py`.
+
+   26Oct semantic follow-up: EG2 теперь ранжирует положительные классы «музыка»,
+   «речь преобладает», «окружение» и «речь + музыка»; вокал, ударные, бас и
+   электронные тембры считаются отдельными кандидатами. L2 анализирует соседние
+   окна, дешёвые DSP-признаки и отдельно фиксирует переходы; L3 сводит поддержку
+   кандидатов. Кандидаты остаются uncalibrated и не ослабляют safe-claim gate;
+   веса и production-пороги не менялись. На 7 доступных CLAP controls top-scene
+   соответствия те же, что у старого банка; русская речь остаётся ложным
+   speech+music, поэтому P0 accuracy criterion не пройден. Ручных interval labels
+   в репозитории нет. Тесты: coarse-to-fine 3/3, EG2 runtime 2/2, py_compile OK.
+   Stage timings разделены для embedding/L1/L2/L3; capture пока отсутствует на
+   descriptor boundary. Live P2 не запускался: 503 prefetch drops, 41.8/60s и
+   стабильность курсоров требуют следующего контролируемого однопоточного прогона.
+   См. `docs/research/audio-coarse-to-fine-20261026.md`.
+  28Oct history reliability: штатное завершение теперь flush-ит sensory history
+  после остановки capture/description producers и surfaced persistence errors;
+  запросы «N минут назад» получают целевое ±30s окно. Lifecycle/history/web tests
+  объединённый lifecycle/history/audio/Qwen/web suite 163 passed + 33 subtests.
+  Это улучшает restart/history, но не закрывает live retrieval,
+  30–60min continuity или integrated 8h acceptance.
+  28Oct audit correction: historical Qwen3-Omni 8h soak действительно завершился,
+  но acceptance FAIL/PARTIAL: 77.6% visual freshness, p95 9.58s, stale gap 23.5min,
+  two outage windows, minimum free RAM 0.18GiB, and no successful audio-description
+  telemetry. Нужен новый run после managed restart/freshness fix.
+
+## D5 — полезный агент и непрерывная память
+
+- [x] D5-01: три настоящих поручения в тестовых окнах/браузере/файлах:
+  действие → проверка результата → короткий отчёт, с уровнями native policy.
+  16Oct r5: file/read/SHA, browser open и form save PASS; fresh native result
+  до terminal, один POST. 21Oct r7: harness принимает
+  `HostOSReader.read_file_range` как fresh read. 21Oct r11 live PASS:
+  `--suite agent-work` 7/7 — file write/read с точным SHA, browser
+  navigate+extract и form save (один POST), memory revision1→2, restart,
+  recall revised value, sandbox denial; ports/fixture cleanup PASS.
+  Startup output-budget закрыт schema-bound для `SYSTEM_CORE_START`;
+  r6 chat-bound maxLength320/thinking-off/actions.minItems сохранён.
+  Отчёт: `runtime/gateway-agent-work-20261021-r11.json`.
+- [~] D5-02: факт → исправление → restart → recall меняет ответ той же личности;
+  задачи переживают Stop речи и отказ провайдера без дубля эффекта.
+  16Oct r5 real user turns: stable memory_key, revision1→2, новая brain generation,
+  fresh SQLStructuredMemory.list_memories и ответ revised value PASS.
+  21Oct r11: memory revision/restart/recall PASS в live agent-work. Задачи
+  через Stop речи/provider fault ещё не приняты.
+- [~] D5-03: эффективный уровень0–3, unattended срок и emergency Stop понятны
+  в общей панели. Не вырезать инструменты/goal/swarm, расширенный UI позже. 18Oct: hostos policy/web tests 19 passed; live operator acceptance remains.
+
+## D6 — день использования и ночь работы
+
+- [~] D6-01: один понятный запуск/stop/restart, готовность зависимостей и ошибок,
+  закрытие панели не убивает brain; явное поведение сворачивания/выхода.
+  15Oct: ordinary и supervised startup/stop PASS; native lease-gated recovery
+  на cheap child PASS. Tray/owner daily lifecycle и длительная модельная работа OPEN.
+  16Oct: supervisor readback переведён с cmdline fallback на lock-bound PID/
+  creation-time receipt.25 focused/38 subtests, новая Hikari supervised20,
+  actual receipt/Job proof и cleanup PASS; full gate912/66/16/109 PASS.
+  24Oct: managed tray Stop now waits for launcher acknowledgement bound to
+  runtime/request ID; timeout remains visible in compact UI. Static labels for
+  mic device/settings search added; desktop Node gate restored its archived
+  avatar lifecycle test and includes accessibility coverage (118/118 PASS).
+  24Oct follow-up: `run_local_bonsai_integrated.ps1 -StartDesktopShell` now
+  starts Electron after backend health, monitors shell exit, and cleans its
+  owned process tree with the profile; desktop remains opt-in for headless
+  acceptance runs. PowerShell parse and launcher tests 13/13 pass. OPEN: live
+  24Oct live smoke: isolated Companion reached ready, Electron remained alive,
+  a matching runtime/request-ID managed-stop was acknowledged, and launcher
+  cleanup closed all disposable ports with exit 0. Found and fixed inherited
+  `ELECTRON_RUN_AS_NODE=1`, which had launched Electron as plain Node. Stop was
+  injected into the isolated managed request file, not clicked in the UI;
+  actual tray interaction and daily-profile launch remain OPEN. Report:
+  `docs/research/desktop-launcher-lifecycle-smoke-20261024.md`.
+- [~] D6-02: integrated 30–60 min run, then 8h full-stack soak with one controlled worker fault plus source/host interruption (target minimize/occlude/close, loopback endpoint change/loss, display sleep/return, Windows suspend/resume where practical).
+  Require bounded RAM/logs/queues; no duplicate workers/actions or stale replay; honest gap/degraded state; fresh-only recovery with DND/Stop/privacy preserved.
+  16Oct новый owned native soak: exact Job/creation identity sampler без cmdline/cwd,
+  native Goal write/read, lease revoke, controlled provider fault/recovery и cleanup
+  PASS на180с. Первый8h native soak FAIL на63.6мин:12 cycles PASS,13-й
+  Goal объявил done без actions, native guard перевёл его в blocked.
+  Controlled fault/recovery PASS; lease revoke/Jobs/ports cleanup PASS.
+  21Oct: false-completion repair (`native_goal_completion_repair.py`) и
+  actual pinned-source probe PASS (one protocol retry, ledger не изменён,
+  повторный false done отклонён).
+  24Oct: native-owned 8h soak PASS, 476 cycles / 0 failed; один
+  intentional transport fault восстановлен. Scope: native gateway/brain/Goal/
+  Companion; физический mic, screen/audio capture и полный daily runtime не
+  входили. Полная интегрированная 30–60min приёмка и full-stack 8h soak остаются
+  OPEN. Физическая Fifine-проверка ранее удовлетворила владельца; повтор не нужен.
+  24Oct: 4h fixed 20-case local sensory simulation PASS (49 batches, 20/20 per
+  batch, 0 errors, 14,411.6s). It covered local Qwen/EG2/GigaAM replay, not live
+  capture, YAMNet music styles, or the daily desktop profile; full integrated
+  continuity/overnight acceptance remains OPEN. Artifact:
+  `runtime/sensory-case-simulation-20261024-clean.json`.
+  24Oct Russian-trailer replay through QwenVisualSensor/Describer/Fusion: 10s,
+  8 submits, 6 inference completions, 2 queue replacements, 5 scene changes,
+  only 2 captions delivered to current context (4 older-scene results rejected),
+  p50/p95 delivered age 2.68/4.28s. No model/capture errors; rapid-cut event
+  continuity remained unserved. Follow-up added a bounded timestamped visual
+  timeline (≤5 distinct scenes/15s), separate from the 5s current caption; late
+  older-scene results enter history without entering current state or attention.
+  Focused and related integration tests pass (56 passed, 1 opt-in display smoke
+  skipped). Replaying the same clips through the updated window and testing
+  brain answers while events are fresh remain OPEN. Physical screen, audio
+  alignment, Hikari uptake and full-stack runtime remain untested here.
+  Report: `docs/research/qwen-visual-trailer-adapter-replay-20261024.md`.
+  24Oct telemetry readiness: the integrated launcher can now optionally write
+  250ms process-tree JSONL for exact launcher PID+creation-time descendants,
+  including CPU, working/private memory, threads, handles, lifecycle events and
+  completeness flags. Eleven focused sampler/monitor tests and PowerShell parse
+  checks pass; no integrated profile was launched. The monitor can still miss a
+  child process that starts and exits wholly between samples. This improves the
+  evidence for the next soak but does not close live continuity acceptance.
+  28Oct audit of the completed direct Qwen3-Omni eight-hour observability soak:
+  960 samples, 745/960 visual-fresh (77.6%), age p95 9.58s/max39.41s, longest
+  consecutive non-fresh interval 23.5min; 23 samples lacked visual state across
+  two outage windows. Brain/TTS/ambient health also had gaps; minimum free RAM
+  was 0.18GiB. The log has no audio-description-success/age series. Soak duration
+  completed, but freshness, outage recovery, and audio semantics did not pass.
+  Full audit: `docs/research/qwen-fullstack-soak-audit-20261028.md`.
+  Managed context budgets now scale down for a 12,288-token window
+  (dynamic=9,000 chars) and accept exact legacy receipts for migration; 15
+  focused tests pass. This code
+  is not loaded into the active soak, so overflow,
+  freshness and readiness recovery remain OPEN pending relaunch and retest.
+- [~] D6-03: применимый major regression + DAILY_ACCEPTANCE, короткая инструкция
+  владельцу и перечень известных ограничений. Это daily release, не весь production TODO. 18Oct: main pytest 1028 passed + 281 subtests; desktop node 95 passed; e2e 18 passed in batches/single runs; live DAILY_ACCEPTANCE items remain.
+  16Oct новый full gate PASS:932 unittest/66 pytest/16HTTP/109Node +browser
+  harnesses; queue projection checks отдельно12 focused PASS. Новый real-model WAV voice3/3 и native text20/20 обоих режимов PASS.
+  DAILY_ACCEPTANCE mic/full actions/durable-task Stop/8h ещё не принята.
+  Connected WAV voice20 и memory correction/restart/recall подтверждены. Исторический
+  14Oct Argon heartbeat FAIL сохранён в runtime/supervised-profile-acceptance-20261014T174524Z.json.
+24Oct full gate PASS after repairing corrupted Cyrillic screen-query/prompt strings:
+pinned snapshot + secret scan clean; 1125 unittest, 67 pytest and 18 API/E2E tests;
+  browser interaction E2E, synthetic desktop voice E2E, Node tests and git diff check
+  passed. This validates the code gate, not the still-open integrated daily-profile
+  30–60min run or full-stack overnight acceptance.
+
+---
+
+## Горизонт H1–H5 — целевая гармоничная архитектура (после базовой стабилизации D1/D2)
+
+Подробная спецификация: [HARMONIZED_ARCHITECTURE_AND_ROADMAP.md](docs/HARMONIZED_ARCHITECTURE_AND_ROADMAP.md).
+
+- [~] **H1 — Дефрагментация UI и VRM («Окно-Хамелеон» в стиле Project Airi / N.E.K.O.):**
+  18Oct: legacy frontend/rust removed, unified desktop app.html/app.js, obs mode, motion/lipsync; desktop node 95 passed; live VRM acceptance remains.
+  полный вывод из эксплуатации устаревших `frontend/index.html`, `--legacy-shell` (`avatar.html` + `avatar-scene.js`) и `rust-client/`; перевод OBS (`8766`) на единое ядро `app.html?mode=obs`; единый контроллер позы (`idle ↔ listening ↔ thinking/working ↔ speaking`) и многоканальная виземная артикуляция губ (`aa/oh/ee/ih/ou`).
+- [~] **H2 — Двухскоростной контур мозга (Dual-Lane JAWL — Fast Chat + Deep Task/RE):**
+  18Oct: duplex cascade heuristic + tests 9 passed/13 subtests; fast hint in turn context; live latency/task separation acceptance remains.
+  разделение потоков внутри единой личности JAWL: быстрый разговорный поток (отклик 1–2 с без тяжёлых tool-loops) и асинхронный поток поручений/модинга/реверса (`HostOS`, `G:\RE`, `Ghidra`, `x64dbg`), присылающий голосовые чекпоинты в быстрый поток.
+- [~] **H3 — Full-Duplex голос (`DuplexCascade` + `OmniVoice`):**
+  18Oct: deterministic micro-turn controller and tests pass; full audio duplex/OmniVoice live validation remains.
+  20Oct DuplexCascade 2.0 (live path): `earlySpeech` (streamed WAV before `final`) теперь считается речью ассистента, и barge-in останавливает именно её (`stopEarlySpeech(true)`, без владельца `speechPlayback`); `/api/voice/draft` принимает `assistant_speaking`/`extended_used` и возвращает `duplex_action`/`avatar_gesture` (backchannel → `nod`, interruption → `cancel_tts`); клиент берёт серверный `required_ms` как окно endpointing (1200 → 800 мс warm, 2000 мс для незаконченной мысли) и показывает `nod` только при смене жеста. Python 44 + streaming 22, JS 24+30 pass.
+  21Oct per-request cancel: `speak_cancel` отменяет in-flight TTS по `request_id` (таргетное закрытие HTTP-сокета через `TTSService.cancel(request_id=...)`), поздний WAV после отмены не эмитится; `done.count` теперь кумулятивный. Python 53 focused.
+  отказ от жёсткого VAD в пользу микро-ходов (`overlap_window ≈ 0.5–0.6 с`); управление очерёдностью речи через 6 спецтокенов (`<|user is talking|>`, `<|user is thinking|>`, `<|assistant_backchannel|>`, `<|user finish talking|>`, `<|user interruption|>`); мгновенный потоковый синтез микро-чанков в `OmniVoice` с клонированным голосом.
+- [~] **H4 — Мультимодальная сенсорная кора на базе `EmbeddingGemma 2` (по принципу `eg2.haku.sh`):**
+  18Oct: audio-visual vibe fusion, latent VRM reflex, semantic scene-change trigger, compact episodic vector memory, Russian eg2 reader, PerceptionFusion.observe_eg2 and optional composition integration; tests eg2/perception fusion 14 passed. Live multimodal validation remains.
+  20Oct: DetailedSensoryDescriber (eg2_describer.py) - 3-level Coarse-to-Fine: L0 macro domain, L1 facets (style, elements, genre/mood/speech, spatial zones from 29 patch tokens), L2 grounded text (in-memory Windows OCR ru+en-US 4-130 ms, DSP: BPM/key/mode/spectral/speech-modulation). 3-ring perception snapshot (user/world/self). Integrated into PerceptionFusion and composition. Tests: 16 new + 25 existing = 41 passed. Replaces heavy VLM (4.6-20 s) with CPU pipeline (~1.2 s screen + 0.2 s audio).
+  20Oct late: vision preprocessing fixed (Gemma4 axial RoPE [pos_x,pos_y] + divisible-by-3 21x30 grid -> 70 spatial tokens; correct detail margin grew from 0.0021 to ~0.24). Haku-style Scene/Character/Plot/Setting/Meme banks expanded to ~158 concepts with 0.4 MB `.npz` cache (2 ms warm init). `enrich_turn_text` now attaches fresh perception on every contextual turn, not only explicit screen words; ambient audio now runs `Eg2AudioDescriptionProvider` (genre/BPM/key/mood); `--screen-watch` can run on EG2 via `-Eg2Vision` without an external VLM. Tests: 125 passed + 29 subtests.
+  20Oct live screen-watch: stack `-EnableScreenWatch -Eg2Vision` ready; watcher running, 3 SCREEN_DELTA events; `/api/vision/describe-displays` ok (2 displays, plot/OCR/zones); `/api/vision/look` ok; attention produced SPEAK_INTENT (significance 3), no VLM. Evidence: `runtime/live-eg2-screenwatch-report.json`.
+- [~] **D2-01 (Speech-First / Stream-Before-Close) — серверная часть сделана:**
+  20Oct: `speech_first.py` — инкрементальный извлекатель речи из *частичного* JSON-конверта
+  (терпим к обрезанным escape/\\u-последовательностям, приватные поля `observation`/`reasoning`
+  никогда не озвучиваются, фраза режется только по настоящей границе предложения, инвариант
+  spoken+tail == финальный ответ байт-в-байт). `live_speech.py` — сессия «произношу первое
+  предложение, пока остальной ответ ещё пишется»: рендер работает в отдельном потоке, TTS
+  вызывается на каждую готовую фразу. WS-действия `speak_delta` / `speak_finish` /
+  `speak_cancel` отдают те же NDJSON-события `audio`, которые уже умеет играть
+  `desktop/speech-stream.js`. Тесты: `test_speech_first.py` (18) + `test_live_speech.py` (9) +
+  WS-тест в `test_ws.py`; полный гейт **1147 passed + 281 subtests**.
+  20Oct P0-связка: `native_jawl_streaming.py` — owned-хук в brain-процессе (tee на
+  `_consume_stream`, принудительный `stream=True` для local json-envelope внутри
+  активного correlated turn, из потока извлекаются только готовые фразы и уходят
+  как `assistant.delta` с `format="speech"`; reasoning/private поля не эмитятся,
+  итоговый `LLMResult` не меняется). Bootstrap реального brain-entrypoint:
+  `"streaming_installed": true`. Компаньон: `jawl_terminal` отличает speech-дельты
+  от display-дельт, `gateway.stream_text` пропускает их, `/api/chat/stream` кормит
+  `LiveSpeechSession` и отдаёт `audio`-события до `final`. Клиент `desktop/app.js`
+  играет ранние WAV сразу и не дублирует озвучку после `final`.
+  **Live-замер 27B (20Oct):** `speech_delta` 15.07с, `final` 15.98с, первый
+  `audio` 16.69с, 3 WAV-чанка, `speech_done` 18.79с, ошибок нет. Связка
+  end-to-end работает; первый звук пока на 0.7с позже `final`, потому что первая
+  фраза приходит за ~0.9с до конца хода (долгий prefill). Цель — сдвинуть первую
+  фразу/звук раньше `final` через Fast-Lane Context Slimming и более ранний
+  `Speech-First` порядок полей.
+  **20Oct Fast Lane (готово):** на коротких разговорных ходах на проводе
+  system 38168→1915 символов, user 24465→195 (остаются сама реплика + свежее
+  восприятие); стабильный префикс без `turn_id` включает переиспользование
+  кэша llama.cpp. Live-замер: первый `speech_delta` **1.01–1.06с** (cold 1.88),
+  `final` 1.74–1.82с, первый `audio` **2.47–2.55с** (cold 3.39), 3 WAV,
+  ошибок нет. Цель 1–3с для первого звука достигнута на тёплых ходах.
+  Задачи с инструментами по-прежнему получают полный контекст.
+  - *Zero-Decoder Visual Probe:* мгновенная классификация кадров экрана через матрицу концептов в RAM за ~15 мс (вызов тяжёлой VLM только для детального OCR);
+  - *Audio-Visual Vibe Fusion:* одновременное понимание музыки, звуковых эффектов, интонации голоса и видеокадра при совместном просмотре фильмов/аниме (с соблюдением co-watching etiquette — реакция лицом во время диалогов, голос в паузах);
+  - *Латентные рефлексы VRM:* прямая реакция эмоций/тела аватара на вектор экрана/звука за ~20 мс в обход LLM;
+  - *Семантический детектор смены сцены* (`cos_sim` соседних кадров для пробуждения `Attention`/`Heartbeat`) и *компактная векторная эпизодическая память дня* (~10 МБ/час без raw video);
+  - *Русский `eg2` reader:* линейный проектор аудио-слайсов в русские словоформы/токены для сверхбыстрого потокового ASR.
+  - **Зрение для управления ПК (Grounding & Affordance Lane):** тот же проход EG2 + UIA + OCR выдаёт `GroundingCandidate` с bbox/role/confidence; кандидаты связаны с `VisionActionPlan`/`VisionPlanExecutor`, действия проверяются postcondition. Без confidence-гейта и свежего observation token клики запрещены.
+- [x] **H4-Grounding — live-приёмка зрения как органа управления:** клик/фокус/ввод в тестовом окне через UIA-кандидаты; OCR-кандидаты на canvas/видео; отказ при низкой уверенности; Stop и policy не дают двойного эффекта.
+  21Oct live PASS (`scripts/live_grounding_acceptance.py`): окно «Grounding Test Window» + кнопка, UIA-кандидат confidence 0.98/match 0.987, `plan_status=ok`, click через InvokePattern, postcondition `title_changed`, повторный execute → `clicks=1` (идемпотентно), несуществующая цель → `denied:no_grounded_candidate`. OCR-canvas: `OCR CANVAS` найден через OCR (confidence 0.9), `desktop.pointer` клик подтверждён по `canvas_clicks=1`/title, повтор идемпотентен; Stop → `denied:emergency_stop_active`, повторного клика нет. Добавлены `screen.ground` (HostOS, read-only), bounds в UIA, fresh-token/confidence-гейт, Windows OCR fallback (`windows_ocr.py`). Focus берётся через `AttachThreadInput`/`SwitchToThisWindow`.
+- [~] **H5 — Игровой моторно-тактический слой (Game Embodied Layer 10–60 Гц + Auto-Modding):**
+  18Oct: expanded engineering baseline in `game_embodied.py`: motor controller, voice combat coordinator, strategy/mod planner, GameObservation, SimulatedGameInputBridge, ModScaffold/ModScaffoldWriter, GameEmbodiedLayer orchestration; tests 17 passed. Live game input, mod execution and auto-modding remain open.
+
+---
+
+## M — Дешёвая модель: трек замены тяжёлого мозга
+
+Цель: снизить VRAM/стоимость основного мозга и сенсорного композитора без потери
+daily-качества. Default-модель не меняется до отдельной приёмки владельцем.
+
+- [ ] **M1 — Baseline Hikari 27B:** зафиксировать VRAM/RSS, p50/p95 prefill/decode,
+  RU-качество и JSON/action validity на одном фиксированном наборе; сохранить отчёт.
+- [ ] **M2 — Шортлист дешёвых моделей:** Qwen3-4B/8B, Gemma-3-4B/12B, Llama-3.1-8B,
+  Mistral-Nemo-12B (лицензия, GGUF, контекст, RU, tool-calling); отсеять по бюджету
+  VRAM и наличию квантов.
+- [ ] **M3 — Единый RU-бенч:** 30 диалоговых реплик, 20 JSON/tool-конвертов,
+  10 длинных sensory-снимков; метрики: RU-адекватность, JSON validity, action
+  correctness, галлюцинации, p50/p95, VRAM. Ошибки считать по каждому пункту.
+- [ ] **M4 — Прогон на GPU1/CPU через тот же llama-server:** сравнить top-2 с Hikari
+  на одинаковых промптах и температуре; зафиксировать дельту качества/скорости.
+- [ ] **M5 — Интеграция за флагом `-BrainModel`/profile:** без смены default;
+  focused tests + DAILY_ACCEPTANCE subset + live text/voice; rollback одной командой.
+- [ ] **M6 — Решение и ADR:** обновить STATE/TODO, указать цену, VRAM, latency,
+  известные ограничения; promotion только после подтверждения владельца.
+- [ ] **M7 — Дешёвый сенсорный композитор (опционально):** EG2 + детерминированный
+  Coarse-to-Fine composer как default; `Needle 3` — только English tool-router
+  (русский словарь 8k BPE не подходит для генерации RU-текста).
+  24Oct paired CPU overlap probe (YAMNet + existing GigaAM): 18 controlled
+  speech/music mixes across 3 phrases × 2 sources × 3 SNR; ASR expected phrase
+  17/18, YAMNet Music ≥.3 in at least one 2s window 18/18, and 0/5 clean
+  speech/noise/silence controls crossed a ≥2-window rule at thresholds .2–.5.
+  This supports parallel tracks but is too small/synthetic to set production
+  thresholds. Remove blanket ASR→music suppression only after source-disjoint
+  real media validation. Music-Descriptor (MERT genre/instrument/mood heads)
+  is a research lead, but demo + MTG-Jamendo declare CC-BY-NC; not a shipping
+  candidate absent license review. No production wiring. Details:
+  `docs/research/yamnet-gigaam-overlap-20261024.md`.  24Oct live-media check: while playback was active on NVIDIA loopback 39,
+  captured 14.91s in memory (699 chunks, 0 drops/errors). YAMNet CPU saw
+  persistent Music (13 rolling windows, 12 above 0.3, median score .683, max .867); GigaAM
+  returned no text. Conditional MERT ran CPU in 1.94s, outputs .324/.293.
+  Secondary instrument/genre tags were only .001–.006 and are not publishable;
+  source identity was not labeled, so this is a live-path/detector smoke, not a
+  music accuracy acceptance. No PCM/transcript persisted. Probe/artifact:
+  `scripts/probe_live_music_loopback.py`,
+  `runtime/audio-path-replay/out/live-music-loopback-probe-20261024.json`.
+  QA segment audit found segA/C/D AAC tracks are digital silence (mean/max
+  -91 dBFS), segB has no audio stream. Do not count those visual fixtures as
+  audio-positive coverage; report:
+  `docs/research/yamnet-gigaam-overlap-20261024.md`.  24Oct implementation follow-up: `YamnetSoundscapeDetector` is now an optional
+  CPU-only ambient lane alongside GigaAM, not a replacement. It emits a music
+  event only after repeated ≥.30 YAMNet windows (long clips require at least
+  25% positive windows), includes only stable tags ≥.15, and never fabricates
+  mood/free-form captions. ASR and music persist separately with segment/source
+  metadata; music Fusion TTL is 20s and pause clears it. Detector load failure
+  leaves ASR intact and is visible in bridge/UI telemetry. Production-venv
+  isolated RSS +31.5 MiB after 8s sax inference, 29.7ms per 8s segment; not a
+  combined companion budget. Focused test suites: 129 Python + 7 UI passed,
+  py_compile passed. Real fixture replay separated Bach/sax/music, speech,
+  speech+synthetic chord, noise and silence. This remains below acceptance:
+  need source-labeled game/video audio, full companion overlap, and 30–60m soak.
+  24Oct live known-music check in isolated no-mic/no-TTS profile: 15s FMA
+  Electronic fixture at -18dB yielded a fresh YAMNet `audio_kind=music` event;
+  GigaAM emitted no transcript, 0 capture drops and 0 soundscape errors. No genre
+  or instrument tag was emitted, so only music presence is proven. This unclosed
+  30m run still has time remaining. It exposed monotonic-vs-wall clock misuse for
+  YAMNet memory retention (1970 event timestamps); fixed conversion and added a
+  regression. 30 focused ambient/YAMNet unittest cases pass; short live
+  verification of the fix remains open. Details in music research.
+    24Oct design review: connection badge now says «Панель подключена» only
+    after `/api/session` succeeds, and «Сервер недоступен» on failure; the old
+    «В контуре» overclaimed overall readiness. Mock-brain browser E2E passes
+    after the copy change; all nine responsive viewports remain overflow-free.
+    Голосовая ошибка теперь объясняет 503 как недоступный TTS и предлагает
+    проверить службу/повторить, а сетевые ошибки дают краткую инструкцию.
+    E2E mock-flow подтвердил показ сообщения после неудачи озвучивания.
+
+
+- 24Oct: ???????? 29-???????? no-mic/no-TTS loopback integration run: 174 polls, 115 segments, zero capture drops/errors, one known electronic control yielded `music`; broad genre/style and external-media transcript remain unverified. Fix wall-clock timestamps covered by 30 tests; live post-fix timestamp check remains open. Run details: `docs/research/music-sensory-candidate-evaluation-20261024.md`.
+
+
+- 24Oct three-role multimodal smoke: Hikari text brain + two concurrent Qwen2.5-Omni-3B sensor slots accepted a video and an audio request (2.70s video, 2.54s audio; Hikari 0.56s). Video got Earth/scene changes but missed clouds/icon detail; audio tagged electronic/EDM but was repetitive and omitted instruments/vocal/transitions. Isolated servers left on localhost 8990/8995; no screen/loopback capture, no daily-profile wiring, and no TTS. Keep audio description quality open; report and proposed detailed role prompts: `docs/research/omni-three-role-smoke-20261024.md`.
+  24Oct follow-up replay with the bounded event window plus one direct Hikari
+  request: 8 submissions, 5 scene changes, 2 current captions, 4 retained visual
+  events; brain endpoint answered in 1.79s and cited details from prior scenes,
+  but output truncated and temporal grounding was inconsistent on a second probe.
+  Confirms context transport only, not reliable continuity or Companion chat.
+  Artifact: `runtime/instances/goal-trailer-visual-replay-20261024/trailer-sensor-replay-timeline-hikari.json`.
+  24Oct follow-up: default full repository gate now passes after the unstable
+  desktop-wallpaper OCR assertion became opt-in: 1,129 unit + 67 pytest + 18
+  API E2E; browser interaction, synthetic desktop voice, Node, PowerShell parse,
+  and diff checks also pass. This does not clear the live-profile blocker:
+  Hikari currently exposes 8,192 tokens against a measured 11,536-token JAWL
+  startup prompt. Gate report: `docs/research/full-gate-20261024.md`.
+  24Oct Hikari follow-up: active 8990 was launched at ctx 8192; workspace owned
+  launcher is configured for 65536. Same model at 16k CPU passes JAWL startup
+  (10,992 prompt tokens) but the first live chat turn times out at 120s while
+  startup ReAct is still running. Need GPU1 16k chat retest; this requires an
+  owner-approved restart of Hikari 8990. Do not treat the CPU chat as PASS.
+  Report: `docs/research/hikari-context-startup-probe-20261024.md`.
+  Readiness fix: normal local-bonsai launch no longer opts into AllowBusyStartup;
+  the existing heartbeat gate waits for SYSTEM_CORE_START completion before
+  exposing Companion readiness. 17 launcher tests, PowerShell parse and CodeSee
+  validation passed. Live GPU1 verification still depends on permission to
+  restart the current user-owned 8990 service.
+
+## 2026-10-25 sensory history follow-up
+
+- Implemented a bounded one-hour text timeline and seven-day compact hourly history for screen/audio observations, with provenance, sensitive-text suppression, and no raw media persistence. Store/fusion/web tests pass (25 passed, 4 subtests).
+- The ten-minute live acceptance captured 199 status samples and 264 text observations with zero capture/API errors. Current scene descriptions worked; direct unaided two-minute retrieval and full ten-minute visual/audio synthesis remain PARTIAL. The existing running companion predates the history-store wiring, so a managed restart and in-process acceptance remain OPEN.
+- Report: `docs/research/sensory-history-acceptance-20261025.md`; raw-media-free ledger: `runtime/sensory-history-acceptance-20261025.json`.
+
+- [ ] 28Oct follow-up: compare LFM1.6B GPU with Qwen GPU on labeled sequential content and live brain/TTS coexistence before selecting a detailed visual describer. Five-frame speed probe completed; runtime/lfm-detail-probe-20261028/STATUS.md.
+
+- [~] 28Oct live YouTube sensory check: LFM450→target-window buffer 50/50 at 1Hz with 64.8ms p50; Hikari caption-only recap in 1.08s declined to invent a plot but answered English and stayed broad. Need labeled story-quality set and Florence tags→brain comparison before selection. Report: runtime/lfm450-story-replay-20261028/STATUS.md.
+
+
+- [ ] Visual detail acceptance: rerun identical LFM450 and Florence-2 moments at the current 960 x 520 adapter output and at the target window's native/highest practical resolution; record pre/post-resize dimensions and scale factor. Score small objects and readable UI text against manual labels; keep JPEG quality fixed for the resolution A/B, then test compression separately. Current 28Oct live comparison is resolution-limited/inconclusive for maximum detail. Report: `runtime/lfm450-story-replay-20261028/STATUS.md`.
+
+- [~] Hikari conversation continuity: managed restart applied 200-message history/cache and startup receipt reports `terminal_context_compaction.installed=true`; compaction is character-budget-driven (18K target) with the latest 12 messages preserved verbatim. Still exercise a long live conversation across the compaction threshold and confirm the summary retains needed decisions. Current health is degraded because captions age out amid scene-change drops; loopback awaits samples.
+
+- [~] Weak YAMNet music-candidate offline screen: 181 source-disjoint ESC-10 non-music clips + three recorded speech fixtures produced zero candidates; five real media clips yielded four confirmed music results and one weak anime candidate; 54 speech/music mixes produced 11 weak candidates and 34 confirmed detections; four speech/noise controls produced zero candidates. Promising routing evidence, not full acceptance: add human-checked speech-only and game/SFX/tonal clips and validate live loopback under load. Candidate cutoff remains uncalibrated; confirmed gate stays 0.35. Report/artifact: `docs/research/audio-speech-music-overlap-20261029.md`, `runtime/audio-path-replay/out/yamnet-weak-music-candidate-20261029.json`.
+
+29Oct direct-mic delivery cues are an experimental DSP lane, disabled by default and opt-in via `-EnableVoiceDeliveryCues` (pitch/level/voiced-frame measurements, no emotion inference). Acceptance remains OPEN pending owner-reviewed mic samples, calibration, CPU/latency cost, and brain uptake: `docs/research/voice-delivery-cues-20261029.md`.
+
+29Oct ambient loopback ASR now filters only clear artifacts (blank/filler, repeated-character and CJK/Hangul) before memory/VA, with an `asr_noise_filtered` counter and no invented default confidence. This is not VAD or semantic validation; mixed-loopback accuracy remains OPEN: `docs/research/ambient-asr-artifact-gate-20261029.md`.

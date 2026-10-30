@@ -164,9 +164,9 @@ class LanSecurityTests(unittest.TestCase):
             auth = {"Authorization": f"Basic {credentials}"}
             context = ssl.create_default_context(cafile=str(cert_file))
             try:
-                with urlopen(Request(base + "/", headers=auth), context=context, timeout=2) as response:
+                with urlopen(Request(base + "/app", headers=auth), context=context, timeout=2) as response:
                     self.assertEqual(response.status, 200)
-                    self.assertIn(b"JAWL VoiceCompanion", response.read())
+                    self.assertIn(b"JAWL Companion", response.read())
 
                 with urlopen(Request(base + "/api/session", headers=auth), context=context, timeout=2) as response:
                     session = json.loads(response.read().decode("utf-8"))

@@ -13,6 +13,28 @@ from scripts.run_unattended_goal_soak import (
 
 
 class UnattendedGoalSoakHarnessTests(unittest.TestCase):
+    def test_cross_plan_read_requires_same_native_trace_and_exact_write_target(self):
+        def action(event, plan, tool, **kwargs):
+            return dict(event=event, plan_id=plan, action_id='a', tool_name=tool, **kwargs)
+        write = 'HostOSWriter.write_file'
+        read = 'HostOSReader.read_file'
+        rows = [action('action_started', 'write', write, trace={'trace_id': 'cycle'},
+                       parameters={'content': 'MARKER', 'filepath': 'sandbox/target.txt'}),
+                action('action_finished', 'write', write, is_success=True),
+                action('action_started', 'probe', read, trace={}, parameters={'filepath': 'sandbox/target.txt'}),
+                action('action_finished', 'probe', read, is_success=True)]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'journal.jsonl'
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows), encoding='utf-8')
+            self.assertFalse(journal_cycle_evidence(path, 'MARKER')['write_then_read_verified'])
+            rows.extend([action('action_started', 'read', read, trace={'trace_id': 'cycle'},
+                                parameters={'filepath': 'sandbox/target.txt'}),
+                         action('action_finished', 'read', read, is_success=True)])
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows), encoding='utf-8')
+            evidence = journal_cycle_evidence(path, 'MARKER')
+            self.assertTrue(evidence['write_then_read_verified'])
+            self.assertEqual(evidence['action_finished_count'], 2)
+
     def test_wait_for_goal_treats_failed_goal_as_terminal(self):
         calls = []
 

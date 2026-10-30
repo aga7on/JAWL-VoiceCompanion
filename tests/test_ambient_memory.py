@@ -78,7 +78,8 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(len(result["episodes"]), 1)
         episode = result["episodes"][0]
         self.assertEqual(episode["type"], "AMBIENT_EPISODE_CANDIDATE")
-        self.assertEqual(episode["payload"]["importance"], "promote_candidate")
+        self.assertEqual(episode["payload"]["importance"], "retain")
+        self.assertFalse(episode["payload"]["verified"])
         self.assertEqual(episode["payload"]["source"], "mixed")
         self.assertEqual(episode["payload"]["source_event_ids"], ["audio-1", "screen-1"])
         self.assertFalse(episode["payload"]["raw_audio_persisted"])
@@ -102,6 +103,53 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(payload["tags"], ["музыка", "ударные"])
         self.assertEqual(payload["duration_seconds"], 4.5)
         self.assertFalse(payload["raw_audio_persisted"])
+
+    def test_ambient_ingest_sanitizes_unknown_mixed_speech_and_sound_bypasses(self):
+        for index, kind in enumerate(("unknown", "mixed", "speech", "sound")):
+            memory = AmbientMemoryBuffer(enabled=True)
+            result = memory.ingest({
+                "schema_version": 1,
+                "event_id": f"unsafe-audio-{index}",
+                "session_id": "test",
+                "type": "AMBIENT_AUDIO_OBSERVATION",
+                "payload": {
+                    "text": "energetic cinematic music, 120 BPM, tense",
+                    "confidence": 0.99,
+                    "audio_kind": kind,
+                    "tags": ["music", "120 BPM", "C major"],
+                    "mood": "tense",
+                },
+            })
+            self.assertEqual(result["status"], "retained")
+            payload = memory.observations()[0]["payload"]
+            self.assertNotIn("energetic cinematic music", payload["text"].lower())
+            self.assertEqual(payload["tags"], [])
+            self.assertNotIn("mood", payload)
+            self.assertEqual(payload["confidence"], 0.0)
+            if kind == "mixed":
+                self.assertEqual(payload["audio_kind"], "unknown")
+
+    def test_tentative_rhythm_cue_stays_machine_readable_as_sound(self):
+        from jawl_voicecompanion.audio_understanding import TENTATIVE_RHYTHM_CUE
+        from jawl_voicecompanion.perception_fusion import PerceptionFusion
+
+        memory = AmbientMemoryBuffer(enabled=True)
+        result = memory.ingest_audio_description({
+            "kind": "sound", "description": TENTATIVE_RHYTHM_CUE,
+            "tags": [], "mood": "", "confidence": 0.0, "duration_seconds": 1,
+        }, event_id="tentative-rhythm")
+        self.assertEqual(result["status"], "retained")
+        payload = memory.observations()[0]["payload"]
+        self.assertEqual(payload["audio_kind"], "sound")
+        self.assertEqual(payload["text"], TENTATIVE_RHYTHM_CUE)
+        self.assertEqual(payload["confidence"], 0.0)
+        self.assertEqual(payload["tags"], [])
+
+        fusion = PerceptionFusion()
+        fusion.note("sound", payload["text"], now=10)
+        composed = fusion.compose(now=11)
+        self.assertIn("not independently verified", composed)
+        self.assertNotIn("music:", composed.lower())
 
     def test_private_duplicate_and_unknown_events_are_not_retained(self):
         memory = AmbientMemoryBuffer(enabled=True)
@@ -152,7 +200,7 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(memory.state(now=20)["episode_count"], 0)
         self.assertEqual(memory.triage(now=21)["status"], "provider_error")
 
-    def test_provider_cannot_suppress_deterministically_salient_observation(self):
+    def test_unscored_asr_remains_unverified_even_when_salient(self):
         memory = AmbientMemoryBuffer(enabled=True, triage_provider=_IgnoreTriage())
         memory.ingest_system_audio(
             "Важный error: deadline сегодня, запомни.",
@@ -162,7 +210,10 @@ class AmbientMemoryTests(unittest.TestCase):
         )
         result = memory.triage(now=20)
         self.assertEqual(result["status"], "processed")
-        self.assertEqual(result["episodes"][0]["payload"]["importance"], "promote_candidate")
+        payload = result["episodes"][0]["payload"]
+        self.assertEqual(payload["importance"], "retain")
+        self.assertFalse(payload["verified"])
+        self.assertTrue(payload["summary"].startswith("Непроверенная ASR-расшифровка:"))
 
     def test_ollama_provider_uses_cpu_and_structured_output(self):
         requests = []

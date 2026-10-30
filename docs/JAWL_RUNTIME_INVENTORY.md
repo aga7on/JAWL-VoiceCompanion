@@ -1,5 +1,41 @@
 # JAWL runtime: исходники и запуск
 
+## Текущая рамка — 2026-10-10
+
+Этот инвентарь описывает source snapshot и подготовку runtime среза 2026-09;
+сведения и проверки ниже исторические. Архитектурно JAWL — единственный мозг
+Companion, VoiceMem поставляет sensory observations. Текущий выбранный LLM
+профиль — Bonsai-2 27B Hikari PQ2_0 на GPU 1. Существование snapshot/manifest
+не доказывает чистую установку, готовность всех компонентов или актуальность
+каждого указанного файла/пакета.
+
+Для live/provider/device/release evidence использовать только датированные
+срезы в [STATE](STATE.md); актуальная карта — [docs/README.md](README.md),
+очередь — [TODO](../TODO.md). На 2026-10-10 проведён только read-only аудит
+документации; последнее сохранённое runtime evidence — 2026-10-05.
+
+## Выбранный target и launch defaults — не одно и то же
+
+Выбранный target Companion: Electron `/app` + VRM/three-vrm; JAWL один brain,
+VoiceMem sensory; Hikari Bonsai-2 27B PQ2_0 на GPU 1 через brain port 8990;
+GigaAM v3 only; TeraTTS ru_f1 default на 9889, OmniVoice выбирается отдельно;
+vision Bonsai 8986 настроен, но полная OCR/grounding приёмка не заявлена.
+
+Defaults проверены чтением параметров launcher-ов на 2026-10-10:
+
+| Launcher | Фактические defaults | Ограничение |
+|---|---|---|
+| `run_local_bonsai_integrated.ps1` | RunSeconds 60; JAWL console 8870; control 2467; presentation 8866; TTS 9989; brain 8990; Hikari model path | Это отдельный bounded profile; его порты отличаются от выбранного target |
+| `run_integrated_profile.ps1` | JAWL console 8770; control 2367; presentation 8766; RunSeconds 0; TTS 9889; vision `http://127.0.0.1:8983/v1`, `qwen3-vl` | Это другой launcher; vision default не равен target Bonsai 8986 |
+| `run_coding_server.ps1` | Port 8986; Bonsai-27B-Q1_0; taardis | Отдельный старый coding/chat сервер; его имя/порт не подтверждают Hikari brain или target vision model |
+
+Для port-only overrides `run_local_bonsai_integrated.ps1` и bounded
+`RunSeconds=60` см. точный пример в [RELEASE](RELEASE.md). Brain port 8990
+задан внутри wrapper. Override-команда не проверяет порты/готовность и не
+исполнялась в этом аудите. Wrapper не выставляет/не передаёт `VisionUrl` и
+`VisionModel`; vision alignment остаётся открытым и не выводится из этих
+overrides.
+
 Проверено read-only 2026-09-05. Это инвентаризация для P0-A; поставка ещё
 частично собрана; live запуск не выполнен.
 

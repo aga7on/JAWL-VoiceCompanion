@@ -1,10 +1,9 @@
 """Deterministic synthetic acoustic cases from one clean PCM16 WAV fixture.
 
 Generates tempo-slow, paused, quiet, noisy, phrase-end and consecutive-phrase
-variants of a source utterance using only the Python stdlib. The produced
-cases.json manifest is consumed by run_asr_profile --expects so the synthetic
-ASR profile can distinguish speech that must be transcribed from tolerated
-no-speech inputs.
+variants of a source utterance using only the Python stdlib. When the caller
+supplies a known source transcript, cases.json records references and a WER
+threshold for speech cases, plus abstention for pure noise.
 """
 
 from __future__ import annotations
@@ -88,7 +87,12 @@ def _seconds(samples: list[int], rate: int) -> float:
     return round(len(samples) / rate, 3)
 
 
-def make_cases(source_path: Path, out_dir: Path, seed: int = 7) -> dict[str, Any]:
+def make_cases(
+    source_path: Path,
+    out_dir: Path,
+    seed: int = 7,
+    reference_text: str | None = None,
+) -> dict[str, Any]:
     source_path = Path(source_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -103,14 +107,23 @@ def make_cases(source_path: Path, out_dir: Path, seed: int = 7) -> dict[str, Any
 
     def add(name: str, case: str, samples: list[int], exp: dict[str, Any], note: str) -> None:
         _write_mono_pcm16(out_dir / name, rate, samples)
-        cases.append({
+        item = {
             "file": name,
             "case": case,
             "must_transcribe": bool(exp["must_transcribe"]),
             "min_chars": int(exp["min_chars"]),
             "duration_seconds": _seconds(samples, rate),
             "note": note,
-        })
+        }
+        if name == "noise_only.wav":
+            item["must_be_empty"] = True
+        if reference_text and exp["must_transcribe"]:
+            item["reference_text"] = (
+                f"{reference_text} {reference_text}"
+                if name == "consecutive_two.wav" else reference_text
+            )
+            item["max_wer"] = 0.20
+        cases.append(item)
 
     add("tempo_slow.wav", "tempo_slow", _stretch(src, 2.0), speech_notes,
         "speech stretched to roughly 2-3 words per second")
@@ -160,6 +173,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--wav", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--reference-text", default=None,
+                        help="known transcript for the source WAV; enables WER scoring")
     return parser
 
 
@@ -167,7 +182,7 @@ def main() -> int:
     args = _parser().parse_args()
     if not Path(args.wav).is_file():
         raise SystemExit(f"source WAV is missing: {args.wav}")
-    manifest = make_cases(args.wav, args.out, seed=args.seed)
+    manifest = make_cases(args.wav, args.out, seed=args.seed, reference_text=args.reference_text)
     print(json.dumps({"status": "ok", "out": str(Path(args.out)), "cases": len(manifest["cases"])}, ensure_ascii=True))
     return 0
 

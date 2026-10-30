@@ -2,8 +2,9 @@
 
 The profile attaches to already running services. It never starts or stops a
 process and never turns an optional dependency into a fake pass. By default it
-checks both Companion HTTP surfaces; ``--require-*`` flags promote external
-provider, JAWL, and Live2D checks to release requirements.
+checks the control surface and the ``?mode=obs`` app surface (ADR-052:
+one origin); ``--require-*`` flags promote external provider and JAWL
+checks to release requirements.
 """
 
 from __future__ import annotations
@@ -22,15 +23,6 @@ from run_native_namespace_profile import _loopback_url, _request, _write_report
 
 class ProfileFailure(RuntimeError):
     """A target-machine release assertion failed."""
-
-
-FORBIDDEN_PRESENTATION_FIELDS = {
-    "session_token",
-    "csrf_token",
-    "policy",
-    "last_turn",
-    "recent_turns",
-}
 
 
 def _request_text(url: str, timeout: float) -> tuple[int, str]:
@@ -98,13 +90,25 @@ def _check_jawl(url: str, token: str, timeout: float) -> dict[str, Any]:
     }
 
 
+def _check_obs_surface(control_url: str, timeout: float) -> dict[str, Any]:
+    """Fetch the ?mode=obs alias and require the app marker (ADR-052).
+
+    The avatar/OBS surface is the single app window in ?mode=obs on the
+    control origin; /avatar is its stable alias.
+    """
+    status, html = _request_text(control_url + "/avatar", timeout)
+    if status != 200 or "JAWL Companion" not in html:
+        raise ProfileFailure("obs-mode app surface marker is missing")
+    return {"html": True}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", help="required acknowledgement for target-machine checks")
     parser.add_argument("--url", default="http://127.0.0.1:2367")
-    parser.add_argument("--presentation-url", default="http://127.0.0.1:8766")
+    parser.add_argument("--presentation-url", default="",
+                        help="deprecated no-op (ADR-052): the obs surface lives on the control origin")
     parser.add_argument("--timeout", type=float, default=10.0)
-    parser.add_argument("--require-live2d", action="store_true")
     parser.add_argument("--require-jawl-url")
     parser.add_argument("--jawl-token", default=os.environ.get("CONSOLE_TOKEN", ""))
     parser.add_argument("--require-dependency", action="append", default=[], metavar="NAME=URL")
@@ -116,9 +120,6 @@ def main() -> int:
         parser.error("--timeout must be between 1 and 60 seconds")
 
     control_url = _loopback_url(args.url)
-    presentation_url = _loopback_url(args.presentation_url)
-    if control_url == presentation_url:
-        raise ValueError("control and presentation URLs must be different")
     report_path = args.report or Path("runtime") / (
         "target-release-profile-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".json"
     )
@@ -126,11 +127,9 @@ def main() -> int:
         "schema_version": 1,
         "profile": "target-machine-loopback-release",
         "control_url": control_url,
-        "presentation_url": presentation_url,
         "surfaces": {},
         "required_dependencies": [],
         "jawl": None,
-        "live2d": None,
         "failures": [],
         "pass": False,
     }
@@ -144,24 +143,7 @@ def main() -> int:
             raise ProfileFailure("control HTML marker is missing")
         report["surfaces"]["control"] = {"health": True, "html": True}
 
-        status, presentation_state = _request(
-            presentation_url,
-            "/api/presentation/state",
-            token="",
-            timeout=args.timeout,
-        )
-        if status != 200 or presentation_state.keys() & FORBIDDEN_PRESENTATION_FIELDS:
-            raise ProfileFailure("presentation state is unavailable or contains privileged fields")
-        status, html = _request_text(presentation_url + "/avatar", args.timeout)
-        if status != 200 or "JAWL Avatar" not in html:
-            raise ProfileFailure("presentation avatar marker is missing")
-        report["surfaces"]["presentation"] = {"state": True, "html": True}
-
-        if args.require_live2d:
-            status, avatar = _request(control_url, "/api/avatar/config", token="", timeout=args.timeout)
-            if status != 200 or avatar.get("ready") is not True:
-                raise ProfileFailure("required Live2D asset/runtime is not ready")
-            report["live2d"] = {"required": True, "ready": True}
+        report["surfaces"]["obs"] = _check_obs_surface(control_url, args.timeout)
 
         for raw_dependency in args.require_dependency:
             name, url = _dependency(raw_dependency)

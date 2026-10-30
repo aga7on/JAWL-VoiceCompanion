@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>JAWL Companion</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/app/node_modules/three/build/three.module.js",
+    "three/addons/": "/app/node_modules/three/examples/jsm/",
+    "@pixiv/three-vrm": "/app/node_modules/@pixiv/three-vrm/lib/three-vrm.module.min.js"
+  }
+}
+</script>
+<style>
+  :root {
+    --bg: #0a1520;
+    --bg-2: #0e1c2a;
+    --card: #12222f;
+    --line: #1e3a4d;
+    --text: #d7f0e9;
+    --muted: #7ba8a0;
+    --accent: #4fd1a5;
+    --accent-2: #2a7770;
+    --danger: #e0705f;
+    --radius: 10px;
+    --rail: 52px;
+    --control-target: 24px;
+    --focus-width: 2px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .ui-icon {
+    width: 18px; height: 18px; display: block; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.8;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .hud-dock .ui-icon { width: 16px; height: 16px; }
+  html, body { height: 100%; }
+  body {
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    overflow: hidden;
+    border-radius: 12px;
+  }
+
+  /* ---- left icon rail ---- */
+  nav.rail {
+    width: max(var(--rail), 60px);
+    background: rgba(8, 18, 28, .9);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  nav.rail button {
+    width: 44px; height: 44px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 17px;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: background .15s, color .15s;
+  }
+  nav.rail button:hover { background: rgba(79, 209, 165, .12); color: var(--text); }
+  nav.rail button.active { background: var(--accent-2); color: #eafff8; }
+  nav.rail button:focus-visible,
+  button:focus-visible, input:focus-visible, select:focus-visible,
+  textarea:focus-visible, [role="button"]:focus-visible {
+    outline: var(--focus-width) solid var(--accent);
+    outline-offset: 2px;
+  }
+  nav.rail .spacer { flex: 1; }
+  .settings-list { max-height: 420px; overflow-y: auto; overflow-x: hidden; }
+  /* V.E.G.A.-style fields: label+desc left, typed control right */
+  .field { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid rgba(30,58,77,.5); }
+  .field:last-child { border-bottom: 0; }
+  .field .fl { flex: 1; min-width: 0; }
+  .field .fn { font-size: 13px; color: var(--text); }
+  .field .fd { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .field .fc { display: inline-flex; align-items: center; gap: 6px; }
+  .field .unit { font-size: 11px; color: var(--muted); }
+  .field input[type=number], .field input[type=text] {
+    width: 90px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-size: 12px;
+  }
+  .field input[type=range] {
+    width: 110px; accent-color: var(--accent);
+  }
+  .field input[type=text].wide { width: 170px; }
+  .field select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px; max-width: 180px;
+  }
+  /* toggle switch (V.E.G.A. .sw) */
+  .sw {
+    position: relative; width: 34px; height: 18px; flex: none;
+    background: #1d3346; border: 1px solid var(--line);
+    border-radius: 999px; cursor: pointer; transition: background .15s;
+    padding: 0; appearance: none; font: inherit;
+  }
+  .sw::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--muted); transition: left .15s, background .15s;
+  }
+  .sw[aria-checked="true"] { background: rgba(79,209,165,.18); border-color: rgba(79,209,165,.4); }
+  .sw[aria-checked="true"]::after { left: 17px; background: var(--accent); }
+
+  main { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #connection-feedback {
+    position: absolute; z-index: 20; top: 48px; right: 12px;
+    max-width: min(420px, calc(100% - 24px));
+    padding: 9px 12px; border: 1px solid rgba(79,209,165,.5);
+    border-radius: 8px; background: rgba(10,21,32,.96); color: var(--text);
+    box-shadow: 0 4px 12px rgba(0,0,0,.25); font-size: 12px;
+  }
+  #connection-feedback.error { border-color: rgba(224,112,95,.65); color: #ffd9d2; }
+
+  .status-strip {
+    display: flex; align-items: center; gap: 12px;
+    flex: 0 0 auto; min-width: 0; min-height: 26px;
+    padding: 3px 10px; border-bottom: 1px solid var(--line);
+    background: rgba(10,21,32,.72); color: var(--muted);
+    font-size: 11px; line-height: 1.35;
+  }
+  .status-strip #avatar-status,
+  .status-strip #sensory-health {
+    position: static; display: block; min-width: 0; max-width: none;
+    padding: 0; border: 0; border-radius: 0; background: transparent;
+    color: inherit; font-size: inherit; line-height: inherit;
+    text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .status-strip #avatar-status { flex: 0 1 34%; }
+  .status-strip #sensory-health { flex: 1 1 0; }
+  .status-strip #sensory-health[data-state="warn"] { color: #f0c977; }
+  .status-strip #sensory-health[data-state="error"] { color: #ffd0c8; }
+  .status-strip #sensory-health-compact { display: none; }
+
+  header.top {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line);
+    -webkit-app-region: drag;
+  }
+  header.top .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  header.top .dot.ok { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  header.top .dot.err { background: var(--danger); }
+  header.top .title { font-weight: 600; letter-spacing: .04em; font-size: 13px; }
+  header.top .status { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+  /* ---- split: stage (3D) + side panel ---- */
+  .split { flex: 1; display: flex; min-height: 0; }
+
+  .stage-wrap {
+    flex: 1.25;
+    min-width: 0;
+    position: relative;
+    background: radial-gradient(ellipse at 50% 30%, #1032447a, #0a1520 70%);
+  }
+  #avatar-canvas { width: 100%; height: 100%; display: block; }
+  .sensor-value[data-state="warn"] { color: #f0c977; }
+  .sensor-value[data-state="error"] { color: #ffd0c8; }
+  .sensor-value { text-align: right; }
+  #avatar-caption {
+    position: absolute; left: 12px; right: 12px; bottom: 10px;
+    color: var(--text); font-size: 13px;
+    text-shadow: 0 1px 4px #000a;
+    min-height: 18px;
+    opacity: .95;
+    transition: opacity .4s;
+  }
+  #avatar-caption.dim { opacity: 0; }
+
+  .side {
+    width: 340px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg-2);
+  }
+  .side .section { flex: 1; overflow-y: auto; padding: 10px; display: none; }
+  .side .section.active { display: block; }
+  .side .section[data-section="chat"].active {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* ---- chat ---- */
+  #chat-log {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    padding-right: 4px;
+    flex: 1;
+    min-height: 0;
+  }
+  .msg { max-width: 88%; padding: 7px 11px; border-radius: 12px; white-space: pre-wrap; font-size: 13px; }
+  .msg.user { align-self: flex-end; background: var(--accent-2); color: #eafff8; }
+  .msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--line); }
+  .msg.system { align-self: center; color: var(--muted); font-size: 11px; background: none; }
+  .composer { display: flex; gap: 8px; padding: 10px 0 0; }
+  .composer textarea {
+    flex: 1; resize: none; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    font: inherit; min-height: 42px; max-height: 110px;
+  }
+  .composer button, .btn {
+    background: var(--accent-2); color: #eafff8; border: 0; border-radius: 8px;
+    padding: 8px 14px; font: inherit; cursor: pointer;
+  }
+  .composer button:disabled { opacity: .4; cursor: default; }
+  .composer button[aria-busy="true"], .hud-dock button[aria-busy="true"] { cursor: progress; }
+  .btn.secondary { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 10px; font-size: 12px; }
+  .btn.danger { background: transparent; border: 1px solid rgba(224,112,95,.4); color: var(--danger); }
+
+  /* ---- cards/rows ---- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .card h3 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+  .card p.note { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(30,58,77,.5); }
+  .row:last-child { border-bottom: 0; }
+  .row .label { flex: 1; font-size: 13px; }
+  .row .value { color: var(--muted); font-size: 11px; text-align: right; }
+  select, input[type=text] {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px;
+  }
+  .model-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .model-tile {
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+    width: 100%; color: var(--text); font: inherit;
+    text-align: center; cursor: pointer; background: var(--bg);
+  }
+  .model-tile:hover { border-color: var(--accent-2); }
+  .model-tile:active { background: var(--card); }
+  .model-tile:focus-visible { outline: var(--focus-width) solid var(--accent); outline-offset: 2px; }
+  .model-tile:disabled { opacity: .58; cursor: progress; }
+  .model-tile.error { border-color: var(--danger); }
+  .model-tile.worn { border-color: var(--accent); background: rgba(79,209,165,.08); }
+  .model-tile .nm { display: block; font-size: 10px; margin-top: 4px; overflow-wrap: anywhere; }
+  .model-tile .sz { display: block; font-size: 9px; color: var(--muted); }
+  .model-tile .em { display: grid; place-items: center; min-height: 28px; color: var(--accent); }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  audio { width: 100%; margin-top: 8px; height: 32px; }
+  .log {
+    font-family: Consolas, monospace; font-size: 11px; color: var(--muted);
+    max-height: 200px; overflow-y: auto; background: var(--bg);
+    border-radius: 6px; padding: 8px; white-space: pre-wrap;
+  }
+  #doctor-log { max-height: 280px; white-space: normal; }
+  .doctor-summary {
+    color: var(--muted); font-size: 10px; letter-spacing: .08em;
+    text-transform: uppercase; padding: 1px 0 7px;
+  }
+  .doctor-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 0; border-bottom: 1px solid rgba(30,58,77,.4);
+    font: 12px/1.35 "Segoe UI", system-ui, sans-serif;
+  }
+  .doctor-row:last-child { border-bottom: 0; }
+  .doctor-icon { width: 28px; text-align: center; color: var(--muted); font-weight: 700; font-size: 9px; letter-spacing: .02em; }
+  .doctor-row.ok .doctor-icon { color: var(--accent); }
+  .doctor-row.warn .doctor-icon { color: #e2b15f; }
+  .doctor-row.error .doctor-icon { color: var(--danger); }
+  .doctor-name { flex: 1; color: var(--text); }
+  .doctor-status { color: var(--muted); font-size: 11px; text-align: right; }
+
+  /* settings workspace: use the full window instead of a 340px column */
+  body.settings-mode .stage-wrap { display: none; }
+  body.settings-mode .side { width: auto; flex: 1; border-left: 0; }
+  body.settings-mode .section[data-section="settings"].active {
+    width: 100%; max-width: 1120px; margin: 0 auto;
+    padding: 14px 20px 24px;
+  }
+  .settings-toolbar { display: flex; align-items: center; gap: 20px; margin-bottom: 10px; }
+  .settings-toolbar .settings-heading { flex: 1; min-width: 0; }
+  .settings-toolbar .settings-heading h3 { margin-bottom: 3px; }
+  .settings-toolbar #settings-search { flex: none; width: min(320px, 36vw); }
+  body.settings-mode #settings-list {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 12px; max-height: none; overflow: visible;
+  }
+  body.settings-mode #settings-list > .card { margin-bottom: 0; min-width: 0; }
+  body.settings-mode #settings-list > #settings-save {
+    grid-column: 1 / -1; justify-self: end; min-width: 170px;
+    margin: 2px 0 0;
+  }
+  body.settings-mode .settings-activity { margin-top: 12px; }
+  .settings-list .field { min-width: 0; align-items: flex-start; }
+  .settings-list .field .fl { overflow-wrap: anywhere; }
+  .settings-list .field .fc { flex-wrap: wrap; justify-content: flex-end; }
+  .settings-list .field input[type=text], .settings-list .field select { max-width: 100%; }
+  /* accordion: quiet foldable group headers */
+  .settings-list .group-toggle {
+    display: flex; width: 100%; align-items: center; gap: 8px;
+    background: none; border: 0; padding: 0; color: var(--text);
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left;
+  }
+  .settings-list .group-toggle::after {
+    content: "▾"; margin-left: auto; color: var(--muted); transition: transform .15s;
+  }
+  .settings-list .group-toggle[aria-expanded="false"]::after { transform: rotate(-90deg); }
+  .settings-list .settings-group h3 { margin: 0; }
+
+  /* thinking indicator */
+  #thinking {
+    position: absolute; right: 12px; top: 8px;
+    font-size: 11px; color: var(--accent);
+    display: none;
+  }
+  #thinking.on { display: block; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+
+  /* chat mic state */
+  #mic-state {
+    overflow-wrap: anywhere;
+    font-size: 11px; color: var(--muted); padding: 4px 0 0; text-align: center;
+    min-height: 16px;
+  }
+  .avatar-controls label { cursor: pointer; }
+  .section[data-section=avatar] .row { flex-wrap: wrap; }
+  .avatar-controls input { accent-color: var(--accent); min-height: var(--control-target); }
+  .avatar-controls input[type=checkbox] { min-width: var(--control-target); }
+  .avatar-controls input[type=range] { flex: 1; min-width: 0; }
+  .avatar-controls input:focus-visible { outline: var(--focus-width) solid var(--accent); }
+  .avatar-controls input:disabled { cursor: not-allowed; opacity: .5; }
+  .avatar-controls output { color: var(--text); font: inherit; }
+  .mic-capture-settings label { cursor: pointer; }
+  .mic-capture-settings input:focus-visible {
+    outline: var(--focus-width) solid var(--accent); outline-offset: var(--focus-width);
+  }
+  .mic-capture-settings input:disabled { cursor: not-allowed; }
+  .mic-capture-settings fieldset { min-width: 0; border: 0; }
+  .mic-capture-settings input[aria-invalid="true"] { border-color: var(--danger); }
+  .mic-capture-settings .save-row { justify-content: flex-end; }
+  .mic-capture-settings button[aria-busy="true"] { cursor: progress; }
+  @media (max-width: 720px) {
+    .status-strip { font-size: 10px; }
+    nav.rail { width: 52px; }
+    .split { flex-direction: column; }
+    .stage-wrap { flex: 0 0 min(38vh, 280px); min-height: 220px; }
+    .side { width: auto; flex: 1; min-width: 0; border-left: 0; border-top: 1px solid var(--line); }
+    header.top .status { display: none; }
+    .status-strip { min-height: 22px; gap: 8px; padding-inline: 8px; }
+    .status-strip #avatar-status { flex-basis: 32%; }
+    body.settings-mode .section[data-section="settings"].active { padding: 14px 12px 24px; }
+    body.settings-mode .settings-toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+    body.settings-mode .settings-toolbar #settings-search { width: 100%; }
+    body.settings-mode #settings-list { grid-template-columns: minmax(0, 1fr); }
+    .field { align-items: flex-start; flex-direction: column; gap: 6px; }
+    .field .fc { width: 100%; flex-wrap: wrap; }
+    .field select, .field input[type="text"].wide { max-width: 100%; }
+  }
+  @media (max-width: 360px) {
+    nav.rail { width: 48px; }
+    nav.rail button { width: 40px; height: 40px; }
+    header.top { gap: 6px; padding: 0 8px; }
+    header.top .title { font-size: 12px; }
+    header.top .win-btn { margin-left: auto; padding-inline: 8px; }
+  }
+  @media (max-width: 400px) {
+    /* At the compact minimum size, give the conversation its vertical space;
+       the same reply is already visible in chat, so don't cover the avatar. */
+    .stage-wrap { flex-basis: min(34vh, 200px); min-height: 160px; }
+    #avatar-caption { display: none; }
+    .status-strip { gap: 0; }
+    .status-strip #avatar-status,
+    .status-strip #sensory-health {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    .status-strip #sensory-health-compact {
+      display: block; flex: 1 1 auto; min-width: 0;
+      overflow: visible; white-space: normal; text-overflow: clip; line-height: 1.25;
+    }
+    .status-strip #sensory-health-compact[data-state="warn"] { color: #f0c977; }
+    .status-strip #sensory-health-compact[data-state="error"] { color: #ffd0c8; }
+  }
+
+  /* ---- Chameleon Compact HUD & OBS mode (Project Airi / N.E.K.O. style) ---- */
+  header.top .win-btn {
+    -webkit-app-region: no-drag;
+    background: rgba(79, 209, 165, .12);
+    color: var(--accent);
+    border: 1px solid rgba(79, 209, 165, .35);
+    border-radius: 6px;
+    padding: 3px 9px;
+    min-height: 24px;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1.2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  header.top .win-btn:hover { background: var(--accent-2); color: #eafff8; }
+
+  .hud-dock {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(10, 21, 32, .82);
+    border: 1px solid rgba(79, 209, 165, .32);
+    backdrop-filter: blur(8px);
+    z-index: 10;
+    opacity: .88;
+    transition: opacity .2s ease;
+  }
+  .stage-wrap:hover .hud-dock,
+  .hud-dock:focus-within { opacity: 1; }
+  .hud-dock button {
+    width: 30px; height: 30px;
+    border: 0; border-radius: 50%;
+    background: rgba(255,255,255,.06);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+  }
+  .hud-dock button:hover { background: var(--accent-2); color: #eafff8; }
+  .hud-dock button:disabled { opacity: .35; cursor: default; }
+  .hud-dock button:focus-visible { outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation-duration: .01ms !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
+  body.compact-mode nav.rail,
+  body.compact-mode header.top,
+  body.compact-mode div.side {
+    display: none !important;
+  }
+  body.compact-mode .stage-wrap {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+  }
+  body.compact-mode .hud-dock {
+    display: inline-flex;
+  }
+  body.compact-mode #avatar-caption {
+    bottom: 54px;
+    background: rgba(10, 21, 32, .78);
+    border: 1px solid rgba(79, 209, 165, .28);
+    border-radius: 12px;
+    padding: 6px 10px;
+    text-align: center;
+  }
+  body.compact-mode #avatar-caption:empty {
+    display: none;
+  }
+  body.obs-mode {
+    background: transparent !important;
+  }
+  body.obs-mode nav.rail,
+  body.obs-mode header.top,
+  body.obs-mode .status-strip,
+  body.obs-mode div.side,
+  body.obs-mode .hud-dock,
+  body.obs-mode #avatar-status,
+  body.obs-mode #sensory-health {
+    display: none !important;
+  }
+  body.obs-mode .stage-wrap {
+    background: transparent !important;
+  }
+</style>
+</head>
+<body>
+  <nav class="rail" aria-label="Разделы компаньона">
+    <button data-tab="chat" class="active" type="button" aria-label="Чат" aria-current="page" title="Чат"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.3 8.3 0 0 1-4-.99L3 21l1.99-5.5A8.3 8.3 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.5 8.5 0 0 1 21 11.5Z"/></svg></button>
+    <button data-tab="avatar" type="button" aria-label="Аватар" title="Аватар"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></button>
+    <button data-tab="voice" type="button" aria-label="Голос" title="Голос"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></button>
+    <button data-tab="memory" type="button" aria-label="Память" title="Память"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3H12v18H5.5A2.5 2.5 0 0 0 3 23.5v-18ZM21 5.5A2.5 2.5 0 0 0 18.5 3H12v18h6.5a2.5 2.5 0 0 1 2.5 2.5v-18Z"/></svg></button>
+    <button data-tab="settings" type="button" aria-label="Настройки" title="Настройки"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M14.7 6.3a5 5 0 0 0-6.4 6.4L3 18l3 3 5.3-5.3a5 5 0 0 0 6.4-6.4L14 13l-3-3 3.7-3.7Z"/><path d="m4 20 2-2"/></svg></button>
+    <button data-tab="system" type="button" aria-label="Система" title="Система"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.6.9l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.6-.9l-1.7.7-1.4-2.4 1.4-1.1a8 8 0 0 1 0-1.9l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.6-.9l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.6.9l1.7-.7 1.4 2.4-1.4 1.1a8 8 0 0 1-.1 1.8Z"/></svg></button>
+  </nav>
+
+  <main>
+    <header class="top">
+      <span class="dot" id="conn-dot"></span>
+      <span class="title">JAWL Companion</span>
+      <span class="status" id="conn-status" role="status" aria-live="polite" aria-atomic="true">подключение…</span>
+      <button id="toggle-compact" class="win-btn" type="button" title="Свернуть в компактный режим компаньона (Ctrl+Shift+M)">Компактно</button>
+    </header>
+    <div id="connection-feedback" role="status" aria-live="assertive" aria-atomic="true" hidden></div>
+    <div class="status-strip" role="group" aria-label="Состояние компаньона и сенсоров">
+      <span id="avatar-status">Аватар: загрузка…</span>
+      <span id="sensory-health" role="status" aria-live="off" aria-atomic="true" data-state="pending">Проверяю сенсоры…</span>
+      <span id="sensory-health-compact" aria-hidden="true" data-state="pending">Проверяю сенсоры…</span>
+    </div>
+
+    <div class="split">
+      <!-- 3D персонаж, всегда на виду -->
+      <div class="stage-wrap">
+        <canvas id="avatar-canvas"></canvas>
+        <span id="thinking">думаю…</span>
+        <div id="avatar-caption"></div>
+        <div class="hud-dock" role="group" aria-label="Быстрое управление компаньоном">
+          <button id="hud-mic" type="button" aria-label="Включить или выключить микрофон" aria-describedby="mic-state" aria-pressed="false" title="Микрофон: вкл/выкл"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></button>
+          <button id="hud-stop" type="button" aria-label="Остановить речь" title="Остановить речь" disabled><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
+          <button id="hud-senses" type="button" aria-label="Приостановить или возобновить восприятие" aria-pressed="false" title="Восприятие (Экран/Звук): вкл/пауза"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <button id="hud-dnd" type="button" aria-label="Включить или выключить режим Не беспокоить" aria-pressed="false" title="Режим Не беспокоить (DND): вкл/выкл"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4M4 4l16 16"/></svg></button>
+          <button id="hud-ghost" type="button" aria-label="Включить или выключить прозрачность для мыши" aria-pressed="false" title="Прозрачность для мыши (Click-through / Выход: Ctrl+Shift+G)"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m5 3 14 11-7 1-3 6L5 3Z"/><path d="m12 15 4 5"/></svg></button>
+          <button id="hud-pin" type="button" aria-label="Закрепить окно поверх остальных" aria-pressed="false" title="Поверх всех окон (Always on Top)"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M16 3H8l1 6-4 4v2h6v6l1 1 1-1v-6h6v-2l-4-4 1-6Z"/></svg></button>
+          <button id="hud-expand" type="button" aria-label="Открыть студию и все настройки" title="Открыть студию и все настройки"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M9 8h12"/></svg></button>
+        </div>
+      </div>
+
+      <!-- боковая панель функций -->
+      <div class="side">
+        <section class="section active" data-section="chat">
+          <div id="chat-log" role="log" aria-label="История сообщений" aria-live="polite" aria-relevant="additions text"><div class="msg system">Компаньон на связи. Напиши или включи микрофон.</div></div>
+          <div class="composer">
+            <textarea id="chat-input" rows="1" aria-label="Сообщение компаньону" placeholder="Сообщение…"></textarea>
+            <button id="chat-send" type="button" aria-label="Отправить сообщение" title="Отправить"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7ZM22 2 11 13"/></svg></button>
+            <button id="chat-mic" type="button" aria-label="Включить или выключить микрофон" aria-describedby="mic-state" aria-pressed="false" title="Микрофон: вкл/выкл"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></button>
+          </div>
+          <div id="mic-state">Микрофон выключен.</div>
+          <div id="mic-live-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+          <button id="speech-stop" class="btn secondary" type="button" disabled>Остановить речь</button>
+        </section>
+
+        <section class="section" data-section="avatar">
+          <div class="card">
+            <h3>Гардероб (VRM)</h3>
+            <div class="model-grid" id="wardrobe-grid">…</div>
+            <p id="wardrobe-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+            <p class="note">Свап — только модели из гардероба (bounded). Агент тоже может менять облик в разговоре.</p>
+          </div>
+          <div class="card">
+            <h3>Выражение</h3>
+            <div class="row"><span class="label">Текущее</span><span class="value" id="avatar-current">neutral</span></div>
+            <div class="row"><span class="label">Тест</span>
+              <button class="btn secondary" data-emotion="happy">Радость</button>
+              <button class="btn secondary" data-emotion="sad">Грусть</button>
+              <button class="btn secondary" data-emotion="surprised">Удивление</button>
+              <button class="btn secondary" data-emotion="relaxed">Спокойствие</button>
+            </div>
+          </div>
+          <div class="card avatar-controls" aria-labelledby="avatar-physics-title">
+            <h3 id="avatar-physics-title">Движение и физика</h3>
+            <div class="row">
+              <label for="avatar-physics-enabled" class="label">Инерция тела и одежды</label>
+              <input id="avatar-physics-enabled" type="checkbox" checked aria-describedby="avatar-physics-help">
+            </div>
+            <div class="row">
+              <label for="avatar-physics-intensity" class="label">Сила движения</label>
+              <input id="avatar-physics-intensity" type="range" min="0" max="100" step="5" value="50" aria-valuetext="50%" aria-describedby="avatar-physics-help">
+              <output id="avatar-physics-value" for="avatar-physics-intensity">50%</output>
+            </div>
+            <div class="row">
+              <label for="avatar-reduced-motion" class="label">Уменьшить движение</label>
+              <input id="avatar-reduced-motion" type="checkbox" aria-describedby="avatar-physics-help">
+            </div>
+            <p class="note" id="avatar-physics-help">Лёгкая инерция только у моделей с подготовленным ригом. Волосы управляются родной физикой VRM. Режим уменьшенного движения системы имеет приоритет.</p>
+            <p class="note" id="avatar-physics-status" role="status">Проверяем риг модели…</p>
+            <p class="note" id="avatar-preferences-status" role="status"></p>
+          </div>
+        </section>
+
+        <section class="section" data-section="voice">
+          <div class="card">
+            <h3>Синтез речи</h3>
+            <div class="row"><span class="label">Провайдер</span><span class="value" id="tts-provider">—</span></div>
+            <div class="row"><span class="label">Статус</span><span class="value" id="tts-status">—</span></div>
+            <div class="row"><label class="label" for="tts-preview-text">Превью</label><input type="text" id="tts-preview-text" aria-label="Текст для проверки голоса" value="Привет! Это превью голоса." style="flex:2"><button class="btn secondary" id="tts-preview" type="button" aria-label="Прослушать превью голоса" title="Прослушать превью"><svg class="ui-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8V4Z"/></svg></button></div>
+            <p class="note">Превью использует общий поток речи. Остановить его можно в чате или новым сообщением.</p>
+          </div>
+          <div class="card">
+            <h3>Голос компаньона</h3>
+            <div class="row"><span class="label">Референс</span><span class="value">Александра</span></div>
+            <p class="note">Клон-голос OmniVoice: 8 с чистого монолога.</p>
+          </div>
+          <div class="card">
+            <h3>Микрофон</h3>
+            <div class="row"><label class="label" for="mic-select">Устройство</label>
+              <select id="mic-select" style="max-width:190px"><option value="">по умолчанию</option></select>
+            </div>
+            <div class="row"><span class="label">Активен сейчас</span><span class="value" id="mic-device">—</span></div>
+            <div class="row"><span class="label">ASR</span><span class="value" id="asr-status">—</span></div>
+            <p class="note">GigaAM — единственный ASR. Выбор устройства запоминается между запусками.</p>
+          </div>
+          <div class="card mic-capture-settings" aria-labelledby="mic-capture-title">
+            <h3 id="mic-capture-title">Захват микрофона</h3>
+            <p class="note" id="mic-capture-help">Порог, пауза завершения реплики и запас начала применятся при следующем запуске микрофона.</p>
+            <fieldset id="mic-capture-fields" disabled aria-labelledby="mic-capture-title" aria-describedby="mic-capture-help mic-capture-disabled mic-capture-error">
+              <div class="field">
+                <label for="mic-gate-open" class="label fl">Порог открытия</label>
+                <input id="mic-gate-open" type="number" min="0.001" max="0.25" step="any" inputmode="decimal" required>
+              </div>
+              <div class="field">
+                <label for="mic-gate-close" class="label fl">Порог закрытия</label>
+                <input id="mic-gate-close" type="number" min="0.0005" max="0.25" step="any" inputmode="decimal" required>
+              </div>
+              <div class="field">
+                <label for="mic-silence-ms" class="label fl">Тишина до конца реплики</label>
+                <span class="fc"><input id="mic-silence-ms" type="number" min="300" max="5000" step="1" inputmode="numeric" required><span class="unit">мс</span></span>
+              </div>
+              <div class="field">
+                <label for="mic-pre-roll-ms" class="label fl">Запас начала речи</label>
+                <span class="fc"><input id="mic-pre-roll-ms" type="number" min="0" max="500" step="1" inputmode="numeric" required><span class="unit">мс</span></span>
+              </div>
+              <div class="row save-row">
+                <button class="btn secondary" id="mic-capture-reload" type="button" hidden disabled>Загрузить актуальные значения</button>
+                <button class="btn" id="mic-capture-save" type="button" disabled>Сохранить</button>
+              </div>
+            </fieldset>
+            <p class="note" id="mic-capture-disabled" role="status">Загрузка настроек захвата…</p>
+            <p class="note" id="mic-capture-error" role="alert" hidden></p>
+          </div>
+        </section>
+
+        <section class="section" data-section="memory">
+          <div class="card">
+            <h3>Журнал ходов</h3>
+            <div class="log" id="journal-log">…</div>
+          </div>
+          <div class="card">
+            <h3>Память JAWL</h3>
+            <div class="log" id="memory-log">…</div>
+          </div>
+        </section>
+
+        <section class="section" data-section="system">
+          <div class="card" aria-labelledby="sensor-health-title">
+            <h3 id="sensor-health-title">Сенсорные источники</h3>
+            <div class="row"><span class="label">Микрофон</span><span class="value sensor-value" id="sensor-mic">проверка…</span></div>
+            <div class="row"><span class="label">Экран</span><span class="value sensor-value" id="sensor-screen">проверка…</span></div>
+            <div class="row"><span class="label">Системный звук</span><span class="value sensor-value" id="sensor-loopback">проверка…</span></div>
+            <p class="note" id="sensor-loopback-device">Устройство не выбрано</p>
+            <p class="note" id="sensor-asr-status" role="status" aria-live="off">ASR системного звука не проверен</p>
+            <p class="note" id="sensor-history-status" role="status" aria-live="off">Сенсорная история не проверена</p>
+            <p class="note" id="sensor-soundscape-status">Музыкальный анализатор не проверен</p>
+            <p class="note" id="sensor-audio-description-status" role="status" aria-live="off">Описатель системного звука не проверен</p>
+            <div class="row"><span class="label">Инициатива</span><span class="value sensor-value" id="sensor-attention">проверка…</span></div>
+            <p class="note">Статус обновляется автоматически. «Пауза» и «Не беспокоить» не означают сбой.</p>
+          </div>
+          <div class="card">
+            <h3>Сервисы</h3>
+            <div class="row"><span class="label">Мозг JAWL</span><span class="value" id="svc-brain">—</span></div>
+            <div class="row"><span class="label">Панель</span><span class="value" id="svc-panel">—</span></div>
+            <div class="row"><span class="label">TTS</span><span class="value" id="svc-tts">—</span></div>
+            <div class="row"><span class="label">JAWL-агент</span><span class="value" id="svc-jawl">—</span></div>
+            <p class="note" id="svc-jawl-activity" role="status" aria-live="polite">Статус агента не проверен</p>
+            <a class="btn secondary" href="/console/" id="jawl-console-link">Открыть консоль JAWL</a>
+            <p class="note">Список процессов и портов скрыт; здесь показывается состояние сервисов.</p>
+          </div>
+          <div class="card">
+            <h3>Диагностика (doctor)</h3>
+            <div class="log" id="doctor-log">…</div>
+          </div>
+          <div class="card">
+            <h3>Агент JAWL</h3>
+            <div class="row"><span class="label">Перезапуск</span><button class="btn secondary" id="jawl-restart">перезапустить</button></div>
+            <div class="row"><span class="label">Логи</span><button class="btn secondary" id="jawl-logs">открыть хвост</button></div>
+            <div class="log" id="jawl-log" hidden></div>
+          </div>
+          <div class="card">
+            <h3>Безопасность</h3>
+            <div class="row"><span class="label">HostOS уровень</span><span class="value" id="hostos-level">—</span></div>
+            <div class="row"><span class="label">Аварийный стоп</span><button class="btn danger" id="emergency-stop">СТОП</button></div>
+            <p class="note">Full Access подтверждается через approvals, как в панели.</p>
+          </div>
+        </section>
+
+        <section class="section settings-section" data-section="settings">
+          <div class="card settings-toolbar">
+            <div class="settings-heading">
+              <h3>Настройки JAWL</h3>
+              <p class="note">Config-hub с ревизиями: изменения применяются без перезапуска, секреты замаскированы.</p>
+            </div>
+            <label class="sr-only" for="settings-search">Поиск по настройкам JAWL</label>
+            <input type="text" id="settings-search" placeholder="поиск по названию или ключу…">
+          </div>
+          <div id="settings-list" class="settings-list">…</div>
+          <div class="card settings-activity">
+            <h3>Активность</h3>
+            <div class="row"><span class="label">Proactive-канал</span><span class="value" id="proactive-state">—</span></div>
+            <div class="row"><span class="label">Ambient-память</span><span class="value" id="ambient-state">—</span></div>
+            <div class="row"><span class="label">Quiet hours</span><span class="value" id="quiet-state">—</span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+  <script src="app-settings.js"></script>
+  <script type="module" src="app-scene.js"></script>
+</body>
+</html>

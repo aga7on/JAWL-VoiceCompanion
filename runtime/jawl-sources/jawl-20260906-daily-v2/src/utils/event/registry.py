@@ -340,6 +340,16 @@ class Events:
         requires_attention=False,
     )
 
+    COMPANION_SPEECH_DELTA = EventConfig(
+        name="COMPANION_SPEECH_DELTA",
+        description=(
+            "User-visible reply sentence extracted from the streamed envelope; "
+            "spoken before the JSON envelope closes."
+        ),
+        level=EventLevel.INFO,
+        requires_attention=False,
+    )
+
     @classmethod
     def all(cls) -> list[EventConfig]:
         events = []

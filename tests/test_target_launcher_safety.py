@@ -41,6 +41,7 @@ class TargetLauncherSafetyTests(unittest.TestCase):
             [self.powershell, "-NoProfile", "-NonInteractive", "-Command", command],
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
         )
 

@@ -119,6 +119,46 @@ class AmbientSegmenterTests(unittest.TestCase):
         release.set()
         segmenter.stop(flush=False)
 
+    def test_segment_timestamps_keep_capture_time_across_worker_backlog(self):
+        now = [10.0]
+        entered = threading.Event()
+        release = threading.Event()
+        segments = []
+
+        def consume(segment):
+            segments.append(segment)
+            if len(segments) == 1:
+                entered.set()
+                release.wait(2)
+
+        segmenter = AmbientSegmenter(
+            consume,
+            queue_size=2,
+            max_chunk_bytes=4096,
+            max_segment_bytes=4096,
+            clock=lambda: now[0],
+        )
+        segmenter.start("capture-time")
+        self.assertEqual(
+            segmenter.submit(b"\0\0" * 2048, 16000, 1, captured_at=10.0)["status"],
+            "accepted",
+        )
+        self.assertTrue(entered.wait(1))
+
+        # The second captured segment waits behind the blocked worker. Advancing
+        # processing time must not rewrite when its audio actually arrived.
+        self.assertEqual(
+            segmenter.submit(b"\0\0" * 2048, 16000, 1, captured_at=11.0)["status"],
+            "accepted",
+        )
+        now[0] = 13.0
+        release.set()
+        self.assertTrue(_wait_for(lambda: len(segments) == 2))
+        segmenter.stop(flush=True)
+
+        self.assertAlmostEqual(segments[1].ended_at, 11.0)
+        self.assertAlmostEqual(segments[1].started_at, 10.872)
+
 
 if __name__ == "__main__":
     unittest.main()

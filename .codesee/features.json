@@ -2,7 +2,7 @@
   "version": "0",
   "manifest": {
     "repo": "JAWL-VoiceCompanion",
-    "generated_at": "2026-09-12T18:30:00Z",
+    "generated_at": "2026-10-24T13:54:54Z",
     "generator": "ai@opencode",
     "lang": "ru"
   },
@@ -55,6 +55,11 @@
       "summary": "Уровни доступа, согласования, аудит, экстренный стоп",
       "order": 3,
       "importance": "normal"
+    },
+    {
+      "id": "presence",
+      "name": "Присутствие и аватар",
+      "summary": "3D VRM-аватар в Electron-оболочке: лицо компаньона, эмоции и голос"
     }
   ],
   "features": [
@@ -67,24 +72,47 @@
         {
           "kind": "cli",
           "detail": "run_integrated_profile.ps1 -ProfileName daily"
+        },
+        {
+          "kind": "cli",
+          "detail": "capture_runtime_baseline.py --report runtime/<new-run>.json; metadata only, no launch"
         }
       ],
       "steps": [
         {
           "id": "args",
-          "name": "Разбор параметров",
+          "name": "Принять явные параметры",
           "role": "input",
           "refs": [
             {
               "file": "scripts/run_integrated_profile.ps1"
+            },
+            {
+              "file": "scripts/configure_profile_native.py"
+            },
+            {
+              "file": "tests/test_configure_profile_native.py"
+            },
+            {
+              "file": "scripts/native_context_budget.py"
+            },
+            {
+              "file": "tests/test_native_context_budget.py"
+            },
+            {
+              "file": "scripts/prepare_daily_profile.py"
+            },
+            {
+              "file": "tests/test_prepare_daily_profile.py"
             }
-          ]
+          ],
+          "note": "Managed local wrapper передаёт фактический BrainContextSize в NativeContextWindowTokens. Budget базового16k профиля масштабируется вниз и до8x вверх; для выбранного64k сервера dynamic=48000 chars, а при окне12,288 — 9000 chars. Точный legacy receipt допускается только для миграции; полный managed JAWL budget требует окно не меньше12,288. Модель/окно/GPU не меняются. Deterministic .native-context-budget.json подтверждает approved leaves при relaunch, чужие edits остаются conflict. EnableNativeBrowser меняет лишь выбранный profile."
         },
         {
           "id": "workers",
           "name": "Запуск воркеров",
           "role": "side-effect",
-          "note": "Tera/ASR/планер; здоровые остатки переиспользуются",
+          "note": "Tera и планер; GigaAM-ASR не воркер-сервер: расшифровка идёт на реплику",
           "refs": [
             {
               "file": "scripts/run_integrated_profile.ps1"
@@ -98,14 +126,66 @@
           "refs": [
             {
               "file": "scripts/run_integrated_profile.ps1"
+            },
+            {
+              "file": "scripts/run_owned_jawl_console.py"
+            },
+            {
+              "file": "tests/test_owned_jawl_console.py"
+            },
+            {
+              "file": "scripts/run_owned_jawl_brain.py"
+            },
+            {
+              "file": "scripts/run_owned_console_acceptance.py"
+            },
+            {
+              "file": "scripts/run_daily_profile.ps1"
+            },
+            {
+              "file": "scripts/prepare_daily_profile.py"
+            },
+            {
+              "file": "scripts/preflight_jawl_runtime.py"
+            },
+            {
+              "file": "scripts/run_owned_jawl_supervisor.py"
+            },
+            {
+              "file": "scripts/register_supervised_profile.py"
+            },
+            {
+              "file": "scripts/run_supervised_recovery_acceptance.py"
+            },
+            {
+              "file": "tests/test_supervised_recovery_acceptance.py"
+            },
+            {
+              "file": "tests/test_owned_jawl_brain.py"
+            },
+            {
+              "file": "scripts/run_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "tests/test_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_supervisor_identity.py"
+            },
+            {
+              "file": "tests/test_native_supervisor_identity.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_policy_completion.py"
             }
-          ]
+          ],
+          "note": "Owned brain проверяет actual delivery/context/JSON/policy completion hooks в bounded startup receipt. Native HostOS exception завершает только correlated request, не меняет permissions или durable Goal lifecycle."
         },
         {
           "id": "heartbeat",
           "name": "Ожидание heartbeat",
           "role": "validation",
-          "note": "Ждёт свежий маркер завершённого цикла; ошибка — fail closed",
+          "note": "Default local-bonsai launch does not pass AllowBusyStartup; it waits for a fresh SYSTEM_CORE_START completion marker before Companion readiness and fails closed on timeout.",
           "refs": [
             {
               "file": "scripts/run_integrated_profile.ps1"
@@ -141,13 +221,111 @@
             {
               "file": "scripts/run_integrated_profile.ps1"
             }
+          ],
+          "note": "Browser voice acceptance явно выбирает --ui app, URL guard сохранён. Ordinary Hikari/GigaAM/OmniVoice3/3 WAV turns PASS; supervised Hikari startup/stop PASS. Physical mic и20 ходов OPEN."
+        },
+        {
+          "id": "manifest",
+          "name": "Разрешить общий профиль",
+          "role": "data-read",
+          "note": "Canonical + optional local JSON; CLI overrides сохраняются. Rust bounded JSON/ports/profile loader ищет manifest от cwd/executable/--repo-root, относительные resource paths привязаны к repo. --check-config не запускает устройства/воркеры, config failure exit2. Полная differential parity ещё не принята.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/runtime_manifest.py"
+            },
+            {
+              "file": "scripts/resolve_runtime_manifest.py"
+            },
+            {
+              "file": "config/runtime.manifest.json"
+            },
+            {
+              "file": "desktop/runtime-config.js"
+            },
+            {
+              "file": "rust-client/src/runtime_manifest.rs"
+            },
+            {
+              "file": "rust-client/tests/runtime_manifest_cli.rs"
+            }
+          ]
+        },
+        {
+          "id": "preflight",
+          "name": "Проверить ресурсы и порты",
+          "role": "validation",
+          "note": "До старта owned brain: required files, свободные порты, совместимые URL и alias; чужой listener не останавливается.",
+          "refs": [
+            {
+              "file": "scripts/run_local_bonsai_integrated.ps1"
+            },
+            {
+              "file": "scripts/hold_supervised_brain.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/worker_readiness.py"
+            }
+          ]
+        },
+        {
+          "id": "config-fail",
+          "name": "Отклонить некорректный профиль",
+          "role": "error",
+          "note": "Нет скрытого fallback на другой port/model; ошибки конфигурации без значений секретов.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/runtime_manifest.py"
+            },
+            {
+              "file": "desktop/runtime-config.js"
+            }
+          ]
+        },
+        {
+          "id": "baseline",
+          "name": "Зафиксировать проверяемый срез",
+          "role": "output",
+          "note": "Отдельная ручная команда: HEAD, dirty/source hashes, snapshot и worker/VRM inventory; без commit, raw diff/env и вывода об art/readiness.",
+          "refs": [
+            {
+              "file": "scripts/capture_runtime_baseline.py"
+            },
+            {
+              "file": "tests/test_runtime_baseline.py"
+            }
+          ]
+        },
+        {
+          "id": "profile-lock",
+          "name": "Заблокировать выбранный профиль",
+          "role": "validation",
+          "note": "ProfileName передаётся local wrapper → integrated → prepare/native configure. Lock до записи, finally освобождает при отказе; wrapper не pre-write daily. NoBrowser/temperature явные. VoiceMem получает data/sensory/voicemem выбранной instance через explicit --memory-root, без authority над JAWL memory; прочие caches/portability ещё OPEN.",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            },
+            {
+              "file": "scripts/run_local_bonsai_integrated.ps1"
+            },
+            {
+              "file": "tests/test_launcher_manifest.py"
+            },
+            {
+              "file": "tests/test_configure_profile_native.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/composition.py"
+            },
+            {
+              "file": "tests/test_voicemem_runtime_isolation.py"
+            }
           ]
         }
       ],
       "flow": [
         {
           "from": "args",
-          "to": "workers",
+          "to": "manifest",
           "kind": "next"
         },
         {
@@ -175,11 +353,50 @@
           "from": "companion",
           "to": "ready",
           "kind": "next"
+        },
+        {
+          "from": "manifest",
+          "to": "preflight",
+          "kind": "next"
+        },
+        {
+          "from": "preflight",
+          "to": "profile-lock",
+          "kind": "next"
+        },
+        {
+          "from": "manifest",
+          "to": "config-fail",
+          "kind": "error",
+          "condition": "manifest некорректен или не читается"
+        },
+        {
+          "from": "preflight",
+          "to": "config-fail",
+          "kind": "error",
+          "condition": "ресурс отсутствует или порт занят"
+        },
+        {
+          "from": "manifest",
+          "to": "baseline",
+          "kind": "conditional",
+          "condition": "владелец запросил отдельную фиксацию metadata baseline, без запуска"
+        },
+        {
+          "from": "profile-lock",
+          "to": "workers",
+          "kind": "next"
+        },
+        {
+          "from": "profile-lock",
+          "to": "config-fail",
+          "kind": "error",
+          "condition": "профиль уже запущен; конфигурацию не переписывать"
         }
       ],
       "confidence": 0.9,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-15T13:20:14.559963+00:00"
     },
     {
       "id": "f-zombie-hygiene",
@@ -244,7 +461,7 @@
     {
       "id": "f-voice-turn",
       "name": "Голосовой ход",
-      "summary": "Микрофон → партиалы → финальный ASR → ответ голосом",
+      "summary": "Микрофон → партиалы → буфер реплики → GigaAM → ответ голосом",
       "epicId": "voice",
       "triggers": [
         {
@@ -257,19 +474,95 @@
           "id": "capture",
           "name": "Захват PCM",
           "role": "input",
+          "note": "Desktop получает lease до permission, bounded gate/upload/flush сохраняются. При upload failure emits bounded redacted capture diagnostics: fixed reason/error class/status, AudioContext/track states, queue/worklet/frame-age; no PCM/transcript/token. Диагностика не мешает teardown.18 actual-function lifecycle tests +16 draft helper PASS; новый fullgate/live scope ещё OPEN. Transport TypeError в старом attempt7 не доказывает AudioWorklet freeze.",
           "refs": [
             {
               "file": "frontend/index.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/voice-input.js"
+            },
+            {
+              "file": "src/jawl_voicecompanion/voice_capture.py"
+            },
+            {
+              "file": "tests/test_voice_capture.py"
+            },
+            {
+              "file": "desktop/voice-input.test.mjs"
+            },
+            {
+              "file": "desktop/tests/app-voice-lifecycle.test.mjs"
+            },
+            {
+              "file": "scripts/run_desktop_voice_e2e.py"
+            },
+            {
+              "file": "scripts/run_browser_voice_e2e.py"
             }
           ]
         },
         {
           "id": "partials",
-          "name": "Партиалы в стрим-ASR",
+          "name": "Изолировать партиалы реплики",
           "role": "transform",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/streaming_asr.py"
+            },
+            {
+              "file": "tests/test_streaming_asr.py"
+            },
+            {
+              "file": "tests/test_streaming_capture.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/owned_pipe.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/voicemem_client.py"
+            },
+            {
+              "file": "tests/test_owned_pipe.py"
+            },
+            {
+              "file": "tests/test_voicemem_sidecar.py"
+            },
+            {
+              "file": "desktop/voice-draft.js"
+            },
+            {
+              "file": "desktop/voice-draft.test.mjs"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "tests/test_desktop_assets.py"
+            },
+            {
+              "file": "tests/test_browser_voice_harness.py"
+            },
+            {
+              "file": "scripts/run_browser_voice_e2e.py"
+            }
+          ],
+          "note": "Owned scoped GigaAM partial child и canonical final owner сохраняются. /app bounded single-inflight draft consumer fences capture/session/correlation/generation and clears on finalization/Stop. Optional --require-draft-preview strict gate requires scoped streaming content, exact DOM prefix/content<=160, post-final clear and no late preview;22 fixture tests PASS, actual required live gate OPEN. Capture/helper34 Node PASS, new fullgate running. Telemetry from prior draftprobe is not equivalent to strict acceptance."
+        },
+        {
+          "id": "buffer",
+          "name": "Накапливать PCM",
+          "role": "data-write",
+          "note": "Буфер ограничен 8 сессиями вместе с in-flight ASR, 4 МиБ на реплику и TTL 120 с. Capture scopes изолируют одинаковые session_id микрофонов и ambient. Активную реплику нельзя подменить новой загрузкой.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/asr.py"
             }
           ]
         },
@@ -280,27 +573,61 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/turn_policy.py"
+            },
+            {
+              "file": "desktop/voice-input.js"
+            },
+            {
+              "file": "src/jawl_voicecompanion/duplex_cascade.py"
             }
           ]
         },
         {
           "id": "final-asr",
-          "name": "Финальный Qwen3-ASR",
+          "name": "Расшифровать реплику",
           "role": "compute",
           "refs": [
             {
-              "file": "src/jawl_voicecompanion/web.py"
+              "file": "src/jawl_voicecompanion/asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/giga_final.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/owned_pipe.py"
+            },
+            {
+              "file": "tests/test_giga_final.py"
+            },
+            {
+              "file": "scripts/gigaam_baseline_fixtures.py"
+            },
+            {
+              "file": "scripts/make_synthetic_audio_cases.py"
+            },
+            {
+              "file": "scripts/run_synthetic_cases_live.ps1"
+            },
+            {
+              "file": "tests/test_gigaam_baseline_fixtures.py"
+            },
+            {
+              "file": "tests/test_synthetic_audio_cases.py"
             }
-          ]
+          ],
+          "note": "Canonical GigaAM file mode: scoped cancellation и bounded JSON/PCM. Cleanup ждёт signaled exact-member process handles плюс Job active=0 до удаления WAV; retry сохраняет identities. Synthetic ASR gate scores known speech against source text (WER ≤0.20), checks repeated phrases, and requires abstention on pure noise; current 12-case CPU replay passed. Independent-speaker and live mixed-media ASR quality remain open; fixture gate is not an ASR/mic SLA."
         },
         {
           "id": "asr-fail",
           "name": "Отказ ASR",
           "role": "error",
-          "note": "Ход не уходит в JAWL, UI показывает деградацию",
+          "note": "Нет транскрайбера → unavailable, сбой движка → failed; второго движка нет, ход не уходит в JAWL",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
             }
           ]
         },
@@ -311,16 +638,246 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/gateway.py"
+            },
+            {
+              "file": "config/jawl/prompts/custom/RESPOND_DIRECTLY.md"
+            },
+            {
+              "file": "config/jawl/prompts/custom/ZZ_COMPANION_DELIVERY.md"
+            },
+            {
+              "file": "tests/test_companion_delivery_prompt.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_delivery.py"
+            },
+            {
+              "file": "scripts/run_owned_jawl_console.py"
+            },
+            {
+              "file": "tests/test_native_delivery_snapshot.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_turn_context.py"
+            },
+            {
+              "file": "tests/test_native_jawl_turn_context.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_json_format.py"
+            },
+            {
+              "file": "tests/test_native_jawl_json_format.py"
+            },
+            {
+              "file": "tests/test_native_jawl_delivery.py"
+            },
+            {
+              "file": "config/jawl/prompts/custom/ZZ_MEMORY_WRITES.md"
+            },
+            {
+              "file": "scripts/run_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "tests/test_owned_agent_work_acceptance.py"
             }
-          ]
+          ],
+          "note": "Connected WAV voice20/20 real GigaAM/Hikari/OmniVoice и /app PASS: drafts20/20, body EOF/full non-silent playback, exact browser Job/stack cleanup. Три fixtures по кругу, no physical mic/audibility. Dispatch proxy p50/p95=8.338/11.964с; latency1–3с OPEN. Ordinary chat fields capped320 chars each, active native Goals сохраняют budget."
         },
         {
           "id": "speak",
-          "name": "Озвучка ответа",
+          "name": "Озвучить ответ",
           "role": "output",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/tts.py"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "tests/test_tts.py"
+            },
+            {
+              "file": "docs/contracts/tts.md"
+            },
+            {
+              "file": "tests/test_tts_admission.py"
+            },
+            {
+              "file": "scripts/run_browser_voice_e2e.py"
+            },
+            {
+              "file": "tests/test_browser_voice_harness.py"
+            }
+          ],
+          "note": "TTSService latest-intent admission/lease retains resources until cleanup, scoped cancel/stale drop; actual Tera CPU probe evidence STATE.13Oct browser harness maps root --ui app to /app and requires existing TTS consumer bodyEOF plus all observed non-silent sources completed on wall+AudioContext clocks; rejects early stop/silent/rejected play/open stream. Preserves owner callbacks, no duplicate TTS reader/player.5 focused URL/JS tests PASS, no hardware audibility claim. Old night route/start evidence retained but B2-01 partial until strict live completion gate; failure/replacement/duplex/p95 remain separate."
+        },
+        {
+          "id": "capture-fail",
+          "name": "Отклонить конфликт захвата",
+          "role": "error",
+          "note": "Другой owner, потерянный lease или ошибка загрузки показываются явно; legacy audio/end разрешён только при отсутствии активного lease",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/voice_capture.py"
+            }
+          ]
+        },
+        {
+          "id": "cancel-asr",
+          "name": "Отменить распознавание",
+          "role": "side-effect",
+          "note": "Release/expiry capture отменяет свой final ASR и scoped streaming child; поздний upload не восстанавливает буфер, поздний final/reset не трогает replacement. Ambient Stop(false) отменяет свою generation, flush(true) сохраняет drain. Late transcript не даёт events/responses, durable JAWL goal не отменяется.17 bridge+9 scoped HTTP tests PASS с cheap actual children, не real-model SLA. TTS/LLM/whole-turn barge-in и physical duplex отдельно OPEN.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/giga_final.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/voice_capture.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_audio.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "tests/test_asr.py"
+            },
+            {
+              "file": "tests/test_giga_final.py"
+            },
+            {
+              "file": "tests/test_voice_capture.py"
+            },
+            {
+              "file": "tests/test_ambient_audio.py"
+            }
+          ]
+        },
+        {
+          "id": "cancel-speech",
+          "name": "Отменить только выбранную речь",
+          "role": "side-effect",
+          "note": "POST /api/tts/cancel с request_id отменяет только его Event; отсутствие ID сохраняет explicit global speech Stop. Strict ASCII ID≤128, registry≤128, closed/cancel-before-start tombstones60s, active entries не вытесняются. Invalid/null ID не становится global. Cancel не влияет на JAWL durable goals. До first chunk проверено реальным TTSService/governor/HTTP с cooperative provider, не real model. Tone browser fixture намеренно выдаёт late data для stale-drop.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/speech_requests.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/tts.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "tests/test_speech_requests.py"
+            },
+            {
+              "file": "tests/test_desktop_speech_cancel.mjs"
+            }
+          ]
+        },
+        {
+          "id": "cancel-inference",
+          "name": "Прервать собственный ONNX вызов",
+          "role": "compute",
+          "note": "Owned RunOptions per run и ContextVar изолируют ONNX cancel.13 worker+8 proxy tests PASS; tiny CPU ORT1.29:cancelA4.494ms/B unaffected/follow-up, не Tera SLA. Opt-in actual CPU24 Tera ru_f1 probe r3 PASS/exit0:cancel→worker+speech lease idle102.8ms,3 WAV/RTF0.399–0.482. Listener доказан exact own Job; worker/consumer/listener закрыты. r1 RAM SKIP и r2 venv PID proof FAIL сохранены.12 harness safety tests PASS. WORLD прерывается между стадиями; no microphone/acoustic/semantic/p95/full-profile acceptance.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/onnx_cancellation.py",
+              "lines": [
+                17,
+                114
+              ]
+            },
+            {
+              "file": "scripts/teratts_server.py",
+              "lines": [
+                132,
+                260
+              ]
+            },
+            {
+              "file": "src/jawl_voicecompanion/tts.py",
+              "lines": [
+                270,
+                360
+              ]
+            },
+            {
+              "file": "tests/test_onnx_cancellation.py"
+            },
+            {
+              "file": "tests/test_teratts_cancel.py"
+            },
+            {
+              "file": "scripts/run_onnx_cancel_acceptance.py"
+            },
+            {
+              "file": "scripts/run_tera_cancel_acceptance.py"
+            },
+            {
+              "file": "tests/test_tera_cancel_acceptance.py"
+            }
+          ]
+        },
+        {
+          "id": "queue-backpressure",
+          "name": "???????????? ???????",
+          "role": "transform",
+          "note": "??? ????? ???????? audio POST ????????? PCM ? ????????? ??????, ?????????? ????? ?? 2 ?????? ? ????? voice/end ??????????? ????? ??? ??? ?? session_id. ??? ?????????? ????????? ?????? ???????? ??????? ?????????.",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/tests/app-voice-lifecycle.test.mjs"
+            }
+          ]
+        },
+        {
+          "id": "voice-cues",
+          "name": "????????",
+          "role": "compute",
+          "note": "????????????????? ????? --voice-delivery-cues; ????? ??????????? ??????????? ???????????? ????????? ?????? pitch/level ???????? ?? ?????????? PCM. ?? ????????? ?????????; ??? ?????? ? ?????????? ?????. ?????????? ? live acceptance ???????.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/voice_delivery.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_packet.py"
+            },
+            {
+              "file": "docs/research/voice-delivery-cues-20261029.md"
+            },
+            {
+              "file": "src/jawl_voicecompanion/composition.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/__main__.py"
+            },
+            {
+              "file": "scripts/run_integrated_profile.ps1"
             }
           ]
         }
@@ -337,6 +894,16 @@
           "kind": "next"
         },
         {
+          "from": "capture",
+          "to": "buffer",
+          "kind": "next"
+        },
+        {
+          "from": "buffer",
+          "to": "final-asr",
+          "kind": "next"
+        },
+        {
           "from": "endpoint",
           "to": "final-asr",
           "kind": "conditional",
@@ -346,22 +913,62 @@
           "from": "final-asr",
           "to": "asr-fail",
           "kind": "error",
-          "condition": "ASR недоступен"
-        },
-        {
-          "from": "final-asr",
-          "to": "turn",
-          "kind": "next"
+          "condition": "движок недоступен или расшифровка сорвалась"
         },
         {
           "from": "turn",
           "to": "speak",
           "kind": "async"
+        },
+        {
+          "from": "capture",
+          "to": "capture-fail",
+          "kind": "error"
+        },
+        {
+          "from": "final-asr",
+          "to": "cancel-asr",
+          "kind": "conditional",
+          "condition": "Stop, discard или capture lease отменён/истёк"
+        },
+        {
+          "from": "speak",
+          "to": "cancel-speech",
+          "kind": "conditional",
+          "condition": "Пользователь прервал озвучку или клиент заменил/отменил запрос"
+        },
+        {
+          "from": "cancel-speech",
+          "to": "cancel-inference",
+          "kind": "conditional",
+          "condition": "Выбран Tera adapter и worker поддерживает scoped ONNX cancellation"
+        },
+        {
+          "from": "buffer",
+          "to": "queue-backpressure",
+          "kind": "next"
+        },
+        {
+          "from": "queue-backpressure",
+          "to": "final-asr",
+          "kind": "next",
+          "condition": "????? PCM ? ?????????? ???????? ??????? ?????????? ?? /voice/end"
+        },
+        {
+          "from": "final-asr",
+          "to": "voice-cues",
+          "kind": "conditional",
+          "condition": "??????????? ??????????? ????????????; ????????? ????? abstain"
+        },
+        {
+          "from": "voice-cues",
+          "to": "turn",
+          "kind": "next"
         }
       ],
-      "confidence": 0.85,
+      "confidence": 0.9,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-29T00:00:00Z"
     },
     {
       "id": "f-streaming-asr",
@@ -382,8 +989,18 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/streaming_asr.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/windows_process.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/owned_pipe.py"
+            },
+            {
+              "file": "tests/test_windows_pipe_process.py"
             }
-          ]
+          ],
+          "note": "Atomic owned Job и binary stdio сохраняются. Terminate/wait удерживает handles проверенных членов exact Job; empty accounting дополняется signals до pipe/temp cleanup. Fault сохраняет identities для retry. Не real-model latency SLA."
         },
         {
           "id": "step",
@@ -399,7 +1016,8 @@
             {
               "file": "src/jawl_voicecompanion/web.py"
             }
-          ]
+          ],
+          "note": "Черновик даёт только мост CrispASR; без него режим unavailable"
         }
       ],
       "flow": [
@@ -417,12 +1035,12 @@
       ],
       "confidence": 0.8,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-15T12:41:36.083918+00:00"
     },
     {
       "id": "f-endpoint-policy",
       "name": "Семантика конца реплики",
-      "summary": "Не обрывает фразу на «и/но/что», держит паузу до 2 с",
+      "summary": "Удерживать незавершённый RU хвост; законченный вопрос завершать быстрее",
       "epicId": "voice",
       "triggers": [
         {
@@ -454,8 +1072,21 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/turn_policy.py"
+            },
+            {
+              "file": "desktop/voice-input.js"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/voice-input.test.mjs"
+            },
+            {
+              "file": "desktop/tests/app-voice-lifecycle.test.mjs"
             }
-          ]
+          ],
+          "note": "Desktop bounded heuristic: unfinished tail>=2200ms, явная пунктуация380ms, прочие фразы по capture silence setting. Не learned классификатор."
         }
       ],
       "flow": [
@@ -473,12 +1104,12 @@
       ],
       "confidence": 0.85,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-15T12:41:36.083933+00:00"
     },
     {
       "id": "f-barge-in",
       "name": "Перебивание",
-      "summary": "Реплика пользователя мгновенно останавливает речь и слушает",
+      "summary": "Отличать поддакивание от перехвата речи; аппаратная приёмка открыта",
       "epicId": "voice",
       "triggers": [
         {
@@ -489,19 +1120,26 @@
       "steps": [
         {
           "id": "detect",
-          "name": "Детект голоса",
+          "name": "Различить сигнал и перебивание",
           "role": "compute",
           "refs": [
             {
               "file": "frontend/index.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/voice-input.js"
             }
-          ]
+          ],
+          "note": "Onset начинает overlap; RU draft или550ms voiced PCM подтверждают interruption. Короткий шум и тишина не накапливают voiced duration."
         },
         {
           "id": "duck",
           "name": "DUCK-гейн",
           "role": "transform",
-          "note": "фейд ~120 мс"
+          "note": "Legacy web duck сохраняется. Desktop классифицирует overlap: ack не отменяет playback; новый owner защищён от старого draft."
         },
         {
           "id": "cancel",
@@ -510,13 +1148,42 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/tts.py"
+            },
+            {
+              "file": "desktop/app.js"
             }
-          ]
+          ],
+          "note": "Отмена только playback owner, наблюдавшего onset; durable goal не меняется.36 Node input/lifecycle PASS; physical Fifine/echo/full duplex OPEN."
         },
         {
           "id": "listen",
           "name": "Непрерывное слушание",
-          "role": "output"
+          "role": "output",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            }
+          ]
+        },
+        {
+          "id": "ack",
+          "name": "Завершить поддакивание без ответа",
+          "role": "output",
+          "note": "Canonical ASR подтверждает короткий ack; flush/session rotation/reset освобождает buffers. Новый ответ/memory event не создаются.18 Python streaming/policy PASS.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/duplex_cascade.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "tests/test_streaming_capture.py"
+            },
+            {
+              "file": "desktop/tests/app-voice-lifecycle.test.mjs"
+            }
+          ]
         }
       ],
       "flow": [
@@ -528,17 +1195,29 @@
         {
           "from": "duck",
           "to": "cancel",
-          "kind": "next"
+          "kind": "conditional",
+          "condition": "Подтверждено перебивание и playback owner совпадает"
+        },
+        {
+          "from": "duck",
+          "to": "ack",
+          "kind": "conditional",
+          "condition": "Итоговая ASR подтверждает поддакивание при overlap"
         },
         {
           "from": "cancel",
+          "to": "listen",
+          "kind": "next"
+        },
+        {
+          "from": "ack",
           "to": "listen",
           "kind": "next"
         }
       ],
       "confidence": 0.8,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-15T12:41:36.083955+00:00"
     },
     {
       "id": "f-prosody",
@@ -602,12 +1281,16 @@
     {
       "id": "f-chat-transport",
       "name": "Нативный транспорт JAWL",
-      "summary": "Курсорный стрим событий и валидированные конверты ответов",
+      "summary": "Согласованный допуск ходов, отмена и валидированный поток JAWL",
       "epicId": "mind",
       "triggers": [
         {
           "kind": "http",
           "detail": "POST /api/companion/turn + SSE /api/companion/stream"
+        },
+        {
+          "kind": "http",
+          "detail": "POST /api/companion/cancel + GET /api/companion/admission-capabilities"
         }
       ],
       "steps": [
@@ -618,13 +1301,38 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/jawl_web.py"
+            },
+            {
+              "file": "tests/test_jawl_sse_reader.py"
             }
-          ]
+          ],
+          "note": "SSE header≤1s/line+packet128KiB/queue64, scoped Stop/join. Fullgate client-post 12Oct779/66/16/86/6/8 direct child0/receipt passed,343 source hashes matched. Browser mock ASR/JAWL/tone TTS, не actual-model/device/art acceptance; selected-model compute release OPEN."
         },
         {
           "id": "submit",
           "name": "Отправить ход",
-          "role": "input"
+          "role": "input",
+          "note": "Strict IDs, один POST/no replay. Default loopback HTTP(S) владеет socket до connect/TLS, absolute configured deadline для headers/body, scoped cancel; no proxy/DNS/redirect, TLS verification включена. Exact-ID cancel — отдельный deadline.13 HTTP/TLS +3 native-adapter loopback tests; EOF не compute release. Opaque injected opener reap не заявляется.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/jawl_gateway_contract.py"
+            },
+            {
+              "file": "tests/test_jawl_turn_admission.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/http_lifecycle.py"
+            },
+            {
+              "file": "tests/test_http_lifecycle.py"
+            },
+            {
+              "file": "tests/test_native_post_lifecycle.py"
+            }
+          ]
         },
         {
           "id": "deltas",
@@ -650,6 +1358,145 @@
           "id": "final",
           "name": "Финальный ответ",
           "role": "output"
+        },
+        {
+          "id": "stop-stream",
+          "name": "Закрыть свой поток",
+          "role": "side-effect",
+          "note": "Interrupt own socket до buffered close, очистить очередь и join≤1.25s с actual thread-exit result. Late opener закрывается без publication. Custom opener может пережить join (false). Не task deletion или доказательство remote model cancellation.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            },
+            {
+              "file": "tests/test_jawl_sse_reader.py"
+            }
+          ]
+        },
+        {
+          "id": "invalid-stream",
+          "name": "Отклонить повреждённый поток",
+          "role": "error",
+          "note": "Не drop oldest terminal packet; oversized line/multiline event, invalid JSON и queue overflow завершаются explicit bounded error.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            },
+            {
+              "file": "tests/test_jawl_sse_reader.py"
+            }
+          ]
+        },
+        {
+          "id": "admit",
+          "name": "Дождаться своего хода",
+          "role": "validation",
+          "note": "Sync/stream producer-owned admission/queue32/cleanup before lease release, owner diagnostics. CPU Hikari r1/r2 remain negative.13Oct actual selected GPU1 r4 PASS strict generation n_decoded2→cancel→idle78.267ms, same-client RU followups0.931/0.773s, canonical CUDA1/64k/output2048, own listener/Job gone. Initial NVML SKIP fixed minimal ProgramFiles env; tiny12-token follow-up FAIL retained, no proven reasoning cause. Not concurrent B, long-context/full agent/voice acceptance. Latest regression/baseline STATE.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            },
+            {
+              "file": "tests/test_jawl_turn_admission.py"
+            },
+            {
+              "file": "scripts/run_llm_cancel_acceptance.py"
+            },
+            {
+              "file": "tests/test_llm_cancel_acceptance.py"
+            },
+            {
+              "file": "docs/contracts/jawl.md"
+            },
+            {
+              "file": "tests/test_jawl_chat_diagnostics.py"
+            },
+            {
+              "file": "scripts/run_llm_model_cancel_acceptance.py"
+            },
+            {
+              "file": "tests/test_llm_model_cancel_acceptance.py"
+            },
+            {
+              "file": "docs/LLM_MODEL_CANCEL_BENCHMARK.md"
+            },
+            {
+              "file": "tests/test_llm_gpu1_probe.py"
+            }
+          ]
+        },
+        {
+          "id": "native-admit",
+          "name": "Шлюз",
+          "role": "validation",
+          "note": "21Oct D5-01 live PASS 7/7: file SHA, browser navigate/extract, form save, memory revision/restart/recall, sandbox denial; Job/fixture cleanup PASS. SYSTEM_CORE_START internal fields schema-bound (maxLength320) while Goal/autonomous cycles keep budget. D5-02 Stop speech/provider fault remains OPEN.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_admission.py"
+            },
+            {
+              "file": "scripts/run_owned_jawl_console.py"
+            },
+            {
+              "file": "tests/test_native_jawl_admission.py"
+            },
+            {
+              "file": "tests/test_native_admission_boundaries.py"
+            },
+            {
+              "file": "tests/test_owned_jawl_console.py"
+            },
+            {
+              "file": "scripts/run_owned_console_acceptance.py"
+            },
+            {
+              "file": "scripts/run_native_gateway_profile.py"
+            },
+            {
+              "file": "tests/test_native_gateway_profile.py"
+            },
+            {
+              "file": "scripts/run_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_policy_completion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_delivery.py"
+            },
+            {
+              "file": "tests/test_native_policy_completion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_json_format.py"
+            },
+            {
+              "file": "tests/test_native_jawl_json_format.py"
+            },
+            {
+              "file": "scripts/run_owned_agent_work_acceptance.py"
+            },
+            {
+              "file": "tests/test_agent_work_acceptance.py"
+            }
+          ]
+        },
+        {
+          "id": "durable-work",
+          "name": "?????????? ????????? ????? ??????",
+          "role": "transform",
+          "note": "Goal lifecycle ???????? ? ??????? ????; terminal final ????????? ??????? turn, ??????? ?????? ?????????????? ????? ?????????.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_json_format.py"
+            },
+            {
+              "file": "config/jawl/prompts/custom/ZZ_TASK_CONTINUITY.md"
+            },
+            {
+              "file": "tests/test_native_jawl_json_format.py"
+            }
+          ]
         }
       ],
       "flow": [
@@ -660,7 +1507,7 @@
         },
         {
           "from": "submit",
-          "to": "deltas",
+          "to": "native-admit",
           "kind": "async"
         },
         {
@@ -672,11 +1519,55 @@
           "from": "envelope",
           "to": "final",
           "kind": "next"
+        },
+        {
+          "from": "open",
+          "to": "invalid-stream",
+          "kind": "error",
+          "condition": "Невалидный или oversized SSE packet, timeout либо переполненная очередь"
+        },
+        {
+          "from": "deltas",
+          "to": "stop-stream",
+          "kind": "conditional",
+          "condition": "Отмена, ошибка или закрытие клиента"
+        },
+        {
+          "from": "final",
+          "to": "stop-stream",
+          "kind": "next"
+        },
+        {
+          "from": "admit",
+          "to": "open",
+          "kind": "next"
+        },
+        {
+          "from": "submit",
+          "to": "stop-stream",
+          "kind": "error",
+          "condition": "Не подтверждён admission/ACK; best-effort exact-ID cancel, не replay"
+        },
+        {
+          "from": "native-admit",
+          "to": "deltas",
+          "kind": "async"
+        },
+        {
+          "from": "native-admit",
+          "to": "stop-stream",
+          "kind": "error",
+          "condition": "Duplicate/tombstone/offline/invalid admission: no replay, scoped cleanup"
+        },
+        {
+          "from": "native-admit",
+          "to": "durable-work",
+          "kind": "next"
         }
       ],
       "confidence": 0.85,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-29T00:20:00Z"
     },
     {
       "id": "f-llm-relay",
@@ -963,7 +1854,16 @@
         {
           "id": "speech",
           "name": "Речь → аудио",
-          "role": "transform"
+          "role": "transform",
+          "note": "Silero-гейт и расшифровка GigaAM в самом воркере, без HTTP-ASR",
+          "refs": [
+            {
+              "file": "scripts/sensory_worker.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/sensory_ingest.py"
+            }
+          ]
         },
         {
           "id": "buffer",
@@ -1005,7 +1905,7 @@
       ],
       "confidence": 0.8,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-09-21T16:53:00Z"
     },
     {
       "id": "f-proactive",
@@ -1204,7 +2104,12 @@
         {
           "id": "api",
           "name": "Разбор маршрута",
-          "role": "input"
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
         },
         {
           "id": "gateway",
@@ -1222,7 +2127,85 @@
           "role": "output",
           "refs": [
             {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/app-settings.js"
+            },
+            {
               "file": "frontend/index.html"
+            }
+          ],
+          "note": "System card explains hidden process/port details and explicitly presents service state without promising that all services are healthy. Browser interaction E2E covers keyboard, target size, and nine viewports; live Qwen/Electron acceptance remains open."
+        },
+        {
+          "id": "settings",
+          "name": "Сохранить настройки",
+          "role": "data-write",
+          "note": "Черновики переживают фильтр, загрузку и ошибки HTTP; подтверждённая ревизия и перезапуск не стирают более новые правки",
+          "refs": [
+            {
+              "file": "desktop/app-settings.js"
+            },
+            {
+              "file": "desktop/app-settings-regression.test.js"
+            }
+          ]
+        },
+        {
+          "id": "save-error",
+          "name": "Сохранить черновик",
+          "role": "error",
+          "note": "Частичное подтверждение, конфликт ревизии или отказ перезапуска показываются владельцу без потери правок",
+          "refs": [
+            {
+              "file": "desktop/app-settings.js"
+            }
+          ]
+        },
+        {
+          "id": "capture-settings",
+          "name": "Настроить захват",
+          "role": "data-write",
+          "note": "Общий ConfigHub валидирует четыре capture поля: revision lock, backup и atomic replace. Comments/CRLF и соседние YAML данные сохраняются либо unsafe syntax отклоняется. next_capture не перезапускает JAWL; UI сохраняет конфликтный draft, ошибки redacted, fetch bounded 5 с.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/config_hub.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/voice_capture.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "desktop/app-settings.js"
+            },
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "tests/test_voice_capture.py"
+            },
+            {
+              "file": "docs/ui-registry/CONFIG_CONTRACTS.md"
+            }
+          ]
+        },
+        {
+          "id": "reject-body",
+          "name": "Завершить отказ HTTP",
+          "role": "error",
+          "note": "Ранний JSON HTTP error не исполняет входное тело: дочитывает только Content-Length ≤64KiB, с общим deadline200ms; oversized/chunked не drain. Consumed body не читать снова. Это hardening Windows close/reset, не доказанный fix всех intermittent fetch failures.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "tests/test_http_rejection.py"
             }
           ]
         }
@@ -1243,11 +2226,49 @@
           "from": "gateway",
           "to": "render",
           "kind": "async"
+        },
+        {
+          "from": "api",
+          "to": "settings",
+          "kind": "conditional",
+          "condition": "владелец сохраняет настройки"
+        },
+        {
+          "from": "settings",
+          "to": "render",
+          "kind": "async"
+        },
+        {
+          "from": "settings",
+          "to": "save-error",
+          "kind": "error"
+        },
+        {
+          "from": "api",
+          "to": "capture-settings",
+          "kind": "conditional",
+          "condition": "владелец меняет параметры микрофона"
+        },
+        {
+          "from": "capture-settings",
+          "to": "render",
+          "kind": "async"
+        },
+        {
+          "from": "capture-settings",
+          "to": "save-error",
+          "kind": "error"
+        },
+        {
+          "from": "session",
+          "to": "reject-body",
+          "kind": "error",
+          "condition": "нет разрешённой session/CSRF/network auth"
         }
       ],
       "confidence": 0.85,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-10T18:07:13Z"
     },
     {
       "id": "f-console-proxy",
@@ -1310,6 +2331,23 @@
           "name": "Отказ апстрима",
           "role": "error",
           "note": "502, если консоль недоступна"
+        },
+        {
+          "id": "session-entry",
+          "name": "??????? ????????? ??????",
+          "role": "transform",
+          "note": "?????? ???? ?? 8770 ???????? ?????? ????? Companion ??? ??????? ? URL; activity ? ???? UI ???????? CSRF.",
+          "refs": [
+            {
+              "file": "scripts/run_owned_jawl_console.py"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "tests/test_console_entry.py"
+            }
+          ]
         }
       ],
       "flow": [
@@ -1360,11 +2398,16 @@
           "to": "fail",
           "kind": "error",
           "condition": "консоль недоступна"
+        },
+        {
+          "from": "fail",
+          "to": "session-entry",
+          "kind": "next"
         }
       ],
       "confidence": 0.9,
       "provenance": "ai",
-      "updated_at": "2026-09-12T19:10:00Z"
+      "updated_at": "2026-10-29T00:20:00Z"
     },
     {
       "id": "f-doctor",
@@ -1385,6 +2428,21 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/doctor.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/qwen_visual_sensor.py"
+            },
+            {
+              "file": "tests/test_doctor.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_audio.py"
+            },
+            {
+              "file": "tests/test_ambient_audio.py"
             }
           ]
         },
@@ -1397,7 +2455,21 @@
         {
           "id": "report",
           "name": "Отчёт панели",
-          "role": "output"
+          "role": "output",
+          "refs": [
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/tests/app-accessibility.test.mjs"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/tests/sensory-health.test.mjs"
+            }
+          ]
         }
       ],
       "flow": [
@@ -1425,6 +2497,10 @@
         {
           "kind": "http",
           "detail": "POST /api/hostos/approvals/*"
+        },
+        {
+          "kind": "http",
+          "detail": "POST /api/hostos/level"
         }
       ],
       "steps": [
@@ -1460,8 +2536,24 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/hostos_tools.py"
+            },
+            {
+              "file": "scripts/run_owned_agent_work_acceptance.py"
+            },
+            {
+              "file": "tests/test_owned_agent_work_acceptance.py"
+            },
+            {
+              "file": "scripts/run_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_policy_completion.py"
+            },
+            {
+              "file": "tests/test_native_policy_completion.py"
             }
-          ]
+          ],
+          "note": "Native authority выполняет policy checks. Owned completion hook только наблюдает PermissionError этой проверки внутри registry call; untrusted tool error text не останавливает цикл. Live policy refusal: одна denied попытка, outside file absent и cleanup PASS."
         },
         {
           "id": "audit",
@@ -1470,6 +2562,62 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/audit.py"
+            },
+            {
+              "file": "scripts/run_owned_agent_work_acceptance.py"
+            },
+            {
+              "file": "tests/test_owned_agent_work_acceptance.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_json_format.py"
+            },
+            {
+              "file": "tests/test_native_jawl_json_format.py"
+            },
+            {
+              "file": "scripts/run_unattended_goal_soak.py"
+            },
+            {
+              "file": "tests/test_unattended_goal_soak.py"
+            },
+            {
+              "file": "tests/test_agent_work_acceptance.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_goal_completion_repair.py"
+            },
+            {
+              "file": "tests/test_native_goal_completion_repair.py"
+            }
+          ],
+          "note": "Agent-work r7: harness принимает read_file_range как fresh read; r6 chat-bound maxLength320/thinking-off/actions.minItems. 21Oct r11 live agent-work 7/7 PASS, including sandbox denial. D5-02 Stop/provider fault OPEN."
+        },
+        {
+          "id": "native-level",
+          "name": "Применить уровень",
+          "role": "side-effect",
+          "note": "Нативная конфигурация JAWL применяется только после подтверждённого stop. Потеря ответа start проверяется GET status без повторного POST",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            },
+            {
+              "file": "tests/test_jawl_web.py"
+            },
+            {
+              "file": "tests/test_e2e.py"
+            }
+          ]
+        },
+        {
+          "id": "unknown-start",
+          "name": "Сообщить неопределённость",
+          "role": "error",
+          "note": "Неподтверждённый stop/start не представляется успешным и не запускается повторно автоматически",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
             }
           ]
         }
@@ -1496,11 +2644,22 @@
           "from": "execute",
           "to": "audit",
           "kind": "next"
+        },
+        {
+          "from": "level",
+          "to": "native-level",
+          "kind": "conditional",
+          "condition": "владелец изменяет нативный уровень"
+        },
+        {
+          "from": "native-level",
+          "to": "unknown-start",
+          "kind": "error"
         }
       ],
       "confidence": 0.8,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-10-21T08:45:10.101995Z"
     },
     {
       "id": "f-terminal-gateway",
@@ -1592,7 +2751,7 @@
     {
       "id": "f-perception-fusion",
       "name": "Склейка восприятия",
-      "summary": "Экран, окно, музыка и речь сливаются в одно наблюдение",
+      "summary": "Текущий экран, недавние сцены, окно, музыка и речь сливаются с раздельной свежестью",
       "epicId": "initiative",
       "triggers": [
         {
@@ -1615,13 +2774,23 @@
           "id": "ttl",
           "name": "Свежесть по TTL",
           "role": "validation",
-          "note": "экран 90с, окно 120с, музыка 240с, речь 300с"
+          "note": "??????? ????? 5? ????? ?????????? ????????????? ?????????; ???????? ??????? caption ???????? ????????. ???????? ????? 15?; ?????? ? ???? 20?.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            }
+          ]
         },
         {
           "id": "compose",
           "name": "Одно наблюдение",
           "role": "transform",
-          "note": "«Экран: … Окно: … Звук: … Слышно: …»"
+          "note": "Текущий caption отделён от короткой последовательности сцен; история явно помечена как не текущий кадр.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            }
+          ]
         },
         {
           "id": "gate",
@@ -1652,16 +2821,222 @@
               "file": "src/jawl_voicecompanion/event_log.py"
             }
           ]
+        },
+        {
+          "id": "visual-history",
+          "name": "Хранить сцены",
+          "role": "data-write",
+          "note": "До 5 событий за 15с с кадром, сценой, источником и временем захвата; поздний ответ остаётся историей и не запускает внимание.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/qwen_visual_sensor.py"
+            }
+          ]
+        },
+        {
+          "id": "same-scene-confirm",
+          "name": "??????????? ?????????? ?????",
+          "role": "validation",
+          "note": "????????? ?????? ??? ?? ???????? ????????? ????? ?????????????, ?? ????????? ??????? ????????? caption; ????????? ??????? ??? ????? ????? ?? ?????????? freshness.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/qwen_visual_sensor.py"
+            },
+            {
+              "file": "tests/test_qwen_visual_sensor.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/__main__.py"
+            },
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            },
+            {
+              "file": "scripts/run_local_bonsai_integrated.ps1"
+            },
+            {
+              "file": "src/jawl_voicecompanion/composition.py"
+            },
+            {
+              "file": "tests/test_launcher_manifest.py"
+            }
+          ]
+        },
+        {
+          "id": "sensory-timeline",
+          "name": "История",
+          "role": "transform",
+          "note": "The bounded text-only store keeps a one-hour rolling timeline and seven-day hourly moments; summaries preserve first/last observations and salient, temporally spread middle moments. Context compaction samples across source time, including late results, and renders chronologically. Store flush/reopen regression covers 20 scene changes across an hour. Ambient ASR samples with at least 16 transcript characters, unverified music descriptions and YAMNet sound-event candidates qualify for bounded hourly moments while retaining verification provenance. Brain history questions can request current, recent, or weekly context. History write outcomes/errors are exposed as text-free telemetry in the sensor card; record-call status does not prove disk flush or brain retrieval. Raw PCM and screen frames are excluded. Flush freshness and failure are exposed separately from record calls; process status does not prove reopen or retrieval. Unreadable, oversized or unsupported-schema archives block automatic overwrite until explicit clear. History-query context warns the brain when saved history is unavailable and labels any listed events as current-process-only. Persistence telemetry labels load, write, clear, and telemetry errors separately. Missing or failed durable history is disclosed in VA; a visual-only fallback is explicitly marked incomplete.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/sensory_history.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "tests/test_sensory_history.py"
+            },
+            {
+              "file": "tests/test_web.py"
+            },
+            {
+              "file": "docs/research/sensory-history-acceptance-20261025.md"
+            },
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "docs/research/sensory-history-write-telemetry-20261029.md"
+            }
+          ]
+        },
+        {
+          "id": "audio-detail",
+          "name": "Уточнить аудиосцену",
+          "role": "transform",
+          "note": "L1 ранжирует широкую сцену; L2 независимо уточняет вокал, ударные, бас и тембры по окнам. Кандидаты не калиброваны.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/eg2_describer.py"
+            },
+            {
+              "file": "tests/test_audio_coarse_to_fine.py"
+            },
+            {
+              "file": "scripts/probe_clap_prompt_bank.py"
+            }
+          ]
+        },
+        {
+          "id": "va-packet",
+          "name": "Передать VA-пакет",
+          "role": "transform",
+          "note": "Мозг получает отдельные свежие каналы экрана/OCR, ASR, аудиоописания, подтверждённой музыки и слабых музыкальных сигналов-гипотез с возрастом и неопределённостью; неподтверждённое состояние music остаётся скрытым.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_packet.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_turn_context.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_action_repair.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_terminal_context_compaction.py"
+            },
+            {
+              "file": "tests/test_perception_packet.py"
+            },
+            {
+              "file": "tests/test_web.py"
+            },
+            {
+              "file": "tests/test_native_jawl_turn_context.py"
+            },
+            {
+              "file": "docs/research/va-audio-channel-handoff-20261029.md"
+            },
+            {
+              "file": "scripts/live_qwen_visual_sensor_smoke.py"
+            },
+            {
+              "file": "docs/research/qwen-screen-ocr-cpu-smoke-20261029.md"
+            }
+          ]
+        },
+        {
+          "id": "audio-events",
+          "name": "Выделить звуковые события",
+          "role": "compute",
+          "note": "YAMNet CPU подтверждает музыку при raw score ≥ 0.35 и пороге по окнам. raw max ≥ 0.20 ниже шлюза идёт в краткую гипотезу музыкального/тонального фона с сырым максимумом и частотой окон (не вероятность): скрининг дал 0/181 ESC-10 немуз. клипов, 0/3 речевых контролей, 1/5 реальных медиаклипов и 11/54 смесей; данные исследовательские, без человеческой разметки. Сигнал некалиброван, не факт и не сохраняется как музыка; live loopback и SFX остаются OPEN. Ambient GigaAM/VoiceMem transcripts share a narrow artifact filter (filler/repeated/CJK-Hangul), and absent ASR confidence remains 0.0; ambient audio/screen entries retain verified=false through VA, triage and episodes, with triage instructed to preserve uncertainty; unscored GigaAM transcripts of at least eight characters can enter the seven-day archive as retain-only unverified hypotheses and are not auto-promoted. This is provenance, not accuracy validation. The system-sensor card exposes loopback ASR mode/count/filter/freshness without transcript text. Plausible hallucination and live mixed-loopback accuracy remain open.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/yamnet_soundscape.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_audio.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_packet.py"
+            },
+            {
+              "file": "tests/test_yamnet_soundscape.py"
+            },
+            {
+              "file": "tests/test_ambient_audio.py"
+            },
+            {
+              "file": "scripts/probe_yamnet_esc10.py"
+            },
+            {
+              "file": "scripts/fetch_esc10_fold.py"
+            },
+            {
+              "file": "docs/research/yamnet-sound-event-candidates-20261029.md"
+            },
+            {
+              "file": "scripts/probe_yamnet_weak_music.py"
+            },
+            {
+              "file": "docs/research/audio-speech-music-overlap-20261029.md"
+            },
+            {
+              "file": "src/jawl_voicecompanion/transcript_quality.py"
+            },
+            {
+              "file": "docs/research/ambient-asr-artifact-gate-20261029.md"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_memory.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_triage.py"
+            },
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "docs/research/ambient-asr-status-20261029.md"
+            }
+          ]
         }
       ],
       "flow": [
         {
           "from": "note",
-          "to": "ttl",
+          "to": "visual-history",
           "kind": "next"
         },
         {
           "from": "ttl",
+          "to": "same-scene-confirm",
+          "kind": "next"
+        },
+        {
+          "from": "same-scene-confirm",
           "to": "compose",
           "kind": "next"
         },
@@ -1685,11 +3060,58 @@
           "from": "bridge",
           "to": "log",
           "kind": "async"
+        },
+        {
+          "from": "visual-history",
+          "to": "ttl",
+          "kind": "next"
+        },
+        {
+          "from": "note",
+          "to": "sensory-timeline",
+          "kind": "async"
+        },
+        {
+          "from": "sensory-timeline",
+          "to": "compose",
+          "kind": "conditional",
+          "condition": "User asks for sensory history"
+        },
+        {
+          "from": "note",
+          "to": "audio-detail",
+          "kind": "conditional",
+          "condition": "Передан WAV и доступен EG2 descriptor"
+        },
+        {
+          "from": "audio-detail",
+          "to": "compose",
+          "kind": "next"
+        },
+        {
+          "from": "audio-detail",
+          "to": "va-packet",
+          "kind": "next"
+        },
+        {
+          "from": "note",
+          "to": "audio-events",
+          "kind": "async"
+        },
+        {
+          "from": "audio-events",
+          "to": "compose",
+          "kind": "next"
+        },
+        {
+          "from": "audio-events",
+          "to": "va-packet",
+          "kind": "next"
         }
       ],
       "confidence": 0.85,
       "provenance": "ai",
-      "updated_at": "2026-09-13T00:30:00Z"
+      "updated_at": "2026-10-29T00:00:00Z"
     },
     {
       "id": "f-ws-transport",
@@ -1783,6 +3205,1353 @@
       "confidence": 0.85,
       "provenance": "ai",
       "updated_at": "2026-09-13T01:20:00Z"
+    },
+    {
+      "id": "f-runtime-supervisor",
+      "name": "Супервизор воркеров",
+      "summary": "Продукт владеет стартом, здоровьем и разбором воркеров",
+      "epicId": "ops",
+      "triggers": [
+        {
+          "kind": "startup",
+          "detail": "RuntimeSupervisor из пакета продукта (ADR-041 этап 2, срез 1)"
+        },
+        {
+          "kind": "cli",
+          "detail": "python scripts/supervisor_live_adr041.py — живой прогон стека"
+        }
+      ],
+      "steps": [
+        {
+          "id": "specs",
+          "name": "Описать воркеров",
+          "role": "input",
+          "note": "WorkerSpec из validated runtime manifest и явных CLI overrides; missing models и port conflicts отклоняются до spawn.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/__main__.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/runtime_manifest.py"
+            }
+          ]
+        },
+        {
+          "id": "spawn",
+          "name": "Запустить по порядку",
+          "role": "side-effect",
+          "note": "Windows start/restart атомарно создаёт DEVNULL worker в nested global+per-worker JOB_LIST до исполнения child. NUL-only inheritance, retained process handle verification; fail-closed без Popen fallback. Environment identical aliases dedup, conflicts rejected. POSIX/PIPE owners и native authority unchanged.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            },
+            {
+              "file": "tests/test_supervisor_ownership.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/windows_process.py"
+            }
+          ]
+        },
+        {
+          "id": "health",
+          "name": "Дождаться живости",
+          "role": "validation",
+          "note": "Health до deadline; brain требует exact alias в bounded /v1/models. Integrated console теперь требует http-turn-admission-v1/cancel_before_dispatch из owned entry, не только agent/status HTTP200. Actual console-only r5 PASS: native listener24204 в exact own Job, startup0.726s, auth+cancel/tombstone+cleanup; no agent/model/whole-profile readiness. Entry verifies pinned snapshot/instance/registry, startup token redaction/UTF8.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/worker_readiness.py"
+            },
+            {
+              "file": "scripts/run_owned_jawl_console.py"
+            },
+            {
+              "file": "scripts/run_integrated_profile.ps1"
+            },
+            {
+              "file": "scripts/run_owned_console_acceptance.py"
+            }
+          ]
+        },
+        {
+          "id": "crash",
+          "name": "Заметить вылет",
+          "role": "error",
+          "note": "воркер, завершившийся при старте, — вылет с кодом, а не таймаут пробы",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            }
+          ]
+        },
+        {
+          "id": "retry",
+          "name": "Перезапустить в бюджете",
+          "role": "other",
+          "note": "До terminate сохранять wait handles после exact Job membership check. Reap требует ActiveProcesses=0 и signaled handles; fault сохраняет Job/identities для retry и запрещает replacement.39 process tests PASS;50-run probe:50 early returns до фикса,0 после.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            },
+            {
+              "file": "tests/test_owned_pipe.py"
+            }
+          ]
+        },
+        {
+          "id": "exhausted",
+          "name": "Исчерпать бюджет",
+          "role": "error",
+          "note": "весь старт провален: полуживых стеков не остаётся",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            }
+          ]
+        },
+        {
+          "id": "teardown",
+          "name": "Разобрать стек",
+          "role": "side-effect",
+          "note": "До terminate сохранять wait handles после exact Job membership check. Reap требует ActiveProcesses=0 и signaled handles; fault сохраняет Job/identities для retry и запрещает replacement.39 process tests PASS;50-run probe:50 early returns до фикса,0 после.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            },
+            {
+              "file": "tests/test_owned_pipe.py"
+            }
+          ]
+        },
+        {
+          "id": "report",
+          "name": "Собрать отчёт",
+          "role": "output",
+          "note": "Native owned sampler использует exact Job/PID creation identity, CPU delta, log/RSS bounds и payload-free native queue counters; missing/invalid counters FAIL. Goal journal требует write→fresh native read в том же ReAct trace.180с smoke PASS;8h запущен16Oct09:59:53UTC, status running, первый Goal/provider fault+recovery PASS; cleanup/итог ожидаются.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/supervisor.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/owned_resource_sampler.py"
+            },
+            {
+              "file": "tests/test_owned_resource_sampler.py"
+            },
+            {
+              "file": "scripts/run_owned_native_soak.py"
+            },
+            {
+              "file": "scripts/run_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "tests/test_owned_native_soak.py"
+            }
+          ]
+        },
+        {
+          "id": "verify",
+          "name": "Проверить на живом стеке",
+          "role": "validation",
+          "note": "17 supervisor+3 ownership+3 atomic+9 process tests PASS;4 worker-tree tests Luna PASS3.14/3.11: restart A, dead-root restart/start, full stop, B root/grandchild живы и owned. Injected teardown error: retained ownership/no replacement. Actual owned native console PASS startup0.717s/auth401/cancel200/turn409/listener gone; no agent/model/device. Latest full-gate receipt/baseline in STATE, not whole-profile acceptance.",
+          "refs": [
+            {
+              "file": "tests/test_supervisor.py"
+            },
+            {
+              "file": "tests/test_worker_manifest.py"
+            },
+            {
+              "file": "tests/test_runtime_manifest.py"
+            },
+            {
+              "file": "tests/test_windows_process.py"
+            },
+            {
+              "file": "tests/test_supervisor_atomic_job.py"
+            },
+            {
+              "file": "tests/test_supervisor_worker_tree.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "specs",
+          "to": "spawn",
+          "kind": "next"
+        },
+        {
+          "from": "spawn",
+          "to": "health",
+          "kind": "next"
+        },
+        {
+          "from": "health",
+          "to": "crash",
+          "kind": "error",
+          "condition": "воркер завершился при старте"
+        },
+        {
+          "from": "health",
+          "to": "retry",
+          "kind": "error",
+          "condition": "проба не стала зелёной"
+        },
+        {
+          "from": "retry",
+          "to": "health",
+          "kind": "loop",
+          "condition": "бюджет перезапусков не исчерпан"
+        },
+        {
+          "from": "retry",
+          "to": "exhausted",
+          "kind": "error",
+          "condition": "бюджет перезапусков исчерпан"
+        },
+        {
+          "from": "exhausted",
+          "to": "teardown",
+          "kind": "error",
+          "condition": "fail-closed: остановить всё запущенное"
+        },
+        {
+          "from": "health",
+          "to": "report",
+          "kind": "next"
+        },
+        {
+          "from": "report",
+          "to": "teardown",
+          "kind": "next"
+        },
+        {
+          "from": "verify",
+          "to": "spawn",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-10-15T12:41:36.084003+00:00"
+    },
+    {
+      "id": "f-native-voice-lane",
+      "name": "Нативный голосовой ход",
+      "summary": "Rust-клиент сам завершает реплику и печатает ответ",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "rust-client --mic — микрофоном владеет нативный клиент"
+        }
+      ],
+      "steps": [
+        {
+          "id": "base",
+          "name": "Найти пульт",
+          "role": "input",
+          "note": "Порт из manifest или явного override",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            }
+          ]
+        },
+        {
+          "id": "session",
+          "name": "Открыть сессию",
+          "role": "auth",
+          "note": "Cookie/CSRF плюс capture lease owner=native; desktop остаётся default, busy запрещает второй capture",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            },
+            {
+              "file": "src/jawl_voicecompanion/voice_capture.py"
+            }
+          ]
+        },
+        {
+          "id": "mic",
+          "name": "Взять микрофон",
+          "role": "input",
+          "note": "cpal открывает capture после acquire; strict finite/range/TTL/owner/ID validation. Очередь ограничена 12 секундами PCM, ошибки callback прекращают capture; pre-roll из snapshot настроек.",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            }
+          ]
+        },
+        {
+          "id": "stream",
+          "name": "Слать чанки",
+          "role": "side-effect",
+          "note": "Один bounded cancellable upload worker, PCM ≤48 KiB, socket polling 100 мс/deadline 10 с. Main loop обслуживает Stop/renew/callback errors, отменяет и join worker; stale generation/replay запрещены. IDs audio/end совпадают и меняются после final. Mock stalled upload Stop+join <1 с PASS; не device latency.",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        },
+        {
+          "id": "silence",
+          "name": "Поймать тишину",
+          "role": "compute",
+          "note": "RMS hysteresis и silence_ms из acquire-ответа, не фиксированные 2 секунды",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            }
+          ]
+        },
+        {
+          "id": "finish",
+          "name": "Завершить реплику",
+          "role": "side-effect",
+          "note": "Явная half-duplex альтернатива: capture/PCM приостановлены во время final, queue очищена без replay. Bounded final/upload waits поддерживают renew/Stop/join; RAII release. 16 unit/mock-HTTP + cargo check offline PASS; duplex/real-provider/device OPEN.",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            }
+          ]
+        },
+        {
+          "id": "print",
+          "name": "Напечатать ответ",
+          "role": "output",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            }
+          ]
+        },
+        {
+          "id": "fail",
+          "name": "Показать отказ хода",
+          "role": "error",
+          "note": "Недоступный сервер, busy/lost lease, capture error не считаются успешной репликой",
+          "refs": [
+            {
+              "file": "rust-client/src/main.rs"
+            },
+            {
+              "file": "src/jawl_voicecompanion/voice_capture.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "base",
+          "to": "session",
+          "kind": "next"
+        },
+        {
+          "from": "session",
+          "to": "mic",
+          "kind": "next"
+        },
+        {
+          "from": "mic",
+          "to": "stream",
+          "kind": "next"
+        },
+        {
+          "from": "stream",
+          "to": "silence",
+          "kind": "loop",
+          "condition": "чанки идут, пока речь не стихла"
+        },
+        {
+          "from": "silence",
+          "to": "finish",
+          "kind": "conditional",
+          "condition": "пауза после речи"
+        },
+        {
+          "from": "finish",
+          "to": "print",
+          "kind": "next"
+        },
+        {
+          "from": "session",
+          "to": "fail",
+          "kind": "error",
+          "condition": "компаньон недоступен"
+        },
+        {
+          "from": "finish",
+          "to": "fail",
+          "kind": "error",
+          "condition": "нет сессии или сервер отказал"
+        },
+        {
+          "from": "print",
+          "to": "stream",
+          "kind": "next"
+        },
+        {
+          "from": "mic",
+          "to": "fail",
+          "kind": "error",
+          "condition": "ошибка устройства или переполнение очереди"
+        },
+        {
+          "from": "stream",
+          "to": "fail",
+          "kind": "error",
+          "condition": "ошибка upload или lost lease"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-10-05T10:29:42Z"
+    },
+    {
+      "id": "f-desktop-avatar",
+      "name": "3D VRM-аватар в Electron",
+      "summary": "Один экран с VRM, чатом и настройками; смена моделей, эмоции и отменяемый голос без наложения",
+      "epicId": "presence",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "Electron открывает /app после health; старая двухоконная оболочка доступна только через --legacy-shell"
+        }
+      ],
+      "steps": [
+        {
+          "id": "launch",
+          "name": "Открыть оболочку",
+          "role": "input",
+          "note": "Electron ждёт готовности /api/health, показывает повторное подключение при сбое и ограничивает навигацию доверенным origin; порт берётся из манифеста или env",
+          "refs": [
+            {
+              "file": "desktop/main.js"
+            },
+            {
+              "file": "desktop/tests/main-startup.test.js"
+            }
+          ]
+        },
+        {
+          "id": "load",
+          "name": "Загрузить модель VRM",
+          "role": "compute",
+          "note": "Загрузка VRM защищена latest-request gate. При успешной смене старые motion offsets и old/new aa сбрасываются до disposal, новая сцена начинает idle. Stale/failed loads сохраняют текущую модель и состояние; статика ограничена node_modules и runtime/vrm-models.",
+          "refs": [
+            {
+              "file": "desktop/app-scene.js"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "tests/test_desktop_assets.py"
+            },
+            {
+              "file": "desktop/tests/avatar-scene-lifecycle.test.mjs"
+            }
+          ]
+        },
+        {
+          "id": "bridge",
+          "name": "Согласовать состояние хода",
+          "role": "side-effect",
+          "note": "Единое окно передаёт конверт напрямую сцене; локальный IPC-мост сохранён только для legacy-shell",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/app-scene.js"
+            },
+            {
+              "file": "desktop/main.js"
+            }
+          ]
+        },
+        {
+          "id": "emotion",
+          "name": "Показать эмоцию хода",
+          "role": "output",
+          "note": "Эмоция и жест конверта управляют поддерживаемыми VRM-выражениями; повторный response_id не повторяет жест",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/app-scene.js"
+            }
+          ]
+        },
+        {
+          "id": "lips",
+          "name": "Двигать губы",
+          "role": "compute",
+          "note": "RMS WebAudio управляет aa только во время speaking; NaN/Infinity отвергаются, значение clamped [0,1], idle/listening и смена модели обнуляют рот. Это не фонемный lip-sync и не замена playback generation fence. Сохранены slices ≤0.4 с, horizon ≤0.8 с, audio ≤32 MiB/300 с и wire ≤64 MiB до decode/split; synthetic browser не заменяет real-provider/device acceptance.",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/app-scene.js"
+            },
+            {
+              "file": "desktop/tests/app-voice-lifecycle.test.mjs"
+            },
+            {
+              "file": "desktop/speech-stream.js"
+            },
+            {
+              "file": "scripts/run_desktop_voice_e2e.py"
+            },
+            {
+              "file": "desktop/speech-stream.test.mjs"
+            },
+            {
+              "file": "desktop/tests/avatar-scene-lifecycle.test.mjs"
+            }
+          ]
+        },
+        {
+          "id": "fail",
+          "name": "Сохранить аватар при отказе",
+          "role": "error",
+          "note": "Недоступный гардероб или сбой новой загрузки не заменяет текущий аватар; устаревшие загрузки не добавляются в сцену",
+          "refs": [
+            {
+              "file": "desktop/app-scene.js"
+            }
+          ]
+        },
+        {
+          "id": "motion",
+          "name": "Оживить движение аватара",
+          "role": "compute",
+          "note": "Idle/listening/thinking/speaking, многоканальный липсинк (aa/oh/ee) и жесты плавно смешиваются; окно поддерживает Compact HUD Mode и ?mode=obs. Смещения снимаются перед базовой позой, сменой rig и teardown(null); поворот не накапливается, reduced motion учитывается.",
+          "refs": [
+            {
+              "file": "desktop/avatar-motion.js"
+            },
+            {
+              "file": "desktop/app-scene.js"
+            },
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/avatar-motion.test.mjs"
+            }
+          ]
+        },
+        {
+          "id": "physics",
+          "name": "Настроить вторичную инерцию",
+          "role": "compute",
+          "note": "Шесть weighted helper bones одежды/тела: ограниченные spring/damper после native VRM pose, отключение восстанавливает позу; реальные checkbox/range, localStorage и reduced motion. Нет prepared rig — UI сообщает unsupported. Не полноценная cloth/soft-body симуляция",
+          "refs": [
+            {
+              "file": "desktop/avatar-physics.js"
+            },
+            {
+              "file": "desktop/app-scene.js"
+            },
+            {
+              "file": "desktop/app.html"
+            },
+            {
+              "file": "desktop/avatar-physics.test.mjs"
+            },
+            {
+              "file": "tools/vrm_gen/check_reference_character.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "launch",
+          "to": "load",
+          "kind": "next"
+        },
+        {
+          "from": "load",
+          "to": "bridge",
+          "kind": "next"
+        },
+        {
+          "from": "bridge",
+          "to": "emotion",
+          "kind": "async",
+          "condition": "ход завершён — пришёл envelope"
+        },
+        {
+          "from": "bridge",
+          "to": "lips",
+          "kind": "async",
+          "condition": "идёт озвучка — аудио-события"
+        },
+        {
+          "from": "emotion",
+          "to": "bridge",
+          "kind": "loop",
+          "condition": "следующий ход"
+        },
+        {
+          "from": "bridge",
+          "to": "fail",
+          "kind": "error",
+          "condition": "ошибка гардероба или загрузки новой модели"
+        },
+        {
+          "from": "load",
+          "to": "motion",
+          "kind": "next"
+        },
+        {
+          "from": "motion",
+          "to": "physics",
+          "kind": "conditional",
+          "condition": "модель имеет подготовленные helper bones и reduced motion выключен"
+        }
+      ],
+      "cross_feature": [
+        {
+          "featureId": "f-voice-turn",
+          "note": "голосовой ход озвучивается TTS и двигает губы аватара"
+        },
+        {
+          "featureId": "f-control-api",
+          "note": "панель в окне Electron — тот же контрольный origin"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-10-05T15:54:19Z"
+    },
+    {
+      "id": "f-omnivoice-tts",
+      "name": "OmniVoice-синтез речи",
+      "summary": "k2-fsa/OmniVoice на GPU1 рядом с мозгом: RU-реалтайм (RTF ~0.1), третий TTS-провайдер",
+      "epicId": "voice",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "-TtsProvider omnivoice -OmniVoicePort 9890 поднимает воркер в лаунчере"
+        }
+      ],
+      "steps": [
+        {
+          "id": "raise",
+          "name": "Поднять воркер",
+          "role": "input",
+          "note": "лаунчер стартует omnivoice_server.py на cuda:1, ждёт /health (переиспользует живой остаток)",
+          "refs": [
+            {
+              "file": "scripts/run_integrated_profile.ps1",
+              "lines": [
+                318,
+                326
+              ]
+            }
+          ]
+        },
+        {
+          "id": "synthesize",
+          "name": "Синтезировать фразу",
+          "role": "compute",
+          "note": "POST /tts: генерация с опорным сэмплом, peak-нормализация 0.9 (сырой выход клиппирует ~1% сэмплов), WAV 24к mono s16",
+          "refs": [
+            {
+              "file": "scripts/omnivoice_server.py",
+              "lines": [
+                60,
+                100
+              ]
+            }
+          ]
+        },
+        {
+          "id": "deliver",
+          "name": "Отдать WAV панели",
+          "role": "output",
+          "note": "контракт теры: тот же TeraTTSHttpClient в composition; X-Gen-Seconds — латентность",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/composition.py",
+              "lines": [
+                270,
+                280
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fail",
+          "name": "Отказ синтеза",
+          "role": "error",
+          "note": "воркер гасит модель/путь не найдены — /health не станет ok, лаунчер падает явно (fail-closed)",
+          "refs": [
+            {
+              "file": "scripts/omnivoice_server.py",
+              "lines": [
+                150,
+                160
+              ]
+            }
+          ]
+        },
+        {
+          "id": "cancel",
+          "name": "Отменить синтез",
+          "role": "side-effect",
+          "note": "speak_cancel закрывает HTTP-сокет текущего request_id; поздний WAV не эмитится, done.count кумулятивный",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/tts.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/live_speech.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "tests/test_live_speech.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "raise",
+          "to": "synthesize",
+          "kind": "next"
+        },
+        {
+          "from": "synthesize",
+          "to": "deliver",
+          "kind": "next"
+        },
+        {
+          "from": "deliver",
+          "to": "synthesize",
+          "kind": "loop",
+          "condition": "новая фраза хода"
+        },
+        {
+          "from": "raise",
+          "to": "fail",
+          "kind": "error",
+          "condition": "модель или референс отсутствуют"
+        },
+        {
+          "from": "deliver",
+          "to": "cancel",
+          "kind": "conditional",
+          "condition": "Stop во время синтеза"
+        },
+        {
+          "from": "cancel",
+          "to": "synthesize",
+          "kind": "loop",
+          "condition": "следующая фраза"
+        }
+      ],
+      "cross_feature": [
+        {
+          "featureId": "f-voice-turn",
+          "note": "голосовой ход может звучать Омнивойсом вместо теры"
+        },
+        {
+          "featureId": "f-desktop-avatar",
+          "note": "аудио-поток двигает губы 3D-аватара"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-10-21T08:18:13.466512Z"
+    },
+    {
+      "id": "f-character-build",
+      "name": "Подготовить VRM-персонажа",
+      "summary": "Оффлайн VRM/VRMA-пайплайн с проверкой в реальной сцене; визуальная приёмка отделена от исправности",
+      "epicId": "presence",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "Blender --background --python tools/vrm_gen/build_reference_character.py или build_vroid_reference.py"
+        }
+      ],
+      "steps": [
+        {
+          "id": "reference",
+          "name": "Проверить референс",
+          "role": "validation",
+          "note": "Собственный процедурный прототип и производный VRoid-кандидат имеют разные источники; образец VRoid не CC0, атрибуция/условия сохраняются",
+          "refs": [
+            {
+              "file": "tools/vrm_gen/build_reference_character.py"
+            },
+            {
+              "file": "tools/vrm_gen/build_vroid_reference.py"
+            },
+            {
+              "file": "docs/CHARACTER_DELIVERY_20261004.md"
+            },
+            {
+              "file": "docs/CHARACTER_ART_DIRECTION.md"
+            }
+          ]
+        },
+        {
+          "id": "build",
+          "name": "Экспортировать кандидата",
+          "role": "data-write",
+          "note": "V8/V9 экспортируются отдельно, active avatar сохраняется. V8: primary hair volumes, smooth temple UV remap без изменения atlas/morphs, real MToon index.source export check. V9: actual contour cuffs/boot shafts и return lip; верх boot следует голени, низ стопе. Cuff Skin weights перенесены barycentric projection после Subsurf; source pant UV splits welded до normal offset и exact hem cut. Это перекрытие и skinning, не сварка кожи/одежды в один mesh; finish деталей/≥90 likeness/full physics OPEN.",
+          "refs": [
+            {
+              "file": "tools/vrm_gen/build_reference_character.py"
+            },
+            {
+              "file": "tools/vrm_gen/build_vroid_reference.py"
+            },
+            {
+              "file": "tools/vrm_gen/reference_tailoring.py"
+            },
+            {
+              "file": "tools/vrm_gen/reference_head.py"
+            },
+            {
+              "file": "tools/vrm_gen/reference_hair_blocking.py"
+            },
+            {
+              "file": "tools/vrm_gen/reference_bomber_connected.py"
+            },
+            {
+              "file": "tools/vrm_gen/reference_interfaces.py"
+            },
+            {
+              "file": "docs/CHARACTER_HAIR_V8_REVIEW.md"
+            },
+            {
+              "file": "docs/CHARACTER_INTERFACE_V9_REVIEW.md"
+            }
+          ]
+        },
+        {
+          "id": "animate",
+          "name": "Запечь движения",
+          "role": "compute",
+          "note": "Пять переносимых VRMA-клипов запекаются из собственного JawlieReference.blend; runtime пока использует процедурный контроллер, не эти файлы",
+          "refs": [
+            {
+              "file": "tools/vrm_gen/bake_reference_motions.py"
+            }
+          ]
+        },
+        {
+          "id": "validate",
+          "name": "Проверить в сцене",
+          "role": "validation",
+          "note": "Actual /app проверяет один root, weighted native hair solver, эмоции, reduced motion и SHA. Geometry отдельно: manifold soles/bomber, cargo clearance/2 leg-flex, 56 face morphs/rest hair-Face. V9 seam gate PASS: rest+16 isolated poses на обеих сторонах, 34 wrist+34 ankle checks по evaluated radial coverage (5/6 мм), 31/26 points/side; ранние FAIL сохранены. Rest/posed close-ups просмотрены; это не все позы, numeric exported runtime seams, cloth/body physics или 90% likeness.",
+          "refs": [
+            {
+              "file": "tools/vrm_gen/check_reference_character.py"
+            },
+            {
+              "file": "docs/CHARACTER_CLOSEUP_AUDIT_20261004.md"
+            },
+            {
+              "file": "docs/CHARACTER_BLOCKING_V3_REVIEW.md"
+            },
+            {
+              "file": "tools/vrm_gen/check_fit_geometry.py"
+            },
+            {
+              "file": "docs/CHARACTER_FIT_V4_REVIEW.md"
+            },
+            {
+              "file": "docs/CHARACTER_SHOULDER_V6_REVIEW.md"
+            },
+            {
+              "file": "docs/CHARACTER_HAIR_V7_REVIEW.md"
+            },
+            {
+              "file": "tools/vrm_gen/check_character_interfaces.py"
+            },
+            {
+              "file": "docs/CHARACTER_INTERFACE_V9_REVIEW.md"
+            }
+          ]
+        },
+        {
+          "id": "reject",
+          "name": "Отклонить результат",
+          "role": "error",
+          "note": "Ошибки экспорта/лицензии/рига останавливают поставку; успешный smoke не подменяет art acceptance",
+          "refs": [
+            {
+              "file": "tools/vrm_gen/build_vroid_reference.py"
+            },
+            {
+              "file": "tools/vrm_gen/check_reference_character.py"
+            },
+            {
+              "file": "docs/CHARACTER_DELIVERY_20261004.md"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "reference",
+          "to": "build",
+          "kind": "next"
+        },
+        {
+          "from": "build",
+          "to": "animate",
+          "kind": "conditional",
+          "condition": "используется редактируемый источник процедурного прототипа"
+        },
+        {
+          "from": "build",
+          "to": "validate",
+          "kind": "next"
+        },
+        {
+          "from": "animate",
+          "to": "validate",
+          "kind": "next"
+        },
+        {
+          "from": "build",
+          "to": "reject",
+          "kind": "error"
+        },
+        {
+          "from": "validate",
+          "to": "reject",
+          "kind": "error"
+        }
+      ],
+      "confidence": 0.86,
+      "provenance": "ai",
+      "updated_at": "2026-10-05T16:24:52Z"
+    },
+    {
+      "id": "f-grounding",
+      "name": "Зрение как орган управления",
+      "summary": "Свежий кадр, UIA/OCR-кандидат и проверенный клик",
+      "epicId": "safety",
+      "triggers": [
+        {
+          "kind": "cli",
+          "detail": "python -X utf8 scripts/live_grounding_acceptance.py"
+        },
+        {
+          "kind": "http",
+          "detail": "HostOS screen.ground"
+        }
+      ],
+      "steps": [
+        {
+          "id": "observe",
+          "name": "Снять свежий кадр",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/screen_adapter.py"
+            }
+          ]
+        },
+        {
+          "id": "fuse",
+          "name": "Слить UIA и OCR",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/grounding.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/windows_ocr.py"
+            }
+          ]
+        },
+        {
+          "id": "rank",
+          "name": "Ранжировать кандидатов",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/grounding.py"
+            }
+          ]
+        },
+        {
+          "id": "plan",
+          "name": "Построить план",
+          "role": "transform",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/vision.py"
+            }
+          ]
+        },
+        {
+          "id": "authorize",
+          "name": "Проверить policy и токен",
+          "role": "auth",
+          "note": "Свежий observation token, confidence 0.65+, emergency stop до idempotency replay",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/hostos_policy.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/hostos_tools.py"
+            }
+          ]
+        },
+        {
+          "id": "execute",
+          "name": "Кликнуть цель",
+          "role": "side-effect",
+          "note": "UIA InvokePattern для element_ref, desktop.pointer для OCR-координаты",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/windows_ui.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/windows_pointer.py"
+            }
+          ]
+        },
+        {
+          "id": "verify",
+          "name": "Подтвердить эффект",
+          "role": "validation",
+          "note": "Live H4: UIA-клик, OCR-canvas клик и Stop-during-click PASS дважды",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/vision.py"
+            },
+            {
+              "file": "scripts/live_grounding_acceptance.py"
+            },
+            {
+              "file": "tests/test_grounding.py"
+            }
+          ]
+        },
+        {
+          "id": "deny",
+          "name": "Отклонить небезопасную цель",
+          "role": "error",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/grounding.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/hostos_policy.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "observe",
+          "to": "fuse",
+          "kind": "next"
+        },
+        {
+          "from": "fuse",
+          "to": "rank",
+          "kind": "next"
+        },
+        {
+          "from": "rank",
+          "to": "plan",
+          "kind": "conditional",
+          "condition": "кандидат найден"
+        },
+        {
+          "from": "plan",
+          "to": "authorize",
+          "kind": "next"
+        },
+        {
+          "from": "authorize",
+          "to": "execute",
+          "kind": "conditional",
+          "condition": "policy разрешила, токен свежий"
+        },
+        {
+          "from": "execute",
+          "to": "verify",
+          "kind": "next"
+        },
+        {
+          "from": "authorize",
+          "to": "deny",
+          "kind": "error",
+          "condition": "Stop, stale token или низкая уверенность"
+        },
+        {
+          "from": "rank",
+          "to": "deny",
+          "kind": "error",
+          "condition": "нет actionable-кандидата"
+        }
+      ],
+      "cross_feature": [
+        {
+          "from": "f-grounding",
+          "to": "f-hostos-policy",
+          "kind": "depends_on",
+          "note": "исполнение подчиняется уровням и emergency stop"
+        },
+        {
+          "from": "f-screen-watch",
+          "to": "f-grounding",
+          "kind": "flow",
+          "mode": "sync",
+          "note": "свежий экранный кадр питает кандидатов"
+        }
+      ],
+      "confidence": 0.92,
+      "provenance": "ai",
+      "updated_at": "2026-10-21T08:18:13.466512Z"
+    },
+    {
+      "id": "f-goal-completion-repair",
+      "name": "Починка ложного завершения Goal",
+      "summary": "Один protocol retry вместо принятия done без действий",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "native Goal state=done"
+        }
+      ],
+      "steps": [
+        {
+          "id": "parse",
+          "name": "Разобрать ответ",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_goal_completion_repair.py"
+            }
+          ]
+        },
+        {
+          "id": "eligible",
+          "name": "Проверить ledger",
+          "role": "auth",
+          "note": "Только активный Goal текущего trace; failed/пустой action batch не считается completion evidence",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_goal_completion_repair.py"
+            }
+          ]
+        },
+        {
+          "id": "repair",
+          "name": "Выдать один retry",
+          "role": "side-effect",
+          "note": "Durable ledger не мутируется; повторная ложная попытка уходит в native rejection",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_goal_completion_repair.py"
+            },
+            {
+              "file": "scripts/run_native_goal_repair_probe.py"
+            }
+          ]
+        },
+        {
+          "id": "accept",
+          "name": "Принять валидное done",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_goal_completion_repair.py"
+            }
+          ]
+        },
+        {
+          "id": "reject",
+          "name": "Отклонить повтор",
+          "role": "error",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_goal_completion_repair.py"
+            },
+            {
+              "file": "tests/test_native_goal_completion_repair.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "parse",
+          "to": "eligible",
+          "kind": "next"
+        },
+        {
+          "from": "eligible",
+          "to": "accept",
+          "kind": "conditional",
+          "condition": "ledger подтверждает завершение"
+        },
+        {
+          "from": "eligible",
+          "to": "repair",
+          "kind": "conditional",
+          "condition": "done без evidence"
+        },
+        {
+          "from": "parse",
+          "to": "reject",
+          "kind": "error",
+          "condition": "повторный false done"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-10-21T08:18:13.466512Z"
+    },
+    {
+      "id": "f-goal-heartbeat-envelope",
+      "name": "Продолжение Goal по heartbeat",
+      "summary": "Активная Goal сохраняет полный протокол в heartbeat-ходе",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "HEARTBEAT при наличии ACTIVE GOAL"
+        }
+      ],
+      "steps": [
+        {
+          "id": "detect-goal",
+          "name": "Распознать активную цель",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_json_format.py"
+            }
+          ]
+        },
+        {
+          "id": "preserve-envelope",
+          "name": "Сохранить Goal-протокол",
+          "role": "transform",
+          "note": "Не применять пассивную perception-схему: оставить calls и поля Goal Protocol v2",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_json_format.py"
+            },
+            {
+              "file": "tests/test_native_jawl_json_format.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_goal_completion_repair.py"
+            },
+            {
+              "file": "tests/test_native_goal_completion_repair.py"
+            }
+          ]
+        },
+        {
+          "id": "respect-wakeup",
+          "name": "Respect Goal backoff",
+          "role": "transform",
+          "note": "Honor next_wakeup_at even when pending work exists; external events clear backoff. Repeated identical successful action batches use exponential delays and block after six no-progress cycles.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_goal_wakeup_backoff.py"
+            },
+            {
+              "file": "tests/test_native_goal_wakeup_backoff.py"
+            },
+            {
+              "file": "scripts/run_owned_jawl_brain.py"
+            },
+            {
+              "file": "scripts/run_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "tests/test_owned_gateway_acceptance.py"
+            },
+            {
+              "file": "scripts/run_owned_native_soak.py"
+            },
+            {
+              "file": "scripts/run_unattended_goal_soak.py"
+            }
+          ]
+        },
+        {
+          "id": "declared-capacity",
+          "name": "????????? ??????? ????????",
+          "role": "transform",
+          "note": "????? ??????? ???? ???????? ????????? Goal cap 18K; ????? native budget ???????????. Gemini ?????????? plain JSON ? native validation.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_turn_context.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/native_jawl_json_format.py"
+            },
+            {
+              "file": "tests/test_native_jawl_turn_context.py"
+            },
+            {
+              "file": "scripts/run_continuity_canary.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "detect-goal",
+          "to": "preserve-envelope",
+          "kind": "conditional",
+          "condition": "system context содержит ## ACTIVE GOAL"
+        },
+        {
+          "from": "preserve-envelope",
+          "to": "respect-wakeup",
+          "kind": "next",
+          "condition": "Goal cycle requests a delayed continuation"
+        },
+        {
+          "from": "respect-wakeup",
+          "to": "declared-capacity",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-10-29T00:20:00Z"
     }
   ],
   "cross_feature": [
@@ -1803,7 +4572,7 @@
       "from": "f-endpoint-policy",
       "to": "f-voice-turn",
       "kind": "flow",
-      "note": "endpoint определяет момент финального ASR"
+      "note": "конец реплики запускает расшифровку GigaAM"
     },
     {
       "from": "f-voice-turn",
@@ -1871,6 +4640,32 @@
       "to": "f-voice-turn",
       "kind": "depends_on",
       "note": "WS-транспорт несёт голосовые чанки и финализацию"
+    },
+    {
+      "from": "f-native-voice-lane",
+      "to": "f-voice-turn",
+      "kind": "depends_on",
+      "note": "нативный клиент питает тот же голосовой контур /api/voice"
+    },
+    {
+      "from": "f-runtime-supervisor",
+      "to": "f-prosody",
+      "kind": "triggers",
+      "note": "живая проверка ADR-041 поднимает TeraTTS-воркер под супервизором"
+    },
+    {
+      "from": "f-character-build",
+      "to": "f-desktop-avatar",
+      "kind": "flow",
+      "mode": "sync",
+      "note": "Проверенный файл VRM становится отдельным элементом гардероба; не меняет текущий выбор автоматически"
+    },
+    {
+      "from": "f-sensory-ingest",
+      "to": "f-perception-fusion",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Распознанные аудиособытия и кадры постепенно пополняют общий контекст"
     }
   ],
   "epic_flow": [

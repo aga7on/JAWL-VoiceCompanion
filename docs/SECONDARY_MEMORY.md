@@ -1,9 +1,11 @@
 # Ситуационная (ambient) память
 
-Актуально: 2026-09-05. Требование — помнить полезный окружающий контекст, не
+Обзор обновлён 2026-10-10 (read-only; latest saved runtime evidence 2026-10-05).
+Требование — помнить полезный окружающий контекст, не
 мешая разговору и не занимая VRAM без необходимости. Это часть одного
-компаньона, не второй агент. [PRODUCT.md](PRODUCT.md) и [TODO.md](../TODO.md)
-разделяют целевое поведение и незавершённые задачи.
+компаньона, не второй агент. Это target design, если явно не указано
+IMPLEMENTED. См. [README.md](README.md), [PRODUCT.md](PRODUCT.md),
+[STATE.md](STATE.md) и актуальную очередь [TODO.md](../TODO.md).
 
 ## Слои и владелец
 
@@ -33,10 +35,11 @@ scene/place/routine/music и abnormal-sound observations. Это perceptual cont
 ориентиры, а не жёсткий «биологический» алгоритм. Настраивать TTL, count/bytes,
 приоритет и правила консолидации по полезности и нагрузке.
 
-Текущие T1/T2/consent preferences — process memory, не переживают restart.
-Существующая ручная `/api/ambient-memory/promote` передаёт confirmed candidate
-в JAWL structured_memories с source/validity/standard tier. Это реализованный
-минимум, **не запрет на автоматическую консолидацию** в будущем.
+Текущие T1/T2/consent preferences — process-local и не переживают restart.
+Ручной `POST /api/ambient-memory/promote` передаёт confirmed candidate в JAWL
+structured memory с source/validity/standard tier; это IMPLEMENTED. Durable
+automatic consolidation — OPEN, не постоянный запрет и не уже реализованная
+функция.
 
 Целевой обычный профиль: после первичной настройки источников/разрешений
 восприятие включено, наблюдения регистрируются по мере поступления, JAWL консолидирует
@@ -51,7 +54,7 @@ scene/place/routine/music и abnormal-sound observations. Это perceptual cont
 ```text
 Микрофон → ASR → один пользовательский turn JAWL + async VoiceMem enrichment
 Звук ПК → segmenter → ASR + [будущий sound/music captioner] → triage
-Экран → change/keyframe/UIA + [VLM после выбора] → triage
+Экран → change/keyframe/UIA + [configured Bonsai 8986; acceptance open] → triage
 triage → attributed episodes → JAWL consolidation/recall
 ```
 
@@ -60,15 +63,16 @@ triage → attributed episodes → JAWL consolidation/recall
 Наблюдение может повлиять на последующий ответ/уместный SPEAK_INTENT только
 через JAWL, Attention/DND и общую политику, не как скрытая команда сенсора.
 
-ASR распознаёт речь. Музыка, шум окружения и оценка тембра/настроения требуют
-своих capabilities и проверки. AudioDescriptionService — существующий
-bounded adapter seam, принятого captioning model нет. Qwen3-ASR не captioner;
-его пустой non-speech ответ не доказывает понимание музыки. Affect — оценка с
+ASR распознаёт речь. GigaAM v3 — единственный ASR; он не является captioner и
+не измеряет тембр/настроение. Музыка, шум окружения и affect требуют отдельных
+capabilities и приёмки. `AudioDescriptionService` — adapter seam, принятого
+captioning model нет. Affect — оценка с
 неопределённостью, не диагноз, идентичность или устойчивый trait.
 
 ## Текущие ограничения
 
-- Qwen final-ASR path копит bounded PCM и flush выполняется при Stop.
+- Ambient GigaAM final-ASR path копит bounded PCM; текущий manual flush
+  выполняется при Stop. Это не заменяет регулярную ротацию сегментов.
   Для повседневной фоновой памяти нужен segmenter с регулярной ротацией,
   backpressure и recovery; бесконечный один session buffer непригоден.
 - Self-TTS suppression основано на времени playback. Это может убрать
@@ -89,7 +93,7 @@ bounded adapter seam, принятого captioning model нет. Qwen3-ASR не
 
 ## Delayed triage и JSON
 
-CPU/RAM worker получает ограниченный текст с источниками, без raw media,
+Целевой CPU/RAM worker получает ограниченный текст с источниками, без raw media,
 секретов, tools или полномочий. Bonsai-1.7B — испытанный кандидат для этого
 слоя; Prism-ML/Ternary-Bonsai-8B из ранней идеи не обязательные зависимости.
 Резидентность и unload — выбор профиля, не скрытый расход ресурсов.
@@ -100,7 +104,7 @@ topics, confidence, source_event_ids, observed interval, retention.
 Противоречивое остаётся неопределённым свидетельством до уточнения.
 Модельная JSON-оценка не выдаёт ей право менять canonical facts.
 
-## Проверка результата
+## OPEN: targets для проверки результата
 
 1. Synthetic speech/music/тишина/наложения → правильные раздельные events.
 2. Несколько последовательных сегментов без ручного Stop и без переполнения RAM.

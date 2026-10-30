@@ -1,141 +1,21 @@
-# JAWL VoiceCompanion
+# JAWL Companion
 
-Единый локальный русскоязычный агент-компаньон: характер и Heartbeat JAWL,
-память и голосовое восприятие VoiceMem, речь, 2D-персонаж, нативные инструменты
-и автономная работа на Windows. Всё управляется из одной лаконичной мятной
-Aero-панели; отдельное окно персонажа и OBS — зеркала той же личности.
+Русскоязычный компаньон для Windows: персонаж рядом на экране, голос и текст,
+общая память JAWL, инициативное восприятие и поручения на ПК.
 
-Цель — согласованный организм: одно внимание, память и цикл
-«восприятие → решение → действие → проверенный опыт». JAWL — база развития
-ядра, VoiceMem — полезные механизмы восприятия; их дубли не должны сохраняться
-только ради объединения фреймворков.
+**14 октября 2026: интеграционная версия. Ежедневная эксплуатация ещё не принята.**
+Последний сохранённый реальный прогон: три озвученных ответа, четвёртый — ошибка.
+Новая ветка: `dev/daily-companion-20261014`; прежние dirty changes сохранены.
 
-## Статус
+- [План ближайшей поставки](docs/DAILY_PLAN.md)
+- [Очередь задач](TODO.md) · [состояние и evidence](docs/STATE.md)
+- [Проверка ежедневного использования](docs/DAILY_ACCEPTANCE.md)
+- [Запуск существующей сборки](docs/DAILY_RUNBOOK.md)
+- [Замысел](docs/PRODUCT.md) · [архитектура](docs/ARCHITECTURE.md)
+- [Карта документов](docs/README.md) · [отложенные требования](docs/BACKLOG.md)
+- [Архив и восстановление](docs/history/2026-10-14-daily-reset/INDEX.md)
 
-**Интеграционный прототип, не release candidate и не production-ready.**
-Есть код и проверенные отдельные срезы. Единого воспроизводимого ежедневного
-сценария с реальной LLM, памятью, голосом, действиями и аватаром пока не принято.
-По умолчанию launcher запускает mock-диалог, а не готового JAWL-агента.
-
-- [Замысел продукта](docs/PRODUCT.md) — чего хочет владелец, обязательное и отложенное.
-- [План](TODO.md) — следующие срезы с проверяемым результатом.
-- [Состояние](docs/STATE.md) — реализованное, внешние зависимости, границы доказательств.
-- [Аудит](docs/TECHNICAL_AUDIT.md) — критические изъяны и матрица приёмки.
-- [Архитектура](docs/ARCHITECTURE.md) — один агентный контур, владельцы компонентов.
-- [Профиль runtime](config/profile.example.json) — пример versioned manifest без секретов.
-- [Правила для агентов](AGENTS.md) — ограничения работы и передачи проекта.
-
-## Открыть локальную демо-панель
-
-```powershell
-cd G:\AI\JAWL-VoiceCompanion
-.\scripts\run_web.ps1
-```
-
-Control: `http://127.0.0.1:2367/`.
-Отдельная presentation-поверхность: `http://127.0.0.1:8766/avatar`.
-На `8765` — FoxMCP, этот порт не занимать. Launcher проверяет оба своих порта
-и не должен останавливать соседние процессы. Открывать HTTP-страницу, не `/ws`.
-
-Этот запуск показывает UI/2D fallback и deterministic mock. Модели, JAWL и
-VoiceMem автоматически не устанавливаются и не подключаются. `--hostos-live`
-сам по себе не включает единый агентный контур; standalone executor — только
-явный development-профиль.
-
-## Подключение к существующему JAWL
-
-Требуется совместимый JAWL с native Companion Gateway, заранее запущенный
-оператором. Наличие обычной web console недостаточно. Токен должен быть
-заранее помещён в `JAWL_WEB_TOKEN` вне истории команд и репозитория.
-
-```powershell
-.\scripts\run_web.ps1 --jawl-web-url http://127.0.0.1:8770 --jawl-hostos-control
-```
-
-Это подключение, **не установка всей платформы**. Управляющие действия панели
-меняют состояние подключённого JAWL. Для разработки нужен отдельный согласованный
-runtime, не рабочий `G:\AI\JAWL-Coding`. Этот каталог — read-only reference,
-включая его config/data/logs/runtime. Текущая зависимость от его незакоммиченных
-native additions — открытая P0-задача, а не поддержанная поставка.
-
-JAWL сохраняет личность, Heartbeat, память, JSON/tool-протокол и полномочия.
-Companion не должен переходить на локальный исполнитель при отказе JAWL.
-Полный доступ 0–3 и unattended остаются обязательными возможностями платформы,
-но не обходят права Windows и явные исключения. См.
-[границу HostOS](docs/contracts/jawl-hostos.md).
-
-Для connected runtime используется `scripts/run_integrated_profile.ps1`. Его
-безопасный default — native access level `0` и отключённый Debug Broker. Явный
-disposable-профиль полного доступа запускается так:
-
-```powershell
-$env:LLM_API_URL = 'http://127.0.0.1:11434/v1'
-$env:LLM_API_KEY_1 = 'local-loopback'
-.\scripts\run_integrated_profile.ps1 -NativeAccessLevel 3 -EnableDebugBroker
-```
-
-Для opt-in unattended lifecycle с нативным JAWL supervisor добавьте
-`-EnableSupervisor`. Supervisor использует тот же profile registry и sandbox,
-а JAWL остаётся владельцем start/stop, lease, policy и recovery:
-
-```powershell
-.\scripts\run_integrated_profile.ps1 `
-  -ProfileName supervised-dev `
-  -NativeAccessLevel 3 `
-  -EnableSupervisor
-```
-
-Воспроизводимый disposable acceptance этого контура:
-
-```powershell
-python scripts/run_supervised_profile_acceptance.py --live
-```
-
-Это проверяет startup и intentional stop. Crash recovery с активным ROOT lease
-и long-run soak всё ещё должны пройти отдельный live gate.
-
-Оба флага меняют только конфигурацию выбранного профиля в
-`runtime/instances/<name>`. Исполнение, policy, registry, audit, emergency
-stop и ROOT lease остаются внутри JAWL; Companion не добавляет второго
-исполнителя. Live evidence: `runtime/native-catalog-full-access-launcher-
-20260909-r2.json` и `runtime/native-namespace-full-access-launcher-
-20260909-r2.json`.
-
-## Голос, модели и представление
-
-Qwen3-ASR-0.6B — текущий русский final-utterance профиль; integrated launcher
-выбирает его по умолчанию (`-AsrBackend whisper` оставляет явный fallback).
-Qwen3-TTS 0.6B —
-желаемый основной голосовой движок с клоном; TeraTTSv2 остаётся рядом как
-быстрый CPU fallback. Нынешний CLI default — Tera, Qwen выбирается явно.
-Это расхождение не скрыто; автоматический выбор ещё предстоит довести.
-
-VoiceMem обогащает итоговый текст асинхронно. Системное аудио — отдельная
-ситуационная память, не пользовательские команды. Модель описания музыки/
-окружения не выбрана. Постоянная VLM-интеграция ждёт решения владельца.
-
-- [Голос/ASR](docs/contracts/voice.md), [TTS](docs/contracts/tts.md).
-- [Ситуационная память](docs/SECONDARY_MEMORY.md).
-- [2D, окно и OBS](docs/OBS.md), [контракт аватара](docs/contracts/avatar.md).
-- [Запуск worker-профилей и сборка](docs/RELEASE.md).
-- [Исторические измерения моделей](docs/MODEL-TESTS.md).
-
-Веса, окружения, референс голоса и лицензируемые ассеты не входят в wheel.
-Проверенный TTS WAV не доказывает end-to-end задержку микрофона или эмоции.
-
-## Проверка и продолжение
-
-```powershell
-.\scripts\run_full_gate.ps1
-```
-
-Это локальная регрессия с fake providers, не приёмка готового продукта.
-Мажорные изменения требуют полного gate, интерактивного browser E2E и
-применимых реальных сценариев из аудита. Для правок только документации —
-проверка ссылок, согласованности и `git diff --check`, без запуска внешних агентов.
-
-Документы до этого аудита сохранены в
-[историческом архиве](docs/history/2026-09-05-before-product-audit/README.md).
-Их старые статусы и команды не являются текущими инструкциями. Исследованные
-репозитории перечислены в [RESEARCH.md](docs/RESEARCH.md); копирование чужого
-кода и ассетов требует отдельной проверки лицензий.
+Основной UI: `http://127.0.0.1:2367/app`. Electron — клиент существующего backend.
+Демо и загруженная сцена не означают работающего агента.
+Сохраняем JAWL как единственный brain/memory/task/policy owner,
+VoiceMem как восприятие, Electron/web + VRM как общий интерфейс.

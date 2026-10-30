@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import json
 from pathlib import Path
+
+try:
+    from native_context_budget import budget_for_window, RECEIPT_NAME
+except ModuleNotFoundError:
+    from scripts.native_context_budget import budget_for_window, RECEIPT_NAME
 
 try:
     import yaml
@@ -39,9 +45,19 @@ def configure(
     enable_debug_broker: bool,
     model_override: str = "",
     temperature_override: str = "",
+    enable_browser: bool = False,
+    context_window_tokens: int = 0,
+    terminal_history_limit: int = 0,
+    terminal_context_limit: int = 0,
 ) -> Path:
     if access_level not in range(4):
         raise ValueError("access_level must be 0, 1, 2 or 3")
+    if terminal_history_limit or terminal_context_limit:
+        if not 20 <= terminal_history_limit <= 10000:
+            raise ValueError("terminal_history_limit must be from 20 to 10000")
+        if not 10 <= terminal_context_limit <= terminal_history_limit:
+            raise ValueError("terminal_context_limit must be from 10 to terminal_history_limit")
+    context_budget = budget_for_window(context_window_tokens)
     profile_root = _profile_root(profile)
     path = profile_root / "config" / "interfaces.yaml"
     if not path.is_file():
@@ -59,7 +75,7 @@ def configure(
         if not 0.0 <= temperature <= 2.0:
             raise ValueError("temperature_override must be a number from 0 to 2")
 
-    if model_override or temperature is not None:
+    if model_override or temperature is not None or context_budget:
         settings_path = profile_root / "config" / "settings.yaml"
         if not settings_path.is_file():
             raise FileNotFoundError(f"prepared profile settings are missing: {settings_path}")
@@ -73,12 +89,21 @@ def configure(
             llm["main_model"] = model_override
         if temperature is not None:
             llm["temperature"] = temperature
+        if context_budget:
+            settings.setdefault("system", {}).setdefault("context_depth", {}).setdefault("budget", {}).update(context_budget)
         settings_tmp = settings_path.with_name(settings_path.name + ".model.tmp")
         settings_tmp.write_text(
             yaml.safe_dump(settings, allow_unicode=True, sort_keys=False),
             encoding="utf-8",
         )
         os.replace(settings_tmp, settings_path)
+        if context_budget:
+            receipt_path = profile_root / RECEIPT_NAME
+            receipt_tmp = receipt_path.with_suffix(".tmp")
+            receipt_tmp.write_text(json.dumps({"schema_version": 1,
+                                              "context_window_tokens": context_window_tokens,
+                                              "budget": context_budget}, indent=2), encoding="utf-8")
+            os.replace(receipt_tmp, receipt_path)
 
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -89,11 +114,28 @@ def configure(
     host_os = host["os"]
     host_os["access_level"] = access_level
 
+    if terminal_history_limit or terminal_context_limit:
+        terminal = host.get("terminal")
+        if not isinstance(terminal, dict):
+            raise ValueError("profile interfaces must contain a host.terminal mapping")
+        terminal["history_limit"] = terminal_history_limit
+        terminal["context_limit"] = terminal_context_limit
+
     broker = payload.get("debug_broker")
     if not isinstance(broker, dict):
         broker = {}
         payload["debug_broker"] = broker
     broker["enabled"] = bool(enable_debug_broker)
+
+    if enable_browser:
+        web = payload.setdefault("web", {})
+        if not isinstance(web, dict):
+            raise ValueError("profile interfaces must contain a web mapping")
+        browser = web.setdefault("browser", {})
+        if not isinstance(browser, dict):
+            raise ValueError("profile web.browser must be a mapping")
+        browser["enabled"] = True
+        browser.setdefault("headless", True)
 
     temporary = path.with_name(path.name + ".native.tmp")
     temporary.write_text(
@@ -111,6 +153,10 @@ def main() -> int:
     parser.add_argument("--enable-debug-broker", action="store_true")
     parser.add_argument("--model-override", default="")
     parser.add_argument("--temperature-override", default="")
+    parser.add_argument("--enable-browser", action="store_true")
+    parser.add_argument("--context-window-tokens", type=int, default=0)
+    parser.add_argument("--terminal-history-limit", type=int, default=0)
+    parser.add_argument("--terminal-context-limit", type=int, default=0)
     args = parser.parse_args()
     path = configure(
         args.profile,
@@ -118,6 +164,10 @@ def main() -> int:
         enable_debug_broker=args.enable_debug_broker,
         model_override=args.model_override,
         temperature_override=args.temperature_override,
+        enable_browser=args.enable_browser,
+        context_window_tokens=args.context_window_tokens,
+        terminal_history_limit=args.terminal_history_limit,
+        terminal_context_limit=args.terminal_context_limit,
     )
     print(
         f"configured profile={args.profile} access_level={args.access_level} "

@@ -18,8 +18,12 @@ only through this hub.
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import os
+import re
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -154,6 +158,187 @@ class ConfigHub:
             "values": values,
             "lists": lists,
         }
+
+    def read_voice_capture(self) -> Dict[str, Any]:
+        """Read the capture subtree without projecting it through snapshot schema."""
+        with self._writer_lock:
+            interfaces = self.cio.load_yaml(self.interfaces_file)
+            if not isinstance(interfaces, dict):
+                raise ValueError("interfaces.yaml root must be a mapping")
+            voice = interfaces.get("voice", {})
+            if voice is None and "voice" in interfaces:
+                raise ValueError("interfaces.yaml voice entry is null")
+            if not isinstance(voice, dict):
+                raise ValueError("interfaces.yaml voice entry must be a mapping")
+            capture = voice.get("capture", {})
+            if capture is None and "capture" in voice:
+                raise ValueError("interfaces.yaml voice.capture entry is null")
+            if not isinstance(capture, dict):
+                raise ValueError("interfaces.yaml voice.capture entry must be a mapping")
+            return {"settings": dict(capture), "revision": self.revision()}
+
+    def write_voice_capture(
+        self, settings: Dict[str, Any], expected_revision: str,
+    ) -> Dict[str, Any]:
+        """Persist capture fields through this hub's revision lock and backups."""
+        if not isinstance(settings, dict):
+            raise ValueError("voice capture settings must be an object")
+        from .voice_capture import VoiceCaptureSettings  # local import avoids a module cycle
+
+        settings = VoiceCaptureSettings.from_mapping(settings).as_settings_dict()
+        with self._writer_lock:
+            current = self.revision()
+            if expected_revision != current:
+                return {
+                    "ok": False,
+                    "status": "conflict",
+                    "error": "config changed since read; reload and retry",
+                    "revision": current,
+                }
+
+            # Parse before backing up or changing anything. Invalid/unknown
+            # interface data is surfaced instead of being reset to defaults.
+            yaml_text, expected_interfaces = self._ensure_capture_subtree(settings)
+            self._atomic_apply_capture(settings, yaml_text, expected_interfaces)
+            return {
+                "ok": True,
+                "revision": self.revision(),
+                "written": [self.interfaces_file.name],
+                "settings": dict(settings),
+                "restart_required": False,
+                "restart_policy": "next_capture",
+            }
+
+    def _ensure_capture_subtree(self, settings: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+        """Insert only absent YAML mapping lines, retaining original text bytes."""
+        interfaces = self.cio.load_yaml(self.interfaces_file)
+        if not isinstance(interfaces, dict):
+            raise ValueError("interfaces.yaml root must be a mapping")
+        original_has_voice = "voice" in interfaces
+        voice = interfaces.get("voice", {})
+        if voice is None and original_has_voice:
+            raise ValueError("voice: null is unsupported for safe capture settings insertion")
+        if not isinstance(voice, dict):
+            raise ValueError("interfaces.yaml voice entry must be a mapping")
+        capture = voice.get("capture", {})
+        if capture is None and "capture" in voice:
+            raise ValueError("voice.capture: null is unsupported for safe settings insertion")
+        if not isinstance(capture, dict):
+            raise ValueError("interfaces.yaml voice.capture entry must be a mapping")
+
+        with self.interfaces_file.open("r", encoding="utf-8", newline="") as source:
+            text = source.read()
+        newline = "\r\n" if text.count("\r\n") > text.count("\n") // 2 else "\n"
+        lines = text.splitlines(keepends=True)
+        if not lines and text:
+            lines = [text]
+
+        voice_line = _yaml_mapping_line(lines, ("voice",)) if original_has_voice else None
+        if original_has_voice and voice_line is None:
+            raise ValueError("quoted or unsupported voice key syntax cannot be edited safely")
+        if voice_line is None:
+            if lines and not lines[-1].endswith(("\n", "\r")):
+                lines[-1] += newline
+            lines.extend(["voice:" + newline, "  capture:" + newline])
+            capture_indent = 2
+        else:
+            voice_indent = _leading_indent(lines[voice_line])
+            voice_text, voice_ending = _strip_line_ending(lines[voice_line])
+            voice_match = re.match(r"^(\s*voice\s*:\s*)(.*)$", voice_text)
+            assert voice_match is not None
+            tail = voice_match.group(2)
+            body = _yaml_value_without_comment(tail)
+            if body == "{}":
+                lines[voice_line] = voice_match.group(1) + _yaml_comment(tail) + voice_ending
+                capture_start = voice_line + 1
+                lines[capture_start:capture_start] = [
+                    " " * (voice_indent + 2) + "capture:" + newline,
+                ]
+                capture_indent = voice_indent + 2
+            elif body:
+                raise ValueError("voice must use a block mapping for safe capture settings insertion")
+            else:
+                capture_line = _yaml_mapping_line(lines, ("voice", "capture"))
+                if capture_line is None:
+                    insertion = _mapping_end(lines, voice_line, voice_indent)
+                    if insertion and not lines[insertion - 1].endswith(("\n", "\r")):
+                        lines[insertion - 1] += newline
+                    capture_indent = voice_indent + 2
+                    lines[insertion:insertion] = [
+                        " " * capture_indent + "capture:" + newline,
+                    ]
+                else:
+                    capture_indent = _leading_indent(lines[capture_line])
+
+        # Empty inline capture mappings are expanded locally. Other inline
+        # mappings are rejected because rewriting them could disturb user YAML.
+        capture_line = _yaml_mapping_line(lines, ("voice", "capture"))
+        if capture_line is None:
+            raise ValueError("could not safely insert voice.capture mapping")
+        capture_text, capture_ending = _strip_line_ending(lines[capture_line])
+        capture_match = re.match(r"^(\s*capture\s*:\s*)(.*)$", capture_text)
+        assert capture_match is not None
+        capture_body = _yaml_value_without_comment(capture_match.group(2))
+        if capture_body == "{}":
+            lines[capture_line] = capture_match.group(1) + _yaml_comment(capture_match.group(2)) + capture_ending
+        elif capture_body:
+            raise ValueError("voice.capture must be a block mapping")
+
+        missing = [key for key in settings if key not in capture]
+        if missing:
+            insertion = _mapping_end(lines, capture_line, capture_indent)
+            if insertion and not lines[insertion - 1].endswith(("\n", "\r")):
+                lines[insertion - 1] += newline
+            block = [
+                " " * (capture_indent + 2) + key + ": " + _yaml_scalar(settings[key]) + newline
+                for key in missing
+            ]
+            lines[insertion:insertion] = block
+
+        expected = copy.deepcopy(interfaces)
+        expected_voice = expected.setdefault("voice", {})
+        expected_capture = expected_voice.setdefault("capture", {})
+        if not isinstance(expected_capture, dict):
+            raise ValueError("voice.capture must be a block mapping for safe settings insertion")
+        expected_capture.update(settings)
+        return "".join(lines), expected
+
+    def _atomic_apply_capture(
+        self, settings: Dict[str, Any], yaml_text: str, expected_interfaces: Dict[str, Any],
+    ) -> None:
+        temp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", newline="", suffix=".yaml",
+                prefix=".interfaces-capture-", dir=self.config_dir, delete=False,
+            ) as temp_file:
+                temp_name = temp_file.name
+                temp_file.write(yaml_text)
+            with Path(temp_name).open("r", encoding="utf-8", newline="") as candidate_file:
+                lines = candidate_file.read().splitlines(keepends=True)
+            for key, value in settings.items():
+                if not _replace_yaml_scalar(lines, ("voice", "capture", key), value):
+                    raise ValueError("could not safely write capture setting: " + key)
+            with Path(temp_name).open("w", encoding="utf-8", newline="") as candidate_file:
+                candidate_file.write("".join(lines))
+            try:
+                candidate_interfaces = self.cio.load_yaml(Path(temp_name))
+            except Exception as exc:
+                raise ValueError(
+                    "capture settings edit produced invalid YAML; "
+                    "this layout is unsupported and was left unchanged"
+                ) from exc
+            if candidate_interfaces != expected_interfaces:
+                raise ValueError(
+                    "capture settings YAML edit changed unrelated interfaces data; "
+                    "this YAML layout is unsupported and was left unchanged"
+                )
+            self._backup_all()
+            os.replace(temp_name, self.interfaces_file)
+            temp_name = None
+        finally:
+            if temp_name is not None:
+                Path(temp_name).unlink(missing_ok=True)
 
     # ----------------------------------------------------------------- write
 
@@ -323,6 +508,86 @@ def _get(data: Dict[str, Any], dotted: str) -> Any:
             return None
         current = current[part]
     return current
+
+
+def _strip_line_ending(line: str) -> Tuple[str, str]:
+    if line.endswith("\r\n"):
+        return line[:-2], "\r\n"
+    if line.endswith(("\n", "\r")):
+        return line[:-1], line[-1:]
+    return line, ""
+
+
+def _leading_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _yaml_mapping_line(lines: List[str], path: Tuple[str, ...]) -> int | None:
+    stack: List[Tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        content, _ = _strip_line_ending(line)
+        match = re.match(r"^(\s*)([A-Za-z_][\w-]*)\s*:(.*)$", content)
+        if match is None:
+            continue
+        indent = len(match.group(1))
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        candidate = tuple([key for _, key in stack] + [match.group(2)])
+        if candidate == path:
+            return index
+        stack.append((indent, match.group(2)))
+    return None
+
+
+def _mapping_end(lines: List[str], start: int, parent_indent: int) -> int:
+    for index in range(start + 1, len(lines)):
+        content, _ = _strip_line_ending(lines[index])
+        if not content.strip() or content.lstrip().startswith("#"):
+            continue
+        if _leading_indent(content) <= parent_indent:
+            return index
+    return len(lines)
+
+
+def _yaml_value_without_comment(value: str) -> str:
+    if value.lstrip().startswith("#"):
+        return ""
+    return re.split(r"\s+#", value, maxsplit=1)[0].strip()
+
+
+def _yaml_comment(value: str) -> str:
+    if value.lstrip().startswith("#"):
+        return value
+    match = re.search(r"\s+#.*$", value)
+    return match.group(0) if match else ""
+
+
+def _yaml_scalar(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("capture config values must be numeric")
+    return repr(value) if isinstance(value, float) else str(value)
+
+
+def _replace_yaml_scalar(lines: List[str], path: Tuple[str, ...], value: Any) -> bool:
+    stack: List[Tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        content, ending = _strip_line_ending(line)
+        match = re.match(r"^(\s*)([A-Za-z_][\w-]*)\s*:(.*)$", content)
+        if match is None:
+            continue
+        indent = len(match.group(1))
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        candidate = tuple([key for _, key in stack] + [match.group(2)])
+        if candidate == path:
+            rest = match.group(3)
+            comment = _yaml_comment(rest)
+            lines[index] = (
+                match.group(1) + match.group(2) + ": " + _yaml_scalar(value) + comment + ending
+            )
+            return True
+        stack.append((indent, match.group(2)))
+    return False
 
 
 __all__ = ["ConfigHub", "SECRET_MARKERS"]

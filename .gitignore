@@ -2,6 +2,9 @@
 .venv/
 .wheel-smoke/
 venv/
+
+# Owned upstream checkout (th0r3nt/JAWL) for kernel deviation reports
+.kernel-upstream/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -19,6 +22,7 @@ build/
 .env
 .env.*
 !.env.example
+config/runtime.manifest.local.json
 *.key
 *.pem
 *.token
@@ -77,6 +81,7 @@ voicemem_memoryspace/demo/
 
 # Rust build output (source is tracked)
 rust-client/target/
+docs/history/2026-10-16-h1-ui-defrag/rust-client/target/
 
 jawl-companion.exe
 

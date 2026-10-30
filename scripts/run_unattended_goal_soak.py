@@ -169,6 +169,14 @@ def journal_cycle_evidence(journal: Path, marker: str) -> dict[str, Any]:
         and isinstance(item.get("parameters"), dict)
         and item["parameters"].get("content") == marker
     }
+    # A ReAct goal can write and verify in different action plans. Include
+    # those plans only through the same native trace, never by pathname alone
+    # (the acceptance harness also reads that pathname after completion).
+    trace_ids = {item.get("trace", {}).get("trace_id") for item in started
+                 if isinstance(item.get("trace"), dict) and item["trace"].get("trace_id")}
+    plan_ids.update(str(item.get("plan_id") or "") for item in entries
+                    if isinstance(item.get("trace"), dict)
+                    and item["trace"].get("trace_id") in trace_ids)
     started_ids = {
         (str(item.get("plan_id") or ""), str(item.get("action_id") or ""))
         for item in entries
@@ -199,6 +207,17 @@ def journal_cycle_evidence(journal: Path, marker: str) -> dict[str, Any]:
         and item.get("tool_name") == "HostOSWriter.write_file"
         and "idempotent no-op" in str(item.get("message") or "").casefold()
     ]
+    targets = {item.get("parameters", {}).get("filepath") for item in started
+               if item.get("parameters", {}).get("filepath")}
+    read_ids = {(item.get("plan_id"), item.get("action_id")) for item in entries
+                if item.get("event") == "action_started"
+                and item.get("tool_name") == "HostOSReader.read_file"
+                and str(item.get("plan_id") or "") in plan_ids
+                and item.get("parameters", {}).get("filepath") in targets}
+    write_positions = [index for index, item in enumerate(entries) if item in successful]
+    read_positions = [index for index, item in enumerate(entries)
+                      if item.get("event") == "action_finished" and item.get("is_success") is True
+                      and (item.get("plan_id"), item.get("action_id")) in read_ids]
     tools = sorted(
         {
             str(item.get("tool_name") or "")
@@ -212,6 +231,7 @@ def journal_cycle_evidence(journal: Path, marker: str) -> dict[str, Any]:
         "action_finished_count": len(finished),
         "successful_target_writes": len(successful),
         "idempotent_noop_writes": len(idempotent_noops),
+        "write_then_read_verified": bool(write_positions and any(index > max(write_positions) for index in read_positions)),
         "tools_seen": tools[:40],
         "journal_entries": len(entries),
     }
@@ -312,6 +332,7 @@ def run_cycle(
     goal_timeout: float,
     poll_seconds: float,
     http_timeout: float,
+    resource_sampler=None,
 ) -> dict[str, Any]:
     run_id = uuid4().hex[:12]
     marker = f"UNATTENDED_SOAK_{cycle:04d}_{run_id}"
@@ -335,19 +356,16 @@ def run_cycle(
                 f"this text: {marker}, then use HostOSReader.read_file to verify "
                 "the marker. Do not access any path outside the profile sandbox, "
                 "do not send messages, do not use terminal or other tools. "
-                "After the read succeeds, first apply the canonical Goal Protocol "
-                "v2 terminal ledger patch: phase=completed, "
+                "After the fresh read succeeds, do not call any more tools. "
+                "Return exactly one native Goal Protocol v2 terminal JSON "
+                "envelope with v=2, state=done, a concise evidence summary, "
+                "and this ledger in that same envelope: phase=completed, "
                 "completed_add=[\"file created and verified\"], "
-                "pending_steps=[], next_action=none, blockers=[]. Then emit "
-                "exactly one compact Goal Protocol v2 state=done envelope with "
-                "a concise evidence summary; the ledger patch is mandatory "
-                "evidence. This acceptance task deliberately tests the direct "
-                "Goal-v2 terminal envelope, not the legacy GoalSkills lifecycle: "
-                "do not call execute_skill as a native tool, do not call "
-                "GoalSkills.update_goal, and do not call set_current_goal. If a "
-                "generic prompt suggests update_goal, that instruction does not "
-                "apply to this explicitly scoped acceptance objective; emit the "
-                "direct state=done envelope after the verified read instead."
+                "pending_steps=[], next_action=none, blockers=[]. The ledger "
+                "is a field in the done response, not a separate action. "
+                "Do not call execute_skill, GoalSkills.update_goal, or "
+                "set_current_goal; do not use the legacy lifecycle tools. "
+                "The successful fresh read is the evidence for completion."
             ),
             "verification_policy": "none",
             "wake": True,
@@ -358,7 +376,8 @@ def run_cycle(
         raise AcceptanceFailure("unattended goal.create did not return an active goal")
     item["goal_id"] = goal_id
     item["goal_created"] = goal
-    item["resource_before"] = sample_owned_processes(profile, source)
+    sample = resource_sampler or (lambda: sample_owned_processes(profile, source))
+    item["resource_before"] = sample()
     try:
         terminal = wait_for_goal(
             port_file,
@@ -367,7 +386,18 @@ def run_cycle(
             poll_seconds=poll_seconds,
         )
         item["goal_terminal"] = terminal
-        item["resource_after_goal"] = sample_owned_processes(profile, source)
+        item["goal_status"] = terminal.get("status")
+        item["goal_last_cycle_status"] = terminal.get("last_cycle_status")
+        count = terminal.get("continuation_count")
+        item["goal_continuation_count"] = count if isinstance(count, int) and not isinstance(count, bool) else None
+        item["goal_pending_work"] = terminal.get("pending_work") if isinstance(terminal.get("pending_work"), bool) else None
+        summary = terminal.get("last_summary")
+        item["no_progress_guard_triggered"] = bool(
+            terminal.get("status") == "blocked"
+            and isinstance(summary, str)
+            and "repeated identical successful native action batch" in summary.casefold()
+        )
+        item["resource_after_goal"] = sample()
         item["terminal_ledger"] = terminal_ledger_evidence(terminal)
         item["forbidden_goal_actions"] = forbidden_goal_actions(terminal)
         item["journal"] = journal_cycle_evidence(journal, marker)
@@ -396,6 +426,8 @@ def run_cycle(
             )
         if item["journal"]["successful_target_writes"] != 1:
             raise AcceptanceFailure("unattended journal did not prove exactly one successful target write")
+        if not item["journal"]["write_then_read_verified"]:
+            raise AcceptanceFailure("unattended agent did not verify the write through a fresh native read")
 
         read_status, read_payload = native_action(
             base,

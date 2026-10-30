@@ -24,12 +24,17 @@ from .composition import build_companion_runtime
 
 
 def _default_frontend_dir() -> Path:
-    """Find source-tree or wheel-installed frontend assets."""
+    """Find source-tree or wheel-installed frontend assets.
+
+    The single-window desktop app (desktop/app.html) is the only UI since
+    ADR-046. The legacy two-window shell (frontend/index.html + avatar.html)
+    was removed; only mic-processor.js remains in frontend/.
+    """
 
     source_root = Path(__file__).resolve().parents[2] / "frontend"
     installed_root = Path(sys.prefix) / "jawl_voicecompanion" / "frontend"
     for candidate in (source_root, installed_root):
-        if (candidate / "index.html").is_file() and (candidate / "avatar.html").is_file():
+        if (candidate / "mic-processor.js").is_file():
             return candidate
     return source_root
 
@@ -87,17 +92,6 @@ def main() -> None:
         "--lan-public-host",
         default=None,
         help="host/IP printed in the LAN URL when --host is 0.0.0.0 or ::",
-    )
-    parser.add_argument(
-        "--presentation-host",
-        default="127.0.0.1",
-        help="loopback host for the isolated avatar/OBS presentation server",
-    )
-    parser.add_argument(
-        "--presentation-port",
-        type=int,
-        default=8766,
-        help="port for the isolated avatar/OBS presentation server (0 chooses a free port)",
     )
     parser.add_argument("--frontend", type=Path, default=None)
     parser.add_argument(
@@ -256,6 +250,80 @@ def main() -> None:
         help="vision request timeout in seconds",
     )
     parser.add_argument(
+        "--visual-describer",
+        choices=("eg2", "qwen"),
+        default="eg2",
+        help="select the continuous visual describer lane (eg2 keeps embeddings/memory; qwen adds change-triggered captions)",
+    )
+    parser.add_argument(
+        "--visual-describer-url",
+        default=None,
+        help="OpenAI-compatible Qwen endpoint for --visual-describer qwen (defaults to --vision-url)",
+    )
+    parser.add_argument(
+        "--visual-describer-model",
+        default="qwen3.5-0.8b",
+        help="model name for --visual-describer qwen",
+    )
+    parser.add_argument(
+        "--visual-describer-roi",
+        default="0,0,1,1",
+        metavar="X,Y,W,H",
+        help="normalized screen ROI for Qwen captions",
+    )
+    parser.add_argument(
+        "--visual-describer-display-index",
+        type=int,
+        choices=(0, 1, 2, 3),
+        default=None,
+        help="capture a physical display by index instead of the focused/target window",
+    )
+    parser.add_argument(
+        "--visual-describer-active-interval",
+        type=float,
+        default=1.0,
+        help="minimum seconds between Qwen requests on active video",
+    )
+    parser.add_argument(
+        "--visual-describer-static-interval",
+        type=float,
+        default=4.0,
+        help="minimum seconds between Qwen requests on static content",
+    )
+    parser.add_argument(
+        "--visual-describer-periodic",
+        type=float,
+        default=4.0,
+        help="periodic Qwen refresh even without visible change",
+    )
+    parser.add_argument(
+        "--visual-describer-max-age",
+        type=float,
+        default=6.0,
+        help="Qwen observation age after which the result is stale",
+    )
+    parser.add_argument(
+        "--audio-describer",
+        choices=("eg2", "qwen-omni"),
+        default="eg2",
+        help="Optional soundscape description backend; ASR remains independent",
+    )
+    parser.add_argument(
+        "--audio-describer-url",
+        default="",
+        help="OpenAI-compatible /v1 endpoint for --audio-describer qwen-omni",
+    )
+    parser.add_argument(
+        "--audio-describer-model",
+        default="local-qwen3-omni",
+        help="Model alias for --audio-describer qwen-omni",
+    )
+    parser.add_argument(
+        "--voice-delivery-cues",
+        action="store_true",
+        help="Opt in to experimental CPU pitch/level measurements from direct microphone turns",
+    )
+    parser.add_argument(
         "--voicemem-python",
         type=Path,
         default=None,
@@ -275,24 +343,17 @@ def main() -> None:
         help="use VoiceMem local E5 memory components without an LLM request",
     )
     parser.add_argument(
+        "--voicemem-memory-root",
+        type=Path,
+        default=None,
+        help="explicit VoiceMem sensory cache directory (standalone default remains VoiceMem-managed)",
+    )
+    parser.add_argument(
         "--voicemem-warmup",
         choices=("none", "text", "audio"),
         default="none",
         help="preload VoiceMem models before serving (audio may take longer)",
     )
-    parser.add_argument(
-        "--asr-url",
-        default=None,
-        help="optional OpenAI-compatible final-utterance ASR endpoint; requires --asr-model",
-    )
-    parser.add_argument(
-        "--asr-model",
-        default=None,
-        help="ASR model name for --asr-url, for example Qwen3-ASR-0.6B",
-    )
-    parser.add_argument("--asr-api-key-env", default="ASR_API_KEY")
-    parser.add_argument("--asr-timeout", type=float, default=30.0)
-    parser.add_argument("--asr-max-utterance-bytes", type=int, default=4 * 1024 * 1024)
     parser.add_argument(
         "--streaming-asr",
         action="store_true",
@@ -311,6 +372,16 @@ def main() -> None:
         "--ambient-audio",
         action="store_true",
         help="configure explicit Windows system-audio loopback controls (does not start capture)",
+    )
+    parser.add_argument(
+        "--ambient-audio-autostart",
+        action="store_true",
+        help="start system-audio loopback with the companion (requires --ambient-audio)",
+    )
+    parser.add_argument(
+        "--ambient-audio-device",
+        default="",
+        help="exact Windows output device name for loopback; defaults to the WASAPI default output",
     )
     parser.add_argument(
         "--ambient-triage-url",
@@ -337,7 +408,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--tts-provider",
-        choices=("tera", "qwen", "voxcpm"),
+        choices=("tera", "qwen", "voxcpm", "omnivoice"),
         default="tera",
         help="explicit worker contract behind --tts-url (default: tera)",
     )
@@ -358,9 +429,6 @@ def main() -> None:
         help="planner model name on the prosody provider",
     )
     parser.add_argument("--prosody-timeout", type=float, default=6.0)
-    parser.add_argument("--live2d-assets", type=Path, default=None)
-    parser.add_argument("--live2d-model", default="model3.json")
-    parser.add_argument("--live2d-runtime", default="live2d-runtime.js")
     parser.add_argument(
         "--audit-file",
         type=Path,
@@ -377,7 +445,50 @@ def main() -> None:
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
     parser.add_argument("--host-root", type=Path, action="append", default=[])
     parser.add_argument("--allowed-executable", action="append", default=[])
+    parser.add_argument(
+        "--supervise-workers",
+        action="store_true",
+        help=(
+            "ADR-041 stage 2: start the configured local workers (brain LLM, TTS) "
+            "through the product RuntimeSupervisor before serving and stop them on "
+            "exit; a worker that exhausts its restart budget fails startup"
+        ),
+    )
+    parser.add_argument(
+        "--supervised-llm-command",
+        default=None,
+        help="executable for the supervised local brain worker",
+    )
+    parser.add_argument(
+        "--supervised-llm-model",
+        default=None,
+        help="GGUF model for the supervised local brain worker",
+    )
+    parser.add_argument(
+        "--supervised-llm-port",
+        type=int,
+        default=None,
+        help="loopback port for the supervised local brain worker",
+    )
+    parser.add_argument(
+        "--supervised-tts-command",
+        default=None,
+        help="executable for the supervised TTS worker",
+    )
+    parser.add_argument(
+        "--supervised-tts-release",
+        default=None,
+        help="TeraTTS release directory for the supervised TTS worker",
+    )
+    parser.add_argument(
+        "--supervised-tts-port",
+        type=int,
+        default=None,
+        help="loopback port for the supervised TTS worker",
+    )
     args = parser.parse_args()
+    if args.ambient_audio_autostart and not args.ambient_audio:
+        parser.error("--ambient-audio-autostart requires --ambient-audio")
     if args.lan_public_host and not args.lan:
         parser.error("--lan-public-host requires --lan")
     lan_access_token = os.environ.get(args.lan_auth_token_env, "") if args.lan else None
@@ -389,6 +500,10 @@ def main() -> None:
         screen_redaction_rects = _parse_redaction_rects(args.screen_redact_rect)
     except ValueError as exc:
         parser.error(str(exc))
+    try:
+        supervisor_runtime = _build_worker_supervisor(args) if args.supervise_workers else None
+    except ValueError as exc:
+        parser.error(str(exc))
     runtime = build_companion_runtime(
         args,
         frontend_dir=args.frontend or _default_frontend_dir(),
@@ -396,6 +511,19 @@ def main() -> None:
         lan_access_token=lan_access_token,
         error=parser.error,
     )
+    # ADR-041 stage 2: when asked, this process also owns the local workers.
+    # They start before the server accepts traffic and stop when it exits.
+    if supervisor_runtime is not None:
+        report = supervisor_runtime.start()
+        if not report.ok:
+            runtime.close()
+            print("supervised workers failed to become healthy:", file=sys.stderr)
+            for name, summary in report.workers.items():
+                print(f"  {name}: {summary}", file=sys.stderr)
+            raise SystemExit(2)
+        print("supervised workers healthy:")
+        for name, summary in report.workers.items():
+            print(f"  {name}: pid={summary['pid']}")
     try:
         server = runtime.control
         display_host = args.lan_public_host or args.host
@@ -403,13 +531,79 @@ def main() -> None:
             display_host = "<LAN-IP>"
         host_part = f"[{display_host}]" if ":" in display_host and not display_host.startswith("[") else display_host
         print(f"JAWL VoiceCompanion control: {server.url_scheme}://{host_part}:{server.server_port}")
-        print(f"JAWL VoiceCompanion avatar/OBS: {server.presentation_url}")
         _boot_trace('serving')
         runtime.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         runtime.close()
+        if supervisor_runtime is not None:
+            supervisor_runtime.stop()
+            print("supervised workers stopped")
+
+
+def _build_worker_supervisor(args) -> "RuntimeSupervisor":  # noqa: ANN001
+    """Specs for the local workers this process should own (stage 2 slice).
+
+    Explicit CLI arguments override the validated canonical + local manifest.
+    Missing workers or occupied ports fail before any model process starts;
+    asking for a supervised stack must not silently serve a degraded mock.
+    """
+    from .runtime_manifest import load_runtime_manifest
+    from .supervisor import RuntimeSupervisor, WorkerSpec
+    from .worker_readiness import model_ready, require_free_ports
+
+    repo = Path(__file__).resolve().parents[2]
+    manifest = load_runtime_manifest(repo)
+    ports, models, brain = (manifest[key] for key in ("ports", "models", "brain"))
+
+    def configured_path(argument: str, key: str) -> Path:
+        value = getattr(args, argument, None)
+        value = value if value is not None else models.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"supervised worker setting models.{key} is missing")
+        result = Path(value)
+        return result if result.is_absolute() else repo / result
+
+    llm_exe = configured_path("supervised_llm_command", "brain_server_exe")
+    llm_model = configured_path("supervised_llm_model", "bonsai_model")
+    tts_exe = configured_path("supervised_tts_command", "tera_python")
+    tts_release = configured_path("supervised_tts_release", "tera_release")
+    for name, path in (("brain executable", llm_exe), ("brain model", llm_model), ("TTS executable", tts_exe)):
+        if not path.is_file():
+            raise ValueError(f"supervised {name} is missing; configure runtime.manifest.local.json")
+    if not tts_release.is_dir():
+        raise ValueError("supervised TTS release is missing; configure runtime.manifest.local.json")
+    llm_port = args.supervised_llm_port if args.supervised_llm_port is not None else ports["brain_port"]
+    tts_port = args.supervised_tts_port if args.supervised_tts_port is not None else ports["tera_tts"]
+    require_free_ports([llm_port, tts_port])
+    return RuntimeSupervisor([
+        WorkerSpec(
+            name="brain",
+            command=[str(llm_exe), "--model", str(llm_model),
+                     "--alias", brain["model"], "--host", "127.0.0.1", "--port", str(llm_port),
+                     "--threads", str(brain["threads"]), "--ctx-size", str(brain["context_size"]),
+                     "--parallel", "1", "--gpu-layers", str(brain["gpu_layers"]),
+                     "--device", brain["device"], "--reasoning", "off", "--no-webui"],
+            cwd=str(repo),
+            probe=lambda: model_ready(llm_port, brain["model"]),
+            startup_timeout_seconds=240.0,
+            max_restarts=1,
+            order=0,
+        ),
+        WorkerSpec(
+            name="tts",
+            command=[str(tts_exe), str(repo / "scripts" / "teratts_server.py"),
+                     "--release-dir", str(tts_release), "--voice", "ru_f1",
+                     "--model", "distilled", "--threads", "24",
+                     "--host", "127.0.0.1", "--port", str(tts_port)],
+            cwd=str(repo),
+            probe=lambda: model_ready(tts_port),
+            startup_timeout_seconds=240.0,
+            max_restarts=1,
+            order=1,
+        ),
+    ])
 
 
 if __name__ == "__main__":

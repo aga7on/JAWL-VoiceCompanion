@@ -1,5 +1,10 @@
 # Audit: Project-N-E-K-O family (2026-09-10)
 
+> **Historical research snapshot (2026-09-10).** Findings and recommendations
+> are not implementation or current product defaults. Current product facts,
+> evidence limits, and the active queue are in [STATE](STATE.md),
+> [TODO](../TODO.md), and the [documentation map](README.md).
+
 Source: https://github.com/Project-N-E-K-O — a mature open companion family
 (2824 stars on the core repo, Steam-distributed, CN/EN/RU docs). This is the
 closest public relative to our product: a real-time companion with proactive

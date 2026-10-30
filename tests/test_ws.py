@@ -12,7 +12,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
+from jawl_voicecompanion.tts import TTSService  # noqa: E402
 from jawl_voicecompanion.web import create_server  # noqa: E402
+
+
+class _FakeTTS:
+    """TTS provider double that returns a WAV-shaped blob per sentence."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self._lock = threading.Lock()
+
+    def synthesize(self, text, *, voice=None, speed=1.0, cancel_event=None):
+        with self._lock:
+            self.calls.append(text)
+        return b"RIFF" + text.encode("utf-8")
+
+    def health(self):
+        return {"status": "ready"}
 
 
 def _client_text_frame(text: str) -> bytes:
@@ -161,6 +178,74 @@ class WebSocketTransportTests(unittest.TestCase):
             self.assertIn("VoiceMem", message["error"])
         finally:
             sock.close()
+
+    def test_live_speech_streams_audio_before_the_reply_ends(self):
+        fake_tts = _FakeTTS()
+        server = create_server(
+            port=0,
+            frontend_dir=Path(__file__).parents[1] / "frontend",
+            gateway=TextGateway(),
+            tts_service=TTSService(_FakeTTS()),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host = f"127.0.0.1:{server.server_port}"
+        sock = socket.create_connection(("127.0.0.1", server.server_port), timeout=3)
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = "\r\n".join([
+            "GET /api/ws HTTP/1.1",
+            f"Host: {host}",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            f"Sec-WebSocket-Key: {key}",
+            "Sec-WebSocket-Version: 13",
+            f"Origin: http://{host}",
+            f"Cookie: companion_session={server.session_token}",
+        ]) + "\r\n\r\n"
+        sock.sendall(request.encode("ascii"))
+        sock.settimeout(5)
+        try:
+            response = b""
+            while b"\r\n\r\n" not in response:
+                response += sock.recv(4096)
+            self.assertIn("101", response.decode("latin-1").split("\r\n", 1)[0])
+
+            # The first sentence is already complete while the rest streams.
+            sock.sendall(_client_text_frame(json.dumps({
+                "action": "speak_delta", "text": "Привет! Как у тебя",
+            })))
+            audio_events = []
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not audio_events:
+                opcode, payload = _read_server_frame(sock)
+                message = json.loads(payload.decode("utf-8"))
+                if message.get("type") == "audio":
+                    audio_events.append(message)
+            self.assertTrue(audio_events, "no audio was produced for the first sentence")
+            self.assertEqual(audio_events[0]["media_type"], "audio/wav")
+            self.assertTrue(
+                base64.b64decode(audio_events[0]["data_base64"]).endswith(b"\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82!"),
+                "the spoken audio does not contain the first sentence",
+            )
+
+            sock.sendall(_client_text_frame(json.dumps({
+                "action": "speak_finish", "text": "Привет! Как у тебя дела?",
+            })))
+            done = None
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                opcode, payload = _read_server_frame(sock)
+                message = json.loads(payload.decode("utf-8"))
+                if message.get("type") == "done":
+                    done = message
+                    break
+            self.assertIsNotNone(done, "the live speech session never finished")
+            self.assertGreaterEqual(done["count"], 1)
+        finally:
+            sock.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
     def _handshake(self, sock: socket.socket) -> None:

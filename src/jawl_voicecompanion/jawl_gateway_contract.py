@@ -47,6 +47,11 @@ def _safe_id(value: Any, field: str) -> str:
     return value
 
 
+def validate_turn_id(value: Any) -> str:
+    """Validate outgoing correlation without coercion or prefix truncation."""
+    return _safe_id(value, "turn_id")
+
+
 @dataclass(frozen=True, slots=True)
 class JawlGatewayEvent:
     """One validated, correlated event from native JAWL."""

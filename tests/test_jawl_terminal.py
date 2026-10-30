@@ -315,7 +315,6 @@ class JawlTerminalGatewayBoundsTests(unittest.TestCase):
         threading.Thread(target=feed, daemon=True).start()
         with self.assertRaises(jt.JawlUnavailable):
             gateway._read_loop()
-        gateway._socket = None
 
 
 class JawlBroadcastWindowTests(unittest.TestCase):

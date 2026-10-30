@@ -34,6 +34,62 @@ class HostOSToolTests(unittest.TestCase):
             self.assertTrue(result["result"]["include_image"])
             self.assertFalse(result["result"]["persisted"])
 
+    def test_screen_ground_ranks_candidates_and_requires_a_fresh_observation(self):
+        import hashlib
+
+        from jawl_voicecompanion.screen_adapter import issue_observation_token
+
+        digest = hashlib.sha256(b"frame").hexdigest()
+
+        class FakeUIA:
+            def observe(self):
+                return {
+                    "status": "verified",
+                    "elements": [{
+                        "element_ref": "ref-1", "element_sha256": "a" * 64,
+                        "name": "Сохранить", "control_type": "ButtonControl",
+                        "bounds": [10, 10, 120, 40],
+                    }],
+                }
+
+        class FakeScreen:
+            def observe(self, *, include_image):
+                return {
+                    "status": "verified",
+                    "observation_digest": digest,
+                    "observation_token": issue_observation_token(1, "Test", [0, 0, 400, 300], digest),
+                    "window": {"bounds": [0, 0, 400, 300]},
+                    "coordinate_scale": {"x": 1.0, "y": 1.0},
+                    "ocr": [],
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            executor = HostOSExecutor(
+                policy=HostOSPolicy(active_level=AccessLevel.OBSERVER),
+                sandbox_root=Path(directory),
+                dry_run=False,
+                ui_automation=FakeUIA(),
+                screen_capture=FakeScreen(),
+            )
+            result = executor.execute(
+                ToolRequest(
+                    tool="screen.ground",
+                    risk=RiskClass.OBSERVE,
+                    arguments={"query": "сохранить", "limit": 3},
+                )
+            )
+            self.assertEqual(result["status"], "verified")
+            self.assertEqual(result["result"]["candidates"][0]["label"], "Сохранить")
+            self.assertTrue(result["result"]["observation_token"])
+            denied = executor.execute(
+                ToolRequest(
+                    tool="screen.ground",
+                    risk=RiskClass.OBSERVE,
+                    arguments={"query": "сохранить", "limit": 50},
+                )
+            )
+            self.assertEqual(denied["status"], "verified", "limit is clamped, not rejected")
+
     def test_sandbox_read_write_are_real_only_when_explicitly_enabled(self):
         with tempfile.TemporaryDirectory() as directory:
             sandbox = Path(directory) / "sandbox"

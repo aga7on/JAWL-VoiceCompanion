@@ -31,6 +31,7 @@ from src.l1_databases.sql.management.ticks import SQLTicks
 from src.l1_databases.vector.manager import VectorManager
 
 from src.l3_agent.llm.executor import LLMExecutor
+from src.l3_agent.goals import policy_completion
 from src.l3_agent.llm.providers.contracts import normalize_tool_transport
 from src.l3_agent.prompt.builder import PromptBuilder
 from src.l3_agent.context.builder import ContextBuilder
@@ -43,10 +44,20 @@ from src.l3_agent.skills.registry import (
     resolve_native_tool_name,
 )
 from src.l3_agent.skills.schema import AgentResponse, ActionCall, parse_llm_json
+from src.l3_agent.react import action_repair
+from src.l3_agent.goals import completion_repair
+from src.l3_agent.goals.ledger import apply_ledger_patch as _apply_ledger_patch
 from src.l3_agent.event_buffer import BoundedEventBuffer
 from src.l3_agent.companion_gateway import (
+    CompanionTurnState,
+    SpeechDeltaSink,
+    bind_companion_turn_state,
+    bind_speech_sink,
     current_companion_turn_id,
+    current_speech_sink,
     reset_companion_turn_id,
+    reset_companion_turn_state,
+    reset_speech_sink,
     set_companion_turn_id,
 )
 
@@ -144,6 +155,21 @@ def _normalize_tool_output(text: str) -> str:
     return "".join(
         ch for ch in normalized if ord(ch) >= 0x20 or ch in "\t\n\r"
     )
+
+def _parse_response_native(
+    loop: "ReactLoop", raw_answer: str
+) -> Tuple[Optional[AgentResponse], Optional[str]]:
+    """Native JSON answer parsing: schema validation + native tool names."""
+    parsed, error = parse_llm_json(raw_answer)
+    if parsed is None or error:
+        return parsed, error
+    for action in parsed.actions:
+        resolved = resolve_native_tool_name(action.tool_name)
+        if action.tool_name.startswith("jawl_") and resolved == action.tool_name:
+            return None, f"System Error: Unknown native tool '{action.tool_name}'."
+        action.tool_name = resolved
+    return parsed, None
+
 
 class ReactLoop:
     """
@@ -358,6 +384,21 @@ class ReactLoop:
         ).strip()[:128]
         companion_turn_token = set_companion_turn_id(
             payload.get("_companion_turn_id", "")
+        )
+        # The wire-envelope policy needs the raw turn message and a durable
+        # Goal probe; bind them per run without persisting turn state.
+        turn_state_token = bind_companion_turn_state(
+            CompanionTurnState(
+                payload.get("message", ""),
+                lambda: getattr(goal_manager, "active_goal", None) is not None,
+            )
+            if current_companion_turn_id()
+            else None
+        )
+        speech_sink_token = bind_speech_sink(
+            SpeechDeltaSink(self.event_bus, current_companion_turn_id())
+            if current_companion_turn_id()
+            else None
         )
 
         try:
@@ -796,6 +837,13 @@ class ReactLoop:
                     agent_logger.info(
                         "[ReAct] Skill requested early cycle termination."
                     )
+                    if policy_completion.native_policy_denied():
+                        # Owned policy completion: one safe terminal error for
+                        # a denial-stopped request. Native denial detail never
+                        # reaches the correlated client.
+                        await policy_completion.publish_request_stopped(
+                            self.event_bus, current_companion_turn_id()
+                        )
                     cycle_concluded = True
                     break
 
@@ -834,6 +882,12 @@ class ReactLoop:
             await asyncio.shield(self._handle_cycle_cancelled())
             raise
         finally:
+            speech_sink = current_speech_sink()
+            if speech_sink is not None:
+                speech_sink.close()
+            reset_speech_sink(speech_sink_token)
+            reset_companion_turn_state(turn_state_token)
+            policy_completion.close_request(current_companion_turn_id())
             reset_companion_turn_id(companion_turn_token)
             self.active_companion_turn_id = ""
             self.agent_state.update_state(AgentStatus.IDLE)
@@ -1090,6 +1144,7 @@ class ReactLoop:
     async def _handle_protocol_error(self, raw_answer: str, error_msg: str) -> None:
         """Persist invalid provider output so the next step can self-correct."""
 
+        completion_repair.note_protocol_error(self)
         safe_error = truncate_text(
             redact_sensitive_text(error_msg), max_chars=2000
         )
@@ -1232,17 +1287,15 @@ class ReactLoop:
         self, raw_answer: str
     ) -> Tuple[Optional[AgentResponse], Optional[str]]:
         """
-        Parses the agent's JSON response.
+        Parses the agent's JSON response (native parsing with the top-level
+        action repair fallback and the one bounded Goal completion repair).
         """
-        parsed, error = parse_llm_json(raw_answer)
-        if parsed is None or error:
-            return parsed, error
-        for action in parsed.actions:
-            resolved = resolve_native_tool_name(action.tool_name)
-            if action.tool_name.startswith("jawl_") and resolved == action.tool_name:
-                return None, f"System Error: Unknown native tool '{action.tool_name}'."
-            action.tool_name = resolved
-        return parsed, None
+        parsed, error = action_repair.parse_with_repair(self, raw_answer, _parse_response_native)
+        return completion_repair.consider_completion_repair(
+            self, parsed, error, raw_answer,
+            eligible=_ledger_completion_eligible,
+            patch_ledger=_apply_ledger_patch,
+        )
 
     def add_realtime_event(self, event_data: Dict[str, Any]) -> None:
         """

@@ -20,6 +20,7 @@ from src.utils.logger import agent_logger
 from src.utils._tools import truncate_text
 from src.utils.settings import SubconsciousConfig
 
+from src.l3_agent.goals import policy_completion
 from src.l3_agent.skills.schema import ActionCall
 from src.l3_agent.skills.execution import ActionExecutionEngine
 from src.l3_agent.hooks.lifecycle import LifecycleHooks
@@ -668,6 +669,14 @@ async def call_skill(
     """
     Low-level call of an individual skill passing parameters through the Pydantic Guard Layer.
     """
+    if policy_completion.native_policy_denied():
+        # Owned policy completion: the active correlated request already
+        # recorded a native HostOS denial; remaining actions cannot run.
+        logger.warning("[Agent Action Result] %s", policy_completion.STOPPED_MESSAGE)
+        stopped = SkillResult.fail(policy_completion.STOPPED_MESSAGE)
+        stopped.terminate_loop = True
+        return stopped
+
     params_str = truncate_text(str(params), max_chars=250, suffix="... [Params truncated]")
 
     logger.info(f"[Agent Action] {name}({params_str})")
@@ -705,15 +714,27 @@ async def call_skill(
         logger.error(f"[Guard] {err_msg}")
         return SkillResult.fail(err_msg)
 
-    try:
-        result = await func(**clean_kwargs)
+    invocation_failed = False
+    with policy_completion.skill_attempt():
+        try:
+            result = await func(**clean_kwargs)
+        except Exception as e:
+            logger.error(f"[Agent Action Result] Error in skill {name}: {str(e)}")
+            result = SkillResult.fail(f"Internal skill error: {str(e)}")
+            invocation_failed = True
+        if (
+            policy_completion.attempt_denied()
+            and policy_completion.record_native_policy_denial()
+        ):
+            # Native authority denied during this attempt (even if the skill
+            # swallowed the exception): the correlated request must stop.
+            result.terminate_loop = True
+
+    if not invocation_failed:
         res_msg = truncate_text(
             str(result.message), max_chars=200, suffix="... [Result truncated for logs]"
         )
         status = "Success" if result.is_success else "Fail"
 
         logger.info(f"[Agent Action Result] {name} ({status}): {res_msg}")
-        return result
-    except Exception as e:
-        logger.error(f"[Agent Action Result] Error in skill {name}: {str(e)}")
-        return SkillResult.fail(f"Internal skill error: {str(e)}")
+    return result

@@ -3,17 +3,33 @@
 Разбор prompt-модулей JAWL, повторной отправки `SOUL` и правил переноса:
 [JAWL_PROMPT_ARCHITECTURE.md](JAWL_PROMPT_ARCHITECTURE.md).
 
-Актуально: 2026-09-05. [PRODUCT.md](PRODUCT.md) задаёт результат,
-[STATE.md](STATE.md) — фактическую готовность. Ниже целевые границы и
-подтверждённые кодом адаптеры; наличие схемы не означает завершение интеграции.
+Срез документации: 2026-10-12. Audit10Oct был read-only; новые isolated Tera/SDK/
+owned-console probes перечислены отдельно, не являются whole-profile acceptance. [PRODUCT.md](PRODUCT.md)
+задаёт продуктовую границу, [STATE.md](STATE.md) — статус/evidence, а
+[README.md](README.md) — карту документации. Текущая очередь только в
+[TODO.md](../TODO.md). Ниже разделены текущая реализация и целевые границы;
+наличие схемы не означает завершение интеграции.
 
 ## Одна платформа, один агентный контур
+
+Owned console entry проверяет immutable JAWL snapshot и instance/registry
+изоляцию, затем добавляет HTTP admission после native auth в том же процессе.
+Он предотвращает поздний dispatch/дубли ID в bounded process-local TTL scope;
+все send/cancel делегируются исходному ChatBridge. Это транспортная защита, не
+второй brain, memory/task owner или переписанный JAWL. Core/upstream read-only;
+контракт и границы compute-release — [contracts/jawl.md](contracts/jawl.md).
+
+Default turn/cancel POST имеют отдельный scoped socket-owner до connect/TLS,
+absolute deadline headers/body и cleanup watchdog; no proxy/redirect/replay,
+TLS verify сохранён. Отмена не затрагивает socket следующего хода. Producer
+держит admission до cleanup. Это не остановка kernel LLM и не удаление goal;
+opaque injected transport остаётся вне forced-reap proof.
 
 ```text
 Микрофон → gate/ASR ───────────────→ пользовательский turn
                     └→ VoiceMem ─→ контекст/наблюдения
 Системный звук → сегменты/ASR ─────→ ambient buffer/triage
-Экран/UIA → capture/[будущий VLM] ─→ наблюдения/Attention
+Экран/UIA → capture/Bonsai 8986 (configured) → observations/Attention
                                              │
 Панель/голос → Companion Gateway ──────────────┤
                                              ▼
@@ -28,7 +44,9 @@
 
 Companion — интеграционная часть того же продукта, не замена JAWL и не
 «вырезание агента». Отдельные процессы изолируют тяжёлые зависимости.
-Единый пользовательский профиль запуска/остановки пока предстоит завершить.
+Desktop shell — Electron с 3D VRM-сценой на three-vrm; web panel остаётся
+поверхностью Companion. Целостность запуска и desktop UX оцениваются по
+evidence в [STATE.md](STATE.md), а не выводятся из схемы.
 
 ## Согласованный цикл вместо параллельных «мозгов»
 
@@ -137,15 +155,19 @@ transport-only VOICE_TURN → JAWL. Тот же текст идёт в bounded V
 не дожидаясь её завершения. Очередь — дополнительный контекст; важные обещания
 и факты не должны существовать только в droppable transient задаче.
 
-Qwen3-ASR работает после end-of-utterance. Hands-free endpointing есть как
+GigaAM (crispasr file mode) — единственный ASR и работает после
+end-of-utterance; буфер реплики (`UtteranceBuffer`) живёт в ядре, второй
+движок и provider-фолбэк удалены. Hands-free endpointing есть как
 RMS heuristic, true partial streaming и реальные AEC/barge-in не приняты.
 Нужны измерения всей цепочки: конец речи → endpoint → ASR → LLM → первый
 слышимый звук. Скорость 2–3 слова/с не превращается напрямую в LLM tok/s.
 
-Желаемый основной TTS — Qwen3-TTS 0.6B Base/clone, быстрый профиль — Tera.
-Нынешние workers выдают complete WAV; Companion умеет sentence streaming.
-Отмена HTTP/playback ещё не гарантирует остановку inference и освобождение
-worker. Нужны capabilities и явный fallback, не фиктивные эмоции.
+Текущий TTS default — TeraTTSv2 `ru_f1` на 9889; OmniVoice выбирается как
+provider, но это не приёмка его качества/capabilities. Hikari Bonsai-2 27B
+PQ2_0 на GPU1 — настроенный LLM профиль. Vision Bonsai на 8986 настроен;
+это не приёмка всех OCR/grounding сценариев. Companion поддерживает
+sentence-level TTS streaming, не provider-native token/audio streaming.
+Отмена HTTP/playback не гарантирует остановку inference и освобождение worker.
 См. [voice](contracts/voice.md), [tts](contracts/tts.md).
 
 ## Ситуационная и долговременная память
@@ -173,8 +195,9 @@ window. Пауза/отдельное устройство/выбранный и
 ## Действия, экран и автономность
 
 JAWL — единая authority для HostOS, Terminal, Debug Broker, MCP и browser.
-Level 0 — default. Изолированный CDP browser/workspace дают полезную работу
-внутри native policy; browser profile не заменяет OS sandbox. Общий desktop
+Level 0 — default. Полноценный изолированный CDP browser/workspace остаётся
+целевой capability под native policy; Companion BrowserAdapter `open_url`/
+UIA не является CDP. Browser profile не заменяет OS sandbox. Общий desktop
 требует соответствующих native прав. Аккаунты и автономные публикации получают
 явный scope; результаты внешних mutations сверяются перед retry.
 В bridge mode отказ native route не вызывает local fallback. Представительский
@@ -185,8 +208,9 @@ Full Access сохраняет все настроенные нативные в
 lease, OS/UAC/EULA и выбранные исключения сохраняются. При сомнении после
 сбоя проверять итог действия, а не автоматически повторять его.
 
-UIA/CLI/API позволяют делать полезные дела без VLM. Экранная capture/Vision
-граница уже есть, окончательная модель отложена. Observation token,
+UIA/CLI/API позволяют делать полезные дела без vision model. Capture/Vision
+граница и Bonsai worker на 8986 настроены, но это не приёмка полного OCR/
+grounding/action цикла. Observation token,
 координаты и postcondition нужны для действия по изображению; прежний кадр
 после собственного клика может устареть — многошаговый цикл требует свежего
 наблюдения, а не бесконечного повтора старого плана.
@@ -199,9 +223,10 @@ UIA/CLI/API позволяют делать полезные дела без VLM
 добавляет HTTPS и вход перед control UI/API, сохраняя session/CSRF/origin;
 настройка сертификата и устройства описана в [LAN.md](LAN.md).
 Персона/черты и журнал работы должны быть доступны из неё. Control origin
-2367 изолирован от presentation origin 8766. Встроенное отображение реального
-Live2D должно использовать безопасную presentation-границу; текущая inline
-CSS-фигура — fallback, ещё не зеркало загруженного model3.
+2367 изолирован от presentation origin 8766. Desktop avatar — VRM в Electron
+через three-vrm; прежняя Live2D `/avatar` поверхность удалена. Оставшиеся
+compatibility/deprecation markers не означают доступный renderer. Наличие
+attachment backend не доказывает интегрированный desktop UX.
 
 Аудио воспроизводит один выбранный клиент; окно/OBS получают только состояние
 и amplitude. Backend задачи не зависят от вкладки; текущий browser mic/playback

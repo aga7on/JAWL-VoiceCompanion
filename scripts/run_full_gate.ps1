@@ -79,14 +79,23 @@ try {
     $env:JAWL_SANDBOX_DIR = Join-Path $gateHome 'sandbox'
     New-Item -ItemType Directory -Force -Path $env:JAWL_LOG_DIR, $env:JAWL_DATA_DIR, $env:JAWL_CONFIG_DIR, $env:JAWL_CACHE_DIR, $env:JAWL_PROMPT_DIR, $env:JAWL_SANDBOX_DIR | Out-Null
     Invoke-CheckedPython @('-m', 'compileall', '-q', 'src', 'tests')
-    Invoke-CheckedPython @('-m', 'py_compile', 'scripts/teratts_server.py', 'scripts/qwen3_tts_server.py', 'scripts/release_secret_scan.py', 'scripts/run_audio_pipeline_profile.py', 'scripts/run_browser_interaction_e2e.py', 'scripts/run_connected_daily_acceptance.py', 'scripts/run_goal_reconciliation_live.py', 'scripts/run_provider_failure_native_recovery.py', 'scripts/run_restart_inference_acceptance.py', 'scripts/register_supervised_profile.py', 'scripts/run_supervised_profile_acceptance.py', 'scripts/run_supervised_recovery_acceptance.py', 'scripts/run_unattended_goal_soak.py', 'scripts/run_unattended_provider_recovery.py', 'scripts/configure_profile_native.py', 'scripts/prepare_daily_profile.py', 'scripts/verify_jawl_snapshot.py')
+    Invoke-CheckedPython @('-m', 'py_compile', 'scripts/teratts_server.py', 'scripts/run_onnx_cancel_acceptance.py', 'scripts/qwen3_tts_server.py', 'scripts/release_secret_scan.py', 'scripts/run_audio_pipeline_profile.py', 'scripts/run_browser_interaction_e2e.py', 'scripts/run_connected_daily_acceptance.py', 'scripts/run_goal_reconciliation_live.py', 'scripts/run_provider_failure_native_recovery.py', 'scripts/run_restart_inference_acceptance.py', 'scripts/register_supervised_profile.py', 'scripts/run_supervised_profile_acceptance.py', 'scripts/run_supervised_recovery_acceptance.py', 'scripts/run_unattended_goal_soak.py', 'scripts/run_unattended_provider_recovery.py', 'scripts/configure_profile_native.py', 'scripts/prepare_daily_profile.py', 'scripts/verify_jawl_snapshot.py')
     Invoke-CheckedPython @('scripts/verify_jawl_snapshot.py', '--source', 'runtime/jawl-sources/jawl-20260906-daily-v2')
     Invoke-CheckedPython @('scripts/release_secret_scan.py', '--report', 'runtime/release-secret-scan.json')
     Invoke-CheckedPython @('-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_[!e]*.py', '-v')
+    # Manifest/launcher fixtures use pytest (unittest discovery imports but
+    # does not execute their function-based cases).
+    Invoke-CheckedPython @('-m', 'pytest', '-q', '-p', 'no:cacheprovider', 'tests/test_runtime_manifest.py', 'tests/test_worker_manifest.py', 'tests/test_jawl_chat_diagnostics.py')
     Invoke-CheckedPython @('-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_e2e.py', '-v')
     Invoke-CheckedPython @('scripts/run_browser_interaction_e2e.py')
+    # Exercise the actual /app NDJSON-to-WebAudio contract. Synthetic provider,
+    # no physical microphone or external profile: not hardware/live acceptance.
+    Invoke-CheckedPython @('scripts/run_desktop_voice_e2e.py')
     Invoke-CheckedNode @('scripts/check_mic_gate.mjs')
+    Invoke-CheckedNode @('--test', 'desktop/app-settings-regression.test.js', 'desktop/tests/main-startup.test.js', 'desktop/tests/runtime-config.test.js', 'desktop/tests/app-accessibility.test.mjs', 'desktop/tests/app-voice-lifecycle.test.mjs', 'desktop/tests/avatar-scene-lifecycle.test.mjs', 'desktop/speech-stream.test.mjs', 'desktop/voice-input.test.mjs', 'desktop/voice-draft.test.mjs', 'desktop/avatar-motion.test.mjs', 'desktop/avatar-physics.test.mjs', 'tests/test_desktop_speech_cancel.mjs')
     Invoke-CheckedPowerShellParse 'scripts/run_integrated_profile.ps1'
+    Invoke-CheckedPowerShellParse 'scripts/run_daily_profile.ps1'
+    Invoke-CheckedPowerShellParse 'scripts/run_local_bonsai_integrated.ps1'
     Invoke-CheckedPowerShellParse 'scripts/run_long_unattended_acceptance.ps1'
     Invoke-CheckedGit @('diff', '--check')
 } finally {

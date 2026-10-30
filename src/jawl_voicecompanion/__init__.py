@@ -6,7 +6,6 @@ from .hostos_policy import HostOSPolicy
 from .hostos_tools import HostOSExecutor, ToolSpec
 from .browser_adapter import BrowserAdapter
 from .approvals import ApprovalStore
-from .avatar import AvatarAssetStore
 from .models import AccessLevel, RiskClass, ToolRequest
 from .arbiter import TurnArbiter, TurnPriority
 from .screen_adapter import ScreenCaptureAdapter
@@ -33,7 +32,8 @@ from .ambient_triage import (
 )
 from .ambient_audio import AmbientAudioASRBridge, AmbientAudioDisabled, AmbientAudioService, PlaybackSuppression
 from .resources import ResourceGovernor
-from .asr import ASRNoSpeech, ASRUnavailable, ExternalASRService, OpenAICompatibleASRClient
+from .asr import UtteranceBuffer
+from .supervisor import RuntimeSupervisor, WorkerSpec
 from .audio_understanding import (
     AUDIO_DESCRIPTION_SCHEMA,
     AUDIO_KINDS,
@@ -57,7 +57,7 @@ __all__ = [
     "HostOSExecutor",
     "BrowserAdapter",
     "ApprovalStore",
-    "AvatarAssetStore",
+    "ApprovalStore",
     "RiskClass",
     "TextGateway",
     "validate_response_envelope",
@@ -100,10 +100,9 @@ __all__ = [
     "AmbientAudioService",
     "PlaybackSuppression",
     "ResourceGovernor",
-    "ASRNoSpeech",
-    "ASRUnavailable",
-    "ExternalASRService",
-    "OpenAICompatibleASRClient",
+    "UtteranceBuffer",
+    "RuntimeSupervisor",
+    "WorkerSpec",
     "AUDIO_DESCRIPTION_SCHEMA",
     "AUDIO_KINDS",
     "AudioDescription",

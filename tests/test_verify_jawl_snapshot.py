@@ -306,6 +306,25 @@ class VerifyJawlSnapshotTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["file_count"], 1)
 
+    def test_generated_runtime_logs_are_ignored(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tracked = root / "module.py"
+            tracked.write_text("print('ok')\n", encoding="utf-8")
+            logs = root / "logs"
+            logs.mkdir()
+            (logs / "runtime.log").write_text("generated noise\n", encoding="utf-8")
+            import hashlib
+
+            files = {"module.py": hashlib.sha256(tracked.read_bytes()).hexdigest()}
+            digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+            (root / "SOURCE_MANIFEST.json").write_text(
+                json.dumps({"files": files, "snapshot_sha256": digest}), encoding="utf-8"
+            )
+            result = verify(root)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["file_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

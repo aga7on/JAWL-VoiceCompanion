@@ -1,5 +1,10 @@
 # JAWL ↔ HostOS ownership contract
 
+Reviewed 2026-10-10 (source inspection only; latest saved runtime evidence is
+2026-10-05). This describes the JAWL-owned authority boundary; route and skill
+availability remain version-dependent. See [README.md](../README.md),
+[STATE.md](../STATE.md), and [TODO.md](../../TODO.md).
+
 JAWL is the only production authority for model-originated computer actions.
 Its native runtime owns ReAct/Heartbeat, the SkillRegistry, HostOS policy,
 approvals, audit, cancellation and the emergency stop:
@@ -33,6 +38,10 @@ is a separate capability. See [PRODUCT.md](../PRODUCT.md).
 
 With `--jawl-hostos-control` and a local JAWL console token, the Companion is
 the browser/control surface for that native authority:
+
+Companion `BrowserAdapter.open_url` opens validated HTTP(S) URLs through the
+system default browser. Browser UIA operations delegate to the UI Automation
+adapter; this is not a full CDP session or browser DOM automation contract.
 
 - level changes are written to JAWL and take effect only after native
   stop/start succeeds;

@@ -17,10 +17,11 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from jawl_voicecompanion.gateway import TextGateway  # noqa: E402
-from jawl_voicecompanion.avatar import AvatarAssetStore  # noqa: E402
+from jawl_voicecompanion.composition import build_companion_runtime  # noqa: E402
 from jawl_voicecompanion.ambient_audio import AmbientAudioASRBridge, AmbientAudioService  # noqa: E402
-from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler  # noqa: E402
-from jawl_voicecompanion.asr import ExternalASRService, OpenAICompatibleASRClient  # noqa: E402
+from jawl_voicecompanion.ambient_memory import AmbientMemoryBuffer, AmbientTriageScheduler
+from jawl_voicecompanion.resources import ResourceGovernor  # noqa: E402
+from jawl_voicecompanion.asr import UtteranceBuffer  # noqa: E402
 from jawl_voicecompanion.hostos_policy import HostOSPolicy  # noqa: E402
 from jawl_voicecompanion.hostos_tools import HostOSExecutor  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTerminalAdapter  # noqa: E402
@@ -90,39 +91,22 @@ class _TTSHandler(BaseHTTPRequestHandler):
         return
 
 
-class _ASRHandler(BaseHTTPRequestHandler):
-    requests = []
+class _StubGigaamTranscriber:
+    """Stand-in for the canonical GigaAM batch transcriber (``giga_final.py``).
 
-    def do_GET(self):  # noqa: N802 - stdlib handler API
-        if self.path != "/health":
-            self.send_error(404)
-            return
-        body = b'{"status":"ok"}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    GigaAM (crispasr file mode) is the only ASR engine, so the browser voice lane
+    must hand one WAV per finished utterance to it. This stub records the WAV it
+    received instead of spawning crispasr.
+    """
 
-    def do_POST(self):  # noqa: N802 - stdlib handler API
-        if self.path != "/v1/audio/transcriptions":
-            self.send_error(404)
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length)
-        _ASRHandler.requests.append(body)
-        response = json.dumps({
-            "type": "transcript.text.done",
-            "text": "language Russian<asr_text>ASR E2E фраза.</asr_text>",
-        }, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(response)))
-        self.end_headers()
-        self.wfile.write(response)
+    text = "ASR E2E фраза."
 
-    def log_message(self, format, *args):
-        return
+    def __init__(self):
+        self.wavs = []
+
+    def transcribe(self, wav_bytes, *, cancel_event=None):
+        self.wavs.append(wav_bytes)
+        return self.text
 
 
 class _JawlWebHandler(BaseHTTPRequestHandler):
@@ -170,8 +154,13 @@ class _JawlWebHandler(BaseHTTPRequestHandler):
 class _JawlControlHandler(BaseHTTPRequestHandler):
     config_values = {}
     calls = []
+    running = False
+    drop_start_response_once = False
 
     def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.path == "/api/agent/status":
+            self._reply({"ok": True, "running": _JawlControlHandler.running})
+            return
         if self.path != "/api/config":
             self.send_error(404)
             return
@@ -202,8 +191,14 @@ class _JawlControlHandler(BaseHTTPRequestHandler):
         elif self.path.endswith("reset"):
             self._reply({"ok": True, "policy": {"emergency_stop": False}})
         elif self.path.endswith("start"):
+            _JawlControlHandler.running = True
+            if _JawlControlHandler.drop_start_response_once:
+                _JawlControlHandler.drop_start_response_once = False
+                self.close_connection = True
+                return
             self._reply({"ok": True, "pid": 42})
         else:
+            _JawlControlHandler.running = False
             self._reply({"ok": True, "forced": False})
 
     def _reply(self, payload):
@@ -663,6 +658,8 @@ class LocalE2ETests(unittest.TestCase):
             "interfaces:host.os.access_level": 0,
         }
         _JawlControlHandler.calls = []
+        _JawlControlHandler.running = False
+        _JawlControlHandler.drop_start_response_once = False
         threading.Thread(target=self.jawl_control_provider.serve_forever, daemon=True).start()
         self.jawl_chat_provider = ThreadingHTTPServer(("127.0.0.1", 0), _JawlChatWebHandler)
         _JawlChatWebHandler.messages = []
@@ -731,24 +728,13 @@ class LocalE2ETests(unittest.TestCase):
         self.ambient_memory = AmbientMemoryBuffer(enabled=True)
         self.ambient_scheduler = AmbientTriageScheduler(self.ambient_memory, interval_seconds=1)
         self.ambient_bridge = AmbientAudioASRBridge(_AmbientVoiceMem(), self.ambient_memory)
+        self.resource_governor = ResourceGovernor()
         self.ambient_audio = AmbientAudioService(
             self.ambient_bridge,
             capture=SystemAudioLoopback(self.ambient_bridge.consume, backend=_AmbientBackend()),
+            governor=self.resource_governor,
         )
-        self.avatar_root = Path(self.temp.name) / "live2d"
         self.jawl_event_dir = Path(self.temp.name) / "jawl-events"
-        self.avatar_root.mkdir()
-        self.avatar_model = (
-            '{"FileReferences":{"Moc":"companion.moc3",'
-            '"Textures":["textures/body.png"],"Motions":{"Idle":[]}}}'
-        )
-        (self.avatar_root / "model3.json").write_text(self.avatar_model, encoding="utf-8")
-        (self.avatar_root / "companion.moc3").write_bytes(b"moc")
-        (self.avatar_root / "textures").mkdir()
-        (self.avatar_root / "textures" / "body.png").write_bytes(b"png")
-        (self.avatar_root / "live2d-runtime.js").write_text(
-            "window.Live2DCompanionRuntime = {create: async () => ({})};", encoding="utf-8"
-        )
         self.server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
@@ -759,11 +745,11 @@ class LocalE2ETests(unittest.TestCase):
             screen_watch_interval=2,
             voice_mem=self.voice_mem,
             tts_service=self.tts,
-            avatar_assets=AvatarAssetStore(self.avatar_root),
             jawl_event_dir=self.jawl_event_dir,
             ambient_memory=self.ambient_memory,
             ambient_audio=self.ambient_audio,
             ambient_scheduler=self.ambient_scheduler,
+            resource_governor=self.resource_governor,
             activity_provider=lambda: {
                 "status": "verified",
                 "idle_seconds": 120.0,
@@ -931,29 +917,24 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(doctor_checks["avatar"]["ready"])
         self.assertTrue(doctor_checks["hostos"]["ready"])
         self.assertNotIn("must-not-cross", json.dumps(doctor, ensure_ascii=False))
-        with urlopen(self.base + "/", timeout=3) as response:
+        with urlopen(self.base + "/app", timeout=3) as response:
             frontend = response.read()
-            self.assertIn(b"attention-dnd", frontend)
-            self.assertIn(b"/api/avatar/audio", frontend)
-            self.assertIn(b"createMediaElementSource", frontend)
-            self.assertIn(b"hands-free", frontend)
-            self.assertIn(b"finishVoiceUtterance", frontend)
-        with urlopen(self.base + "/avatar", timeout=3) as response:
-            avatar_html = response.read()
-            self.assertIn(b"JAWL Avatar", avatar_html)
-            self.assertIn(b'id="mouth"', avatar_html)
-            self.assertIn(b"2D FALLBACK", avatar_html)
-            self.assertIn(b"BroadcastChannel", avatar_html)
-            self.assertIn(b"setLipSync", avatar_html)
+            self.assertIn(b"JAWL Companion", frontend)
+            self.assertIn(b"hud-mic", frontend)
+            self.assertIn(b"hud-senses", frontend)
+            self.assertIn(b"hud-dnd", frontend)
+            self.assertIn(b"compact-mode", frontend)
+        with urlopen(self.base + "/app.js", timeout=3) as response:
+            js = response.read()
+            self.assertIn(b"/api/attention", js)
+        # ADR-045: the Live2D /avatar page and /avatar-assets store are
+        with self.assertRaises(HTTPError) as context:
+            urlopen(self.base + "/avatar", timeout=3)
+        self.assertEqual(context.exception.code, 404)
+        context.exception.close()
         _, avatar_config = self.get_json("/api/avatar/config")
-        self.assertTrue(avatar_config["enabled"])
-        self.assertTrue(avatar_config["ready"])
-        self.assertEqual(avatar_config["validation"]["missing"], [])
-        self.assertTrue(avatar_config["capabilities"]["lip_sync"])
-        self.assertEqual(avatar_config["capabilities"]["motion_groups"], ["Idle"])
-        self.assertEqual(avatar_config["capabilities"]["fallback_expressions"][0], "neutral")
-        with urlopen(self.base + "/avatar-assets/model3.json", timeout=3) as response:
-            self.assertEqual(response.read().decode("utf-8"), self.avatar_model)
+        self.assertFalse(avatar_config["enabled"])
+        self.assertEqual(avatar_config.get("deprecated"), "live2d")
 
         status, chat = self.post_json("/api/chat", {"text": "проверка e2e"})
         self.assertEqual(status, 200)
@@ -1314,6 +1295,9 @@ class LocalE2ETests(unittest.TestCase):
         self.assertTrue(hostos["enabled"])
 
     def test_jawl_hostos_control_syncs_native_and_companion_policy(self):
+        # The native start succeeds but its HTTP acknowledgment is lost. The
+        # adapter must observe the resulting state instead of replaying start.
+        _JawlControlHandler.drop_start_response_once = True
         adapter = JawlWebAdapter(
             f"http://127.0.0.1:{self.jawl_control_provider.server_port}",
             token="e2e-console-token",
@@ -1483,6 +1467,27 @@ class LocalE2ETests(unittest.TestCase):
         self.assertFalse(stopped["state"]["capture"]["running"])
         self.assertEqual(stopped["state"]["flush"]["status"], "flushed")
 
+    def test_ambient_audio_pause_and_resume_lifecycle(self):
+        self.server.ambient_memory.set_enabled(True)
+        _, started = self.post_json("/api/ambient-audio/start", {})
+        self.assertTrue(started["state"]["capture"]["running"])
+        _, paused = self.post_json("/api/ambient-audio/pause", {})
+        self.assertTrue(paused["state"]["paused"])
+        self.assertFalse(paused["state"]["capture"]["running"])
+        _, resumed = self.post_json("/api/ambient-audio/resume", {})
+        self.assertFalse(resumed["state"]["paused"])
+        self.assertTrue(resumed["state"]["capture"]["running"])
+        _, stopped = self.post_json("/api/ambient-audio/stop", {})
+        self.assertFalse(stopped["state"]["capture"]["running"])
+
+    def test_gaming_mode_marks_ambient_audio_as_yielding(self):
+        _, configured = self.post_json("/api/resources", {"gaming_mode": True})
+        self.assertTrue(configured["resources"]["gaming_mode"])
+        _, state = self.get_json("/api/ambient-audio")
+        self.assertTrue(state["yields_to_game"])
+        _, reset = self.post_json("/api/resources", {"gaming_mode": False})
+        self.assertFalse(reset["resources"]["gaming_mode"])
+
     def test_voicemem_sidecar_final_reaches_http_chat_state(self):
         _, status = self.get_json("/api/voice/status")
         self.assertTrue(status["configured"])
@@ -1526,10 +1531,7 @@ class LocalE2ETests(unittest.TestCase):
         self.assertEqual([event["type"] for event in flushed["events"]], ["VOICE_TURN"])
         self.assertEqual(flushed["responses"][0]["text"], "JAWL E2E: аудио")
 
-    def test_external_asr_final_utterance_reaches_voicemem_and_chat(self):
-        provider = ThreadingHTTPServer(("127.0.0.1", 0), _ASRHandler)
-        _ASRHandler.requests = []
-        threading.Thread(target=provider.serve_forever, daemon=True).start()
+    def test_gigaam_final_utterance_reaches_voicemem_and_chat(self):
         policy = HostOSPolicy()
         gateway = TextGateway(policy=policy, responder=self.jawl_adapter, brain_name="e2e_asr")
         executor = HostOSExecutor(
@@ -1540,11 +1542,10 @@ class LocalE2ETests(unittest.TestCase):
             dry_run=False,
         )
         voice_mem = VoiceMemProcessClient(sys.executable, args=("--test-stub",), timeout_seconds=2)
-        asr = ExternalASRService(OpenAICompatibleASRClient(
-            f"http://127.0.0.1:{provider.server_port}/v1",
-            "Qwen3-ASR-0.6B",
-            timeout_seconds=2,
-        ))
+        # GigaAM (crispasr file mode) is the only ASR engine: the voice lane buffers
+        # the browser PCM16 and transcribes it once with the injected transcriber.
+        transcriber = _StubGigaamTranscriber()
+        asr = UtteranceBuffer(transcriber)
         server = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
@@ -1573,9 +1574,11 @@ class LocalE2ETests(unittest.TestCase):
         try:
             _, status = self._get_json_from(base, "/api/voice/status", headers)
             self.assertEqual(status["mode"], "external_final_utterance")
-            self.assertEqual(status["asr"]["mode"], "final_utterance")
+            self.assertTrue(status["asr"]["configured"])
+            self.assertEqual(status["asr"]["engine"], "gigaam")
+            self.assertEqual(status["asr"]["mode"], "gigaam_final")
             _, buffered = post("/api/voice/audio", {
-                "session_id": "external-s1",
+                "session_id": "gigaam-s1",
                 "sample_rate": 16000,
                 "channels": 1,
                 "pcm16_base64": base64.b64encode(b"\x01\x00" * 1600).decode("ascii"),
@@ -1583,18 +1586,23 @@ class LocalE2ETests(unittest.TestCase):
             self.assertEqual(buffered["mode"], "external_final_utterance")
             self.assertEqual(buffered["events"], [])
             self.assertEqual(buffered["buffer"]["bytes"], 3200)
+            self.assertEqual(buffered["buffer"]["mode"], "gigaam_final")
+            self.assertEqual(transcriber.wavs, [], "an unfinished utterance is not transcribed")
 
-            _, finished = post("/api/voice/end", {"session_id": "external-s1"})
+            _, finished = post("/api/voice/end", {"session_id": "gigaam-s1"})
             self.assertEqual(finished["transcript"], "ASR E2E фраза.")
             self.assertEqual([event["type"] for event in finished["events"]], ["USER_PARTIAL", "VOICE_TURN"])
             self.assertEqual(finished["responses"][0]["text"], "JAWL E2E: ASR E2E фраза.")
-            self.assertTrue(_ASRHandler.requests)
-            self.assertIn(b"Qwen3-ASR-0.6B", _ASRHandler.requests[0])
+            # The buffered browser PCM actually reached the ASR engine, as one WAV.
+            self.assertEqual(len(transcriber.wavs), 1)
+            with wave.open(io.BytesIO(transcriber.wavs[0]), "rb") as wav_file:
+                self.assertEqual(wav_file.getnchannels(), 1)
+                self.assertEqual(wav_file.getframerate(), 16000)
+                self.assertEqual(wav_file.readframes(wav_file.getnframes()), b"\x01\x00" * 1600)
+            self.assertEqual(asr.state()["active_sessions"], 0)
         finally:
             server.shutdown()
             server.server_close()
-            provider.shutdown()
-            provider.server_close()
 
     @staticmethod
     def _get_json_from(base, path, headers):

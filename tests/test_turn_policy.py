@@ -4,6 +4,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
+from jawl_voicecompanion.duplex_cascade import (  # noqa: E402
+    TOKEN_USER_BACKCHANNEL,
+    TOKEN_USER_INTERRUPTION,
+)
 from jawl_voicecompanion.turn_policy import (  # noqa: E402
     BASE_SILENCE_MS,
     EXTENDED_SILENCE_MS,
@@ -45,6 +49,24 @@ class TurnPolicyTests(unittest.TestCase):
     def test_decide_listens_before_base(self):
         decision = decide("Готово.", silence_ms=200)
         self.assertEqual(decision["action"], "listen")
+
+    def test_assistant_speaking_substantive_speech_cancels_tts(self):
+        decision = decide("Стой, подожди", silence_ms=120, assistant_speaking=True)
+        self.assertEqual(decision["duplex_action"], "cancel_tts")
+        self.assertEqual(decision["duplex_token"], TOKEN_USER_INTERRUPTION)
+
+    def test_assistant_speaking_backchannel_keeps_tts(self):
+        decision = decide("угу", silence_ms=120, assistant_speaking=True)
+        self.assertEqual(decision["duplex_action"], "ignore_backchannel")
+        self.assertEqual(decision["duplex_token"], TOKEN_USER_BACKCHANNEL)
+        self.assertEqual(decision["avatar_gesture"], "nod")
+
+    def test_extended_used_limits_one_extension(self):
+        first = decide("Я думаю, что", silence_ms=100)
+        self.assertEqual(first["action"], "hold")
+        second = decide("Я думаю, что", silence_ms=100, extended_used=True)
+        self.assertEqual(second["action"], "listen")
+        self.assertTrue(second["hold"])
 
 
 if __name__ == "__main__":

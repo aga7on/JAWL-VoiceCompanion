@@ -1,5 +1,10 @@
 # Canonical JAWL capabilities
 
+Status reviewed 2026-10-10 (read-only). Latest saved runtime evidence is
+2026-10-05. This table describes ownership and configured selections, not
+acceptance of every capability. See [README.md](README.md), [STATE.md](STATE.md),
+and the current work queue in [TODO.md](../TODO.md).
+
 ## Boundary
 
 `G:\AI\JAWL-Coding` is read-only reference/upstream. The pinned snapshot
@@ -22,8 +27,8 @@ regression test and a short rationale in the audit or CHANGELOG.
 | Heartbeat/EventBus | JAWL `Heartbeat` | feed bounded sensor events and display status |
 | SkillCatalog, HostOS, native discovery | JAWL | preserve the complete registry and policy 0–3 |
 | Swarm, ToT, subconscious | JAWL | expose configuration and lifecycle status |
-| Native Whisper/Edge/ElevenLabs | JAWL L2 voice interfaces | adapt local Qwen ASR/Tera/Qwen TTS where selected |
-| Microphone gate, LAN UI, Live2D/OBS, playback | Companion | own browser/device orchestration |
+| Native Whisper/Edge/ElevenLabs | JAWL L2 voice interfaces | adapt the selected local TTS provider; GigaAM v3 is the only Companion ASR |
+| Microphone gate, LAN UI, Electron/three-vrm avatar, playback | Companion | own browser/device orchestration |
 | Screen/audio sensing and ambient memory | VoiceMem + Companion adapter | bounded sensor input; JAWL remains memory authority |
 
 ## Important distinction
@@ -37,7 +42,10 @@ must not remove Goal, Swarm, SkillCatalog, HostOS or native discovery.
 
 ## Voice rule
 
-JAWL's native voice plugins remain available. Local Qwen/Tera services are
-providers behind the Companion voice adapter, not a second agent. The adapter
-owns capture/gate/playback and forwards only final/approved text to TTS; JAWL
-owns identity, goal execution, tools and durable records.
+JAWL's native voice plugins remain available. TeraTTSv2 (`ru_f1`, port 9889)
+is the selected default; OmniVoice is selectable, without an accepted provider
+quality/capability claim. GigaAM v3 is the sole ASR. The adapter owns
+capture/gate/playback and forwards final text to JAWL; ASR is not a captioner
+or affect classifier. JAWL owns identity, goal execution, tools and durable
+records. Speech cancellation must preserve the task checkpoint; it does not
+assert real provider-worker cancellation.

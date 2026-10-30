@@ -1,11 +1,17 @@
 param(
     [int]$ConsolePort = 8770,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [string]$JawlSourceRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$source = Join-Path $repo 'runtime\jawl-sources\jawl-20260906-daily-v2'
+$sourceRoot = [IO.Path]::GetFullPath((Join-Path $repo 'runtime\jawl-sources'))
+$sourceCandidate = if ($JawlSourceRoot) { [IO.Path]::GetFullPath($JawlSourceRoot) } else { Join-Path $sourceRoot 'jawl-20260906-daily-v2' }
+if (-not (Test-Path -LiteralPath $sourceCandidate -PathType Container)) { throw 'JawlSourceRoot must be an existing snapshot inside runtime/jawl-sources.' }
+$source = (Resolve-Path -LiteralPath $sourceCandidate).Path
+if (-not $source.StartsWith($sourceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'JawlSourceRoot must resolve inside runtime/jawl-sources.' }
+$env:JAWL_SOURCE_ROOT = $source
 $venvPython = Join-Path $repo 'runtime\jawl-daily-venv\Scripts\python.exe'
 
 if (-not (Test-Path -LiteralPath $venvPython)) { throw "Owned runtime Python is missing: $venvPython" }
@@ -37,7 +43,7 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 # Provider URL is non-secret. The key must already exist in the environment as
 # LLM_API_KEY_*. This script never stores, prints, or handles credentials.
 if (-not $env:LLM_API_URL) { $env:LLM_API_URL = 'https://opencode.ai/zen/v1' }
-$args = @('-m', 'src.web.server', '--host', '127.0.0.1', '--port', "$ConsolePort", '--keep-agent')
+$args = @('-B', (Join-Path $repo 'scripts\run_owned_jawl_console.py'), '--host', '127.0.0.1', '--port', "$ConsolePort", '--keep-agent')
 if ($NoBrowser) { $args += '--no-browser' }
 Push-Location $env:JAWL_INSTANCE_HOME
 try { & $venvPython @args } finally { Pop-Location }

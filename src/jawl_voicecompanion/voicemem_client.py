@@ -14,6 +14,7 @@ from threading import Lock, Thread
 from time import monotonic, sleep
 from typing import Any, Iterable
 from uuid import uuid4
+from .owned_pipe import spawn_owned_pipe
 
 
 class VoiceMemUnavailable(ConnectionError):
@@ -49,8 +50,13 @@ class VoiceMemProcessClient:
         self._process: subprocess.Popen[bytes] | None = None
         self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._lock = Lock()
+        # Keep lifecycle snapshots responsive while one serialized sidecar
+        # request waits for CPU audio processing or model startup.
+        self._request_lock = Lock()
         self._reader: Thread | None = None
         self._status = "not_started"
+        self._last_request_ok: bool | None = None
+        self._last_request_error: str | None = None
 
     def feed_partial(self, text: str, *, ended: bool = False, session_id: str = "local") -> list[dict[str, Any]]:
         request_id = str(uuid4())
@@ -123,20 +129,23 @@ class VoiceMemProcessClient:
                 "status": self._status,
                 "running": running,
                 "pid": process.pid if running else None,
+                "ready": running and self._last_request_ok is True,
+                "last_request_ok": self._last_request_ok,
+                "last_request_error": self._last_request_error,
             }
 
     def close(self) -> None:
         with self._lock:
             process = self._process
             reader = self._reader
+            if process is not None:
+                self._retire_process(process, reader)
             self._process = None
             self._reader = None
             self._status = "stopped"
-        if process is None:
-            return
+    @staticmethod
+    def _retire_process(process, reader) -> None:
         try:
-            if process.stdin is not None:
-                process.stdin.close()
             process.terminate()
             process.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
@@ -146,47 +155,66 @@ class VoiceMemProcessClient:
                 process.wait(timeout=2)
         if reader is not None:
             reader.join(timeout=2)
+            if reader.is_alive():
+                raise VoiceMemUnavailable('VoiceMem reader teardown incomplete')
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass  # Child/tree already reaped; buffered writes cannot survive.
         if process.stdout is not None:
             process.stdout.close()
 
     def abort(self) -> None:
         """Best-effort interrupt for a request running in another thread."""
         process = self._process
-        if process is None or process.poll() is not None:
+        if process is None:
             return
         try:
-            if process.stdin is not None:
-                process.stdin.close()
-        except OSError:
-            pass
-        try:
+            # Stop the tree before touching a potentially blocked buffered writer.
             process.terminate()
         except OSError:
             pass
 
     def _request(self, payload: dict[str, Any], request_id: str) -> list[dict[str, Any]]:
-        with self._lock:
+        # Requests share one JSONL pipe and are correlated by request_id, so
+        # serialize them. Do not hold the lifecycle lock while waiting for a
+        # response: /api/health and the UI need a non-blocking state snapshot
+        # even while VoiceMem processes an audio segment.
+        with self._request_lock:
             try:
-                process = self._ensure_process()
-                if process.stdin is None:
-                    raise VoiceMemUnavailable("VoiceMem sidecar stdin is unavailable")
-                process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-                process.stdin.flush()
-                return self._read_until_complete(request_id)
+                with self._lock:
+                    process = self._ensure_process()
+                    if process.stdin is None:
+                        raise VoiceMemUnavailable("VoiceMem sidecar stdin is unavailable")
+                    process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
+                    process.stdin.flush()
+                replies = self._read_until_complete(request_id)
+                failed = next((item for item in replies if item.get("type") == "VOICE_DEGRADED"), None)
+                with self._lock:
+                    self._last_request_ok = failed is None
+                    self._last_request_error = (
+                        str((failed.get("payload") or {}).get("reason") or "sidecar_degraded")[:160]
+                        if failed is not None else None
+                    )
+                return replies
             except (OSError, BrokenPipeError, VoiceMemUnavailable):
-                self._status = "degraded"
+                with self._lock:
+                    self._status = "degraded"
+                    self._last_request_ok = False
+                    self._last_request_error = "sidecar_unavailable"
                 raise VoiceMemUnavailable("VoiceMem sidecar is unavailable")
 
     def _ensure_process(self) -> subprocess.Popen[bytes]:
         if self._process is not None and self._process.poll() is None:
             return self._process
+        if self._process is not None:
+            self._retire_process(self._process, self._reader)
+            self._process = self._reader = None
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
-        process = subprocess.Popen(
+        process = spawn_owned_pipe(
             [self.python_executable, self.runner, *self.args],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
             env=env,
         )
         self._process = process
@@ -194,7 +222,13 @@ class VoiceMemProcessClient:
         result_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._queue = result_queue
         self._reader = Thread(target=self._read_stdout, args=(process, result_queue), daemon=True)
-        self._reader.start()
+        try:
+            self._reader.start()
+        except RuntimeError:
+            self._reader = None
+            self._retire_process(process, None)
+            self._process = None
+            raise VoiceMemUnavailable('VoiceMem reader startup failed')
         return process
 
     def _read_stdout(
@@ -213,9 +247,8 @@ class VoiceMemProcessClient:
                     result_queue.put(item)
         finally:
             result_queue.put(None)
-            with self._lock:
-                if self._process is process and process.poll() is not None and self._status == "running":
-                    self._status = "degraded"
+            # Never acquire the request/lifecycle lock here: close/replacement
+            # joins this reader while owning it. state() derives dead-child status.
 
     def _read_until_complete(self, request_id: str) -> list[dict[str, Any]]:
         deadline = monotonic() + self.timeout_seconds

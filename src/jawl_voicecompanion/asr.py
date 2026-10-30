@@ -1,158 +1,30 @@
-"""Bounded external ASR adapter and final-utterance audio buffer.
+"""Bounded per-session utterance buffer for the canonical GigaAM ASR.
 
-The local llama.cpp audio endpoint is a transcription API, not a guaranteed
-streaming partial-ASR API.  Keep that distinction explicit: VoiceMem remains
-the default streaming path, while this module provides an opt-in final
-utterance bridge for providers such as Qwen3-ASR.
+GigaAM (crispasr, file mode) is the **only** ASR engine in this product (owner
+decision 2026-09-21): the OpenAI-compatible provider path
+(``--asr-url``/``--asr-model``, Qwen3-ASR and whisper backends) and its
+"fallback" lane were removed, because GigaAM already won the head-to-head
+(0.58 s vs 1.19 s on the same clip, more accurate Russian) and the fallback
+pointed at a server the daily profile never starts.
+
+What remains here is not a model client: this is the bounded PCM16 buffer the
+browser voice lane and the ambient bridge fill, plus the WAV packaging the
+canonical transcriber consumes once per utterance.
 """
 
 from __future__ import annotations
 
 import io
-import json
-import re
 import threading
 import time
 import wave
 from dataclasses import dataclass
 from typing import Any, Callable
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
-from uuid import uuid4
 
-
-MAX_ASR_AUDIO_BYTES = 8 * 1024 * 1024
 MAX_UTTERANCE_BYTES = 4 * 1024 * 1024
 MAX_ASR_TEXT_CHARS = 12_000
 MAX_ASR_SESSIONS = 8
 SESSION_TTL_SECONDS = 120.0
-DEFAULT_TRANSCRIPTION_PROMPT = "Transcribe the audio exactly as spoken."
-
-
-class ASRUnavailable(ConnectionError):
-    """The selected ASR provider is unavailable or returned an invalid reply."""
-
-
-class ASRNoSpeech(ValueError):
-    """The ASR provider responded without transcribing any speech."""
-
-
-def _transcription_url(value: str) -> str:
-    endpoint = str(value or "").strip().rstrip("/")
-    if not endpoint:
-        raise ValueError("ASR endpoint is required")
-    if endpoint.endswith("/audio/transcriptions"):
-        return endpoint
-    if endpoint.endswith("/v1"):
-        return f"{endpoint}/audio/transcriptions"
-    return f"{endpoint}/v1/audio/transcriptions"
-
-
-def _health_url(transcription_url: str) -> str:
-    marker = "/v1/"
-    root = transcription_url.split(marker, 1)[0] if marker in transcription_url else transcription_url.rsplit("/audio/transcriptions", 1)[0]
-    return f"{root}/health"
-
-
-class OpenAICompatibleASRClient:
-    """Minimal dependency-free client for OpenAI-compatible audio endpoints."""
-
-    def __init__(
-        self,
-        endpoint: str,
-        model: str,
-        *,
-        api_key: str = "",
-        timeout_seconds: float = 30.0,
-        max_audio_bytes: int = MAX_ASR_AUDIO_BYTES,
-        prompt: str = DEFAULT_TRANSCRIPTION_PROMPT,
-        opener: Callable[..., Any] = urlopen,
-    ) -> None:
-        self.endpoint = _transcription_url(endpoint)
-        self.model = str(model or "").strip()
-        if not self.model:
-            raise ValueError("ASR model is required")
-        self.api_key = str(api_key or "")
-        self.timeout_seconds = max(2.0, min(float(timeout_seconds), 180.0))
-        self.max_audio_bytes = max(64 * 1024, min(int(max_audio_bytes), MAX_ASR_AUDIO_BYTES))
-        self.prompt = str(prompt or "").strip()[:1200]
-        self._opener = opener
-
-    def health(self) -> dict[str, Any]:
-        request = Request(_health_url(self.endpoint), method="GET")
-        try:
-            with self._opener(request, timeout=min(self.timeout_seconds, 10.0)) as response:
-                payload = json.loads(response.read(16 * 1024).decode("utf-8"))
-        except (HTTPError, URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError):
-            return {"status": "offline", "mode": "final_utterance"}
-        status = payload.get("status") if isinstance(payload, dict) else None
-        return {
-            "status": "online" if status == "ok" else "degraded",
-            "mode": "final_utterance",
-            "model": self.model,
-        }
-
-    def transcribe(self, wav_bytes: bytes, *, filename: str = "utterance.wav") -> str:
-        if not isinstance(wav_bytes, bytes) or not wav_bytes or len(wav_bytes) > self.max_audio_bytes:
-            raise ValueError("ASR WAV must be non-empty and within the configured byte limit")
-        boundary = f"----JAWLVoiceCompanion{uuid4().hex}"
-        body = self._multipart(boundary, wav_bytes, filename)
-        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        request = Request(self.endpoint, data=body, headers=headers, method="POST")
-        try:
-            with self._opener(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read(128 * 1024).decode("utf-8"))
-        except HTTPError as exc:
-            raise ASRUnavailable(f"ASR endpoint returned HTTP {exc.code}") from exc
-        except (URLError, OSError) as exc:
-            raise ASRUnavailable("ASR endpoint is unavailable") from exc
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ASRUnavailable("ASR endpoint returned invalid JSON") from exc
-        text = self._extract_text(payload)
-        if not text:
-            raise ASRNoSpeech("ASR endpoint returned no speech text")
-        return text[:MAX_ASR_TEXT_CHARS]
-
-    def _multipart(self, boundary: str, wav_bytes: bytes, filename: str) -> bytes:
-        safe_filename = re.sub(r"[^A-Za-z0-9_.-]", "_", str(filename or "utterance.wav"))[:80] or "utterance.wav"
-        delimiter = f"--{boundary}".encode("ascii")
-        chunks = [
-            delimiter + b"\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n",
-            self.model.encode("utf-8") + b"\r\n",
-        ]
-        if self.prompt:
-            chunks.extend([
-                delimiter + b"\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n",
-                self.prompt.encode("utf-8") + b"\r\n",
-            ])
-        chunks.extend([
-            delimiter + b"\r\n",
-            (
-                f'Content-Disposition: form-data; name="file"; filename="{safe_filename}"\r\n'
-                "Content-Type: audio/wav\r\n\r\n"
-            ).encode("ascii"),
-            wav_bytes,
-            b"\r\n" + delimiter + b"--\r\n",
-        ])
-        return b"".join(chunks)
-
-    @staticmethod
-    def _extract_text(payload: Any) -> str:
-        text = ""
-        if isinstance(payload, dict):
-            direct = payload.get("text")
-            if isinstance(direct, str):
-                text = direct
-            else:
-                choices = payload.get("choices")
-                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-                    message = choices[0].get("message")
-                    if isinstance(message, dict) and isinstance(message.get("content"), str):
-                        text = message["content"]
-        text = re.sub(r"^\s*language\s+[A-Za-z-]+\s*", "", text, flags=re.IGNORECASE)
-        return text.replace("<asr_text>", "").replace("</asr_text>", "").strip()
 
 
 @dataclass
@@ -161,40 +33,77 @@ class _AudioSession:
     channels: int
     data: bytearray
     touched_at: float
-    last_draft_at: float = 0.0
-    last_draft_text: str = ""
+    cancel: _ASRCancellation
 
 
-class ExternalASRService:
-    """Collect bounded PCM16 sessions and transcribe only on explicit end."""
+class _ASRCancellation(threading.Event):
+    """Per-utterance cancellation, optionally linked to a capture lease."""
+
+    def __init__(self, parent: threading.Event | None = None) -> None:
+        super().__init__()
+        self.parent = parent
+
+    def is_set(self) -> bool:
+        return super().is_set() or (self.parent is not None and self.parent.is_set())
+
+
+class UtteranceBuffer:
+    """Collect bounded PCM16 sessions and transcribe them with GigaAM on end."""
 
     def __init__(
         self,
-        provider: OpenAICompatibleASRClient,
+        transcriber: Any | None = None,
         *,
         max_utterance_bytes: int = MAX_UTTERANCE_BYTES,
         session_ttl_seconds: float = SESSION_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self.provider = provider
+        # ``transcriber`` is the canonical GigaAM batch transcriber
+        # (giga_final.CrispASRFileTranscriber). There is deliberately no second
+        # engine and no provider fallback behind it.
+        self.transcriber = transcriber
         self.max_utterance_bytes = max(32 * 1024, min(int(max_utterance_bytes), MAX_UTTERANCE_BYTES)) & ~1
         self.session_ttl_seconds = max(10.0, min(float(session_ttl_seconds), 600.0))
         self._clock = clock
-        self._sessions: dict[str, _AudioSession] = {}
+        self._sessions: dict[tuple[str, str], _AudioSession] = {}
+        self._inflight: dict[tuple[str, str], _ASRCancellation] = {}
+        self._closed = False
         self._lock = threading.RLock()
 
-    def feed_audio(self, pcm16: bytes, *, sample_rate: int, channels: int, session_id: str) -> dict[str, Any]:
+    @property
+    def configured(self) -> bool:
+        return self.transcriber is not None
+
+    @staticmethod
+    def _key(session_id: str, scope_id: str = "") -> tuple[str, str]:
+        return str(scope_id)[:200], str(session_id or "local")[:200]
+
+    def feed_audio(
+        self, pcm16: bytes, *, sample_rate: int, channels: int, session_id: str,
+        scope_id: str = "", cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
         self._validate_audio(pcm16, sample_rate, channels)
-        session = str(session_id or "local")[:200]
+        session = self._key(session_id, scope_id)
         now = self._clock()
         with self._lock:
+            if self._closed:
+                raise ValueError("ASR buffer is closed")
+            if cancel_event is not None and cancel_event.is_set():
+                raise ValueError("ASR capture is cancelled")
             self._expire(now)
+            if session in self._inflight:
+                raise ValueError("ASR utterance is still processing")
             current = self._sessions.get(session)
             if current is None:
-                if len(self._sessions) >= MAX_ASR_SESSIONS:
+                if len(self._sessions) + len(self._inflight) >= MAX_ASR_SESSIONS:
                     raise ValueError("ASR session limit reached")
-                current = _AudioSession(int(sample_rate), int(channels), bytearray(), now)
+                current = _AudioSession(
+                    int(sample_rate), int(channels), bytearray(), now, _ASRCancellation(cancel_event),
+                )
                 self._sessions[session] = current
+            if current.cancel.is_set():
+                self._sessions.pop(session, None)
+                raise ValueError("ASR capture is cancelled")
             if (current.sample_rate, current.channels) != (int(sample_rate), int(channels)):
                 raise ValueError("audio format cannot change during an ASR utterance")
             if len(current.data) + len(pcm16) > self.max_utterance_bytes:
@@ -204,102 +113,136 @@ class ExternalASRService:
             current.touched_at = now
             return {
                 "status": "buffered",
-                "mode": "final_utterance",
+                "mode": "gigaam_final",
                 "bytes": len(current.data),
                 "sample_rate": current.sample_rate,
                 "channels": current.channels,
                 "raw_audio_persisted": False,
             }
 
-    def draft(self, session_id: str) -> dict[str, Any]:
-        """Transcribe the buffered utterance without clearing it.
+    def finish(
+        self, session_id: str, *, scope_id: str = "", analyze_delivery: bool = False,
+    ) -> dict[str, Any]:
+        """Transcribe the buffered utterance with GigaAM and clear the session.
 
-        Gives the panel a near-real-time transcript while the user is still
-        speaking. The session buffer is NOT cleared: only finish() ends an
-        utterance. Drafts are throttled per session and never raise: any
-        provider failure yields an empty draft, keeping capture unaffected.
+        Explicit by design: a missing transcriber or a transcriber failure is
+        reported as ``unavailable``/``failed`` instead of being masked by a
+        second engine.
         """
-        session = str(session_id or "local")[:200]
-        with self._lock:
-            current = self._sessions.get(session)
-            if current is None or not current.data:
-                return {"status": "empty", "text": "", "bytes": 0, "raw_audio_persisted": False}
-            now = self._clock()
-            last_at = getattr(current, "last_draft_at", 0.0)
-            if last_at and now - last_at < 2.0:
-                cached = getattr(current, "last_draft_text", "")
-                return {"status": "throttled", "text": cached, "bytes": len(current.data), "raw_audio_persisted": False}
-            current.last_draft_at = now
-        wav_bytes = self._wav(current)
-        try:
-            text = self.provider.transcribe(wav_bytes)
-        except ASRNoSpeech:
-            text = ""
-        except Exception:  # noqa: BLE001 - drafts must never break capture
-            return {"status": "draft_failed", "text": "", "bytes": len(current.data), "raw_audio_persisted": False}
-        text = str(text or "").strip()
-        with self._lock:
-            current.last_draft_text = text[:MAX_ASR_TEXT_CHARS]
-        return {
-            "status": "drafted",
-            "text": text[:MAX_ASR_TEXT_CHARS],
-            "bytes": len(current.data),
-            "raw_audio_persisted": False,
-        }
-
-    def finish(self, session_id: str) -> dict[str, Any]:
-        session = str(session_id or "local")[:200]
+        session = self._key(session_id, scope_id)
         with self._lock:
             current = self._sessions.pop(session, None)
+            if current is not None and current.data:
+                self._inflight[session] = current.cancel
         if current is None or not current.data:
             return {"status": "empty", "text": "", "raw_audio_persisted": False}
-        wav_bytes = self._wav(current)
         try:
-            text = self.provider.transcribe(wav_bytes)
-        except ASRNoSpeech:
+            if current.cancel.is_set():
+                return self._cancelled(current)
+            if self.transcriber is None:
+                return {
+                    "status": "unavailable", "text": "", "bytes": len(current.data),
+                    "error": "GigaAM transcriber is not configured", "raw_audio_persisted": False,
+                }
+            try:
+                text = str(self.transcriber.transcribe(self._wav(current), cancel_event=current.cancel) or "").strip()
+            except Exception as exc:  # noqa: BLE001 - the caller reports the failure
+                if current.cancel.is_set():
+                    return self._cancelled(current)
+                return {
+                    "status": "failed", "text": "", "bytes": len(current.data),
+                    "error": f"{type(exc).__name__}: {exc}"[:300], "raw_audio_persisted": False,
+                }
+            if current.cancel.is_set():
+                return self._cancelled(current)
+        finally:
+            with self._lock:
+                self._inflight.pop(session, None)
+        if not text:
             return {"status": "no_speech", "text": "", "bytes": len(current.data), "raw_audio_persisted": False}
-        return {
+        result = {
             "status": "transcribed",
             "text": text[:MAX_ASR_TEXT_CHARS],
             "bytes": len(current.data),
             "raw_audio_persisted": False,
         }
+        if analyze_delivery:
+            # Ambient loopback callers keep the default off; only the direct
+            # microphone turn opts in, so external media is not attributed to
+            # the user's vocal delivery.
+            try:
+                from .voice_delivery import analyze_voice_delivery
+                delivery = analyze_voice_delivery(
+                    bytes(current.data), current.sample_rate, current.channels,
+                    observed_monotonic=current.touched_at,
+                )
+            except Exception:  # noqa: BLE001 - optional measurements cannot break ASR
+                delivery = None
+            if delivery is not None:
+                result["voice_delivery"] = delivery
+        return result
 
-    def to_wav(self, session_id: str) -> bytes | None:
+    def finish_microphone(self, session_id: str, *, scope_id: str = "") -> dict[str, Any]:
+        """Finish a direct-mic turn and attach optional objective voice cues."""
+        return self.finish(session_id, scope_id=scope_id, analyze_delivery=True)
+
+    @staticmethod
+    def _cancelled(current: _AudioSession) -> dict[str, Any]:
+        return {"status": "cancelled", "text": "", "bytes": len(current.data), "raw_audio_persisted": False}
+
+    def to_wav(self, session_id: str, *, scope_id: str = "") -> bytes | None:
         """Peek the buffered utterance as WAV bytes without clearing it."""
-        session = str(session_id or "local")[:200]
+        session = self._key(session_id, scope_id)
         with self._lock:
             current = self._sessions.get(session)
             if current is None or not current.data:
                 return None
             return self._wav(current)
 
-    def discard(self, session_id: str) -> dict[str, Any]:
-        """Drop a buffered utterance without calling the provider.
-
-        Used when another lane (the batch GigaAM transcriber) already produced
-        the canonical final transcript for this utterance.
-        """
-        session = str(session_id or "local")[:200]
+    def discard(self, session_id: str, *, scope_id: str = "") -> dict[str, Any]:
+        """Drop buffered PCM and cancel only this utterance's active process."""
+        session = self._key(session_id, scope_id)
         with self._lock:
             current = self._sessions.pop(session, None)
+            cancel = self._inflight.get(session)
+            if cancel is not None:
+                cancel.set()
         return {
-            "status": "discarded" if current is not None else "empty",
+            "status": "cancelled" if cancel is not None else "discarded" if current is not None else "empty",
             "bytes": len(current.data) if current is not None else 0,
             "raw_audio_persisted": False,
         }
 
+    def discard_scope(self, scope_id: str) -> dict[str, Any]:
+        """Release one capture owner without touching microphone/ambient peers."""
+        scope = str(scope_id)[:200]
+        with self._lock:
+            keys = [key for key in self._sessions if key[0] == scope]
+            for key in keys:
+                self._sessions.pop(key)
+            cancelled = 0
+            for key, cancel in self._inflight.items():
+                if key[0] == scope:
+                    cancel.set()
+                    cancelled += 1
+        return {"status": "cancelled", "discarded_sessions": len(keys), "cancelled_transcriptions": cancelled}
+
     def health(self) -> dict[str, Any]:
-        result = self.provider.health()
-        return {"configured": True, **result, "active_sessions": self.state()["active_sessions"]}
+        state = self.state()
+        return {
+            "configured": self.configured,
+            "status": "ok" if self.configured else "not_configured",
+            "engine": "gigaam",
+            "mode": "gigaam_final",
+            **state,
+        }
 
     def state(self) -> dict[str, Any]:
         with self._lock:
             self._expire(self._clock())
             return {
-                "configured": True,
-                "mode": "final_utterance",
                 "active_sessions": len(self._sessions),
+                "inflight_transcriptions": len(self._inflight),
                 "buffered_bytes": sum(len(item.data) for item in self._sessions.values()),
                 "max_utterance_bytes": self.max_utterance_bytes,
                 "raw_audio_persisted": False,
@@ -307,10 +250,16 @@ class ExternalASRService:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             self._sessions.clear()
+            for cancel in self._inflight.values():
+                cancel.set()
 
     def _expire(self, now: float) -> None:
-        expired = [key for key, item in self._sessions.items() if now - item.touched_at > self.session_ttl_seconds]
+        expired = [
+            key for key, item in self._sessions.items()
+            if item.cancel.is_set() or now - item.touched_at > self.session_ttl_seconds
+        ]
         for key in expired:
             self._sessions.pop(key, None)
 
@@ -334,10 +283,4 @@ class ExternalASRService:
         return output.getvalue()
 
 
-__all__ = [
-    "ASRNoSpeech",
-    "ASRUnavailable",
-    "DEFAULT_TRANSCRIPTION_PROMPT",
-    "ExternalASRService",
-    "OpenAICompatibleASRClient",
-]
+__all__ = ["MAX_UTTERANCE_BYTES", "UtteranceBuffer"]

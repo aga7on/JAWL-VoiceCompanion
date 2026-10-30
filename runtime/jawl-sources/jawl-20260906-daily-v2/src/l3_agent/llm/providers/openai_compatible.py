@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import os
 import time
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 import openai
 
+from src.l3_agent.companion_gateway import current_speech_sink
+from src.l3_agent.llm import envelope_policy
 from src.l3_agent.llm.client import LLMClient
 from src.l3_agent.llm.exceptions import AllKeysExhaustedError
 from src.l3_agent.llm.providers.base import LLMProvider
@@ -22,6 +26,107 @@ from src.l3_agent.llm.providers.contracts import (
     ProviderError,
     ProviderHealth,
 )
+from src.l3_agent.llm.speech_first import SpeechFirstGate
+
+_SPEECH_TEE_BUDGET_SECONDS = 300.0
+
+
+def _visible_text(chunk: Any) -> str:
+    """Return only user-visible streamed content, never hidden reasoning."""
+
+    parts: list[str] = []
+    for choice in getattr(chunk, "choices", None) or []:
+        delta = getattr(choice, "delta", None)
+        if delta is None:
+            continue
+        content = getattr(delta, "content", None)
+        if isinstance(content, str) and content:
+            parts.append(content)
+    return "".join(parts)
+
+
+def _is_local(provider: Any) -> bool:
+    client = getattr(provider, "client", None)
+    base_url = getattr(client, "base_url", "") or getattr(client, "api_url", "")
+    try:
+        parsed = urlsplit(str(base_url))
+        return parsed.scheme in {"http", "https"} and parsed.hostname in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }
+    except ValueError:
+        return False
+
+
+def _stream_first_request(provider: Any, request: LLMRequest) -> LLMRequest:
+    """Speak the reply before the JSON envelope closes (owned streaming).
+
+    Only the local JSON-envelope lane inside an active correlated turn is
+    streamed; every other request keeps its exact transport. The returned
+    provider result is unchanged either way.
+    """
+
+    try:
+        if (
+            getattr(request, "tool_transport", "") == "json_envelope"
+            and _is_local(provider)
+            and current_speech_sink() is not None
+        ):
+            return dataclasses.replace(request, stream=True)
+    except Exception:
+        pass
+    return request
+
+
+def _drain_gate(gate: SpeechFirstGate) -> list[str]:
+    out: list[str] = []
+    while True:
+        piece = gate.feed("")
+        if not piece:
+            return out
+        out.append(piece)
+
+
+def _tee_speech(stream: Any) -> Any:
+    """Tee user-visible streamed content into the per-turn speech sink.
+
+    Only ``delta.content`` is observed; ``reasoning_content`` and the private
+    envelope fields are never emitted. The consumer still receives exactly
+    the same chunks.
+    """
+
+    sink = current_speech_sink()
+    if sink is None:
+        return stream
+    gate = SpeechFirstGate()
+    deadline = time.monotonic() + _SPEECH_TEE_BUDGET_SECONDS
+
+    async def tee():
+        try:
+            async for chunk in stream:
+                try:
+                    text = _visible_text(chunk)
+                    if text:
+                        piece = gate.feed(text)
+                        if piece:
+                            await sink.emit(piece)
+                        for extra in _drain_gate(gate):
+                            await sink.emit(extra)
+                except Exception:
+                    pass
+                if time.monotonic() > deadline:
+                    break
+                yield chunk
+        finally:
+            try:
+                tail = gate.flush()
+                if tail:
+                    await sink.emit(tail)
+            except Exception:
+                pass
+
+    return tee()
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -89,9 +194,10 @@ class OpenAICompatibleProvider(LLMProvider):
             in {"json_object", "json_schema"}
         ):
             kwargs["response_format"] = {"type": "json_object"}
-        return kwargs
+        return envelope_policy.apply_envelope_policy(kwargs, request, provider=self)
 
     async def complete(self, request: LLMRequest) -> LLMResult:
+        request = _stream_first_request(self, request)
         if request.stream and not self.capabilities.streaming:
             raise ProviderError(
                 "streaming is not supported by this provider",
@@ -198,6 +304,7 @@ class OpenAICompatibleProvider(LLMProvider):
     async def _consume_stream(
         self, stream: Any, request: LLMRequest
     ) -> LLMResult:
+        stream = _tee_speech(stream)
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         call_parts: dict[int, dict[str, str]] = {}

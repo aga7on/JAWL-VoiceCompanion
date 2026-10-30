@@ -268,6 +268,19 @@ class TextGateway:
                                         "turn_id": token.turn_id,
                                         "correlation_id": correlation,
                                     }
+                            elif event_type == "speech_delta":
+                                # Early reply sentences extracted by the owned
+                                # brain streaming hook. They drive live TTS and
+                                # are deliberately not part of the display
+                                # deltas (which must match the final text).
+                                fragment = event.get("text")
+                                if isinstance(fragment, str) and fragment.strip():
+                                    yield {
+                                        "type": "speech_delta",
+                                        "text": fragment.strip(),
+                                        "turn_id": token.turn_id,
+                                        "correlation_id": correlation,
+                                    }
                             elif event_type == "final":
                                 candidate = event.get("response")
                                 if not isinstance(candidate, dict):
