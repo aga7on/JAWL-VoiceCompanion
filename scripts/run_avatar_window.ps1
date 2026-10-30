@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Url = "http://127.0.0.1:8766/avatar?source=pet",
+    [string]$Url = "http://127.0.0.1:2367/app?mode=obs",
     [int]$Width = 420,
     [int]$Height = 560,
     [int]$Left = 40,
@@ -11,8 +11,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $parsed = [Uri]$Url
-if ($parsed.Scheme -notin @("http", "https") -or $parsed.Host -notin @("127.0.0.1", "localhost", "::1") -or $parsed.AbsolutePath -ne "/avatar") {
-    throw "Avatar window URL must be a local /avatar HTTP(S) URL."
+if ($parsed.Scheme -notin @("http", "https") -or $parsed.Host -notin @("127.0.0.1", "localhost", "::1") -or $parsed.AbsolutePath -notin @("/app", "/avatar")) {
+    throw "Avatar window URL must be a local /app (or /avatar) HTTP(S) URL."
 }
 if ($Width -lt 240 -or $Width -gt 2400 -or $Height -lt 240 -or $Height -gt 2400) {
     throw "Avatar window dimensions are outside the bounded range."

@@ -226,24 +226,10 @@ def _host_header_parts(value: str | None, scheme: str) -> tuple[str, int] | None
     return parsed.hostname.casefold().rstrip("."), port
 
 
-def _security_headers(handler: BaseHTTPRequestHandler, *, presentation: bool = False) -> None:
-    """Apply a conservative policy to both control and presentation responses."""
+def _security_headers(handler: BaseHTTPRequestHandler) -> None:
+    """Apply a conservative security policy to all HTTP responses."""
     handler.send_header("X-Content-Type-Options", "nosniff")
     handler.send_header("Referrer-Policy", "no-referrer")
-    if presentation:
-        # The avatar page is the OBS source and is embedded by the loopback
-        # control panel. OBS loads it top-level, so framing stays restricted
-        # to loopback control origins; LAN origins must load it top-level.
-        handler.send_header("Content-Security-Policy", (
-            "default-src 'self'; object-src 'none'; base-uri 'none'; "
-            "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; connect-src 'self'; "
-            "frame-ancestors http://127.0.0.1:* http://localhost:* "
-            "https://127.0.0.1:* https://localhost:*"
-        ))
-        handler.send_header("Cross-Origin-Opener-Policy", "same-origin")
-        handler.send_header("Cross-Origin-Resource-Policy", "same-origin")
-        return
     handler.send_header("X-Frame-Options", "DENY")
     handler.send_header("Cross-Origin-Opener-Policy", "same-origin")
     handler.send_header("Cross-Origin-Resource-Policy", "same-origin")
@@ -334,7 +320,6 @@ class CompanionServer(ThreadingHTTPServer):
     visual_sensor: Any | None = None,
     config_hub: Any | None = None,
     log_dir: Path | None = None,
-    legacy_presentation: bool = True,
     resource_governor: ResourceGovernor | None = None,
     presence_file: Path | None = None,
         stream_chat: StreamChatIngestor | None = None,
@@ -415,7 +400,6 @@ class CompanionServer(ThreadingHTTPServer):
         self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
-        self.legacy_presentation = bool(legacy_presentation)
         self.lan_mode = bool(lan_mode)
         self.lan_access_token = str(lan_access_token or "")
         self.lan_auth_user = str(lan_auth_user or "tablet")
@@ -426,7 +410,6 @@ class CompanionServer(ThreadingHTTPServer):
         self.stream_chat = stream_chat or StreamChatIngestor(
             downstream=self._accept_stream_chat_event,
         )
-        self.presentation_url: str | None = None
         # A fresh process must invalidate browser-side speech buffers.  This is
         # deliberately a runtime identity, not a persisted session identifier:
         # after a restart any in-flight audio belongs to the old process.
@@ -501,8 +484,6 @@ class CompanionServer(ThreadingHTTPServer):
             return False
         return (origin_host, origin_port) == _host_header_parts(host_header, self.url_scheme)
 
-    def set_presentation_url(self, url: str) -> None:
-        self.presentation_url = str(url).strip() or None
 
     def _load_presence_preferences(self) -> None:
         if self.presence_file is None or not self.presence_file.exists():
@@ -544,39 +525,8 @@ class CompanionServer(ThreadingHTTPServer):
             except OSError:
                 pass
 
-    def presentation_state(self) -> dict[str, Any]:
-        """Return only the ephemeral state allowed on the unprivileged origin."""
-        state = self.gateway.state()
-        turn = state.get("last_turn") if isinstance(state, dict) else None
-        response = turn.get("response") if isinstance(turn, dict) else None
-        if not isinstance(response, dict):
-            response = {}
-        emotion = response.get("emotion")
-        avatar = response.get("avatar")
-        if not isinstance(emotion, dict):
-            emotion = {"id": "neutral", "intensity": 0.0, "confidence": 1.0}
-        if not isinstance(avatar, dict):
-            avatar = {"expression": "neutral", "motion": "idle", "state": "idle"}
-        return {
-            "schema_version": 1,
-            "response_id": str(response.get("response_id") or ""),
-            "turn_id": str(response.get("turn_id") or ""),
-            "subtitle": str(response.get("text") or "")[:280] if response.get("speak") else "",
-            "speak": bool(response.get("speak", False)),
-            "emotion": {
-                "id": str(emotion.get("id") or "neutral")[:128],
-                "intensity": max(0.0, min(1.0, float(emotion.get("intensity", 0.0) or 0.0))),
-            },
-            "avatar": {
-                "expression": str(avatar.get("expression") or "neutral")[:128],
-                "motion": str(avatar.get("motion") or "idle")[:128],
-                "state": str(avatar.get("state") or "idle")[:32],
-            },
-            "avatar_audio": self.avatar_audio(),
-        }
-
     def set_avatar_audio(self, amplitude: float, speaking: bool, timestamp_ms: int) -> dict[str, Any]:
-        """Keep only a short-lived presentation signal; never persist audio."""
+        """Keep only a short-lived avatar/lip-sync signal; never persist audio."""
         with self._avatar_audio_lock:
             if timestamp_ms >= int(self._avatar_audio["timestamp_ms"]):
                 self._avatar_audio.update({
@@ -1474,7 +1424,7 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 "enabled": False,
                 "deprecated": "live2d",
                 "note": "3D VRM avatar lives in the desktop shell (desktop/)",
-                "presentation_url": self.server.presentation_url,
+                "obs_mode_url": "/app?mode=obs",
             })
             return
         if path == "/api/avatar/wardrobe":
@@ -1661,6 +1611,16 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         # directory; app.html is the entry, app.js/app-scene.js its modules.
         # The scene loads three.js through its own import map from
         # node_modules under desktop/ (read-only assets, no uploads).
+        if path == "/avatar":
+            # ADR-052: the avatar/OBS surface is the single app window in
+            # ?mode=obs; the separate presentation origin is removed. This
+            # alias keeps old pet-window and OBS links working.
+            self.send_response(HTTPStatus.FOUND)
+            _security_headers(self)
+            self.send_header("Location", "/app?mode=obs")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         APP_FILES = {
             "/app": ("app.html", "text/html; charset=utf-8"),
             "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -3325,153 +3285,6 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         ]
 
 
-class CompanionPresentationServer(ThreadingHTTPServer):
-    """Unprivileged loopback origin for the avatar/OBS surface."""
-
-    allow_reuse_address = True
-
-    def __init__(
-        self,
-        server_address: tuple[str, int],
-        companion: CompanionServer,
-        tls_context: ssl.SSLContext | None = None,
-        presentation_access_token: str | None = None,
-    ):
-        self.companion = companion
-        self.frontend_dir = companion.frontend_dir
-        self.tls_enabled = tls_context is not None
-        self.url_scheme = "https" if self.tls_enabled else "http"
-        self.remote_access = not is_loopback_host(server_address[0])
-        self.presentation_access_token = (
-            _validate_lan_access_token(presentation_access_token)
-            if self.remote_access
-            else ""
-        )
-        super().__init__(server_address, CompanionPresentationRequestHandler)
-        if tls_context is not None:
-            self.socket = tls_context.wrap_socket(self.socket, server_side=True)
-
-
-class CompanionPresentationRequestHandler(BaseHTTPRequestHandler):
-    server: CompanionPresentationServer
-
-    def _require_presentation_access(self) -> bool:
-        """Authenticate remote presentation reads without affecting loopback OBS."""
-        if not self.server.remote_access:
-            return True
-        query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
-        candidate = self.headers.get("X-Companion-Presentation-Token") or (
-            query.get("token", [""])[0]
-        )
-        expected = self.server.presentation_access_token
-        if expected and hmac.compare_digest(str(candidate), expected):
-            return True
-        self.send_error(HTTPStatus.FORBIDDEN, "presentation access token required")
-        return False
-
-    def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
-        path = urlsplit(self.path).path
-        if not self._require_presentation_access():
-            return
-        if path == "/api/presentation/state":
-            self._json(self.server.companion.presentation_state())
-            return
-        if path == "/api/presentation/config":
-            # ADR-045: the Live2D asset store is removed; the presentation
-            # server keeps the OBS surface contract only.
-            self._json({
-                "enabled": False,
-                "deprecated": "live2d",
-                "note": "3D VRM avatar lives in the desktop shell (desktop/)",
-                "capabilities": {
-                    "expressions": 0,
-                    "motion_groups": [],
-                    "physics": False,
-                    "pose": False,
-                    "display_info": False,
-                    "lip_sync": True,
-                    "fallback_expressions": [
-                        "neutral", "attentive", "concerned", "confused",
-                        "happy", "sad", "angry", "surprised",
-                    ],
-                },
-            })
-            return
-        if path == "/":
-            # ADR-045: the presentation surface serves a minimal placeholder
-            # (OBS consumers should use the Electron avatar window).
-            body = ("<!doctype html><html lang=\"ru\"><meta charset=\"utf-8\">"
-                    "<title>JAWL Companion — presentation</title>"
-                    "<body style=\"background:#001a2b26;color:#9fe8d4;font-family:sans-serif\">"
-                    "<p>3D-аватар живёт в окне десктоп-оболочки (desktop/). "
-                    "Live2D-презентация удалена (ADR-045).</p></body></html>").encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            _security_headers(self, presentation=True)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        self.send_error(HTTPStatus.NOT_FOUND)
-
-    def do_POST(self) -> None:  # noqa: N802 - read-only presentation API
-        self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
-
-    def log_message(self, format: str, *args: Any) -> None:
-        return
-
-    def _json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        _security_headers(self, presentation=True)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-
-def _local_url(host: str, port: int, path: str) -> str:
-    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    return f"http://{host_part}:{port}{path}"
-
-
-def create_presentation_server(
-    companion: CompanionServer,
-    host: str = "127.0.0.1",
-    port: int = 8766,
-    *,
-    lan_mode: bool = False,
-    tls_cert_file: str | os.PathLike[str] | None = None,
-    tls_key_file: str | os.PathLike[str] | None = None,
-    access_token: str | None = None,
-) -> CompanionPresentationServer:
-    """Create the isolated avatar/OBS server without exposing control state.
-
-    A remote presentation bind gets its own read-only bearer token.  The token
-    is intentionally separate from the control-plane LAN credential so an OBS
-    or tablet link cannot be upgraded into a control session.
-    """
-    host = require_bind_host(host, lan_mode=lan_mode)
-    tls_context = create_tls_context(tls_cert_file, tls_key_file)
-    if not is_loopback_host(host) and tls_context is None:
-        raise ValueError("non-loopback LAN presentation requires a trusted TLS certificate and private key")
-    remote_token = access_token or (secrets.token_urlsafe(24) if not is_loopback_host(host) else None)
-    server = CompanionPresentationServer(
-        (host, port),
-        companion,
-        tls_context=tls_context,
-        presentation_access_token=remote_token,
-    )
-    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    url = f"{server.url_scheme}://{host_part}:{server.server_port}/avatar"
-    if server.remote_access:
-        url += "?token=" + quote(server.presentation_access_token, safe="")
-    companion.set_presentation_url(url)
-    return server
-
-
 def create_server(
     host: str = "127.0.0.1",
     port: int = 2367,
@@ -3503,7 +3316,6 @@ def create_server(
     visual_sensor: Any | None = None,
     config_hub: Any | None = None,
     log_dir: Path | None = None,
-    legacy_presentation: bool = True,
     presence_file: Path | None = None,
     stream_chat: StreamChatIngestor | None = None,
     stream_chat_event_sink: Callable[[dict[str, Any]], Any] | None = None,
@@ -3609,7 +3421,6 @@ def create_server(
         visual_sensor=visual_sensor,
         config_hub=config_hub,
         log_dir=log_dir,
-        legacy_presentation=legacy_presentation,
         resource_governor=resource_governor,
         presence_file=presence_file,
         stream_chat=stream_chat,

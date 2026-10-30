@@ -32,7 +32,7 @@ from .tts import Qwen3TTSHttpClient, TeraTTSHttpClient, TTSService, VoxCPMHttpCl
 from .user_activity import WindowsUserActivity
 from .vision import OpenAICompatibleVisionClient
 from .voicemem_client import VoiceMemProcessClient
-from .web import create_presentation_server, create_server, is_loopback_host
+from .web import create_server
 from .windows_keyboard import WindowsKeyboardAdapter
 from .windows_pointer import WindowsPointerAdapter
 from .windows_ui import WindowsUIAutomationAdapter
@@ -568,7 +568,6 @@ def build_companion_runtime(
         jawl_hostos_control=args.jawl_hostos_control,
         audit_file=args.audit_file or project_root / "runtime" / "audit.ndjson",
         presence_file=project_root / "runtime" / "presence.json",
-        legacy_presentation=False,
         resource_governor=resource_governor,
         lan_mode=args.lan,
         lan_access_token=lan_access_token,
@@ -606,21 +605,7 @@ def build_companion_runtime(
         qwen_visual_sensor.on_observation = _qwen_attention
         qwen_visual_sensor.start()
 
-    runtime = CompanionRuntime(server)
-    try:
-        presentation = create_presentation_server(
-            server,
-            host=args.presentation_host,
-            port=args.presentation_port,
-            lan_mode=args.lan,
-            tls_cert_file=(args.tls_cert if not is_loopback_host(args.presentation_host) else None),
-            tls_key_file=(args.tls_key if not is_loopback_host(args.presentation_host) else None),
-        )
-        runtime.attach_presentation(presentation)
-        return runtime
-    except BaseException:
-        runtime.close()
-        raise
+    return CompanionRuntime(server)
 
 
 __all__ = ["build_companion_runtime"]

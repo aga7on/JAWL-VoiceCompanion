@@ -1843,6 +1843,7 @@ try {
   const modeParam = params.get('mode');
   if (modeParam === 'obs') {
     document.body?.classList?.add('obs-mode');
+    document.title = 'JAWL Avatar';
   } else if (modeParam === 'compact' || localStorage.getItem('jawl.app.compactMode') === '1') {
     setCompactMode(true, {defaultPin: false});
   } else if (alwaysOnTop) {

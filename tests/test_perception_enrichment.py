@@ -28,7 +28,6 @@ def _server(fusion):
         frontend_dir=ROOT / "frontend",
         gateway=TextGateway(),
         perception_fusion=fusion,
-        legacy_presentation=False,
     )
     return server
 

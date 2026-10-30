@@ -43,7 +43,7 @@ class VoiceMemRuntimeIsolationTests(unittest.TestCase):
 
         class Runtime:
             control = SimpleNamespace(
-                url_scheme="http", server_port=2367, presentation_url="http://127.0.0.1:8766"
+                url_scheme="http", server_port=2367
             )
 
             def serve_forever(self):

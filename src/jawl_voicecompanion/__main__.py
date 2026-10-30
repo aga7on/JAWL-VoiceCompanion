@@ -93,17 +93,6 @@ def main() -> None:
         default=None,
         help="host/IP printed in the LAN URL when --host is 0.0.0.0 or ::",
     )
-    parser.add_argument(
-        "--presentation-host",
-        default="127.0.0.1",
-        help="loopback host for the isolated avatar/OBS presentation server",
-    )
-    parser.add_argument(
-        "--presentation-port",
-        type=int,
-        default=8766,
-        help="port for the isolated avatar/OBS presentation server (0 chooses a free port)",
-    )
     parser.add_argument("--frontend", type=Path, default=None)
     parser.add_argument(
         "--jawl-port-file",
@@ -542,7 +531,6 @@ def main() -> None:
             display_host = "<LAN-IP>"
         host_part = f"[{display_host}]" if ":" in display_host and not display_host.startswith("[") else display_host
         print(f"JAWL VoiceCompanion control: {server.url_scheme}://{host_part}:{server.server_port}")
-        print(f"JAWL VoiceCompanion avatar/OBS: {server.presentation_url}")
         _boot_trace('serving')
         runtime.serve_forever()
     except KeyboardInterrupt:

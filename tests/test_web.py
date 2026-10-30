@@ -16,7 +16,6 @@ from jawl_voicecompanion.gateway import validate_response_envelope  # noqa: E402
 from jawl_voicecompanion.jawl_web import JawlWebUnavailable  # noqa: E402
 from jawl_voicecompanion.web import (  # noqa: E402
     CompanionServer,
-    create_presentation_server,
     create_server,
     is_meaningful_transcript,
     voice_memory_block,
@@ -196,9 +195,9 @@ class _UnavailableJawlControl:
 
 
 class WebTests(unittest.TestCase):
-    def test_default_ports_keep_control_and_presentation_separate(self):
+    def test_default_control_port_is_2367(self):
         self.assertEqual(inspect.signature(create_server).parameters["port"].default, 2367)
-        self.assertEqual(inspect.signature(create_presentation_server).parameters["port"].default, 8766)
+
 
     def setUp(self):
         self.server = create_server(port=0, frontend_dir=Path(__file__).parents[1] / "frontend", gateway=TextGateway())
@@ -355,14 +354,13 @@ class WebTests(unittest.TestCase):
             self.assertIn(b"requestAnimationFrame", js)
             self.assertIn(b"emotion", js)
             self.assertIn(b"Analyser", js)
-        # ADR-045: /avatar is removed (the 3D VRM avatar lives in the
-        # Electron shell); it must 404 now.
-        try:
-            with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
-                self.fail("expected 404 for the removed /avatar page")
-        except HTTPError as exc:
-            with exc:
-                self.assertEqual(exc.code, 404)
+        # ADR-052: /avatar is the alias of the single app's ?mode=obs surface
+        # (the separate presentation origin is removed); old OBS links follow
+        # the redirect to the renderer-only app window.
+        with urlopen(self.base + "/avatar?source=obs", timeout=2) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("mode=obs", response.geturl())
+            self.assertIn(b"JAWL Companion", response.read())
         with urlopen(self.base + "/mic-processor.js", timeout=2) as response:
             self.assertEqual(response.status, 200)
             self.assertIn(b"AudioWorkletProcessor", response.read())
@@ -1046,100 +1044,36 @@ class WebTests(unittest.TestCase):
         self.assertIn("draft", payload)
 
 
-class PresentationWebTests(unittest.TestCase):
+class ObsSurfaceTests(unittest.TestCase):
+    """ADR-052: one origin — the app serves both the panel and ?mode=obs."""
+
     def setUp(self):
         self.control = create_server(
             port=0,
             frontend_dir=Path(__file__).parents[1] / "frontend",
             gateway=TextGateway(),
-            legacy_presentation=False,
         )
-        self.presentation = create_presentation_server(self.control, port=0)
         self.control_thread = threading.Thread(target=self.control.serve_forever, daemon=True)
-        self.presentation_thread = threading.Thread(target=self.presentation.serve_forever, daemon=True)
         self.control_thread.start()
-        self.presentation_thread.start()
-        self.base = f"http://127.0.0.1:{self.presentation.server_port}"
+        self.base = f"http://127.0.0.1:{self.control.server_port}"
 
     def tearDown(self):
-        _stop_test_http_server(self.presentation, self.presentation_thread)
         _stop_test_http_server(self.control, self.control_thread)
 
-    def test_presentation_origin_has_only_bounded_read_only_state(self):
-        with urlopen(self.base + "/api/presentation/state", timeout=2) as response:
-            state = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
-            # The avatar page is the OBS source and may be embedded only by
-            # loopback control origins; framing stays denied everywhere else.
-            self.assertIn(
-                "frame-ancestors http://127.0.0.1:* http://localhost:*",
-                response.headers["Content-Security-Policy"],
-            )
-            self.assertNotIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
-        self.assertEqual(state["schema_version"], 1)
-        self.assertIn("avatar", state)
-        self.assertIn("subtitle", state)
-        self.assertIn("avatar_audio", state)
-        for secret_field in ("session_token", "csrf_token", "policy", "last_turn", "recent_turns"):
-            self.assertNotIn(secret_field, state)
-
     def test_control_origin_denies_frame_ancestors(self):
-        with urlopen(f"http://127.0.0.1:{self.control.server_port}/app", timeout=2) as response:
+        with urlopen(self.base + "/app", timeout=2) as response:
             self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
-    def test_presentation_origin_serves_avatar_but_cannot_mutate_control(self):
-        # ADR-045: the presentation surface is a placeholder (the 3D VRM
-        # avatar lives in the Electron shell); the read-only boundary is what
-        # still must hold.
-        # ADR-046: the presentation surface is the single app window in
-        # ?mode=obs (transparent background, no controls); the read-only
-        # boundary is what still must hold.
-        # The presentation origin serves the same app content, so we verify
-        # the app loads correctly on the control origin instead.
-        with urlopen(f"http://127.0.0.1:{self.control.server_port}/app", timeout=2) as response:
+    def test_avatar_alias_serves_the_obs_mode_app_on_the_same_origin(self):
+        with urlopen(self.base + "/avatar", timeout=2) as response:
+            self.assertEqual(response.status, 200)
             self.assertIn(b"JAWL Companion", response.read())
-        request = Request(
-            self.base + "/api/presentation/state",
-            data=b"{}",
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with self.assertRaises(HTTPError) as context:
-            urlopen(request, timeout=2)
-        self.assertEqual(context.exception.code, 405)
-        context.exception.close()
-        with self.assertRaises(HTTPError) as context:
-            urlopen(f"http://127.0.0.1:{self.control.server_port}/avatar", timeout=2)
-        self.assertEqual(context.exception.code, 404)
-        context.exception.close()
+            self.assertIn("mode=obs", response.geturl())
 
-    def test_remote_presentation_origin_requires_its_read_only_token(self):
-        # Use the loopback test server but force the same handler policy as a
-        # remote TLS bind; this avoids generating certificates in the unit
-        # suite while exercising the actual authorization boundary.
-        self.presentation.remote_access = True
-        self.presentation.presentation_access_token = "presentation-test-token"
-        with self.assertRaises(HTTPError) as context:
-            urlopen(self.base + "/api/presentation/state", timeout=2)
-        self.assertEqual(context.exception.code, 403)
-        context.exception.close()
-        with urlopen(
-            self.base + "/api/presentation/state?token=presentation-test-token",
-            timeout=2,
-        ) as response:
-            state = json.loads(response.read().decode("utf-8"))
-        self.assertEqual(state["schema_version"], 1)
-        with urlopen(
-            self.base + "/?token=presentation-test-token",
-            timeout=2,
-        ) as response:
-            self.assertIn(b"presentation", response.read())
-
-    def test_http_servers_reject_non_loopback_binds(self):
+    def test_http_server_rejects_non_loopback_binds(self):
         with self.assertRaises(ValueError):
             create_server(host="0.0.0.0", port=0, gateway=TextGateway())
-        with self.assertRaises(ValueError):
-            create_presentation_server(self.control, host="0.0.0.0", port=0)
+
 
 class _FakeStreamingAsr:
     def __init__(self, text="", active=True, silence_ms=800.0):

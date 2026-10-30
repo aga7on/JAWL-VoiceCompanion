@@ -1,5 +1,4 @@
 import unittest
-from threading import Thread
 
 import sys
 from pathlib import Path
@@ -22,18 +21,6 @@ class _Closable:
 
     def server_close(self):
         self.calls.append("close")
-
-
-class _FailingShutdown(_Closable):
-    def shutdown(self):
-        self.calls.append("shutdown")
-        raise RuntimeError("presentation shutdown failed")
-
-
-class _FailingClose(_Closable):
-    def server_close(self):
-        self.calls.append("close")
-        raise RuntimeError("presentation close failed")
 
 
 class _StubbornControl:
@@ -65,19 +52,20 @@ class _ControlWithHistory(_Closable):
 
 
 class CompanionRuntimeTests(unittest.TestCase):
-    def test_attach_and_close_are_ordered_and_idempotent(self):
+    def test_close_is_idempotent(self):
         control = _Closable()
-        presentation = _Closable()
         runtime = CompanionRuntime(control)
 
-        self.assertIs(runtime.attach_presentation(presentation), presentation)
-        self.assertIsInstance(runtime.presentation_thread, Thread)
         runtime.close()
         runtime.close()
 
-        self.assertEqual(presentation.calls, ["serve", "shutdown", "close"])
         self.assertEqual(control.calls, ["close"])
-        self.assertFalse(runtime.presentation_thread.is_alive())
+
+    def test_serve_after_close_fails(self):
+        runtime = CompanionRuntime(_Closable())
+        runtime.close()
+        with self.assertRaises(RuntimeError):
+            runtime.serve_forever()
 
     def test_close_flushes_sensory_history_after_stopping_capture_owners(self):
         control = _ControlWithHistory()
@@ -117,33 +105,6 @@ class CompanionRuntimeTests(unittest.TestCase):
 
             reopened = SensoryHistoryStore(path, enabled=True)
             self.assertIn("A new game scene appears", reopened.context_text())
-
-    def test_second_presentation_and_post_close_attach_fail(self):
-        runtime = CompanionRuntime(_Closable())
-        runtime.attach_presentation(_Closable(), start=False)
-        with self.assertRaises(RuntimeError):
-            runtime.attach_presentation(_Closable(), start=False)
-        runtime.close()
-        with self.assertRaises(RuntimeError):
-            runtime.attach_presentation(_Closable(), start=False)
-
-    def test_control_still_closes_when_presentation_shutdown_fails(self):
-        control = _Closable()
-        runtime = CompanionRuntime(control)
-        runtime.attach_presentation(_FailingShutdown(), start=False)
-        with self.assertRaises(RuntimeError):
-            runtime.close()
-        self.assertEqual(control.calls, ["close"])
-        runtime.close()
-        self.assertEqual(control.calls, ["close"])
-
-    def test_control_still_closes_when_presentation_close_fails(self):
-        control = _Closable()
-        runtime = CompanionRuntime(control)
-        runtime.attach_presentation(_FailingClose(), start=False)
-        with self.assertRaises(RuntimeError):
-            runtime.close()
-        self.assertEqual(control.calls, ["close"])
 
     def test_failed_control_close_stays_retryable(self):
         control = _StubbornControl()
