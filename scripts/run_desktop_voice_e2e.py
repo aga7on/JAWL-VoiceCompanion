@@ -546,7 +546,6 @@ def main() -> int:
             asr_service=UtteranceBuffer(transcriber=transcriber),
             tts_service=tones,
             config_hub=config_hub,
-            legacy_presentation=False,
         )
         server_thread = threading.Thread(target=server.serve_forever, name="desktop-voice-e2e", daemon=True)
         server_thread.start()
