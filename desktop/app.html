@@ -326,6 +326,17 @@
   .settings-list .field .fl { overflow-wrap: anywhere; }
   .settings-list .field .fc { flex-wrap: wrap; justify-content: flex-end; }
   .settings-list .field input[type=text], .settings-list .field select { max-width: 100%; }
+  /* accordion: quiet foldable group headers */
+  .settings-list .group-toggle {
+    display: flex; width: 100%; align-items: center; gap: 8px;
+    background: none; border: 0; padding: 0; color: var(--text);
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left;
+  }
+  .settings-list .group-toggle::after {
+    content: "▾"; margin-left: auto; color: var(--muted); transition: transform .15s;
+  }
+  .settings-list .group-toggle[aria-expanded="false"]::after { transform: rotate(-90deg); }
+  .settings-list .settings-group h3 { margin: 0; }
 
   /* thinking indicator */
   #thinking {
@@ -715,7 +726,7 @@
               <p class="note">Config-hub с ревизиями: изменения применяются без перезапуска, секреты замаскированы.</p>
             </div>
             <label class="sr-only" for="settings-search">Поиск по настройкам JAWL</label>
-            <input type="text" id="settings-search" placeholder="поиск по ключам…">
+            <input type="text" id="settings-search" placeholder="поиск по названию или ключу…">
           </div>
           <div id="settings-list" class="settings-list">…</div>
           <div class="card settings-activity">

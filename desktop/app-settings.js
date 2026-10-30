@@ -1,7 +1,7 @@
 // Settings section: config-hub rendered as typed V.E.G.A.-style fields
 // (toggles, sliders, selects with human labels) — not a text editor.
-// Field descriptors know each key's type and Russian label; unknown keys
-// fall back to a sensible input by value type.
+// Groups are an accordion: everyday groups open, engineering groups
+// collapsed; search matches Russian labels, descriptions and keys.
 
 const SETTING_FIELDS = [
   // --- interfaces: mcp ---
@@ -39,32 +39,38 @@ const SETTING_FIELDS = [
   { key: 'settings:llm.context_tokens', label: 'Контекст модели', desc: '64k рекомендован для ReAct', type: 'number', min: 1024, max: 131072, step: 1024, unit: 'ток' },
 ];
 
+// Everyday groups render open; engineering groups start collapsed (accordion).
 const SETTING_GROUPS = [
   { title: 'Мозг и личность', match: (k) => k.startsWith('settings:llm') || k.startsWith('settings:identity') || k.startsWith('settings:system') },
   { title: 'Чувства и мультимодальность', match: (k) => k.startsWith('interfaces:multimodality') },
-  { title: 'Инструменты и MCP-мосты', match: (k) => k.startsWith('interfaces:mcp') },
-  { title: 'Инженерия и реверс', match: (k) => k.startsWith('interfaces:debug_broker') },
+  { title: 'Инструменты и MCP-мосты', collapsed: true, match: (k) => k.startsWith('interfaces:mcp') },
+  { title: 'Инженерия и реверс', collapsed: true, match: (k) => k.startsWith('interfaces:debug_broker') },
 ];
 
 function fieldDescriptor(key, value) {
-  const known = SETTING_FIELDS.find(f => f.key === key);
-  if (known) return known;
-  // auto by value type
-  if (typeof value === 'boolean') return { key, label: key.split(':').pop(), type: 'bool' };
-  if (typeof value === 'number') return { key, label: key.split(':').pop(), type: 'number' };
-  return { key, label: key.split(':').pop(), type: 'text' };
+  return SETTING_FIELDS.find(f => f.key === key) || {
+    key,
+    label: key.split(':').pop(),
+    type: typeof value === 'boolean' ? 'bool' : typeof value === 'number' ? 'number' : 'text',
+  };
+}
+
+function mk(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
 let configHub = null;
 const settingsDirty = new Map();
+const groupOpen = new Map();
 let settingsSaving = false;
 
 function updateSaveButton() {
   const save = document.querySelector('#settings-save');
   if (!save) return;
-  save.textContent = settingsSaving
-    ? 'сохранение…'
-    : `сохранить (${settingsDirty.size})`;
+  save.textContent = settingsSaving ? 'сохранение…' : `сохранить (${settingsDirty.size})`;
   save.disabled = settingsSaving || settingsDirty.size === 0;
 }
 
@@ -88,22 +94,16 @@ async function loadSettings() {
       setStatusLine(`не удалось обновить настройки; черновики сохранены: ${e.message}`);
       renderSettings(document.querySelector('#settings-search')?.value || '');
     } else {
-      const card = document.createElement('div');
-      card.className = 'card settings-load-error';
-      card.setAttribute('role', 'group');
-      const heading = document.createElement('h3');
-      heading.id = 'settings-load-error-heading';
-      heading.textContent = 'Настройки недоступны';
-      card.setAttribute('aria-labelledby', heading.id);
-      const message = document.createElement('p');
-      message.className = 'note';
+      const message = mk('p', 'note', 'Сервис настроек не ответил. Повторите загрузку позже.');
       message.setAttribute('role', 'alert');
-      message.textContent = 'Сервис настроек не ответил. Повторите загрузку позже.';
-      const retry = document.createElement('button');
-      retry.className = 'btn secondary';
+      const retry = mk('button', 'btn secondary', 'Повторить загрузку');
       retry.type = 'button';
-      retry.textContent = 'Повторить загрузку';
       retry.addEventListener('click', loadSettings);
+      const heading = mk('h3', '', 'Настройки недоступны');
+      heading.id = 'settings-load-error-heading';
+      const card = mk('div', 'card settings-load-error');
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-labelledby', heading.id);
       card.append(heading, message, retry);
       list.replaceChildren(card);
     }
@@ -131,12 +131,17 @@ function renderSettings(filter) {
   const values = configHub.values || configHub.sections || {};
   const isFlat = Object.keys(values).some(k => k.includes(':'));
   const flat = isFlat ? Object.entries(values) : flattenHub(values);
-  const entries = flat.filter(([key]) =>
-    !filter || key.toLowerCase().includes(filter.toLowerCase()));
+  const f = String(filter || '').trim().toLowerCase();
+  const entries = flat.filter(([key, value]) => {
+    if (!f) return true;
+    const d = fieldDescriptor(key, value);
+    return key.toLowerCase().includes(f)
+      || (d.label || '').toLowerCase().includes(f)
+      || (d.desc || '').toLowerCase().includes(f);
+  });
   list.replaceChildren();
   if (!entries.length) list.textContent = 'ничего не найдено';
 
-  // group by descriptor
   const groups = SETTING_GROUPS.map(g => ({...g, entries: []}));
   const other = { title: 'Прочее', entries: [] };
   for (const entry of entries) {
@@ -146,20 +151,27 @@ function renderSettings(filter) {
 
   for (const group of [...groups, other]) {
     if (!group.entries.length) continue;
-    const card = document.createElement('div');
-    card.className = 'card';
-    const h = document.createElement('h3');
-    h.textContent = group.title;
-    card.appendChild(h);
+    // Search always opens matches; otherwise respect the user's fold state.
+    const open = f ? true : (groupOpen.get(group.title) ?? !group.collapsed);
+    const toggle = mk('button', 'group-toggle', group.title);
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.addEventListener('click', () => {
+      groupOpen.set(group.title, !(groupOpen.get(group.title) ?? !group.collapsed));
+      renderSettings(filter);
+    });
+    const body = mk('div', 'group-body');
+    if (!open) body.setAttribute('hidden', '');
     for (const [key, value] of group.entries) {
-      card.appendChild(renderField(key, settingsDirty.has(key) ? settingsDirty.get(key) : value));
+      body.appendChild(renderField(key, settingsDirty.has(key) ? settingsDirty.get(key) : value));
     }
+    const card = mk('div', 'card settings-group');
+    card.appendChild(mk('h3')).appendChild(toggle);
+    card.appendChild(body);
     list.appendChild(card);
   }
-  // save button
-  const save = document.createElement('button');
+  const save = mk('button', 'btn');
   save.id = 'settings-save';
-  save.className = 'btn';
   save.type = 'button';
   save.addEventListener('click', saveSettings);
   list.appendChild(save);
@@ -168,22 +180,15 @@ function renderSettings(filter) {
 
 function renderField(key, value) {
   const d = fieldDescriptor(key, value);
-  const row = document.createElement('div');
-  row.className = 'field';
-  // label block
-  const fl = document.createElement('div');
-  fl.className = 'fl';
-  const fn = document.createElement('div');
-  fn.className = 'fn';
+  const row = mk('div', 'field');
+  const fl = mk('div', 'fl');
+  const fn = mk('div', 'fn', d.label);
   fn.id = `setting-label-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-  fn.textContent = d.label;
   fl.appendChild(fn);
   let description = null;
   if (d.desc) {
-    description = document.createElement('div');
-    description.className = 'fd';
+    description = mk('div', 'fd', d.desc);
     description.id = `${fn.id}-description`;
-    description.textContent = d.desc;
     fl.appendChild(description);
   }
   row.appendChild(fl);
@@ -194,8 +199,7 @@ function renderField(key, value) {
 
   let control;
   if (d.type === 'bool') {
-    control = document.createElement('button');
-    control.className = 'sw';
+    control = mk('button', 'sw');
     control.type = 'button';
     control.setAttribute('role', 'switch');
     control.setAttribute('aria-checked', String(!!value));
@@ -206,26 +210,23 @@ function renderField(key, value) {
       markSettingDirty(key, next);
     });
   } else if (d.type === 'range') {
-    const wrap = document.createElement('span');
-    wrap.className = 'fc';
-    const range = document.createElement('input');
+    const range = mk('input');
     range.type = 'range';
     range.min = d.min ?? 0; range.max = d.max ?? 100; range.step = d.step ?? 1;
     range.value = Number(value) || 0;
     associateControl(range, `${d.label}, ползунок`);
-    const num = document.createElement('input');
+    const num = mk('input');
     num.type = 'number';
     num.min = range.min; num.max = range.max; num.step = range.step;
     num.value = range.value;
     associateControl(num, `${d.label}, числовое значение`);
     range.addEventListener('input', () => { num.value = range.value; markSettingDirty(key, Number(range.value)); });
     num.addEventListener('input', () => { range.value = num.value; markSettingDirty(key, Number(num.value)); });
-    wrap.append(range, num);
-    control = wrap;
+    control = mk('span', 'fc');
+    control.append(range, num);
   } else if (d.type === 'number') {
-    const wrap = document.createElement('span');
-    wrap.className = 'fc';
-    const num = document.createElement('input');
+    control = mk('span', 'fc');
+    const num = mk('input');
     num.type = 'number';
     num.value = Number(value) || 0;
     associateControl(num);
@@ -233,27 +234,16 @@ function renderField(key, value) {
     if (d.max !== undefined) num.max = d.max;
     if (d.step !== undefined) num.step = d.step;
     num.addEventListener('input', () => markSettingDirty(key, Number(num.value)));
-    wrap.appendChild(num);
-    if (d.unit) {
-      const u = document.createElement('span');
-      u.className = 'unit';
-      u.textContent = d.unit;
-      wrap.appendChild(u);
-    }
-    control = wrap;
+    control.appendChild(num);
+    if (d.unit) control.appendChild(mk('span', 'unit', d.unit));
   } else if (d.type === 'enum') {
-    control = document.createElement('select');
+    control = mk('select');
     associateControl(control);
-    for (const [v, label] of (d.options || [])) {
-      const option = document.createElement('option');
-      option.value = v;
-      option.textContent = label;
-      control.appendChild(option);
-    }
+    for (const [v, label] of (d.options || [])) control.appendChild(mk('option', '', label)).value = v;
     control.value = String(value ?? '');
     control.addEventListener('change', () => markSettingDirty(key, control.value));
   } else {
-    control = document.createElement('input');
+    control = mk('input');
     control.type = 'text';
     control.value = value === null || value === undefined ? '' : String(value);
     associateControl(control);
