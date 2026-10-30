@@ -38,8 +38,7 @@ def main() -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root / "src")
     process = subprocess.Popen(
-        [sys.executable, "-m", "jawl_voicecompanion", "--host", "127.0.0.1", "--port", str(port),
-         "--presentation-host", "127.0.0.1", "--presentation-port", str(free_port())],
+        [sys.executable, "-m", "jawl_voicecompanion", "--host", "127.0.0.1", "--port", str(port)],
         cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     report = {"schema_version": 1, "profile": "browser_interaction_e2e", "status": "failed", "mode": "mock_brain", "checks": [], "screenshots": [], "failure": None}

@@ -80,7 +80,6 @@ def main() -> int:
         companion = subprocess.Popen(
             [sys.executable, "-X", "utf8", "-m", "jawl_voicecompanion",
              "--host", "127.0.0.1", "--port", str(port),
-             "--presentation-host", "127.0.0.1", "--presentation-port", str(free_port()),
              "--voicemem-python", VOICEMEM_PY,
              "--tts-provider", "tera", "--tts-url", f"http://127.0.0.1:{tts_port}",
              "--streaming-asr", "--streaming-asr-exe", CRISPASR, "--streaming-asr-model", GIGAAM],

@@ -65,7 +65,6 @@ def main() -> int:
     parser.add_argument("--run-seconds", type=int, default=12)
     parser.add_argument("--console-port", type=int, default=8798)
     parser.add_argument("--control-port", type=int, default=2398)
-    parser.add_argument("--presentation-port", type=int, default=8799)
     parser.add_argument("--model-override", default="")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
@@ -89,7 +88,6 @@ def main() -> int:
         "-ProfileName", profile,
         "-JawlConsolePort", str(args.console_port),
         "-ControlPort", str(args.control_port),
-        "-PresentationPort", str(args.presentation_port),
         "-NoBrowser", "-NoLive2D", "-EnableSupervisor",
         "-NativeAccessLevel", "3", "-RunSeconds", str(args.run_seconds),
         "-StartupTimeoutSeconds", "180", "-JawlChatTimeoutSeconds", "60",
@@ -142,7 +140,7 @@ def main() -> int:
     heartbeat_timeout = "JAWL startup heartbeat did not complete within" in output
     ports_clear = not any(
         port_is_listening(port)
-        for port in (args.console_port, args.control_port, args.presentation_port)
+        for port in (args.console_port, args.control_port)
     )
     markers_clear = not any(
         path.exists() for path in (INSTANCES / "supervisor.pid", INSTANCES / "supervisor.lock")

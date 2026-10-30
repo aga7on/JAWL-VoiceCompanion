@@ -115,7 +115,6 @@ def main() -> int:
     command = [
         sys.executable, "-X", "utf8", "-m", "jawl_voicecompanion",
         "--host", "127.0.0.1", "--port", str(port),
-        "--presentation-host", "127.0.0.1", "--presentation-port", str(free_port()),
         # The voice lane requires the VoiceMem sidecar (it owns the same audio
         # session), so the live slice runs the real daily shape, not a mock.
         "--voicemem-python", VOICEMEM_PY,

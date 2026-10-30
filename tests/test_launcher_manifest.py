@@ -565,7 +565,8 @@ foreach ($path in $paths) {{
             explicit = item["explicit"]
             self.assertEqual(defaults["JawlConsolePort"], 8770)
             self.assertEqual(defaults["ControlPort"], 2367)
-            self.assertEqual(defaults["PresentationPort"], 8766)
+            # ADR-052: no PresentationPort mapping remains in the launchers.
+            self.assertNotIn("PresentationPort", defaults)
             self.assertEqual(defaults["TtsPort"], 9889)
             self.assertEqual(defaults["RunSeconds"], 0)
             self.assertEqual(defaults["TtsProvider"], "tera")

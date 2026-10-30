@@ -6,7 +6,6 @@
   "profile": "daily",
   "ports": {
     "control": 2367,
-    "presentation": 8766,
     "jawl_console": 8770,
     "opencode_relay": 8891,
     "qwen3_vl": 8983,

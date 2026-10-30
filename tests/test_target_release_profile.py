@@ -34,10 +34,23 @@ class TargetReleaseProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TARGET_MODULE._dependency("asr=http://example.com:8984")
 
-    def test_presentation_forbidden_fields_are_explicit(self):
-        self.assertIn("csrf_token", TARGET_MODULE.FORBIDDEN_PRESENTATION_FIELDS)
-        self.assertIn("policy", TARGET_MODULE.FORBIDDEN_PRESENTATION_FIELDS)
-        self.assertNotIn("subtitle", TARGET_MODULE.FORBIDDEN_PRESENTATION_FIELDS)
+    def test_obs_surface_requires_the_app_marker(self):
+        # ADR-052: the presentation origin is gone; the release profile
+        # checks the ?mode=obs alias of the single app on the control origin.
+        with mock.patch.object(
+            TARGET_MODULE, "_request_text", return_value=(200, "<title>JAWL Companion</title>")
+        ):
+            self.assertEqual(
+                TARGET_MODULE._check_obs_surface("http://127.0.0.1:2367", 1.0),
+                {"html": True},
+            )
+        for status, html in ((200, "<html>not the app</html>"), (404, ""), (500, "JAWL Companion")):
+            with self.subTest(status=status, html=html):
+                with mock.patch.object(
+                    TARGET_MODULE, "_request_text", return_value=(status, html)
+                ):
+                    with self.assertRaises(TARGET_MODULE.ProfileFailure):
+                        TARGET_MODULE._check_obs_surface("http://127.0.0.1:2367", 1.0)
 
     def test_jawl_requirement_rejects_stopped_native_console(self):
         responses = [

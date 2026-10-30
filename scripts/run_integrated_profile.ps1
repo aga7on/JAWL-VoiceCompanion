@@ -1,6 +1,7 @@
 ﻿param(
     [int]$JawlConsolePort,
     [int]$ControlPort,
+    # ADR-052: accepted as a no-op for older callers - single origin now.
     [int]$PresentationPort,
     [int]$RunSeconds,
     [ValidateRange(10,600)]
@@ -116,7 +117,6 @@ function Resolve-LauncherRuntimeDefaults {
     $values = @{
         JawlConsolePort = $Manifest.ports.jawl_console
         ControlPort = $Manifest.ports.control
-        PresentationPort = $Manifest.ports.presentation
         RunSeconds = $Manifest.launch.run_seconds
         ProfileName = $Manifest.profile
         TtsPort = $Manifest.ports.tera_tts
@@ -152,7 +152,6 @@ $effectiveTtsPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } elseif ($TtsP
 $effectivePorts = @(
     @{ Name = 'JAWL console'; Port = $JawlConsolePort },
     @{ Name = 'Companion control'; Port = $ControlPort },
-    @{ Name = 'Companion presentation'; Port = $PresentationPort },
     @{ Name = 'TTS'; Port = $effectiveTtsPort }
 )
 if ($ManageVisualQwenServer) { $effectivePorts += @{ Name = 'Visual Qwen'; Port = $VisualDescriberPort } }
@@ -440,7 +439,6 @@ function Wait-JawlHeartbeatReady([string]$LogPath, [datetime]$StartedAt, [int]$T
 
 Assert-PortAvailable $JawlConsolePort 'JAWL console'
 Assert-PortAvailable $ControlPort 'Companion control'
-Assert-PortAvailable $PresentationPort 'Companion presentation'
 if ($VisualDescriber -eq 'qwen') {
     if ($ManageVisualQwenServer -and [string]::IsNullOrWhiteSpace($VisualDescriberUrl)) {
         $VisualDescriberUrl = "http://127.0.0.1:$VisualDescriberPort/v1"
@@ -668,7 +666,7 @@ $jawlEnv = @{}
     if ($env:JAWL_ENV_FILE) { $companionEnv.JAWL_ENV_FILE = $env:JAWL_ENV_FILE }
     if ($env:JAWL_LOG_DIR) { $companionEnv.JAWL_LOG_DIR = $env:JAWL_LOG_DIR }
     if ($env:JAWL_SCREEN_TARGET_TITLE) { $companionEnv.JAWL_SCREEN_TARGET_TITLE = $env:JAWL_SCREEN_TARGET_TITLE }
-    $companionArgs = "-u -m jawl_voicecompanion --host 127.0.0.1 --port $ControlPort --presentation-host 127.0.0.1 --presentation-port $PresentationPort --jawl-port-file `"$portFile`" --jawl-web-url $consoleUrl --jawl-chat-timeout $JawlChatTimeoutSeconds --jawl-hostos-control$audioArgs"
+    $companionArgs = "-u -m jawl_voicecompanion --host 127.0.0.1 --port $ControlPort --jawl-port-file `"$portFile`" --jawl-web-url $consoleUrl --jawl-chat-timeout $JawlChatTimeoutSeconds --jawl-hostos-control$audioArgs"
     # Unified config hub: the companion edits the profile config in place with
     # revision semantics; both paths are optional so tests without a profile pass.
     if ($env:JAWL_CONFIG_DIR) { $companionArgs += " --jawl-config-dir `"$env:JAWL_CONFIG_DIR`"" }
@@ -828,7 +826,7 @@ $jawlEnv = @{}
         Write-Host "Desktop shell started (pid $($desktopShell.Id))."
     }
     $supervisorText = if ($EnableSupervisor) { " supervisor=$($supervisor.Id)" } else { '' }
-    Write-Host "Integrated profile ready: control=$ControlPort presentation=$PresentationPort jawl_console=$JawlConsolePort$supervisorText"
+    Write-Host "Integrated profile ready: control=$ControlPort jawl_console=$JawlConsolePort$supervisorText"
     if ($RunBrowserVoiceE2E) {
         if ($BrowserVoiceWav.Count -lt 3) {
             $BrowserVoiceWav = @(

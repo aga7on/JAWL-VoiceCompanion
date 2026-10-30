@@ -34,13 +34,11 @@ def http_get(url: str, timeout: float = 5) -> int:
 
 def main() -> int:
     port = free_port()
-    pres = free_port()
     env = {**__import__("os").environ,
            "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
     command = [
         sys.executable, "-X", "utf8", "-m", "jawl_voicecompanion",
         "--host", "127.0.0.1", "--port", str(port),
-        "--presentation-host", "127.0.0.1", "--presentation-port", str(pres),
         "--voicemem-python", VOICEMEM_PY,
         "--supervise-workers",
     ]

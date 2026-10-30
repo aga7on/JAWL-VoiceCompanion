@@ -2,6 +2,7 @@
 param(
     [switch]$Live,
     [string]$CompanionUrl = 'http://127.0.0.1:2367',
+    # ADR-052: accepted as a no-op for older callers - single origin now.
     [string]$PresentationUrl = 'http://127.0.0.1:8766',
     [string]$JawlUrl = 'http://127.0.0.1:8773',
     [string]$JawlRoot,
@@ -243,7 +244,6 @@ try {
     }
 
     $companionUri = Get-LoopbackUri $CompanionUrl 'CompanionUrl'
-    $presentationUri = Get-LoopbackUri $PresentationUrl 'PresentationUrl'
     $jawlUri = Get-LoopbackUri $JawlUrl 'JawlUrl'
     $jawlPort = Get-Port $jawlUri
 
@@ -499,7 +499,6 @@ try {
         (Quote-ProcessArgument $profileScript),
         '--live',
         '--url', (Quote-ProcessArgument $CompanionUrl),
-        '--presentation-url', (Quote-ProcessArgument $PresentationUrl),
         '--require-jawl-url', (Quote-ProcessArgument $JawlUrl),
         '--report', (Quote-ProcessArgument $profileReportPath)
     ) -join ' '

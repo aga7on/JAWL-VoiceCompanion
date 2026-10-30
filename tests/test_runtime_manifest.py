@@ -43,6 +43,8 @@ def test_legacy_defaults_keep_model_identity_and_allow_missing_model_files(tmp_p
     result = load_runtime_manifest(tmp_path)
 
     assert result["ports"]["brain_port"] == 8990
+    # ADR-052: the deprecated presentation port is accepted and dropped.
+    assert "presentation" not in result["ports"]
     assert result["models"]["brain_server_exe"] == "Z:/missing/llama-server.exe"
     assert result["brain"]["model"] == "local-bonsai2"
     assert result["brain"]["context_size"] == 65536
@@ -67,7 +69,7 @@ def test_local_manifest_deep_merges_without_mutating_inputs(tmp_path: Path) -> N
     canonical_path = config_dir / "runtime.manifest.json"
     local_path = config_dir / "runtime.manifest.local.json"
     original = _manifest()
-    override = {"brain": {"threads": 6}, "ports": {"presentation": 8866}}
+    override = {"brain": {"threads": 6}, "ports": {"tera_tts": 9890}}
     _write_manifest(canonical_path, original)
     _write_manifest(local_path, override)
     canonical_bytes = canonical_path.read_bytes()
@@ -76,21 +78,21 @@ def test_local_manifest_deep_merges_without_mutating_inputs(tmp_path: Path) -> N
     result = load_runtime_manifest(tmp_path)
 
     assert result["ports"]["control"] == 2367
-    assert result["ports"]["presentation"] == 8866
+    assert result["ports"]["tera_tts"] == 9890
     assert result["brain"]["model"] == "local-bonsai2"
     assert result["brain"]["threads"] == 6
     assert canonical_path.read_bytes() == canonical_bytes
     assert local_path.read_bytes() == local_bytes
-    assert override == {"brain": {"threads": 6}, "ports": {"presentation": 8866}}
+    assert override == {"brain": {"threads": 6}, "ports": {"tera_tts": 9890}}
     assert original == _manifest()
 
 
 @pytest.mark.parametrize(
     "ports",
     [
-        {"control": 8765, "presentation": 8766, "brain_port": 8990},
-        {"control": 2367, "presentation": 2367, "brain_port": 8990},
-        {"control": 2367, "presentation": 8766, "brain_port": 8766},
+        {"control": 8765, "jawl_console": 8770, "brain_port": 8990},
+        {"control": 2367, "jawl_console": 2367, "brain_port": 8990},
+        {"control": 2367, "jawl_console": 8770, "brain_port": 8770},
     ],
 )
 def test_reserved_and_duplicate_ports_are_rejected(tmp_path: Path, ports: dict[str, int]) -> None:

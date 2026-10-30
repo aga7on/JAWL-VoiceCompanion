@@ -199,8 +199,8 @@ def wire_probe(brain_url, model, source):
 def run_mode(mode, run_root, env, snapshot, model, brain, *, suite="chat", soak_seconds=28800, voice_turns=20,
              soak_interval_seconds=300):
     profile = "turn-series-" + mode + "-" + uuid4().hex[:10]
-    ports = free_ports(3)
-    console, control, presentation = ports
+    ports = free_ports(2)
+    console, control = ports
     token = uuid4().hex
     base = f"http://127.0.0.1:{console}"
     control_base = f"http://127.0.0.1:{control}"
@@ -217,7 +217,7 @@ def run_mode(mode, run_root, env, snapshot, model, brain, *, suite="chat", soak_
     command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "scripts/run_integrated_profile.ps1"), "-ProfileName", profile,
                "-JawlConsolePort", str(console), "-ControlPort", str(control),
-               "-PresentationPort", str(presentation), "-NoBrowser", "-NoLive2D",
+               "-NoBrowser", "-NoLive2D",
                "-RunSeconds", "0", "-JawlModelOverride", model, "-StartupTimeoutSeconds", "180",
                "-JawlTemperatureOverride", "0.3", "-JawlChatTimeoutSeconds", "120",
                "-NativeContextWindowTokens", env.get("JAWL_ACCEPTANCE_CONTEXT_WINDOW_TOKENS", "0"),

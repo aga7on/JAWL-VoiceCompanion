@@ -63,7 +63,6 @@ def run_case(label: str, exe: str, model: str) -> dict:
     process = subprocess.Popen(
         [sys.executable, "-X", "utf8", "-m", "jawl_voicecompanion",
          "--host", "127.0.0.1", "--port", str(port),
-         "--presentation-host", "127.0.0.1", "--presentation-port", str(free_port()),
          "--voicemem-python", VOICEMEM_PY,
          "--streaming-asr", "--streaming-asr-exe", exe, "--streaming-asr-model", model],
         cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -48,7 +48,6 @@ _TOP_LEVEL = frozenset(
 _PORT_KEYS = frozenset(
     {
         "control",
-        "presentation",
         "jawl_console",
         "opencode_relay",
         "qwen3_vl",
@@ -217,6 +216,11 @@ def _apply_legacy_defaults(config: dict[str, Any]) -> None:
             inferred_port = parsed.port
         except ValueError:
             pass
+    # ADR-052: the second presentation port is gone (single origin on the
+    # control port). Accepted and dropped for one release so persisted
+    # manifests keep loading; remove this drop after the next release.
+    ports.pop("presentation", None)
+
     ports.setdefault("brain_port", inferred_port or 8990)
 
     models.setdefault("brain_server_exe", models.get("llama_server_exe", "llama-server.exe"))

@@ -85,12 +85,9 @@ def run_profile(args: argparse.Namespace) -> dict:
     }
     for cycle in range(1, args.cycles + 1):
         port = free_loopback_port()
-        presentation_port = free_loopback_port()
-        while presentation_port == port:
-            presentation_port = free_loopback_port()
         base_url = f"http://127.0.0.1:{port}"
         started = time.monotonic()
-        item = {"cycle": cycle, "port": port, "presentation_port": presentation_port}
+        item = {"cycle": cycle, "port": port}
         try:
             process = subprocess.Popen(
                 [
@@ -101,10 +98,6 @@ def run_profile(args: argparse.Namespace) -> dict:
                     "127.0.0.1",
                     "--port",
                     str(port),
-                    "--presentation-host",
-                    "127.0.0.1",
-                    "--presentation-port",
-                    str(presentation_port),
                 ],
                 cwd=root,
                 env={**os.environ, "PYTHONPATH": str(root / "src")},
@@ -114,7 +107,7 @@ def run_profile(args: argparse.Namespace) -> dict:
             )
         except OSError as exc:
             item["error"] = str(exc)[:240]
-            item["port_released"] = port_is_closed(port) and port_is_closed(presentation_port)
+            item["port_released"] = port_is_closed(port)
             report["cycles"].append(item)
             break
         try:
@@ -134,7 +127,7 @@ def run_profile(args: argparse.Namespace) -> dict:
             item["stop_mode"] = stop_mode
             if stop_mode == "forced":
                 report["forced_stops"] += 1
-            item["port_released"] = port_is_closed(port) and port_is_closed(presentation_port)
+            item["port_released"] = port_is_closed(port)
             if not item["port_released"]:
                 report["port_leaks"] += 1
             item["duration_ms"] = round((time.monotonic() - started) * 1000, 1)
@@ -146,7 +139,7 @@ def run_profile(args: argparse.Namespace) -> dict:
             item["error"] = str(exc)[:240]
             if process.poll() is None:
                 stop_process(process, args.shutdown_timeout)
-            item["port_released"] = port_is_closed(port) and port_is_closed(presentation_port)
+            item["port_released"] = port_is_closed(port)
             report["cycles"].append(item)
             break
     report["status"] = "passed" if report["cycles_completed"] == args.cycles and report["port_leaks"] == 0 else "failed"

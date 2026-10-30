@@ -10,6 +10,7 @@
     [string]$BrainLogPath = '',
     [int]$JawlConsolePort,
     [int]$ControlPort,
+    # ADR-052: accepted as a no-op for older callers - single origin now.
     [int]$PresentationPort,
     [int]$TtsPort,
     [ValidateSet('tera', 'omnivoice', 'voxcpm')]
@@ -89,7 +90,6 @@ function Resolve-LauncherRuntimeDefaults {
         ProfileName = $Manifest.profile
         JawlConsolePort = $ports.jawl_console
         ControlPort = $ports.control
-        PresentationPort = $ports.presentation
         TtsPort = $ports.tera_tts
         TtsProvider = $launch.tts_provider
         Model = $models.bonsai_model
@@ -200,7 +200,6 @@ $effectivePorts = @(
     @{ Name = 'Brain'; Port = $BrainPort },
     @{ Name = 'JAWL console'; Port = $JawlConsolePort },
     @{ Name = 'Companion control'; Port = $ControlPort },
-    @{ Name = 'Companion presentation'; Port = $PresentationPort },
     @{ Name = 'TTS'; Port = $effectiveTtsPort }
 )
 if ($VisualDescriber -eq 'qwen' -and -not $VisualDescriberUrl) { $effectivePorts += @{ Name = 'Visual Qwen'; Port = $VisualDescriberPort } }
@@ -222,7 +221,6 @@ if ($BrainMaxOutputTokens -ge $BrainContextSize) { throw 'BrainMaxOutputTokens m
 Assert-PortAvailable $BrainPort 'Brain'
 Assert-PortAvailable $JawlConsolePort 'JAWL console'
 Assert-PortAvailable $ControlPort 'Companion control'
-Assert-PortAvailable $PresentationPort 'Companion presentation'
 if ($VisualDescriber -eq 'qwen' -and -not $VisualDescriberUrl) {
     foreach ($path in @(
         (Join-Path $repo $VisualDescriberServerPath),
@@ -274,7 +272,7 @@ try {
         '-RunSeconds', [string]$RunSeconds,
         '-ProfileName', $ProfileName, '-JawlTemperatureOverride', '0.3', '-NativeContextWindowTokens', [string]$BrainContextSize,
         '-JawlConsolePort', [string]$JawlConsolePort, '-ControlPort', [string]$ControlPort,
-        '-PresentationPort', [string]$PresentationPort, '-TtsPort', [string]$TtsPort,
+        '-TtsPort', [string]$TtsPort,
         '-TtsProvider', $TtsProvider, '-VisionUrl', $VisionUrl, '-VisionModel', $VisionModel,
         # Do not expose the daily Companion while JAWL is still processing
         # SYSTEM_CORE_START; the first user turn must not queue behind startup.
@@ -341,7 +339,7 @@ try {
         llm_url = $BrainUrl
         brain_owned_by = 'supervised-holder'
         brain_leaked_after_run = $leaked
-        ports = [ordered]@{ jawl_console = $JawlConsolePort; control = $ControlPort; presentation = $PresentationPort; brain = $BrainPort; tts = $effectiveTtsPort }
+        ports = [ordered]@{ jawl_console = $JawlConsolePort; control = $ControlPort; brain = $BrainPort; tts = $effectiveTtsPort }
         components = @('owned-jawl', $VisionModel, 'gigaam-v3', $TtsProvider, 'voicemem')
         evidence_scope = 'startup-health-model-identity-shutdown only; no user-turn or browser-ASR acceptance'
     }

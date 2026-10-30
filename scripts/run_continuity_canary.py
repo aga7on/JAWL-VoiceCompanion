@@ -28,7 +28,7 @@ def main():
     home = ROOT / "runtime" / "instances" / profile
     out = ROOT / "runtime" / "continuity-audit-20261029" / profile
     out.mkdir(parents=True)
-    console, control, presentation = free_port(), free_port(), free_port()
+    console, control = free_port(), free_port()
     token = uuid4().hex
     env = {key: os.environ[key] for key in (
         "PATH", "SYSTEMROOT", "WINDIR", "PATHEXT", "COMSPEC", "USERPROFILE", "APPDATA",
@@ -41,7 +41,7 @@ def main():
     env["JAWL_ACCEPTANCE_CONTEXT_DIAGNOSTICS"] = "1"
     command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "scripts/run_integrated_profile.ps1"), "-ProfileName", profile,
-               "-JawlConsolePort", str(console), "-ControlPort", str(control), "-PresentationPort", str(presentation),
+               "-JawlConsolePort", str(console), "-ControlPort", str(control),
                "-NoBrowser", "-NoLive2D", "-AllowBusyStartup", "-RunSeconds", "0",
                "-JawlModelOverride", "gemini-3.8-flash", "-NativeAccessLevel", "0",
                "-NativeContextWindowTokens", "1048576", "-StartupTimeoutSeconds", "180"]

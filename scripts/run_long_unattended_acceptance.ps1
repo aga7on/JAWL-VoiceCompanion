@@ -12,6 +12,7 @@ param(
     [string]$ProfileName = '',
     [int]$JawlConsolePort = 8770,
     [int]$ControlPort = 2368,
+    # ADR-052: accepted as a no-op for older callers - single origin now.
     [int]$PresentationPort = 8767,
     [string]$Model = 'qwen3.8-27b-abliterated:latest',
     [string]$JawlTemperatureOverride = '0.2',
@@ -88,11 +89,10 @@ function Stop-OwnedProfileTree([int]$RootId) {
 
 foreach ($port in @(
     @{ Port = $JawlConsolePort; Name = 'JAWL console' },
-    @{ Port = $ControlPort; Name = 'Companion control' },
-    @{ Port = $PresentationPort; Name = 'Companion presentation' }
+    @{ Port = $ControlPort; Name = 'Companion control' }
 )) { Assert-FreePort $port.Port $port.Name }
-if (@($JawlConsolePort, $ControlPort, $PresentationPort) -contains 11434 -or
-    @($JawlConsolePort, $ControlPort, $PresentationPort) -contains 8765) {
+if (@($JawlConsolePort, $ControlPort) -contains 11434 -or
+    @($JawlConsolePort, $ControlPort) -contains 8765) {
     throw 'Refusing to use Ollama 11434 or FoxMCP 8765 as a disposable profile port.'
 }
 
@@ -113,7 +113,6 @@ try {
         '-ProfileName', $ProfileName,
         '-JawlConsolePort', [string]$JawlConsolePort,
         '-ControlPort', [string]$ControlPort,
-        '-PresentationPort', [string]$PresentationPort,
         '-NoBrowser', '-NoLive2D',
         '-NativeAccessLevel', '3',
         '-JawlModelOverride', $Model,
@@ -190,7 +189,7 @@ finally {
         Remove-Item -LiteralPath $resourceTelemetryReadyPath -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 2
-    $openProfilePorts = @($JawlConsolePort, $ControlPort, $PresentationPort) |
+    $openProfilePorts = @($JawlConsolePort, $ControlPort) |
         Where-Object { Test-LoopbackPort $_ }
     $profilePortsClosed = ($openProfilePorts.Count -eq 0)
     if (-not $profilePortsClosed -and -not $failure) {

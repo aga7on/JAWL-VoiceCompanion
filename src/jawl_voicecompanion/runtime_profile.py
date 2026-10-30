@@ -70,10 +70,14 @@ class RuntimeProfile:
         safe_paths = {key: _relative_path(paths[key], f"paths.{key}") for key in sorted(_PATHS)}
 
         ports = raw["ports"]
-        if not isinstance(ports, Mapping) or set(ports) != {"control", "presentation", "reserved"}:
-            raise ValueError("ports must contain control/presentation/reserved")
+        # ADR-052: "presentation" is a one-release deprecated key,
+        # accepted and dropped so persisted profiles keep loading.
+        if isinstance(ports, Mapping) and "presentation" in ports:
+            ports = {key: value for key, value in ports.items() if key != "presentation"}
+        if not isinstance(ports, Mapping) or set(ports) != {"control", "reserved"}:
+            raise ValueError("ports must contain control/reserved")
         values: dict[str, Any] = {}
-        for key in ("control", "presentation"):
+        for key in ("control",):
             value = ports[key]
             if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
                 raise ValueError(f"ports.{key} must be a valid TCP port")
@@ -145,7 +149,7 @@ class RuntimeProfile:
             "schema_version": self.schema_version,
             "profile_id": self.profile_id,
             "paths": dict(self.paths),
-            "ports": {"control": self.ports["control"], "presentation": self.ports["presentation"]},
+            "ports": {"control": self.ports["control"]},
             "components": dict(self.components),
             "consent": dict(self.consent),
         }
