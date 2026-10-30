@@ -31,7 +31,7 @@ extension-слоями `native_*` снаружи ядра, переносятс�
 | 7 | `native_goal_wakeup_backoff` | `goals/wakeup_backoff.py` | DONE `e30329a` |
 | 8 | `native_goal_completion_repair` | `goals/completion_repair.py` | DONE `636189f` |
 | 9 | `native_jawl_admission` | admission нативен | DONE `e58eb20` |
-| 10 | `native_jawl_delivery` | delivery нативен (`_CYCLE`) | в работе |
+| 10 | `native_jawl_delivery` | delivery нативен (`_CYCLE`) | DONE `4cb51ae` |
 
 Срезы 1–8 перенесены заново после потери рабочей песочницы и опубликованы в
 `origin/reorg/kernel-migration-20261029`. Receipt финализирован:
@@ -42,22 +42,16 @@ extension-слоями `native_*` снаружи ядра, переносятс�
 e2e, voice_capture, preflight со старым снапшот-путём, skill_aliases с
 `jawl-20260905-daily-v1`); ничего из падений не связано с миграцией.
 
-**Решение по slice-10 (зафиксировано для продолжения):** hooks-канон сохраняет
-`delivery_guard` → `install_native_delivery_guard` остаётся owned-хуком
-(receipt сверяет обёртки на трёх классах). «Delivery нативен (`_CYCLE`)» =
-пер-ходовая state-машина `_CYCLE`/`_CycleState` (terminal_event, locks,
-suppress_private_completion, parent-цепочка) и её хелперы переезжают в
-`companion_gateway` (рядом с `CompanionTurnState`); продукт
-`native_jawl_delivery.py` делегирует состояние kernel-модулю, guard-обёртки
-(observed_emit/guarded_broadcast/guarded_completion/guarded_publish/
-guarded_run/emit_missing_terminal) остаются поведением установки, чтобы
-фикстуры `test_native_jawl_delivery.py`/`test_native_delivery_snapshot.py`
-(19 кейсов на фейковых классах) оставались зелёными. Стираемые дубликаты:
-`native_policy_denied`/`record_native_policy_denial` (в ядре с slice-1 —
-`goals/policy_completion`), `native_companion_chat_active`/
-`active_companion_message` (в ядре с slice-4 — `CompanionTurnState`),
-`NATIVE_POLICY_DENIAL_REASON` (источник — `utils/policy_denial`).
-`emit_active_delta` — перенести в kernel-модуль без изменений API.
+**Финальное решение по `native_supervisor_identity.py` (вне очереди 1–10):**
+остаётся product-owned слоем. Он не чинит поведение ядра, а добавляет
+owned-политику идентичности супервизора (PID/creation-метаданные, lock-bound
+receipt в `runtime/instances`) поверх нативного `InstanceManager`; это
+продуктовая конвенция путей, а не upstream-worthy патч. Устанавливается
+owned-лаунчерами (console/supervisor) так же, как delivery guard. Итог
+критерия: слои-репары (`native_*`, чинившие ядро) перенесены в ядро полностью;
+в `src/jawl_voicecompanion/` остаются два shim'а (`speech_first.py`,
+`perception_packet.py`) и две owned-установки (`native_jawl_delivery.py` —
+guard-обёртки со state в ядре, `native_supervisor_identity.py` — identity).
 
 ### DONE-записи
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import importlib
+from pathlib import Path
 import re
 import sys
 from typing import Any, Callable
@@ -36,6 +37,22 @@ def _cycle_module():
     if module is None:
         from src.l3_agent import companion_gateway as module
     return module
+
+
+def __getattr__(name):
+    # Single source of truth stays in the kernel; expose lazily for callers.
+    if name == "NATIVE_POLICY_DENIAL_REASON":
+        snapshot = str(Path(__file__).resolve().parents[2] / "runtime/jawl-sources/jawl-20260906-daily-v2")
+        if snapshot not in sys.path:
+            sys.path.insert(0, snapshot)
+        if "src.l3_agent" not in sys.modules:
+            # A failed earlier import may leave a partial ``src`` namespace
+            # cached; drop it so the snapshot resolves cleanly.
+            for key in [k for k in sys.modules if k == "src" or k.startswith("src.")]:
+                sys.modules.pop(key, None)
+        from src.l3_agent.goals.policy_completion import NATIVE_POLICY_DENIAL_REASON
+        return NATIVE_POLICY_DENIAL_REASON
+    raise AttributeError(name)
 
 
 def _cycle_state_cls():
