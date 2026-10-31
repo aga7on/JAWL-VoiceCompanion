@@ -54,6 +54,7 @@ async function boot() {
       return;
     }
     setConn('ok', '\u041f\u0430\u043d\u0435\u043b\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0430');
+    await restoreChatHistory();
     refreshAll();
   } catch {
     setConn('err', '\u0421\u0435\u0440\u0432\u0435\u0440 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d');
@@ -667,6 +668,32 @@ function addMessage(kind, text) {
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
   return div;
+}
+
+async function restoreChatHistory() {
+  try {
+    const response = await fetch('/api/history', {
+      credentials: 'include',
+      cache: 'no-store',
+      headers: API.headers(),
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    const turns = Array.isArray(payload.turns) ? payload.turns : [];
+    if (!turns.length) return;
+    chatLog.replaceChildren();
+    for (const turn of turns) {
+      const storedUserText = typeof turn.user === 'string' ? turn.user : '';
+      const userText = storedUserText.split('<va_perception>')[0].trim();
+      const reply = turn.response && typeof turn.response === 'object'
+        ? turn.response.text : '';
+      if (userText) addMessage('user', userText);
+      if (typeof reply === 'string' && reply) addMessage('assistant', reply);
+    }
+    chatLog.scrollTop = chatLog.scrollHeight;
+  } catch {
+    // A history fetch failure must not disable a new chat turn.
+  }
 }
 
 function setThinking(on) {

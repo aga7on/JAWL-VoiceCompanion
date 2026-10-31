@@ -155,6 +155,7 @@ class TextGateway:
 
     def handle_text(
         self, text: str, session_id: str = "local", correlation_id: str | None = None,
+        history_user_text: str | None = None,
     ) -> dict[str, Any]:
         clean = str(text or "").strip()
         response_id = str(uuid4())
@@ -218,12 +219,16 @@ class TextGateway:
                 if native_envelope is not None
                 else self._build_envelope(clean, answer, response_id, turn_id, speak=speak, emotion=emotion)
             )
-            self._record_turn(session_id, correlation, clean, envelope)
+            stored_user_text = history_user_text if history_user_text is not None else clean
+            self._record_turn(session_id, correlation, stored_user_text, envelope)
             return envelope
         finally:
             self.arbiter.complete(token)
 
-    def stream_text(self, text: str, session_id: str = "local", correlation_id: str | None = None) -> Iterator[dict[str, Any]]:
+    def stream_text(
+        self, text: str, session_id: str = "local", correlation_id: str | None = None,
+        history_user_text: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Stream safe responder deltas and finish with one canonical envelope."""
         clean = str(text or "").strip()
         response_id = str(uuid4())
@@ -385,7 +390,8 @@ class TextGateway:
                 if native_envelope is not None
                 else self._build_envelope(clean, answer, response_id, token.turn_id, speak=speak, emotion=emotion)
             )
-            self._record_turn(session_id, correlation, clean, envelope)
+            stored_user_text = history_user_text if history_user_text is not None else clean
+            self._record_turn(session_id, correlation, stored_user_text, envelope)
             yield {"type": "final", "response": envelope, "correlation_id": correlation}
         finally:
             self.arbiter.complete(token)

@@ -1097,6 +1097,34 @@ class _FakeFusion:
 
 
 class CurrentPerceptionEnrichmentTests(unittest.TestCase):
+    def test_persisted_dialogue_is_rehydrated_without_losing_current_text(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class Gateway:
+            arbiter = Arbiter()
+
+            @staticmethod
+            def turn_history(limit=12):
+                return [{
+                    "user": "We are discussing the quest marker.<va_perception>{ignored}</va_perception>",
+                    "response": {"text": "It moved to the north gate."},
+                }]
+
+        class ServerContext:
+            gateway = Gateway()
+            _SCREEN_QUERY = CompanionServer._SCREEN_QUERY
+
+        ServerContext.perception_fusion = None
+        enriched = CompanionServer.enrich_turn_text(ServerContext, "Continue from there.")
+
+        self.assertIn("We are discussing the quest marker.", enriched)
+        self.assertIn("It moved to the north gate.", enriched)
+        self.assertIn("[CURRENT USER MESSAGE]\nContinue from there.", enriched)
+        self.assertNotIn("ignored", enriched)
+
     def test_current_scene_question_gets_atomic_frame_provenance_and_history_guard(self):
         class Arbiter:
             @staticmethod

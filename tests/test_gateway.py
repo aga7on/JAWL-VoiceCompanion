@@ -305,6 +305,19 @@ class ConversationHistoryTests(unittest.TestCase):
             reloaded = ConversationHistory(store.path).turns()
             self.assertEqual(reloaded[0]["user"], "Привет, запомни меня")
 
+    def test_enriched_provider_text_does_not_replace_the_saved_user_message(self):
+        import tempfile
+        from jawl_voicecompanion.history import ConversationHistory  # noqa: E402
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ConversationHistory(Path(tmp) / "conversation.ndjson")
+            gateway = TextGateway(history_store=store)
+            gateway.handle_text(
+                "prior transcript + current request",
+                history_user_text="current request",
+            )
+            self.assertEqual(store.turns()[0]["user"], "current request")
+
     def test_turn_history_prefers_persisted_store(self):
         import tempfile
         from jawl_voicecompanion.history import ConversationHistory  # noqa: E402
