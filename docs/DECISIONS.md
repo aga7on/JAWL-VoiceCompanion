@@ -927,3 +927,28 @@ Status: Accepted (2026-10-30)
 presentation-слой только, ядро и его гарантии не трогаются. Удаляемое
 удаляется в том же слайсе. Бюджеты, слайсы S1–S4 и стоп-условие —
 docs/UI_CONSOLIDATION_PLAN.md.
+
+## ADR-053 — Память принадлежит JAWL, companion только предлагает кандидатов
+
+Status: Accepted (2026-11-01)
+
+Долговременную память пишет только JAWL (`SQLStructuredMemory`). Companion
+владеет наблюдением, ограниченной текстовой историей и буфером кандидатов.
+Поток: наблюдение → история → кандидат → решение JAWL → память.
+
+- `POST /api/ambient-memory/handoff` публикует `MEMORY_CANDIDATE` во вход
+  событий JAWL и никогда не вызывает `memory.remember`; без event-dir кандидат
+  остаётся в буфере (`503 not_delivered`).
+- Явный override владельца (`/api/ambient-memory/promote`, `confirm=true`) идёт
+  тем же allowlisted путём, что консоль JAWL, и сохраняет честный провенанс:
+  `trust`, `verified`, `observation_class`, `source_event_ids`, тир и
+  предикат `episode_summary_unverified` для наблюдений модели. `confidence` не
+  завышается.
+- `forget`/`archive` каскадируют: провенанс даёт `source_event_ids`,
+  `SensoryHistoryStore.redact` и `AmbientMemoryBuffer.redact` убирают
+  наблюдения, редакция переживает перезапуск. Сенсорный ингестор разделяет один
+  `event_id` между буфером и историей, иначе связь невозможна.
+
+Границы: ядро JAWL и pinned snapshot не изменяются; `retention_tier` пока не
+исполняется в JAWL автоматически и трактуется как обещание, а не удаление.
+Детали, отображение в UI и список доказанного — `docs/MEMORY_OWNERSHIP.md`.

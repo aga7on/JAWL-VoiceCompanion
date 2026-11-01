@@ -169,6 +169,40 @@ class SensoryIngestor:
         self._counters["lines"] += processed
         return {"status": "ok", "processed": processed, "results": results}
 
+    def _mirror_history(
+        self,
+        modality: str,
+        text: str,
+        *,
+        event_id: str,
+        observed_at: float,
+        source: str,
+    ) -> None:
+        """Write the same observation to the text history under the same id.
+
+        Ambient memory and the sensory history are separate bounded stores, but
+        they describe the same evidence.  Sharing the id is what lets JAWL's
+        forget/archive cascade reach the history instead of leaving an orphan
+        description behind.
+        """
+
+        store = getattr(self.fusion, "history_store", None) if self.fusion is not None else None
+        if store is None:
+            return
+        try:
+            store.record(
+                modality,
+                text,
+                observed_at=observed_at,
+                source=source,
+                event_id=event_id,
+                verified=False,
+                metadata={"history_only": True, "mirrored_event_id": event_id},
+            )
+        except Exception as exc:  # noqa: BLE001 - the archive is best-effort
+            self._counters["errors"] += 1
+            self._last_error = f"{type(exc).__name__}: {exc}"[:240]
+
     def _handle(self, event: dict[str, Any], now: float) -> str:
         event_type = str(event.get("type") or "")
         try:
@@ -193,16 +227,23 @@ class SensoryIngestor:
         if not window:
             self._counters["ignored"] += 1
             return "ignored"
+        evidence_id = str(uuid4())
+        summary = f"Смена сцены в окне: {window}"
         result = self.memory.ingest_visual(
-            f"Смена сцены в окне: {window}",
+            summary,
             confidence=0.5,
             source_app=window[:80],
+            event_id=evidence_id,
             session_id="sensory-worker",
         )
         status = str(result.get("status") or "")
         if status == "retained":
             self._counters["visual"] += 1
             log_event("screen_change", window=window)
+            self._mirror_history(
+                "visual", summary, event_id=evidence_id, observed_at=time.time(),
+                source=str(window)[:100],
+            )
             if self.fusion is not None:
                 self.fusion.note("window", window)
             return "visual"
@@ -229,9 +270,10 @@ class SensoryIngestor:
             confidence = float(event.get("key_confidence") or 0.5)
         except (TypeError, ValueError):
             confidence = 0.5
+        evidence_id = str(uuid4())
         result = self.memory.ingest({
             "schema_version": 1,
-            "event_id": str(uuid4()),
+            "event_id": evidence_id,
             "session_id": "sensory-worker",
             "type": "AMBIENT_AUDIO_OBSERVATION",
             "payload": {
@@ -244,6 +286,9 @@ class SensoryIngestor:
             self._last_music_at = now
             self._counters["music"] += 1
             log_event("system_music", detail=text)
+            self._mirror_history(
+                "music", text, event_id=evidence_id, observed_at=now, source="sensory-worker",
+            )
             if self.fusion is not None:
                 self.fusion.note("music", text)
             return "music"
@@ -257,12 +302,17 @@ class SensoryIngestor:
         if not text:
             self._counters["ignored"] += 1
             return "ignored"
+        evidence_id = str(uuid4())
         result = self.memory.ingest_system_audio(
-            text, confidence=0.6, session_id="sensory-worker",
+            text, confidence=0.6, event_id=evidence_id, session_id="sensory-worker",
         )
         if str(result.get("status")) == "retained":
             self._counters["speech"] += 1
             log_event("system_speech", text=text)
+            self._mirror_history(
+                "speech", text, event_id=evidence_id, observed_at=time.time(),
+                source="sensory-worker",
+            )
             if self.fusion is not None:
                 self.fusion.note("speech", text)
             return "speech"

@@ -1,5 +1,20 @@
 # Текущее состояние — 29 октября 2026
 
+## Память: кандидат вместо записи — 1 ноября 2026
+
+Долговременную память пишет только JAWL. Companion предлагает кандидата
+(`POST /api/ambient-memory/handoff` → событие `MEMORY_CANDIDATE` в event-dir
+JAWL) и исполняет забывание; прямой записи из браузера больше нет. Override
+`/api/ambient-memory/promote` остаётся явным действием владельца и сохраняет
+провенанс: `trust`, `verified`, `observation_class`, `source_event_ids`,
+`retention_tier`, предикат `episode_summary_unverified`. `forget`/`archive`
+каскадируют в сенсорную историю и ambient-буфер, редакция переживает
+перезапуск. 17 новых тестов памяти прошли; desktop 124/124 без изменений;
+`tests/test_web` даёт те же 8 ошибок ConfigHub, что и до изменения
+(жёсткий `G:\...` путь снапшота в песочнице). Не доказано: что живой агент
+JAWL действительно вызывает `remember` по этому событию — нужен прогон на
+поднятом профиле. Детали: `docs/MEMORY_OWNERSHIP.md`, ADR-053.
+
 ## ReAct / VA / большой контекст — актуальное состояние
 
 Daily `hikari-clean-20261029` запущен с Gemini 3.8 Flash через локальный relay,
