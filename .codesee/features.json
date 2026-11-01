@@ -1748,7 +1748,7 @@
     {
       "id": "f-ambient-memory",
       "name": "Ambient-память",
-      "summary": "Ограниченный буфер наблюдений с триажем в эпизоды",
+      "summary": "Ограниченный буфер наблюдений: кандидат передаётся JAWL, память пишет только агент",
       "epicId": "memory",
       "triggers": [
         {
@@ -1759,7 +1759,7 @@
       "steps": [
         {
           "id": "ingest",
-          "name": "Приём наблюдения",
+          "name": "Приём",
           "role": "data-write",
           "refs": [
             {
@@ -1769,14 +1769,15 @@
         },
         {
           "id": "privacy",
-          "name": "Фильтр приватности",
+          "name": "Приватность",
           "role": "validation",
           "note": "пароли/секреты/чувствительные окна"
         },
         {
           "id": "triage",
-          "name": "Триаж в эпизоды",
+          "name": "Триаж",
           "role": "compute",
+          "note": "importance — ранг внимания, а не решение о памяти",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/ambient_memory.py"
@@ -1784,10 +1785,45 @@
           ]
         },
         {
-          "id": "promote",
-          "name": "Промоут в JAWL",
-          "role": "side-effect",
+          "id": "provenance",
+          "name": "Провенанс",
+          "role": "transform",
+          "note": "trust/verified/observation_class/source_event_ids/retention_tier",
           "refs": [
+            {
+              "file": "src/jawl_voicecompanion/memory_policy.py"
+            }
+          ]
+        },
+        {
+          "id": "handoff",
+          "name": "Передача JAWL",
+          "role": "side-effect",
+          "note": "MEMORY_CANDIDATE в event-dir JAWL; запись в память не выполняется",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/jawl_events.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            }
+          ]
+        },
+        {
+          "id": "jawl-decision",
+          "name": "Решение JAWL",
+          "role": "other",
+          "note": "агент сам вызывает SQLStructuredMemory.remember или отказывается"
+        },
+        {
+          "id": "forget-cascade",
+          "name": "Забывание",
+          "role": "side-effect",
+          "note": "forget/archive → redact истории и буфера по source_event_ids",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/sensory_history.py"
+            },
             {
               "file": "src/jawl_voicecompanion/web.py"
             }
@@ -1808,14 +1844,30 @@
         },
         {
           "from": "triage",
-          "to": "promote",
+          "to": "provenance",
           "kind": "conditional",
-          "condition": "эпизод — кандидат на промоут"
+          "condition": "эпизод — кандидат на передачу"
+        },
+        {
+          "from": "provenance",
+          "to": "handoff",
+          "kind": "next"
+        },
+        {
+          "from": "handoff",
+          "to": "jawl-decision",
+          "kind": "next"
+        },
+        {
+          "from": "jawl-decision",
+          "to": "forget-cascade",
+          "kind": "conditional",
+          "condition": "JAWL забыл или архивировал запись"
         }
       ],
-      "confidence": 0.85,
+      "confidence": 0.9,
       "provenance": "ai",
-      "updated_at": "2026-09-12T18:30:00Z"
+      "updated_at": "2026-11-01T10:00:00Z"
     },
     {
       "id": "f-sensory-ingest",

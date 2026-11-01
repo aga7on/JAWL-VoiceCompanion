@@ -431,6 +431,80 @@ class AmbientMemoryBuffer:
                 return dict(item)
         raise ValueError("ambient episode was not found or expired")
 
+    def mark_handed_off(self, event_id: str, memory_key: str) -> dict[str, Any]:
+        """Record that a candidate was proposed to JAWL (not that it was stored).
+
+        The companion never decides.  ``handed_off`` only means the agent was
+        given the candidate with its provenance; whether a canonical record
+        appears is entirely JAWL's decision.
+        """
+
+        event_id = _bounded_text(event_id, 120)
+        memory_key = _bounded_text(memory_key, 128)
+        if not event_id or not memory_key:
+            raise ValueError("episode_id and memory_key are required")
+        with self._lock:
+            for item in self._episodes:
+                if item.get("event_id") != event_id:
+                    continue
+                payload = item.setdefault("payload", {})
+                payload["handed_off"] = True
+                payload["handed_off_memory_key"] = memory_key
+                payload["handed_off_at"] = _iso()
+                return dict(item)
+        raise ValueError("ambient episode was not found or expired")
+
+    def redact(self, event_ids: Any, *, reason: str = "") -> dict[str, Any]:
+        """Drop observations and episodes that JAWL has forgotten.
+
+        ``event_ids`` are the evidence identifiers stored in a canonical
+        record's provenance.  An episode is removed when its own id or any of
+        its source observations match, so no derived summary of a forgotten
+        observation survives in the buffer.
+        """
+
+        if isinstance(event_ids, (str, bytes)):
+            event_ids = [event_ids]
+        wanted = {_bounded_text(item, 120) for item in (event_ids or []) if _bounded_text(item, 120)}
+        if not wanted:
+            return {"status": "ignored", "reason": "no_event_ids"}
+        with self._lock:
+            observations = len(self._observations)
+            kept: deque[_StoredObservation] = deque()
+            for stored in self._observations:
+                identifiers = {str(stored.event.get("event_id") or "")}
+                payload = stored.event.get("payload")
+                if isinstance(payload, dict):
+                    source = payload.get("source_event_ids")
+                    if isinstance(source, list):
+                        identifiers.update(str(item) for item in source[:32])
+                if identifiers & wanted:
+                    self._bytes -= stored.size
+                else:
+                    kept.append(stored)
+            self._observations = kept
+            episodes = len(self._episodes)
+            retained: deque[dict[str, Any]] = deque(maxlen=self.max_episodes)
+            for episode in self._episodes:
+                payload = episode.get("payload")
+                identifiers = {str(episode.get("event_id") or "")}
+                if isinstance(payload, dict):
+                    source = payload.get("source_event_ids")
+                    if isinstance(source, list):
+                        identifiers.update(str(item) for item in source[:32])
+                if identifiers & wanted:
+                    self._episode_bytes -= self._serialized_size(episode)
+                else:
+                    retained.append(episode)
+            self._episodes = retained
+        return {
+            "status": "redacted",
+            "event_ids": len(wanted),
+            "reason": _bounded_text(reason, 120),
+            "observations": observations - len(self._observations),
+            "episodes": episodes - len(self._episodes),
+        }
+
     def state(self, *, now: float | None = None) -> dict[str, Any]:
         timestamp = time.time() if now is None else float(now)
         with self._lock:
@@ -452,6 +526,10 @@ class AmbientMemoryBuffer:
                     for item in self._episodes
                     if item.get("payload", {}).get("importance") == "promote_candidate"
                     and not item.get("payload", {}).get("promoted")
+                    and not item.get("payload", {}).get("handed_off")
+                ),
+                "handed_off_count": sum(
+                    1 for item in self._episodes if item.get("payload", {}).get("handed_off")
                 ),
             }
 

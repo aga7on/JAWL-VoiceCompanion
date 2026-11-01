@@ -81,6 +81,55 @@ class JawlEventFileSink:
             event_id,
         )
 
+    def publish_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        """Offer one ambient candidate to JAWL without writing memory.
+
+        This is the only durable-memory handoff in the companion: the agent
+        receives the observation, its trust level and the evidence ids, and
+        decides itself whether to call ``SQLStructuredMemory.remember``.
+        """
+
+        if not isinstance(candidate, dict) or candidate.get("type") != "MEMORY_CANDIDATE":
+            raise ValueError("only MEMORY_CANDIDATE events can be offered to JAWL")
+        payload = candidate.get("payload")
+        if not isinstance(payload, dict):
+            raise ValueError("MEMORY_CANDIDATE payload is required")
+        summary = str(payload.get("summary") or "").replace("\x00", "").strip()[:1200]
+        memory_key = str(payload.get("memory_key") or "").replace("\x00", "").strip()[:128]
+        if not summary or not memory_key:
+            raise ValueError("MEMORY_CANDIDATE summary and memory_key are required")
+        event_id = str(candidate.get("event_id") or uuid4())[:200]
+        source_ids = payload.get("source_event_ids")
+        forwarded = {
+            "source": "jawl_voicecompanion",
+            "event_type": "MEMORY_CANDIDATE",
+            "memory_key": memory_key,
+            "candidate_summary": summary,
+            "trust": str(payload.get("trust") or "unverified_model_observation")[:60],
+            "verified": payload.get("verified") is True,
+            "observation_class": str(payload.get("observation_class") or "ambient_observation")[:60],
+            "retention_tier": str(payload.get("retention_tier") or "short")[:32],
+            "confidence": payload.get("confidence"),
+            "source_event_ids": [str(item)[:120] for item in source_ids[:32]]
+            if isinstance(source_ids, list) else [],
+            "observed_from": str(payload.get("observed_from") or "")[:80],
+            "observed_until": str(payload.get("observed_until") or "")[:80],
+            "triage_provider": str(payload.get("triage_provider") or "")[:80],
+            "candidate_event_id": event_id,
+            "raw_audio_persisted": False,
+            "raw_frame_persisted": False,
+        }
+        return self._write_event(
+            {
+                "message": (
+                    "Ambient candidate for memory review (model observation, "
+                    f"not a confirmed fact): {summary}"
+                )[:1600],
+                "payload": forwarded,
+            },
+            event_id,
+        )
+
     def _write_event(self, event: dict[str, Any], event_id: str) -> dict[str, Any]:
         self.event_dir.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".companion-", suffix=".tmp", dir=self.event_dir)

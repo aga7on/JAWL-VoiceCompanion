@@ -36,6 +36,7 @@ from .event_log import log_event
 from .gateway import TextGateway
 from .hostos_tools import HostOSExecutor
 from .jawl_events import JawlEventFileSink
+from . import memory_policy
 from .jawl_web import JawlWebUnavailable
 from .live_speech import LiveSpeechSession
 from .models import ToolRequest
@@ -324,6 +325,7 @@ class CompanionServer(ThreadingHTTPServer):
     presence_file: Path | None = None,
         stream_chat: StreamChatIngestor | None = None,
         stream_chat_event_sink: Callable[[dict[str, Any]], Any] | None = None,
+        candidate_sink: Callable[[dict[str, Any]], Any] | None = None,
         lan_mode: bool = False,
         lan_access_token: str | None = None,
         lan_auth_user: str = "tablet",
@@ -407,6 +409,15 @@ class CompanionServer(ThreadingHTTPServer):
         self.url_scheme = "https" if self.tls_enabled else "http"
         self._stream_chat_events = deque(maxlen=100)
         self.stream_chat_event_sink = stream_chat_event_sink
+        # Durable memory belongs to JAWL: the companion can only *offer* a
+        # candidate through this sink (JAWL's own event intake) and wait for
+        # the agent to decide.  Without it, candidates stay in their buffer.
+        self.candidate_sink = candidate_sink
+        # memory_key -> evidence ids, used when JAWL forgets a record so the
+        # source observations can be retired too.  The native projection is the
+        # source of truth; this map only covers records we wrote ourselves.
+        self._memory_sources: deque[tuple[str, tuple[str, ...]]] = deque(maxlen=256)
+        self._memory_sources_lock = threading.Lock()
         self.stream_chat = stream_chat or StreamChatIngestor(
             downstream=self._accept_stream_chat_event,
         )
@@ -457,6 +468,84 @@ class CompanionServer(ThreadingHTTPServer):
             sensory_ingestor=self.sensory_ingestor,
             gigaam_transcriber=getattr(self, "gigaam_transcriber", None),
         )
+
+    # ------------------------------------------------------------------
+    # memory ownership: JAWL writes, the companion observes and forgets
+    # ------------------------------------------------------------------
+
+    def remember_memory_sources(self, memory_key: str, event_ids: Any) -> None:
+        """Remember which observations a canonical record came from."""
+
+        key = str(memory_key or "").strip()[:128]
+        if not key:
+            return
+        ids = tuple(str(item)[:120] for item in (event_ids or []) if str(item or "").strip())[:32]
+        if not ids:
+            return
+        with self._memory_sources_lock:
+            self._memory_sources.append((key, ids))
+
+    def memory_sources(self, memory_key: str) -> list[str]:
+        """Evidence ids for one canonical record, native projection first."""
+
+        key = str(memory_key or "").strip()[:128]
+        if not key:
+            return []
+        ids: list[str] = []
+        adapter = getattr(self.gateway, "jawl_web", None)
+        if adapter is not None:
+            try:
+                payload = adapter.structured_memory(limit=100)
+            except Exception:  # noqa: BLE001 - the local ledger must still work
+                payload = None
+            records = payload.get("memory") if isinstance(payload, dict) else None
+            items = []
+            if isinstance(records, dict):
+                items = next((value for value in records.values() if isinstance(value, list)), [])
+            elif isinstance(records, list):
+                items = records
+            for item in items:
+                if not isinstance(item, dict) or item.get("memory_key") != key:
+                    continue
+                provenance = item.get("provenance")
+                source = provenance.get("source_event_ids") if isinstance(provenance, dict) else None
+                if isinstance(source, list):
+                    ids.extend(str(value)[:120] for value in source[:32])
+        if not ids:
+            with self._memory_sources_lock:
+                for stored_key, stored_ids in reversed(self._memory_sources):
+                    if stored_key == key:
+                        ids = list(stored_ids)
+                        break
+        return list(dict.fromkeys(ids))
+
+    def forget_memory_sources(self, memory_key: str, *, reason: str = "") -> dict[str, Any]:
+        """Retire the observations behind a forgotten canonical record.
+
+        JAWL forgets/archives the record; the companion is responsible for the
+        text it still holds.  Without this the archive would keep describing
+        something the agent was told to forget.
+        """
+
+        ids = self.memory_sources(memory_key)
+        if not ids:
+            return {"status": "nothing_to_redact", "memory_key": memory_key, "event_ids": 0}
+        result: dict[str, Any] = {"status": "redacted", "memory_key": memory_key, "event_ids": len(ids)}
+        if self.sensory_history is not None:
+            try:
+                result["sensory_history"] = self.sensory_history.redact(
+                    ids, reason=reason or f"forgotten:{memory_key}"
+                )
+            except Exception as exc:  # noqa: BLE001 - report, never fail the forget
+                result["sensory_history"] = {"status": "error", "error": type(exc).__name__}
+        if self.ambient_memory is not None:
+            try:
+                result["ambient_memory"] = self.ambient_memory.redact(
+                    ids, reason=reason or f"forgotten:{memory_key}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                result["ambient_memory"] = {"status": "error", "error": type(exc).__name__}
+        return result
 
     def origin_allowed(self, origin: str | None, host_header: str | None) -> bool:
         """Require an exact same-origin request, including scheme and port."""
@@ -1405,6 +1494,14 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 "observations": self.server.ambient_memory.observations(),
                 "episodes": self.server.ambient_memory.episodes(),
                 "sensory_history": self.server.sensory_history.state() if self.server.sensory_history is not None else None,
+                # Who owns what, and whether a candidate can even reach the
+                # agent right now.  The UI must not pretend otherwise.
+                "memory_policy": memory_policy.describe_pipeline(),
+                "handoff": {
+                    "available": self.server.candidate_sink is not None,
+                    "event_type": memory_policy.HANDOFF_EVENT_TYPE,
+                    "writes_memory": False,
+                },
             })
             return
         if path == "/api/ambient-audio":
@@ -2179,16 +2276,22 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 elif operation == "revise":
                     memory_key = str(allowed.pop("memory_key", "")).strip()
                     result = adapter.revise_memory(memory_key, **allowed)
-                elif operation == "forget":
-                    result = adapter.forget_memory(
-                        str(allowed.get("memory_key") or ""),
-                        str(allowed.get("reason") or "browser request"),
+                elif operation in {"forget", "archive"}:
+                    memory_key = str(allowed.get("memory_key") or "")
+                    reason = str(allowed.get("reason") or "browser request")
+                    if operation == "forget":
+                        result = adapter.forget_memory(memory_key, reason)
+                    else:
+                        result = adapter.archive_memory(memory_key, reason)
+                    # JAWL owns the record; the companion owns the observations
+                    # behind it, so forgetting must retire those too. Otherwise
+                    # the sensor archive would keep describing what the agent
+                    # was told to forget.
+                    redacted = self.server.forget_memory_sources(
+                        memory_key, reason=f"{operation}:{memory_key}"
                     )
-                elif operation == "archive":
-                    result = adapter.archive_memory(
-                        str(allowed.get("memory_key") or ""),
-                        str(allowed.get("reason") or "browser request"),
-                    )
+                    self._json({"ok": True, "native": True, "result": result, "redacted": redacted})
+                    return
                 else:
                     raise ValueError("unsupported JAWL memory operation")
                 self._json({"ok": True, "native": True, "result": result})
@@ -2350,7 +2453,77 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if self.path == "/api/ambient-memory/triage":
                 self._json(self.server.ambient_memory.triage())
                 return
+            if self.path == "/api/ambient-memory/handoff":
+                # Owner-facing path, JAWL-owned outcome: the companion only
+                # hands the candidate to JAWL's own event intake with its
+                # provenance.  The agent decides whether it becomes memory, so
+                # this endpoint never touches ``memory.remember``.
+                if payload.get("confirm") is not True:
+                    raise ValueError("proposing an ambient candidate to JAWL requires confirm=true")
+                episode_id = str(payload.get("episode_id") or "").strip()[:120]
+                if not episode_id:
+                    raise ValueError("episode_id is required")
+                episode = self.server.ambient_memory.episode(episode_id)
+                if episode is None:
+                    raise ValueError("ambient episode was not found or expired")
+                episode_payload = episode.get("payload")
+                if not isinstance(episode_payload, dict):
+                    raise ValueError("ambient episode payload is invalid")
+                if episode_payload.get("importance") != "promote_candidate":
+                    raise ValueError("only promote_candidate episodes may be proposed")
+                if episode_payload.get("handed_off"):
+                    self._json({"ok": True, "status": "already_handed_off", "episode": episode})
+                    return
+                memory_key = memory_policy.memory_key_for(episode_id)
+                candidate = memory_policy.handoff_event(
+                    episode,
+                    memory_key=memory_key,
+                    triage_provider=str(episode_payload.get("triage_provider") or "") or None,
+                )
+                if self.server.candidate_sink is None:
+                    self._json(
+                        {
+                            "ok": False,
+                            "status": "not_delivered",
+                            "reason": "JAWL event intake is not configured; the candidate stays in the buffer",
+                            "candidate": candidate,
+                        },
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return
+                try:
+                    delivery = self.server.candidate_sink(candidate)
+                except Exception as exc:  # noqa: BLE001 - report the real failure
+                    self._json(
+                        {
+                            "ok": False,
+                            "status": "not_delivered",
+                            "reason": f"{type(exc).__name__}: {exc}"[:300],
+                        },
+                        status=HTTPStatus.BAD_GATEWAY,
+                    )
+                    return
+                try:
+                    marked = self.server.ambient_memory.mark_handed_off(episode_id, memory_key)
+                except ValueError:
+                    marked = episode
+                self.server.remember_memory_sources(memory_key, candidate["payload"]["source_event_ids"])
+                self._json(
+                    {
+                        "ok": True,
+                        "status": "handed_off",
+                        "delivery": delivery,
+                        "memory_key": memory_key,
+                        "trust": candidate["payload"]["trust"],
+                        "episode": marked,
+                    }
+                )
+                return
             if self.path == "/api/ambient-memory/promote":
+                # Explicit owner override through JAWL's own allowlisted
+                # control path (the same one its console uses).  It is not the
+                # default pipeline: the candidate keeps its honest provenance,
+                # including the fact that a model, not the owner, observed it.
                 if payload.get("confirm") is not True:
                     raise ValueError("promoting ambient memory requires confirm=true")
                 episode_id = str(payload.get("episode_id") or "").strip()[:120]
@@ -2367,30 +2540,49 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 if episode_payload.get("promoted"):
                     self._json({"ok": True, "status": "already_promoted", "episode": episode})
                     return
+                episode_info = {"event_id": episode_id}
+                episode_info.update(episode_payload)
+                memory_key = memory_policy.memory_key_for(episode_id)
+                provenance = memory_policy.candidate_provenance(
+                    episode_info,
+                    memory_key=memory_key,
+                    triage_provider=str(episode_payload.get("triage_provider") or "") or None,
+                    episode_id=episode_id,
+                )
+                try:
+                    confidence = max(0.0, min(1.0, float(episode_payload.get("confidence", 0.5))))
+                except (TypeError, ValueError):
+                    confidence = 0.5
                 adapter = self.server.gateway.jawl_web
                 if adapter is None or not adapter.token:
                     raise JawlWebUnavailable("JAWL memory control requires a console token")
-                memory_key = f"ambient.episode.{episode_id}"
                 stored = adapter.remember_memory(
                     memory_key=memory_key,
                     kind="summary",
                     subject="ambient",
-                    predicate="episode_summary",
+                    predicate=memory_policy.predicate_for(verified=provenance["verified"]),
                     value=str(episode_payload.get("summary") or "")[:4000],
                     source=f"ambient:{str(episode_payload.get('source') or 'mixed')[:32]}",
-                    confidence=float(episode_payload.get("confidence", 0.5)),
-                    provenance={
-                        "ambient_episode_id": episode_id,
-                        "source_event_ids": list(episode_payload.get("source_event_ids") or [])[:32],
-                        "observed_from": str(episode_payload.get("observed_from") or "")[:80],
-                        "observed_until": str(episode_payload.get("observed_until") or "")[:80],
-                        "triage_provider": str(episode_payload.get("triage_provider") or "deterministic")[:80],
-                    },
+                    confidence=confidence,
+                    provenance=provenance,
                     valid_from=str(episode_payload.get("observed_from") or "") or None,
-                    retention_tier="standard",
+                    retention_tier=memory_policy.retention_tier_for(
+                        verified=provenance["verified"],
+                        confidence=confidence,
+                        observation=provenance["observation_class"],
+                    ),
                 )
                 marked = self.server.ambient_memory.mark_promoted(episode_id, memory_key)
-                self._json({"ok": True, "status": "promoted", "episode": marked, "memory": stored})
+                self.server.remember_memory_sources(memory_key, provenance["source_event_ids"])
+                self._json(
+                    {
+                        "ok": True,
+                        "status": "promoted",
+                        "episode": marked,
+                        "memory": stored,
+                        "trust": provenance["trust"],
+                    }
+                )
                 return
             if self.path == "/api/ambient-memory/clear":
                 result = self.server.ambient_memory.clear()
@@ -3463,6 +3655,8 @@ def create_server(
         presence_file=presence_file,
         stream_chat=stream_chat,
         stream_chat_event_sink=stream_chat_event_sink or (event_sink.publish_chat if event_sink else None),
+        # Candidates are offered, never written: JAWL's agent decides.
+        candidate_sink=event_sink.publish_candidate if event_sink is not None else None,
         lan_mode=lan_mode,
         lan_access_token=lan_access_token,
         lan_auth_user=lan_auth_user,

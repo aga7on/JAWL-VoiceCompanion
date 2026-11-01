@@ -144,25 +144,238 @@ async function refreshAll() {
   refreshProactive();
 }
 
-async function refreshMemory() {
-  const el = document.querySelector('#memory-log');
-  if (!el) return;
-  try {
-    const r = await fetch('/api/jawl/memory', {credentials: 'include', headers: API.headers()});
-    if (!r.ok) { el.textContent = 'память JAWL недоступна (агент не поднят?)'; return; }
-    const d = await r.json();
-    if (d.status === 'unavailable' || d.configured === false) {
-      el.textContent = 'память JAWL не сконфигурирована в этом контуре';
-      return;
+// ---------------------------------------------------------------------------
+// memory: наблюдение → сенсорная история → отбор → постоянная память JAWL
+// Каждый слой живёт своей жизнью, поэтому и читается своим запросом: пустая
+// вкладка не значит «ничего не было», и заполненный архив не значит «JAWL
+// сохранил знание».
+// ---------------------------------------------------------------------------
+
+const MEMORY_SECTION = '.side .section[data-section="memory"]';
+
+function memoryActive() {
+  return document.querySelector(MEMORY_SECTION)?.classList.contains('active') === true;
+}
+
+async function memoryJson(url) {
+  const response = await fetch(url, {credentials: 'include', headers: API.headers(), cache: 'no-store'});
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+function memoryLine(id, rows, empty) {
+  const el = document.querySelector('#' + id);
+  if (el) el.textContent = rows.length ? rows.join('\n') : empty;
+}
+
+function memoryClock(value) {
+  const moment = typeof value === 'number' ? new Date(value * 1000) : new Date(String(value || ''));
+  return Number.isNaN(moment.getTime()) ? '--:--'
+    : moment.toTimeString().slice(0, 8);
+}
+
+function memorySpan(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  return value >= 3600 ? `${Math.round(value / 3600)} ч` : `${Math.max(1, Math.round(value / 60))} мин`;
+}
+
+function memoryTrust(confidence) {
+  const value = Number(confidence);
+  return Number.isFinite(value) ? `доверие ${Math.round(Math.max(0, Math.min(1, value)) * 100)}%` : 'доверие —';
+}
+
+function memoryText(value, limit = 90) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+function firstList(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return [];
+  return Object.values(value).find(Array.isArray) || [];
+}
+
+function renderPerception(settled) {
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  if (!data || data.configured === false) {
+    setVal('perception-meta', 'не подключено');
+    memoryLine('perception-log', [], 'Восприятие не подключено в этом контуре.');
+    return;
+  }
+  const items = Array.isArray(data.items) ? data.items : [];
+  setVal('perception-meta', `${memorySpan(data.window_seconds || data.buffer?.window_seconds)} · ${items.length}`);
+  const rows = items.slice(-8).reverse().map(item =>
+    `${memoryClock(item.timestamp)} ${item.modality || 'медиа'} · ${memoryText(item.summary || item.top_label)}`);
+  memoryLine('perception-log', rows, 'Буфер пуст: сенсоры пока ничего не передали.');
+}
+
+function renderHistory(settled) {
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  if (!data || data.configured === false) {
+    setVal('history-state', 'не настроена');
+    setVal('history-counts', '—');
+    memoryLine('history-log', [], 'Сенсорная история не настроена в этом контуре.');
+    return;
+  }
+  const state = data.state || {};
+  setVal('history-state', state.enabled ? 'пишется' : 'пауза / выключена');
+  setVal('history-counts', `${state.recent_event_count || 0} / ${state.compact_moment_count || 0}`);
+  const hour = String(data.last_hour || '').trim();
+  const observed = !hour || /^No sensory observations/i.test(hour) ? []
+    : hour.split('\n')
+      .filter(line => line.trim() && !/^SENSORY HISTORY(?! WARNING)/i.test(line))
+      .slice(-10)
+      .map(line => /^SENSORY HISTORY WARNING/i.test(line)
+        ? '⚠ архив недоступен: прежняя история не читается'
+        : line.replace(/^(\S+)T(\d\d:\d\d:\d\d)\S*\s*/, '$2 '));
+  memoryLine('history-log', observed,
+    state.enabled ? 'За последний час наблюдений нет.' : 'История не пишется: Ambient Memory выключена или на паузе.');
+}
+
+async function memoryPost(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: {...API.headers(), 'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await response.json(); } catch { /* an empty body is still a result */ }
+  return {ok: response.ok, status: response.status, data};
+}
+
+// Один кандидат — одна строка. «Передать» не пишет память: JAWL получает
+// наблюдение с провенансом и решает сам, станет ли оно знанием.
+function candidateRow(episode, handoffAvailable) {
+  const payload = episode.payload || {};
+  const stored = payload.promoted === true;
+  const handed = payload.handed_off === true;
+  const row = document.createElement('div');
+  row.className = 'candidate';
+
+  const mark = document.createElement('span');
+  mark.className = 'candidate-mark';
+  mark.textContent = stored ? '✓' : handed ? '→' : payload.importance === 'promote_candidate' ? '↑' : '·';
+
+  const body = document.createElement('span');
+  body.className = 'candidate-body';
+  const trust = payload.verified === true ? 'подтверждено' : 'наблюдение модели';
+  body.textContent = `${memoryClock(episode.created_at)} · ${trust} · ${memoryTrust(payload.confidence)} · ${memoryText(payload.summary)}`;
+
+  const action = document.createElement('button');
+  action.type = 'button';
+  action.className = 'btn secondary candidate-send';
+  action.textContent = stored ? 'в памяти' : handed ? 'передано' : 'JAWL';
+  action.disabled = stored || handed || !handoffAvailable;
+  action.title = handoffAvailable
+    ? 'Передать кандидата JAWL: решение о памяти принимает агент'
+    : 'JAWL не подключён: кандидат останется в буфере';
+  action.setAttribute('aria-label', `Передать кандидата JAWL: ${memoryText(payload.summary, 60)}`);
+  if (!stored && !handed && handoffAvailable) {
+    action.addEventListener('click', () => handOffCandidate(String(episode.event_id || ''), action, body));
+  }
+  row.append(mark, body, action);
+  return row;
+}
+
+async function handOffCandidate(episodeId, button, body) {
+  if (!episodeId) return;
+  button.disabled = true;
+  button.textContent = '…';
+  const {ok, data} = await memoryPost('/api/ambient-memory/handoff', {episode_id: episodeId, confirm: true});
+  if (ok) {
+    button.textContent = 'передано';
+    button.title = `Передано JAWL (${data.memory_key || 'кандидат'}) — ждём решения агента`;
+    refreshMemory();
+    return;
+  }
+  button.textContent = 'JAWL';
+  button.disabled = false;
+  const reason = data && data.reason ? memoryText(data.reason, 90) : 'не передано';
+  body.textContent = `${body.textContent} — ${reason}`;
+}
+
+function renderAmbient(settled) {
+  const el = document.querySelector('#ambient-log');
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  const state = data && data.state ? data.state : null;
+  const available = data && data.handoff ? data.handoff.available === true : false;
+  if (!state) {
+    setVal('ambient-meta', 'недоступно');
+    if (el) {
+      el.classList.remove('candidates');
+      el.textContent = 'Буфер отбора недоступен.';
     }
-    const counts = Object.entries(d.database || {}).flatMap(([kind, part]) =>
-      Object.entries(part?.counts || (Number.isFinite(part?.count) ? {items: part.count} : {}))
-        .map(([name, value]) => `${kind}: ${name} ${value}`));
-    const facts = Array.isArray(d.structured?.memories) ? d.structured.memories : [];
-    const entries = facts.slice(0, 14).map(f => `${f.subject || ''} · ${f.predicate || ''} · ${f.value || ''}`.trim().slice(0, 240));
-    const drives = (d.drives?.drives || []).slice(0, 8).map(x => `Драйв: ${x.name || x.title || x.id}${x.description ? ` — ${x.description}` : ''}`);
-    el.textContent = [...counts, ...entries, ...drives].filter(Boolean).join('\n') || 'Структурированных записей пока нет.';
-  } catch { el.textContent = 'память JAWL недоступна'; }
+    return;
+  }
+  const candidates = state.promotable_episode_count || 0;
+  const handed = state.handed_off_count || 0;
+  setVal('ambient-meta', `${state.observation_count || 0} / ${candidates}${handed ? ` · передано ${handed}` : ''}`);
+  const episodes = Array.isArray(data.episodes) ? data.episodes : [];
+  if (!el) return;
+  el.textContent = '';
+  if (!episodes.length) {
+    el.classList.remove('candidates');
+    el.textContent = state.enabled
+      ? 'Эпизодов пока нет: буфер копит наблюдения.'
+      : 'Отбор не идёт: Ambient Memory выключена или на паузе.';
+    return;
+  }
+  el.classList.add('candidates');
+  for (const episode of episodes.slice(-6).reverse()) {
+    el.append(candidateRow(episode, available));
+  }
+  if (!available) {
+    const note = document.createElement('p');
+    note.className = 'candidate-hint';
+    note.textContent = 'JAWL не подключён: кандидаты остаются в буфере и память не трогают.';
+    el.append(note);
+  }
+}
+
+function renderCanonical(settled) {
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  if (!data || data.configured === false || data.status === 'unavailable') {
+    setVal('canonical-meta', 'недоступна');
+    memoryLine('memory-log', [], 'Память JAWL недоступна: агент не поднят. Сенсорные слои при этом могут писаться.');
+    return;
+  }
+  // JAWL's own storage stats (sql/vector/graph) stay visible: they say what
+  // the agent actually keeps, not what the sensors happened to see.
+  const counts = Object.entries(data.database || {}).flatMap(([kind, part]) =>
+    Object.entries(part?.counts || (Number.isFinite(part?.count) ? {items: part.count} : {}))
+      .map(([name, value]) => `${kind}: ${name} ${value}`));
+  const structured = data.structured || {};
+  const records = structured.available === false ? [] : firstList(structured);
+  const drives = Array.isArray(data.drives?.drives) ? data.drives.drives.length : 0;
+  setVal('canonical-meta', `${records.length} / ${drives}`);
+  const rows = records.slice(0, 12).map(record => {
+    const item = record && typeof record === 'object' ? record : { content: record };
+    const when = item.updated_at || item.created_at || item.timestamp;
+    const text = item.content || item.text || item.summary || item.title || item.value || JSON.stringify(item);
+    // JAWL keeps the trust level in the predicate; show it, don't hide it.
+    const caveat = String(item.predicate || '').endsWith('_unverified') ? 'наблюдение · ' : '';
+    return `${when ? memoryClock(when) + ' ' : ''}${caveat}${memoryText(text, 100)}`;
+  });
+  const lines = [...counts.slice(0, 4), ...rows];
+  memoryLine('memory-log', lines, structured.available === false
+    ? 'Каноническая память пуста: JAWL ещё не отобрал устойчивых знаний.'
+    : 'Записей пока нет — их создаёт только JAWL.');
+}
+
+async function refreshMemory() {
+  if (!memoryActive()) return;
+  const settled = await Promise.allSettled([
+    memoryJson('/api/perception/stream'),
+    memoryJson('/api/sensory-history'),
+    memoryJson('/api/ambient-memory'),
+    memoryJson('/api/jawl/memory'),
+  ]);
+  renderPerception(settled[0]);
+  renderHistory(settled[1]);
+  renderAmbient(settled[2]);
+  renderCanonical(settled[3]);
 }
 
 async function refreshProactive() {
@@ -659,6 +872,7 @@ document.querySelectorAll('nav.rail button[data-tab]').forEach(button => {
       s.classList.toggle('active', s.dataset.section === tab));
     if (tab === 'settings' && typeof loadSettings === 'function') loadSettings();
     if (tab === 'avatar') loadWardrobe();
+    if (tab === 'memory') refreshMemory();
   });
 });
 

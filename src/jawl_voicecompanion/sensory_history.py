@@ -59,6 +59,11 @@ class SensoryHistoryStore:
         self._lock = RLock()
         self._recent: deque[dict[str, Any]] = deque()
         self._hours: dict[str, dict[str, Any]] = {}
+        # Redactions are durable, unlike the events they remove: once JAWL (or
+        # the owner) forgets a canonical record, its source observations must
+        # not come back after a restart.
+        self._redactions: dict[str, dict[str, Any]] = {}
+        self.max_redactions = 512
         self._last_flush = 0.0
         self._last_error: str | None = None
         self._last_error_stage: str | None = None
@@ -79,7 +84,8 @@ class SensoryHistoryStore:
     def record(self, modality: str, text: str, *, observed_at: float | str | None = None,
                source: str = "", scene_id: str = "", frame_id: str = "",
                confidence: float | None = None, verified: bool | None = None,
-               metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+               metadata: dict[str, Any] | None = None,
+               event_id: str | None = None) -> dict[str, Any]:
         if not self._is_enabled():
             return {"status": "disabled"}
         body = _clean(text)
@@ -93,6 +99,11 @@ class SensoryHistoryStore:
         now = self._clock()
         stamp = _timestamp(observed_at) or now
         meta = metadata if isinstance(metadata, dict) else {}
+        replayed_ids = {
+            str(value) for value in (meta.get("event_id"), frame_id, scene_id) if str(value or "").strip()
+        }
+        if replayed_ids & set(self._redactions):
+            return {"status": "suppressed", "reason": "redacted_event"}
         importance = 1
         reasons: list[str] = []
         if modality == "visual" and scene_id:
@@ -121,7 +132,11 @@ class SensoryHistoryStore:
         if meta.get("user_marked_important") is True:
             importance += 3
             reasons.append("user_marked")
-        item = {"event_id": str(uuid4()), "observed_at": _iso(stamp), "timestamp": stamp,
+        # A caller may share one evidence id across stores (ambient buffer and
+        # this history).  That shared id is what lets JAWL's forget/archive
+        # cascade reach the observations behind a canonical record.
+        item = {"event_id": _clean(event_id, 120) or str(uuid4()),
+                "observed_at": _iso(stamp), "timestamp": stamp,
                 "modality": modality, "text": body, "source": _clean(source, 100),
                 "scene_id": _clean(scene_id, 64), "frame_id": _clean(frame_id, 64),
                 "confidence": round(max(0.0, min(1.0, float(confidence))), 3)
@@ -226,11 +241,25 @@ class SensoryHistoryStore:
                 self._last_error = "history_schema_unsupported"
                 self._last_error_stage = "load"
                 return
+            for entry in payload.get("redactions", []):
+                if not isinstance(entry, dict):
+                    continue
+                event_id = _clean(entry.get("event_id"), 120)
+                if event_id:
+                    self._redactions[event_id] = {
+                        "redacted_at": _clean(entry.get("redacted_at"), 40),
+                        "reason": _clean(entry.get("reason"), 120),
+                    }
+            if len(self._redactions) > self.max_redactions:
+                for stale in list(self._redactions)[: len(self._redactions) - self.max_redactions]:
+                    self._redactions.pop(stale, None)
             for event in payload.get("recent_events", [])[-self.max_recent_events:]:
                 if not isinstance(event, dict) or event.get("modality") not in {"visual", "speech", "music", "sound"}:
                     continue
                 stamp = _timestamp(event.get("timestamp") or event.get("observed_at"))
                 text = _clean(event.get("text"))
+                if str(event.get("event_id") or "") in self._redactions:
+                    continue
                 if stamp is not None and text:
                     normalized = dict(event); normalized["timestamp"] = stamp; normalized["text"] = text
                     self._recent.append(normalized)
@@ -239,7 +268,8 @@ class SensoryHistoryStore:
                     self._hours[bucket["hour_start"]] = {"hour_start": bucket["hour_start"],
                         "event_count": max(0, int(bucket.get("event_count", 0) or 0)),
                         "moments": [dict(moment) for moment in bucket.get("moments", [])[:self.max_moments_per_hour]
-                                    if isinstance(moment, dict) and _clean(moment.get("text"))]}
+                                    if isinstance(moment, dict) and _clean(moment.get("text"))
+                                    and str(moment.get("event_id") or "") not in self._redactions]}
             self._prune(self._clock())
         except (OSError, ValueError, TypeError):
             self._recent.clear()
@@ -258,7 +288,10 @@ class SensoryHistoryStore:
                            "compact_retention_days": round(self.retention_seconds / _DAY, 1),
                            "raw_audio_persisted": False, "raw_video_persisted": False},
                 "recent_events": recent,
-                "hourly_summaries": sorted(self._hours.values(), key=lambda bucket: bucket["hour_start"])}
+                "hourly_summaries": sorted(self._hours.values(), key=lambda bucket: bucket["hour_start"]),
+                "redactions": [
+                    {"event_id": event_id, **entry} for event_id, entry in list(self._redactions.items())[-self.max_redactions:]
+                ]}
 
     def _flush(self, now: float) -> None:
         if self._load_blocked:
@@ -296,6 +329,7 @@ class SensoryHistoryStore:
                     "last_flush_age_seconds": round(max(0.0, now - self._last_flush), 1)
                     if self._last_flush > 0 else None,
                     "raw_audio_persisted": False, "raw_video_persisted": False,
+                    "redacted_event_count": len(self._redactions),
                     "last_error": self._last_error,
                     "last_error_stage": self._last_error_stage,
                     "load_blocked": self._load_blocked}
@@ -377,6 +411,48 @@ class SensoryHistoryStore:
                 return output
             keep -= 1
         return (header + format_line(selected[-1]))[:max_chars]
+
+    def redact(self, event_ids: Any, *, reason: str = "") -> dict[str, Any]:
+        """Forget specific observations and keep them forgotten.
+
+        JAWL owns durable memory, so when it forgets (or archives) a canonical
+        record the companion must retire the raw observations that record came
+        from.  Redaction is id-scoped: it never touches unrelated history, and
+        the ledger survives reloads and restarts.
+        """
+
+        if isinstance(event_ids, (str, bytes)):
+            event_ids = [event_ids]
+        wanted = {_clean(item, 120) for item in (event_ids or []) if _clean(item, 120)}
+        if not wanted:
+            return {"status": "ignored", "reason": "no_event_ids"}
+        with self._lock:
+            now = self._clock()
+            remembered = len(wanted)
+            removed_recent = sum(1 for event in self._recent if str(event.get("event_id") or "") in wanted)
+            if removed_recent:
+                self._recent = deque(
+                    event for event in self._recent if str(event.get("event_id") or "") not in wanted
+                )
+            removed_moments = 0
+            for bucket in self._hours.values():
+                moments = bucket.get("moments") or []
+                kept = [moment for moment in moments if str(moment.get("event_id") or "") not in wanted]
+                removed_moments += len(moments) - len(kept)
+                bucket["moments"] = kept
+            for event_id in sorted(wanted):
+                self._redactions[event_id] = {"redacted_at": _iso(now), "reason": _clean(reason, 120)}
+            overflow = len(self._redactions) - self.max_redactions
+            if overflow > 0:
+                for stale in list(self._redactions)[:overflow]:
+                    self._redactions.pop(stale, None)
+            self._flush(now)
+        return {
+            "status": "redacted",
+            "event_ids": remembered,
+            "recent_events": removed_recent,
+            "moments": removed_moments,
+        }
 
     def clear(self) -> dict[str, Any]:
         with self._lock:
