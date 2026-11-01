@@ -132,14 +132,16 @@ function setVal(id, text) {
 // ---------------------------------------------------------------------------
 
 let refreshTimer = null;
+const proactiveSeen = new Set();
 function startRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(refreshAll, 10000);
 }
 async function refreshAll() {
-  refreshStatuses();
+  await refreshStatuses();
   refreshJournal();
   refreshMemory();
+  refreshProactive();
 }
 
 async function refreshMemory() {
@@ -153,18 +155,29 @@ async function refreshMemory() {
       el.textContent = 'память JAWL не сконфигурирована в этом контуре';
       return;
     }
-    const lines = [];
-    const facts = d.facts || d.memories || d.items || [];
-    if (Array.isArray(facts)) {
-      for (const fact of facts.slice(0, 14)) {
-        const text = typeof fact === 'string' ? fact : (fact.content || fact.text || fact.summary || JSON.stringify(fact));
-        const when = fact.updated_at || fact.timestamp || '';
-        lines.push(`${when ? String(when).slice(0, 16) + ' ' : ''}${String(text).slice(0, 100)}`);
-      }
-    }
-    el.textContent = lines.length ? lines.join('\n')
-      : 'записей пока нет — JAWL пополняет память из разговоров и heartbeat';
+    const counts = Object.entries(d.database || {}).flatMap(([kind, part]) =>
+      Object.entries(part?.counts || (Number.isFinite(part?.count) ? {items: part.count} : {}))
+        .map(([name, value]) => `${kind}: ${name} ${value}`));
+    const facts = Array.isArray(d.structured?.memories) ? d.structured.memories : [];
+    const entries = facts.slice(0, 14).map(f => `${f.subject || ''} · ${f.predicate || ''} · ${f.value || ''}`.trim().slice(0, 240));
+    const drives = (d.drives?.drives || []).slice(0, 8).map(x => `Драйв: ${x.name || x.title || x.id}${x.description ? ` — ${x.description}` : ''}`);
+    el.textContent = [...counts, ...entries, ...drives].filter(Boolean).join('\n') || 'Структурированных записей пока нет.';
   } catch { el.textContent = 'память JAWL недоступна'; }
+}
+
+async function refreshProactive() {
+  if (dndActive) return;
+  try {
+    const response = await fetch('/api/proactive', {credentials: 'include', cache: 'no-store', headers: API.headers()});
+    if (!response.ok) return;
+    for (const item of (await response.json()).delivered || []) {
+      if (!item.id || !item.text || proactiveSeen.has(item.id)) continue;
+      proactiveSeen.add(item.id);
+      addMessage('assistant', item.text);
+      showCaption(item.text);
+      if (item.speak !== false && !dndActive && !state.thinking && !assistantSpeechActive()) speakFinal({text: item.text});
+    }
+  } catch { /* proactive delivery must not disrupt normal chat */ }
 }
 
 const DOCTOR_LABELS = {
