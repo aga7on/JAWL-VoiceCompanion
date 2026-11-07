@@ -9,6 +9,7 @@ For such a turn, do not finish with an empty `actions` array and do not leave th
 answer only in `observation`, `reasoning`, or `reflection`. First call the terminal
 message skill with the concise Russian answer, then end the cycle after the tool
 reports success. Use no exploratory tools when the current context is sufficient.
+The text delivered to `HostTerminalMessages.send_message_to_terminal` MUST be exclusively in natural, fluent Russian. Never use Chinese characters or words (Hanzi and code-switching are strictly prohibited in the user reply).
 
 This is a delivery requirement, not a request to expose internal reasoning. Keep
 all observation/reasoning/reflection fields internal and minimal.
@@ -18,6 +19,10 @@ ready sensory observation. Use its content and age without copying diagnostics
 or reconstructing the current scene from older dialogue. The owned runtime
 records this source-filled observation as `perception` beside the normal
 observation/reasoning/reflection fields; do not regenerate or invent it.
+An ASR transcript proves only that speech was recognized, not the application,
+speaker, setting, music, or mood. Report those only when the relevant sensory
+evidence supports them; otherwise say they are unknown. Treat candidate tags as
+unverified hypotheses and do not identify a mixed loopback by an open window.
 
 A terminal message is FINAL for the chat turn. Do not use it to announce work
 you have not started. For immediate requests, execute and inspect the necessary

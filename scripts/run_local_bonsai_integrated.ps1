@@ -1,4 +1,4 @@
-﻿param(
+param(
     [int]$RunSeconds,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$')]
     [string]$ProfileName,
@@ -16,11 +16,13 @@
     [ValidateSet('tera', 'omnivoice', 'voxcpm')]
     [string]$TtsProvider,
     [switch]$NoStreamingAsr,
-    [string]$OmniVoiceRefWav = 'G:\AI\JAWL-VoiceCompanion\runtime\models\asr\voice_ref_aleksandra.wav',
+    [string]$OmniVoiceRefWav = 'runtime\models\tts\refs\voice_ref_aleksandra.wav',
     [string]$OmniVoiceRefText = (-join ([char[]](0x421,0x43d,0x430,0x447,0x430,0x43b,0x430,0x20,0x43f,0x43e,0x434,0x433,0x43e,0x442,0x43e,0x432,0x44c,0x441,0x44f,0x2e,0x20,0x41f,0x43e,0x43a,0x430,0x436,0x438,0x2c,0x20,0x447,0x435,0x433,0x43e,0x20,0x442,0x44b,0x20,0x441,0x442,0x43e,0x438,0x448,0x44c,0x2e,0x20,0x412,0x20,0x442,0x430,0x43a,0x43e,0x43c,0x20,0x432,0x438,0x434,0x435,0x20,0x443,0x20,0x442,0x435,0x431,0x44f,0x20,0x43d,0x435,0x442,0x20,0x448,0x430,0x43d,0x441,0x43e,0x432,0x20,0x43f,0x440,0x43e,0x442,0x438,0x432,0x20,0x434,0x435,0x43c,0x43e,0x43d,0x43e,0x432,0x2e,0x20,0x41d,0x435,0x43f,0x43b,0x43e,0x445,0x43e,0x2e,0x20,0x41d,0x43e,0x20,0x43f,0x440,0x435,0x43a,0x440,0x430,0x441,0x43d,0x44b,0x439,0x20,0x43f,0x440,0x438,0x43d,0x446,0x2e))),
     [switch]$RunBrowserVoiceE2E,
     [switch]$EnableAmbientAudio,
     [switch]$StartAmbientAudio,
+    [ValidateRange(0,86400)]
+    [int]$AmbientTriageSeconds = 300,
     [string]$AmbientAudioDevice = '',
     [ValidateSet('eg2', 'qwen-omni')]
     [string]$AudioDescriber = 'eg2',
@@ -41,6 +43,8 @@
     [int]$BrainMaxOutputTokens,
     [int]$BrainGpuLayers,
     [string]$BrainDevice,
+    [string]$BrainCacheTypeK = '',
+    [string]$BrainCacheTypeV = '',
     [ValidateSet('off', 'auto', 'on')]
     [string]$BrainReasoningMode = 'off',
     [string]$BrainMmproj = '',
@@ -62,6 +66,7 @@
     [double]$VisualDescriberStaticInterval = 4.0,
     [double]$VisualDescriberPeriodic = 4.0,
     [double]$VisualDescriberMaxAge = 6.0,
+    [int]$NativeContextWindowTokens,
     [string]$ManifestPath
 )
 
@@ -92,13 +97,14 @@ function Resolve-LauncherRuntimeDefaults {
         ControlPort = $ports.control
         TtsPort = $ports.tera_tts
         TtsProvider = $launch.tts_provider
-        Model = $models.bonsai_model
+        Model = if ($models.sensenova_model) { $models.sensenova_model } elseif ($models.brain_model) { $models.brain_model } else { $models.bonsai_model }
         ModelAlias = $brain.model
         BrainPort = $ports.brain_port
         BrainUrl = $brain.llm_url
         BrainServer = $models.brain_server_exe
         BrainThreads = $brain.threads
         BrainContextSize = $brain.context_size
+        NativeContextWindowTokens = if ($Bound.Keys -contains 'BrainContextSize') { $Bound['BrainContextSize'] } else { $brain.context_size }
         BrainMaxOutputTokens = $brain.max_output_tokens
         BrainGpuLayers = $brain.gpu_layers
         BrainDevice = $brain.device
@@ -121,11 +127,24 @@ if (-not $PSBoundParameters.ContainsKey('BrainUrl') -and $PSBoundParameters.Cont
     $brainUri.Port = $BrainPort
     $BrainUrl = $brainUri.Uri.AbsoluteUri.TrimEnd('/')
 }
+if (-not $PSBoundParameters.ContainsKey('BrainCacheTypeK') -and $runtimeManifest.brain.cache_type_k) {
+    $BrainCacheTypeK = [string]$runtimeManifest.brain.cache_type_k
+}
+if (-not $PSBoundParameters.ContainsKey('BrainCacheTypeV') -and $runtimeManifest.brain.cache_type_v) {
+    $BrainCacheTypeV = [string]$runtimeManifest.brain.cache_type_v
+}
 $server = $BrainServer
 $model = $Model
 foreach ($resource in @('server', 'model')) {
     $value = Get-Variable -Name $resource -ValueOnly
     if (-not [IO.Path]::IsPathRooted($value)) { Set-Variable -Name $resource -Value (Join-Path $repo $value) }
+}
+if ($OmniVoiceRefWav) {
+    if (-not [IO.Path]::IsPathRooted($OmniVoiceRefWav)) { $OmniVoiceRefWav = Join-Path $repo $OmniVoiceRefWav }
+    if (-not (Test-Path -LiteralPath $OmniVoiceRefWav)) {
+        $inTreeRef = Join-Path $repo 'runtime\models\tts\refs\voice_ref_aleksandra.wav'
+        if (Test-Path -LiteralPath $inTreeRef) { $OmniVoiceRefWav = $inTreeRef }
+    }
 }
 function Get-BrainProbeUrls([string]$BaseUrl, [int]$Port) {
     $uri = [Uri]$BaseUrl
@@ -252,6 +271,8 @@ try {
         '--reasoning', $BrainReasoningMode
     )
     if ($BrainMmproj) { $holderArgs += @('--mmproj', ('"{0}"' -f $BrainMmproj)) }
+    if ($BrainCacheTypeK) { $holderArgs += @('--cache-type-k', $BrainCacheTypeK) }
+    if ($BrainCacheTypeV) { $holderArgs += @('--cache-type-v', $BrainCacheTypeV) }
     if ($BrainTransformersServerScript) {
         $holderArgs += @('--transformers-server-script', ('"{0}"' -f $BrainTransformersServerScript))
         if (-not $BrainTransformersPython) { throw '-BrainTransformersPython is required with -BrainTransformersServerScript.' }
@@ -270,7 +291,7 @@ try {
     # profile, under its profile lock. Never pre-write the daily profile here.
     $integratedArgs = @(
         '-RunSeconds', [string]$RunSeconds,
-        '-ProfileName', $ProfileName, '-JawlTemperatureOverride', '0.3', '-NativeContextWindowTokens', [string]$BrainContextSize,
+        '-ProfileName', $ProfileName, '-JawlTemperatureOverride', '0.3', '-NativeContextWindowTokens', [string]$NativeContextWindowTokens,
         '-JawlConsolePort', [string]$JawlConsolePort, '-ControlPort', [string]$ControlPort,
         '-TtsPort', [string]$TtsPort,
         '-TtsProvider', $TtsProvider, '-VisionUrl', $VisionUrl, '-VisionModel', $VisionModel,
@@ -288,6 +309,7 @@ try {
     if ($StartDesktopShell) { $integratedArgs += '-StartDesktopShell' }
     if ($EnableAmbientAudio) {
         $integratedArgs += '-EnableAmbientAudio'
+        if ($AmbientTriageSeconds -gt 0) { $integratedArgs += @('-AmbientTriageSeconds', [string]$AmbientTriageSeconds) }
         if ($StartAmbientAudio) { $integratedArgs += '-StartAmbientAudio' }
         if (-not [string]::IsNullOrWhiteSpace($AmbientAudioDevice)) {
             $integratedArgs += @('-AmbientAudioDevice', $AmbientAudioDevice)

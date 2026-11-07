@@ -9,8 +9,9 @@ import json
 import sys
 from pathlib import Path
 
-WEIGHTS = Path(sys.argv[1] if len(sys.argv) > 1 else r"G:\AI\JAWL-VoiceCompanion\runtime\models\needle3\needle3.cact")
-TOOLS = Path(sys.argv[2] if len(sys.argv) > 2 else r"G:\AI\JAWL-VoiceCompanion\runtime\models\needle3\tools.json")
+_ROOT = Path(__file__).resolve().parents[1]
+WEIGHTS = Path(sys.argv[1] if len(sys.argv) > 1 else _ROOT / "runtime" / "models" / "needle3" / "needle3.cact")
+TOOLS = Path(sys.argv[2] if len(sys.argv) > 2 else _ROOT / "runtime" / "models" / "needle3" / "tools.json")
 
 QUERIES = [
     "Set a timer for five minutes",          # EN control

@@ -182,6 +182,12 @@ def main() -> None:
         help="enable optional transient OCR grounding; pytesseract remains optional",
     )
     parser.add_argument(
+        "--screen-display-index",
+        type=int,
+        default=0,
+        help="display monitor index for screen capture",
+    )
+    parser.add_argument(
         "--screen-redact-rect",
         action="append",
         default=[],
@@ -301,6 +307,24 @@ def main() -> None:
         type=float,
         default=6.0,
         help="Qwen observation age after which the result is stale",
+    )
+    parser.add_argument(
+        "--visual-stream",
+        action="store_true",
+        default=False,
+        help="enable continuous zero-disk DXGI desktop capture into EpisodicVisualMemory",
+    )
+    parser.add_argument(
+        "--visual-stream-cadence",
+        type=float,
+        default=0.5,
+        help="poll cadence in seconds for visual stream scene delta evaluation (default 0.5s)",
+    )
+    parser.add_argument(
+        "--visual-stream-min-ingest-interval",
+        type=float,
+        default=5.0,
+        help="minimum interval in seconds between LanceDB keyframe ingestions (default 5.0s)",
     )
     parser.add_argument(
         "--audio-describer",

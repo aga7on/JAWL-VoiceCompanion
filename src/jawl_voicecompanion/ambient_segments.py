@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from queue import Empty, Full, Queue
 from threading import Event, RLock, Thread, current_thread
@@ -24,6 +24,13 @@ class AmbientSegment:
     channels: int
     started_at: float
     ended_at: float
+    app_name: str | None = None
+    app_category: str | None = None
+    app_title: str | None = None
+    app_pid: int | None = None
+    timestamp_source: str = "unknown"
+    source_isolated: bool = False
+    privacy_epoch: int | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,14 @@ class _Chunk:
     sample_rate: int
     channels: int
     captured_at: float
+    app_name: str | None = None
+    app_category: str | None = None
+    app_title: str | None = None
+    app_pid: int | None = None
+    discontinuity: bool = False
+    timestamp_source: str = "unknown"
+    source_isolated: bool = False
+    privacy_epoch: int | None = None
 
 
 class AmbientSegmenter:
@@ -69,6 +84,11 @@ class AmbientSegmenter:
         self._accepted_chunks = 0
         self._dropped_chunks = 0
         self._dropped_bytes = 0
+        self._gap_pending = False
+        self._discontinuities = 0
+        self._discontinuity_discarded_bytes = 0
+        self._source_changes = 0
+        self._source_change_discarded_bytes = 0
         self._cancelled_chunks = 0
         self._cancelled_bytes = 0
         self._rejected_chunks = 0
@@ -92,6 +112,7 @@ class AmbientSegmenter:
                 return self.state()
             self._queue = Queue(maxsize=self.queue_size)
             self._queued_bytes = 0
+            self._gap_pending = False
             self._stop.clear()
             self._cancel.clear()
             self._session_id = str(session_id or "ambient-audio")[:120]
@@ -116,6 +137,14 @@ class AmbientSegmenter:
         channels: int,
         *,
         captured_at: float | None = None,
+        app_name: str | None = None,
+        app_category: str | None = None,
+        app_title: str | None = None,
+        app_pid: int | None = None,
+        discontinuity: bool = False,
+        timestamp_source: str = "unknown",
+        source_isolated: bool = False,
+        privacy_epoch: int | None = None,
     ) -> dict[str, Any]:
         if not isinstance(pcm16, bytes) or not pcm16:
             self._reject(len(pcm16) if isinstance(pcm16, bytes) else 0, "ambient segment input must be non-empty PCM16")
@@ -131,14 +160,30 @@ class AmbientSegmenter:
         capture_end = self._clock() if captured_at is None else float(captured_at)
         if not math.isfinite(capture_end) or capture_end < 0:
             self._reject(len(pcm16), "ambient segment capture time is invalid")
-        chunk = _Chunk(bytes(pcm16), sample_rate, channels, capture_end)
+        chunk = _Chunk(
+            bytes(pcm16),
+            sample_rate,
+            channels,
+            capture_end,
+            app_name=app_name,
+            app_category=app_category,
+            app_title=app_title,
+            app_pid=app_pid,
+            discontinuity=bool(discontinuity),
+            timestamp_source=str(timestamp_source or "unknown")[:80],
+            source_isolated=bool(source_isolated),
+            privacy_epoch=privacy_epoch,
+        )
         with self._lock:
             queue = self._queue
             if queue is None or self._worker is None or not self._worker.is_alive() or self._stop.is_set():
                 return {"status": "inactive", "reason": "segmenter_not_running"}
+            if self._gap_pending and not chunk.discontinuity:
+                chunk = replace(chunk, discontinuity=True)
             if self._queued_bytes + len(chunk.data) > self.max_queue_bytes:
                 self._dropped_chunks += 1
                 self._dropped_bytes += len(chunk.data)
+                self._gap_pending = True
                 return {
                     "status": "dropped",
                     "reason": "ambient_segment_queue_bytes_full",
@@ -150,6 +195,7 @@ class AmbientSegmenter:
             except Full:
                 self._dropped_chunks += 1
                 self._dropped_bytes += len(chunk.data)
+                self._gap_pending = True
                 return {
                     "status": "dropped",
                     "reason": "ambient_segment_queue_full",
@@ -157,6 +203,7 @@ class AmbientSegmenter:
                 }
             self._queued_bytes += len(chunk.data)
             self._accepted_chunks += 1
+            self._gap_pending = False
             return {"status": "accepted", "queue_depth": queue.qsize()}
 
     def stop(self, *, flush: bool = True, timeout: float = 2.0) -> dict[str, Any]:
@@ -196,6 +243,11 @@ class AmbientSegmenter:
                 "accepted_chunks": self._accepted_chunks,
                 "dropped_chunks": self._dropped_chunks,
                 "dropped_bytes": self._dropped_bytes,
+                "discontinuities": self._discontinuities,
+                "discontinuity_discarded_bytes": self._discontinuity_discarded_bytes,
+                "discontinuity_pending": self._gap_pending,
+                "source_changes": self._source_changes,
+                "source_change_discarded_bytes": self._source_change_discarded_bytes,
                 "cancelled_chunks": self._cancelled_chunks,
                 "cancelled_bytes": self._cancelled_bytes,
                 "rejected_chunks": self._rejected_chunks,
@@ -217,6 +269,14 @@ class AmbientSegmenter:
         ended_at = 0.0
         last_activity_at = 0.0
         sequence = 0
+        curr_app_name: str | None = None
+        curr_app_category: str | None = None
+        curr_app_title: str | None = None
+        curr_app_pid: int | None = None
+        curr_timestamp_source = "unknown"
+        curr_source_key: tuple[Any, bool, int | None] | None = None
+        curr_source_isolated = False
+        curr_privacy_epoch: int | None = None
         try:
             while True:
                 if self._cancel.is_set():
@@ -233,8 +293,19 @@ class AmbientSegmenter:
                             sequence,
                             started_at,
                             ended_at,
+                            app_name=curr_app_name,
+                            app_category=curr_app_category,
+                            app_title=curr_app_title,
+                            app_pid=curr_app_pid,
+                            timestamp_source=curr_timestamp_source,
+                            source_isolated=curr_source_isolated,
+                            privacy_epoch=curr_privacy_epoch,
                         )
                         buffer.clear()
+                        curr_app_name = curr_app_category = curr_app_title = curr_app_pid = None
+                        curr_timestamp_source = "unknown"
+                        curr_source_key = None
+                        curr_source_isolated = False
                     if self._stop.is_set() and queue.empty():
                         break
                     continue
@@ -244,8 +315,39 @@ class AmbientSegmenter:
                     if self._cancel.is_set():
                         self._record_cancelled(len(chunk.data))
                         continue
+                    if chunk.discontinuity:
+                        # Never combine speech across missing PCM. Discard the
+                        # incomplete prefix rather than fabricate a full phrase.
+                        with self._lock:
+                            self._discontinuities += 1
+                            self._discontinuity_discarded_bytes += len(buffer)
+                        buffer.clear()
+                        curr_app_name = curr_app_category = curr_app_title = curr_app_pid = None
+                        curr_timestamp_source = "unknown"
+                        curr_source_key = None
+                        curr_source_isolated = False
+                    identity = ("pid", chunk.app_pid) if chunk.app_pid is not None else ("name", chunk.app_name or None)
+                    source_key = (identity, chunk.source_isolated, chunk.privacy_epoch)
+                    if buffer and source_key != curr_source_key:
+                        # A new/unknown attribution must never take ownership
+                        # of bytes buffered under the prior source.
+                        with self._lock:
+                            self._source_changes += 1
+                            self._source_change_discarded_bytes += len(buffer)
+                        buffer.clear()
+                        curr_app_name = curr_app_category = curr_app_title = curr_app_pid = None
+                        curr_timestamp_source = "unknown"
+                    if chunk.app_name:
+                        curr_app_name = chunk.app_name
+                        curr_app_category = chunk.app_category
+                        curr_app_title = chunk.app_title
+                        curr_app_pid = chunk.app_pid
                     if not buffer:
                         sample_rate, channels = chunk.sample_rate, chunk.channels
+                        curr_timestamp_source = chunk.timestamp_source
+                        curr_source_key = source_key
+                        curr_source_isolated = chunk.source_isolated
+                        curr_privacy_epoch = chunk.privacy_epoch
                         bytes_per_second = max(1, sample_rate * channels * 2)
                         started_at = chunk.captured_at - len(chunk.data) / bytes_per_second
                         ended_at = chunk.captured_at
@@ -258,12 +360,26 @@ class AmbientSegmenter:
                             sequence,
                             started_at,
                             ended_at,
+                            app_name=curr_app_name,
+                            app_category=curr_app_category,
+                            app_title=curr_app_title,
+                            app_pid=curr_app_pid,
+                            timestamp_source=curr_timestamp_source,
+                            source_isolated=curr_source_isolated,
+                            privacy_epoch=curr_privacy_epoch,
                         )
                         buffer.clear()
+                        curr_app_name = curr_app_category = curr_app_title = curr_app_pid = None
                         sample_rate, channels = chunk.sample_rate, chunk.channels
+                        curr_timestamp_source = chunk.timestamp_source
+                        curr_source_key = source_key
+                        curr_source_isolated = chunk.source_isolated
+                        curr_privacy_epoch = chunk.privacy_epoch
                         bytes_per_second = max(1, sample_rate * channels * 2)
                         started_at = chunk.captured_at - len(chunk.data) / bytes_per_second
                         ended_at = chunk.captured_at
+                    elif curr_timestamp_source != chunk.timestamp_source:
+                        curr_timestamp_source = "mixed"
                     offset = 0
                     bytes_per_second = max(1, sample_rate * channels * 2)
                     chunk_started_at = chunk.captured_at - len(chunk.data) / bytes_per_second
@@ -281,8 +397,17 @@ class AmbientSegmenter:
                                 sequence,
                                 started_at,
                                 self._clock(),
+                                app_name=curr_app_name,
+                                app_category=curr_app_category,
+                                app_title=curr_app_title,
+                                app_pid=curr_app_pid,
+                                timestamp_source=curr_timestamp_source,
+                                source_isolated=curr_source_isolated,
+                                privacy_epoch=curr_privacy_epoch,
                             )
                             buffer.clear()
+                            curr_app_name = curr_app_category = curr_app_title = curr_app_pid = None
+                            curr_timestamp_source = chunk.timestamp_source
                             started_at = self._clock()
                             continue
                         buffer.extend(chunk.data[offset : offset + take])
@@ -303,8 +428,17 @@ class AmbientSegmenter:
                                 sequence,
                                 started_at,
                                 ended_at,
+                                app_name=curr_app_name,
+                                app_category=curr_app_category,
+                                app_title=curr_app_title,
+                                app_pid=curr_app_pid,
+                                timestamp_source=curr_timestamp_source,
+                                source_isolated=curr_source_isolated,
+                                privacy_epoch=curr_privacy_epoch,
                             )
                             buffer.clear()
+                            curr_app_name = curr_app_category = curr_app_title = curr_app_pid = None
+                            curr_timestamp_source = chunk.timestamp_source
                             started_at = ended_at
                 finally:
                     queue.task_done()
@@ -322,6 +456,13 @@ class AmbientSegmenter:
                         sequence,
                         started_at,
                         ended_at,
+                        app_name=curr_app_name,
+                        app_category=curr_app_category,
+                        app_title=curr_app_title,
+                        app_pid=curr_app_pid,
+                        timestamp_source=curr_timestamp_source,
+                        source_isolated=curr_source_isolated,
+                        privacy_epoch=curr_privacy_epoch,
                     )
         except Exception as exc:
             with self._lock:
@@ -340,6 +481,14 @@ class AmbientSegmenter:
         sequence: int,
         started_at: float,
         ended_at: float,
+        *,
+        app_name: str | None = None,
+        app_category: str | None = None,
+        app_title: str | None = None,
+        app_pid: int | None = None,
+        timestamp_source: str = "unknown",
+        source_isolated: bool = False,
+        privacy_epoch: int | None = None,
     ) -> int:
         if not buffer:
             return sequence
@@ -353,6 +502,13 @@ class AmbientSegmenter:
             channels=channels,
             started_at=started_at,
             ended_at=ended_at,
+            app_name=app_name,
+            app_category=app_category,
+            app_title=app_title,
+            app_pid=app_pid,
+            timestamp_source=timestamp_source,
+            source_isolated=source_isolated,
+            privacy_epoch=privacy_epoch,
         )
         with self._lock:
             self._emitted_segments += 1

@@ -14,12 +14,13 @@ import time
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from jawl_voicecompanion.supervisor import RuntimeSupervisor, WorkerSpec  # noqa: E402
 
-LLAMA = r"G:\AI\llamacpp-prism\build-fa\bin\llama-server.exe"
+_INTREE_LLAMA = ROOT / "runtime" / "bin" / "llama-server" / "llama-server.exe"
+LLAMA = str(_INTREE_LLAMA) if _INTREE_LLAMA.exists() else r"G:\AI\llamacpp-prism\build-fa\bin\llama-server.exe"
 HIKARI = r"G:\AI\models\Ternary-Bonsai-2-27B-Abliterated-Hikari\Ternary-Bonsai-2-27B-Abliterated-PQ2_0.gguf"
 TERA_PY = r"G:\AI\tts_env\Scripts\python.exe"
 TERA_RELEASE = r"G:\AI\tts_models\TeraSpace__TeraTTSv2"

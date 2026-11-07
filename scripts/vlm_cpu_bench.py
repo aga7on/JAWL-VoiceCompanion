@@ -263,7 +263,11 @@ def _stop_tree(pid: int) -> None:
 def run_model(cfg: dict[str, Any], runtime: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     model_id = cfg["id"]
     model_path = Path(cfg["file"])
+    model_path = model_path if model_path.is_absolute() else ROOT / model_path
     mmproj = Path(cfg["mmproj"])
+    mmproj = mmproj if mmproj.is_absolute() else ROOT / mmproj
+    server_path = Path(server_path)
+    server_path = str(server_path if server_path.is_absolute() else ROOT / server_path)
     missing = [str(path) for path in (model_path, mmproj) if not path.is_file()]
     if missing:
         return {"status": "missing_weights", "model": model_id, "missing": missing}
@@ -272,7 +276,7 @@ def run_model(cfg: dict[str, Any], runtime: dict[str, Any], out_dir: Path) -> di
     stdout_path = log_dir / f"{model_id}.out.log"
     stderr_path = log_dir / f"{model_id}.err.log"
     command = [
-        runtime["llama_server"],
+        server_path,
         "-m", str(model_path),
         "--mmproj", str(mmproj),
         "--host", "127.0.0.1",
@@ -286,7 +290,7 @@ def run_model(cfg: dict[str, Any], runtime: dict[str, Any], out_dir: Path) -> di
     with stdout_path.open("wb") as out_handle, stderr_path.open("wb") as err_handle:
         process = subprocess.Popen(
             command,
-            cwd=str(Path(runtime["llama_server"]).parent),
+            cwd=str(Path(server_path).parent),
             stdout=out_handle,
             stderr=err_handle,
         )

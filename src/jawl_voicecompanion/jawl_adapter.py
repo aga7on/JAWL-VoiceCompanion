@@ -37,6 +37,13 @@ _INTERNAL_LINE = re.compile(
     r"|(?:thoughts?|observation|reasoning|reflection|action(?: result)?|tool(?: call| result)?)\s*:)",
     re.IGNORECASE | re.MULTILINE,
 )
+_CJK_MAP = (
+    ("一切正常", "всё в порядке"),
+    ("正常", "в норме"),
+    ("稳定", "стабиль"),
+    ("偏好", "предпочтение"),
+)
+_CJK_CHARS = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+")
 
 
 def filter_user_response(text: str) -> str:
@@ -51,6 +58,9 @@ def filter_user_response(text: str) -> str:
         clean = final.group("text").strip()
     if _INTERNAL_TAG.search(clean) or _INTERNAL_LINE.search(clean):
         raise JawlUnsafeResponse("JAWL response contains internal control markup")
+    for zh, ru in _CJK_MAP:
+        clean = clean.replace(zh, ru)
+    clean = _CJK_CHARS.sub("", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
     if not clean:
         raise JawlUnsafeResponse("JAWL response contains no user-facing text")
@@ -72,6 +82,9 @@ def filter_user_delta(text: str) -> str:
         raise JawlUnsafeResponse("JAWL delta exceeds the bounded text limit")
     if "<!--" in clean or _INTERNAL_TAG.search(clean) or _INTERNAL_LINE.search(clean):
         raise JawlUnsafeResponse("JAWL delta contains internal control markup")
+    for zh, ru in _CJK_MAP:
+        clean = clean.replace(zh, ru)
+    clean = _CJK_CHARS.sub("", clean)
     return clean
 
 
@@ -86,6 +99,7 @@ class JawlTerminalAdapter:
     """
 
     handshake = b"JAWL_HANDSHAKE\n"
+    manages_history = True
 
     def __init__(self, port_file: Path, timeout: float = 30.0):
         self.port_file = Path(port_file)

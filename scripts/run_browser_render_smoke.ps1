@@ -90,13 +90,14 @@ $controlDomPath = Join-Path $tempRoot 'control.dom.html'
 $obsDomPath = Join-Path $tempRoot 'obs.dom.html'
 $controlProfile = Join-Path $tempRoot 'control-profile'
 $obsProfile = Join-Path $tempRoot 'obs-profile'
+$historyPath = Join-Path $tempRoot 'conversation.ndjson'
 $controlScreenshot = Join-Path $evidenceRoot 'control.png'
 $obsScreenshot = Join-Path $evidenceRoot 'obs.png'
 $server = $null
 
 try {
     $server = Start-Process -FilePath $pythonExe -WorkingDirectory $companionRoot -PassThru `
-        -ArgumentList @('-m', 'jawl_voicecompanion', '--host', '127.0.0.1', '--port', "$controlPort") `
+        -ArgumentList @('-m', 'jawl_voicecompanion', '--host', '127.0.0.1', '--port', "$controlPort", '--history-file', "`"$historyPath`"") `
         -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
     Wait-Health $baseUrl $server
     $controlDom = Invoke-BrowserDump $browser "$baseUrl/app" $controlDomPath $controlProfile $controlScreenshot

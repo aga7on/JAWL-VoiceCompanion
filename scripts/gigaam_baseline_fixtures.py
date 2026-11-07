@@ -21,12 +21,13 @@ import time
 import unicodedata
 from pathlib import Path
 
-REPO = Path(r"G:\AI\JAWL-VoiceCompanion")
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from jawl_voicecompanion.giga_final import CrispASRFileTranscriber  # noqa: E402
 
-CRISPASR = Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
+_INTREE_CRISP = REPO / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+CRISPASR = _INTREE_CRISP if _INTREE_CRISP.exists() else Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
 # The GigaAM weights live inside the project (runtime/models/asr, gitignored)
 # so a dev-machine cleanup of external model dirs cannot break the canonical
 # ASR engine (ADR-044: GigaAM is the only ASR; a missing model must fail

@@ -110,7 +110,7 @@ class JawlEventFileSink:
             "observation_class": str(payload.get("observation_class") or "ambient_observation")[:60],
             "retention_tier": str(payload.get("retention_tier") or "short")[:32],
             "confidence": payload.get("confidence"),
-            "source_event_ids": [str(item)[:120] for item in source_ids[:32]]
+            "source_event_ids": [str(item)[:120] for item in source_ids[:256]]
             if isinstance(source_ids, list) else [],
             "observed_from": str(payload.get("observed_from") or "")[:80],
             "observed_until": str(payload.get("observed_until") or "")[:80],

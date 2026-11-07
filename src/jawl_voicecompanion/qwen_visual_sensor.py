@@ -30,6 +30,7 @@ class QwenVisualSensor:
         screen_capture: Any,
         describer: QwenEventDescriber,
         fusion: Any,
+        scene_state: Any | None = None,
         on_observation: Callable[[QwenEventObservation], Any] | None = None,
         roi: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
         target_title: str = "",
@@ -47,6 +48,7 @@ class QwenVisualSensor:
         self.screen_capture = screen_capture
         self.describer = describer
         self.fusion = fusion
+        self.scene_state = scene_state or getattr(fusion, "scene_state", None)
         self.on_observation = on_observation
         self.roi = self._normalize_roi(roi)
         self.target_title = str(target_title or "").strip()
@@ -64,7 +66,8 @@ class QwenVisualSensor:
         self._stop = Event()
         self._thread: Thread | None = None
         self._signature: np.ndarray | None = None
-        self._scene_id = "scene-1"
+        canonical_sid = getattr(self.scene_state, "scene_id", "") if self.scene_state is not None else ""
+        self._scene_id = str(canonical_sid) if canonical_sid else "scene-1"
         self._scene_counter = 1
         self._frame_counter = 0
         self._last_submit_at = 0.0
@@ -230,6 +233,12 @@ class QwenVisualSensor:
             self._scene_counter += 1
             self._scene_id = f"scene-{self._scene_counter}"
             self._scene_changes += 1
+            sc = self.scene_state or getattr(self.fusion, "scene_state", None)
+            if sc is not None and hasattr(sc, "transition_scene"):
+                try:
+                    sc.transition_scene(self._scene_id)
+                except Exception:
+                    pass
             self._invalidate_previous_caption()
         if (scene_change or roi_change) and ocr_enabled and not ocr_due:
             self._ocr_pending = True

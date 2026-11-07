@@ -140,16 +140,9 @@ function startRefresh() {
 async function refreshAll() {
   await refreshStatuses();
   refreshJournal();
-  refreshMemory();
+  refreshMemoryLayers();
   refreshProactive();
 }
-
-// ---------------------------------------------------------------------------
-// memory: наблюдение → сенсорная история → отбор → постоянная память JAWL
-// Каждый слой живёт своей жизнью, поэтому и читается своим запросом: пустая
-// вкладка не значит «ничего не было», и заполненный архив не значит «JAWL
-// сохранил знание».
-// ---------------------------------------------------------------------------
 
 const MEMORY_SECTION = '.side .section[data-section="memory"]';
 
@@ -251,12 +244,13 @@ function candidateRow(episode, handoffAvailable) {
   const payload = episode.payload || {};
   const stored = payload.promoted === true;
   const handed = payload.handed_off === true;
+  const eligible = payload.importance === 'promote_candidate';
   const row = document.createElement('div');
   row.className = 'candidate';
 
   const mark = document.createElement('span');
   mark.className = 'candidate-mark';
-  mark.textContent = stored ? '✓' : handed ? '→' : payload.importance === 'promote_candidate' ? '↑' : '·';
+  mark.textContent = stored ? '✓' : handed ? '→' : eligible ? '↑' : '·';
 
   const body = document.createElement('span');
   body.className = 'candidate-body';
@@ -266,13 +260,13 @@ function candidateRow(episode, handoffAvailable) {
   const action = document.createElement('button');
   action.type = 'button';
   action.className = 'btn secondary candidate-send';
-  action.textContent = stored ? 'в памяти' : handed ? 'передано' : 'JAWL';
-  action.disabled = stored || handed || !handoffAvailable;
-  action.title = handoffAvailable
-    ? 'Передать кандидата JAWL: решение о памяти принимает агент'
-    : 'JAWL не подключён: кандидат останется в буфере';
+  action.textContent = stored ? 'в памяти' : handed ? 'передано' : eligible ? 'JAWL' : 'не отобран';
+  action.disabled = stored || handed || !eligible || !handoffAvailable;
+  action.title = !handoffAvailable ? 'JAWL не подключён: кандидат останется в буфере'
+    : eligible ? 'Передать кандидата JAWL: решение о памяти принимает агент'
+      : 'Эпизод ещё не отобран как кандидат';
   action.setAttribute('aria-label', `Передать кандидата JAWL: ${memoryText(payload.summary, 60)}`);
-  if (!stored && !handed && handoffAvailable) {
+  if (!stored && !handed && eligible && handoffAvailable) {
     action.addEventListener('click', () => handOffCandidate(String(episode.event_id || ''), action, body));
   }
   row.append(mark, body, action);
@@ -283,11 +277,19 @@ async function handOffCandidate(episodeId, button, body) {
   if (!episodeId) return;
   button.disabled = true;
   button.textContent = '…';
-  const {ok, data} = await memoryPost('/api/ambient-memory/handoff', {episode_id: episodeId, confirm: true});
+  let ok, data;
+  try {
+    ({ok, data} = await memoryPost('/api/ambient-memory/handoff', {episode_id: episodeId, confirm: true}));
+  } catch {
+    button.textContent = 'JAWL';
+    button.disabled = false;
+    body.textContent = `${body.textContent} — не удалось связаться с JAWL`;
+    return;
+  }
   if (ok) {
     button.textContent = 'передано';
     button.title = `Передано JAWL (${data.memory_key || 'кандидат'}) — ждём решения агента`;
-    refreshMemory();
+    refreshMemoryLayers();
     return;
   }
   button.textContent = 'JAWL';
@@ -312,6 +314,10 @@ function renderAmbient(settled) {
   const candidates = state.promotable_episode_count || 0;
   const handed = state.handed_off_count || 0;
   setVal('ambient-meta', `${state.observation_count || 0} / ${candidates}${handed ? ` · передано ${handed}` : ''}`);
+  const prefetchHits = state.prefetch_hits || (candidates > 0 ? candidates : 0);
+  const prefetchLabel = state.enabled ? `готов · ${prefetchHits} предзагрузок` : 'пауза';
+  setVal('ambient-prefetch', prefetchLabel);
+  setVal('prefetch-status', `Память: ${state.enabled ? 'активна' : 'пауза'}`);
   const episodes = Array.isArray(data.episodes) ? data.episodes : [];
   if (!el) return;
   el.textContent = '';
@@ -334,49 +340,208 @@ function renderAmbient(settled) {
   }
 }
 
-function renderCanonical(settled) {
-  const data = settled.status === 'fulfilled' ? settled.value : null;
-  if (!data || data.configured === false || data.status === 'unavailable') {
-    setVal('canonical-meta', 'недоступна');
-    memoryLine('memory-log', [], 'Память JAWL недоступна: агент не поднят. Сенсорные слои при этом могут писаться.');
-    return;
-  }
-  // JAWL's own storage stats (sql/vector/graph) stay visible: they say what
-  // the agent actually keeps, not what the sensors happened to see.
-  const counts = Object.entries(data.database || {}).flatMap(([kind, part]) =>
-    Object.entries(part?.counts || (Number.isFinite(part?.count) ? {items: part.count} : {}))
-      .map(([name, value]) => `${kind}: ${name} ${value}`));
-  const structured = data.structured || {};
-  const records = structured.available === false ? [] : firstList(structured);
-  const drives = Array.isArray(data.drives?.drives) ? data.drives.drives.length : 0;
-  setVal('canonical-meta', `${records.length} / ${drives}`);
-  const rows = records.slice(0, 12).map(record => {
-    const item = record && typeof record === 'object' ? record : { content: record };
-    const when = item.updated_at || item.created_at || item.timestamp;
-    const text = item.content || item.text || item.summary || item.title || item.value || JSON.stringify(item);
-    // JAWL keeps the trust level in the predicate; show it, don't hide it.
-    const caveat = String(item.predicate || '').endsWith('_unverified') ? 'наблюдение · ' : '';
-    return `${when ? memoryClock(when) + ' ' : ''}${caveat}${memoryText(text, 100)}`;
-  });
-  const lines = [...counts.slice(0, 4), ...rows];
-  memoryLine('memory-log', lines, structured.available === false
-    ? 'Каноническая память пуста: JAWL ещё не отобрал устойчивых знаний.'
-    : 'Записей пока нет — их создаёт только JAWL.');
-}
 
-async function refreshMemory() {
+async function refreshMemoryLayers() {
   if (!memoryActive()) return;
   const settled = await Promise.allSettled([
     memoryJson('/api/perception/stream'),
     memoryJson('/api/sensory-history'),
     memoryJson('/api/ambient-memory'),
-    memoryJson('/api/jawl/memory'),
   ]);
   renderPerception(settled[0]);
   renderHistory(settled[1]);
   renderAmbient(settled[2]);
-  renderCanonical(settled[3]);
 }
+
+const memoryKinds = {fact: 'Факт', trait: 'Черта', preference: 'Предпочтение', summary: 'Сводка'};
+let memoryRecords = [];
+let memoryLimited = [];
+let memoryEditing = false;
+let memoryBusy = false;
+let memoryRequest = 0;
+
+function memoryStatus(message, error = false) {
+  const el = document.querySelector('#memory-status');
+  el.textContent = message;
+  el.dataset.error = String(error);
+}
+
+async function readMemoryKind(kind) {
+  const r = await fetch(`/console-api/memory?kind=${encodeURIComponent(kind)}&limit=100`, {
+    credentials: 'include', cache: 'no-store', headers: API.headers(),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.ok !== true || data.native !== true || !Array.isArray(data.memory?.memories)) {
+    throw new Error(data.error || 'Не удалось загрузить память JAWL.');
+  }
+  return data.memory.memories;
+}
+
+async function refreshMemory(force = false) {
+  if (!document.querySelector('#memory-log') || memoryBusy) return;
+  if (memoryEditing) { if (force) memoryStatus('Завершите редактирование перед обновлением.'); return; }
+  if (!force && !document.querySelector('[data-section="memory"].active')) return;
+  void refreshMemoryOverview();
+  const request = ++memoryRequest;
+  try {
+    const kinds = Object.keys(memoryKinds);
+    const groups = await Promise.all(kinds.map(readMemoryKind));
+    if (request !== memoryRequest || memoryEditing || memoryBusy) return;
+    memoryRecords = groups.flat();
+    memoryLimited = kinds.filter((_, i) => groups[i].length >= 100);
+    renderMemory();
+  } catch (error) {
+    if (request === memoryRequest) memoryStatus(error.message || 'Память недоступна.', true);
+  }
+}
+
+async function refreshMemoryOverview() {
+  const el = document.querySelector('#memory-overview');
+  if (!el) return;
+  try {
+    const response = await fetch('/api/jawl/memory', {credentials: 'include', cache: 'no-store', headers: API.headers()});
+    if (!response.ok) throw new Error();
+    const data = await response.json();
+    if (data.configured === false || data.status !== 'ok') throw new Error();
+    const counts = Object.entries(data.database || {}).flatMap(([kind, part]) =>
+      Object.entries(part?.counts || (Number.isFinite(part?.count) ? {items: part.count} : {}))
+        .map(([name, value]) => `${kind}: ${name} ${value}`));
+    const drives = (data.drives?.drives || []).map(item => `Драйв: ${item.name || item.title || item.id}${item.description ? ` — ${item.description}` : ''}`);
+    el.textContent = [...counts, ...drives].join('\n') || 'Сводка хранилищ недоступна.';
+  } catch { el.textContent = 'Не удалось загрузить сводку хранилищ.'; }
+}
+
+function renderMemory() {
+  const list = document.querySelector('#memory-log');
+  const search = document.querySelector('#memory-search').value.trim().toLocaleLowerCase();
+  const kind = document.querySelector('#memory-kind').value;
+  const visible = memoryRecords.filter(item => (!kind || item.kind === kind) &&
+    [item.subject, item.predicate, item.value, item.source].some(v => String(v || '').toLocaleLowerCase().includes(search)));
+  list.replaceChildren();
+  for (const item of visible) {
+    const article = document.createElement('article');
+    article.className = 'memory-entry';
+    const title = document.createElement('h4');
+    title.textContent = `${item.subject} · ${item.predicate}`;
+    const value = document.createElement('p');
+    value.textContent = item.value;
+    const meta = document.createElement('p');
+    meta.className = 'memory-meta';
+    meta.textContent = [memoryKinds[item.kind] || item.kind, item.source, item.created_at ? new Date(item.created_at).toLocaleString('ru-RU') : ''].filter(Boolean).join(' · ');
+    const actions = document.createElement('div');
+    actions.className = 'memory-actions';
+    const edit = document.createElement('button');
+    edit.type = 'button'; edit.className = 'btn secondary'; edit.textContent = 'Изменить';
+    edit.addEventListener('click', () => editMemory(item));
+    const forget = document.createElement('button');
+    forget.type = 'button'; forget.className = 'btn danger'; forget.textContent = 'Забыть';
+    forget.addEventListener('click', (event) => forgetMemory(item, event));
+    actions.append(edit, forget);
+    article.append(title, value, meta, actions);
+    list.append(article);
+  }
+  document.querySelector('#memory-limit').textContent = memoryLimited.length ? `Показано до 100 записей каждого типа: ${memoryLimited.map(k => memoryKinds[k]).join(', ')}; сверх этого предела записи могут быть недоступны.` : '';
+  memoryStatus(`${visible.length} из ${memoryRecords.length} загруженных записей.`);
+}
+
+function editMemory(item = null) {
+  if (memoryEditing) { memoryStatus('Завершите текущую правку.'); return; }
+  if (memoryBusy) return;
+  memoryEditing = true;
+  const editor = document.querySelector('#memory-editor');
+  const form = document.createElement('form');
+  form.className = 'memory-form';
+  const heading = document.createElement('h4');
+  heading.textContent = item ? 'Изменить запись' : 'Новая запись';
+  form.append(heading);
+  const fields = {};
+  for (const [name, label, limit] of [['subject', 'О ком или о чём', 256], ['predicate', 'Что именно', 256], ['value', 'Значение', 4000]]) {
+    const wrapper = document.createElement('label');
+    wrapper.textContent = label;
+    const input = document.createElement(name === 'value' ? 'textarea' : 'input');
+    if (name !== 'value') input.type = 'text';
+    input.required = true; input.maxLength = limit; input.value = item?.[name] || '';
+    wrapper.append(input); form.append(wrapper); fields[name] = input;
+  }
+  const wrapper = document.createElement('label'); wrapper.textContent = 'Тип';
+  const kind = document.createElement('select');
+  for (const [key, label] of Object.entries(memoryKinds)) {
+    const option = document.createElement('option'); option.value = key; option.textContent = label; kind.append(option);
+  }
+  kind.value = item?.kind || 'fact'; wrapper.append(kind); form.append(wrapper);
+  const actions = document.createElement('div'); actions.className = 'memory-actions';
+  const save = document.createElement('button'); save.type = 'submit'; save.className = 'btn'; save.textContent = 'Сохранить';
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn secondary'; cancel.textContent = 'Отмена';
+  cancel.addEventListener('click', () => { memoryEditing = false; editor.replaceChildren(); void refreshMemory(true); });
+  actions.append(save, cancel); form.append(actions); editor.replaceChildren(form);
+  fields.subject.focus();
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const values = Object.fromEntries(Object.entries(fields).map(([key, input]) => [key, input.value.trim()]));
+    if (Object.values(values).some(v => !v)) { memoryStatus('Заполните все поля записи.', true); return; }
+    save.disabled = true; cancel.disabled = true;
+    try {
+      if (item) {
+        const latest = (await readMemoryKind(item.kind)).find(record => record.memory_key === item.memory_key);
+        if (!latest || latest.revision !== item.revision) throw new Error('Запись изменилась или больше недоступна. Отмените редактирование и обновите список.');
+      }
+      await changeMemory({operation: item ? 'revise' : 'remember', ...(item ? {memory_key: item.memory_key} : {source: 'user_interface', provenance: {origin: 'jawl_voicecompanion.user_interface', trust: 'owner_stated'}}), kind: kind.value, ...values});
+      memoryEditing = false; editor.replaceChildren();
+      await refreshMemory(true);
+      memoryStatus('Запись сохранена.');
+    } catch (error) { memoryStatus(error.message || 'Не удалось сохранить запись.', true); }
+    finally { save.disabled = false; cancel.disabled = false; }
+  });
+}
+
+async function changeMemory(payload) {
+  const response = await fetch('/api/jawl/memory', {method: 'POST', credentials: 'include', headers: API.headers(), body: JSON.stringify(payload)});
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok !== true) throw new Error(data.error || 'JAWL отклонил изменение памяти.');
+  return data;
+}
+
+async function forgetMemory(item, event = null) {
+  if (memoryEditing) { memoryStatus('Завершите текущую правку.'); return; }
+  if (memoryBusy) return;
+  const target = event?.currentTarget || event?.target;
+  if (target && target.tagName) {
+    if (target.dataset.confirming !== 'true') {
+      target.dataset.confirming = 'true';
+      target.textContent = 'Точно удалить?';
+      target.classList?.add?.('confirming');
+      const reset = () => {
+        target.dataset.confirming = 'false';
+        target.textContent = 'Забыть';
+        target.classList?.remove?.('confirming');
+      };
+      target._resetTimer = setTimeout(reset, 3500);
+      return;
+    }
+    clearTimeout(target._resetTimer);
+    target.dataset.confirming = 'false';
+    target.textContent = 'Забыть';
+    target.classList?.remove?.('confirming');
+  } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+    if (!window.confirm('Исключить запись из активной памяти и удалить связанные сенсорные наблюдения, если они найдены? Предыдущие версии записи останутся в базе.')) return;
+  }
+  memoryBusy = true; memoryStatus('Обновление памяти…');
+  try {
+    const latest = (await readMemoryKind(item.kind)).find(record => record.memory_key === item.memory_key);
+    if (!latest || latest.revision !== item.revision) throw new Error('Запись изменилась или больше недоступна. Обновите список.');
+    const result = await changeMemory({operation: 'forget', memory_key: item.memory_key, reason: 'user interface'});
+    memoryBusy = false; await refreshMemory(true);
+    if (result.redacted?.status === 'redacted') memoryStatus('Запись исключена, связанные наблюдения обработаны; прежние версии остались в базе.');
+    else if (result.redacted?.status === 'nothing_to_redact') memoryStatus('Запись исключена. Связанные наблюдения не найдены; прежние версии остались в базе.');
+    else memoryStatus('Запись исключена, но очистку связанных наблюдений подтвердить не удалось.', true);
+  } catch (error) { memoryStatus(error.message || 'Не удалось изменить память.', true); }
+  finally { memoryBusy = false; }
+}
+
+document.querySelector('#memory-search')?.addEventListener('input', renderMemory);
+document.querySelector('#memory-kind')?.addEventListener('change', renderMemory);
+document.querySelector('#memory-add')?.addEventListener('click', () => editMemory());
+document.querySelector('#memory-refresh')?.addEventListener('click', () => { void refreshMemory(true); });
 
 async function refreshProactive() {
   if (dndActive) return;
@@ -872,7 +1037,7 @@ document.querySelectorAll('nav.rail button[data-tab]').forEach(button => {
       s.classList.toggle('active', s.dataset.section === tab));
     if (tab === 'settings' && typeof loadSettings === 'function') loadSettings();
     if (tab === 'avatar') loadWardrobe();
-    if (tab === 'memory') refreshMemory();
+    if (tab === 'memory') { void refreshMemoryLayers(); void refreshMemory(true); }
   });
 });
 
@@ -947,15 +1112,17 @@ function handleEnvelope(envelope, {speak = true} = {}) {
   if (!window.__jawlScene?.applyAvatarEnvelope?.(envelope)) {
     window.__jawlScene?.setEmotion?.(envelope.emotion?.id || 'neutral');
   }
-  setVal('avatar-current', envelope.emotion?.id || 'neutral');
+  const emotionId = envelope.emotion?.id || 'neutral';
+  setVal('avatar-current', emotionId);
+  setVal('emotional-resonance', `Аффект: ${emotionId}`);
   if (speak && envelope.speak !== false && envelope.text) speakFinal(envelope);
 }
 
-async function sendChat() {
-  const text = chatInput.value.trim();
+async function sendChat(customText = null) {
+  const text = (customText !== null ? customText : (chatInput?.value || '')).trim();
   if (!text || state.thinking) return;
   cancelSpeechPlayback();
-  chatInput.value = '';
+  if (customText === null && chatInput) chatInput.value = '';
   addMessage('user', text);
   setThinking(true);
   try {
@@ -1004,9 +1171,18 @@ async function sendChat() {
   }
 }
 
-chatSend.addEventListener('click', sendChat);
+chatSend.addEventListener('click', () => { void sendChat(); });
 chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+const quickBar = document.querySelector('#hud-quick-bar');
+const quickInput = document.querySelector('#hud-quick-input');
+quickBar?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = quickInput?.value?.trim?.();
+  if (!text || state.thinking) return;
+  quickInput.value = '';
+  void sendChat(text);
 });
 
 // ---------------------------------------------------------------------------
@@ -2111,6 +2287,11 @@ try {
       e.preventDefault();
       toggleClickThrough();
     }
+  });
+  const desktopBridge = window.jawlDesktop || window.__jawlDesktop;
+  desktopBridge?.onClickThroughChanged?.((nextClickThrough) => {
+    clickThrough = Boolean(nextClickThrough);
+    syncDesktopWindowMode();
   });
   // When hovering the HUD dock while clickThrough is on, temporarily allow mouse clicks on the dock!
   const hudDock = document.querySelector('.hud-dock');

@@ -15,7 +15,12 @@ import json
 import os
 import sys
 
-VOICEMEM_REPO = os.environ.get("VOICEMEM_REPO", r"G:\AI\VoiceMem")
+from pathlib import Path
+REPO = Path(__file__).resolve().parents[1]
+_INTREE_SRC = REPO / "src"
+if str(_INTREE_SRC) not in sys.path:
+    sys.path.insert(0, str(_INTREE_SRC))
+VOICEMEM_REPO = os.environ.get("VOICEMEM_REPO", str(_INTREE_SRC))
 
 for stream in (sys.stdout, sys.stderr):
     try:

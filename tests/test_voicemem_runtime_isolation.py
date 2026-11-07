@@ -23,8 +23,8 @@ class VoiceMemRuntimeIsolationTests(unittest.TestCase):
     def test_owned_profiles_get_distinct_explicit_roots_even_with_inherited_env(self):
         inherited_root = r"G:\AI\VoiceMem\memory"
         profile_roots = (
-            Path(r"G:\AI\JAWL-VoiceCompanion\runtime\instances\alpha\data\sensory\voicemem"),
-            Path(r"G:\AI\JAWL-VoiceCompanion\runtime\instances\beta\data\sensory\voicemem"),
+            Path(r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\instances\alpha\data\sensory\voicemem"),
+            Path(r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\instances\beta\data\sensory\voicemem"),
         )
         with patch.dict("os.environ", {"VOICEMEM_MEMORY_ROOT": inherited_root}):
             args_by_profile = [

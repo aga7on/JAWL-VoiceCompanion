@@ -393,6 +393,9 @@ Invoke-Expression $autostart.Extent.Text
         integrated = (ROOT / "scripts" / "run_integrated_profile.ps1").read_text(encoding="utf-8")
         self.assertIn("if ($EnableStreamingAsr -and -not $StartLocalAudio)", integrated)
         self.assertIn("--ambient-audio-autostart", integrated)
+        full_profile = (ROOT / "scripts" / "launch_integrated_clean.py").read_text(encoding="utf-8")
+        self.assertIn('"-EnableAmbientAudio"', full_profile)
+        self.assertIn('"-StartAmbientAudio"', full_profile)
 
     def test_profile_lock_is_exclusive_and_released_on_prepare_failure(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -544,7 +547,9 @@ foreach ($path in $paths) {{
         @{{ RunSeconds = 60; ControlPort = 2467; TtsPort = 9899; TeraPython = 'override/python.exe'; TeraRelease = 'override/release'; VisionModel = 'fixture-vision' }}
     }}
     $explicit = Resolve-LauncherRuntimeDefaults $fixture $overrides
-    $results += ,@{{ defaults = $defaults; explicit = $explicit }}
+    $brainOverride = if ($path -eq $paths[0]) {{ Resolve-LauncherRuntimeDefaults $fixture @{{ BrainContextSize = 32768 }} }} else {{ $null }}
+    $nativeOverride = if ($path -eq $paths[0]) {{ Resolve-LauncherRuntimeDefaults $fixture @{{ BrainContextSize = 32768; NativeContextWindowTokens = 20000 }} }} else {{ $null }}
+    $results += ,@{{ defaults = $defaults; explicit = $explicit; brainOverride = $brainOverride; nativeOverride = $nativeOverride }}
 }}
 [Console]::Out.WriteLine(($results | ConvertTo-Json -Depth 8 -Compress))
 """
@@ -560,6 +565,9 @@ foreach ($path in $paths) {{
         self.assertEqual(result.returncode, 0, result.stderr)
         output = json.loads(result.stdout.strip().splitlines()[-1])
         self.assertEqual(len(output), 2)
+        self.assertEqual(output[0]["defaults"]["NativeContextWindowTokens"], 65536)
+        self.assertEqual(output[0]["brainOverride"]["NativeContextWindowTokens"], 32768)
+        self.assertEqual(output[0]["nativeOverride"]["NativeContextWindowTokens"], 20000)
         for item in output:
             defaults = item["defaults"]
             explicit = item["explicit"]

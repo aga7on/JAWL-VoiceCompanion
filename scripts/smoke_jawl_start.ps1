@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$StartupSeconds = 90,
     [int]$ShutdownSeconds = 20
 )
@@ -29,8 +29,15 @@ $psi.UseShellExecute = $false
 $psi.CreateNoWindow = $true
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
-foreach ($name in 'JAWL_INSTANCE_ID','JAWL_INSTANCE_HOME','JAWL_DATA_DIR','JAWL_CONFIG_DIR','JAWL_LOG_DIR','JAWL_PROMPT_DIR','JAWL_SANDBOX_DIR','JAWL_ENV_FILE','JAWL_INSTANCES_ROOT','PYTHONPATH','PYTHONIOENCODING','LLM_API_URL') {
-    $psi.Environment[$name] = (Get-Item "Env:$name").Value
+foreach ($name in 'SystemRoot','SystemDrive','TEMP','TMP','PATH','JAWL_INSTANCE_ID','JAWL_INSTANCE_HOME','JAWL_DATA_DIR','JAWL_CONFIG_DIR','JAWL_LOG_DIR','JAWL_PROMPT_DIR','JAWL_SANDBOX_DIR','JAWL_ENV_FILE','JAWL_INSTANCES_ROOT','PYTHONPATH','PYTHONIOENCODING','LLM_API_URL') {
+    $val = [Environment]::GetEnvironmentVariable($name)
+    if ($null -ne $val) {
+        try {
+            $psi.Environment[$name] = $val
+        } catch {
+            $psi.EnvironmentVariables[$name] = $val
+        }
+    }
 }
 $process = [Diagnostics.Process]::new()
 $process.StartInfo = $psi

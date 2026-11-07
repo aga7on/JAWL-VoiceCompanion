@@ -56,18 +56,41 @@ def validate_response_envelope(envelope: dict[str, Any]) -> None:
     """Validate the bounded v1 shape before a response leaves the gateway."""
     if not isinstance(envelope, dict):
         raise ValueError("response envelope must be an object")
+    if isinstance(envelope.get("schema_version"), bool) or envelope.get("schema_version") != 1:
+        raise ValueError("unsupported response envelope schema")
+    for field in ("response_id", "turn_id"):
+        if field not in envelope:
+            raise ValueError(f"response envelope is missing field: {field}")
+        _bounded_text(envelope[field], field, limit=128)
+        if not _SAFE_ID.fullmatch(envelope[field]):
+            raise ValueError(f"{field} contains unsupported characters")
+
+    if envelope.get("status") == "deferred" or envelope.get("admitted") is False:
+        deferred_allowed = _ALLOWED_ENVELOPE_FIELDS | {"admitted", "status", "reason"}
+        unknown = sorted(set(envelope) - deferred_allowed)
+        if unknown:
+            raise ValueError(f"response envelope contains unknown fields: {', '.join(unknown)}")
+        _bounded_text(envelope.get("text", ""), "response text", allow_empty=True, limit=_MAX_ENVELOPE_TEXT)
+        if "speak" in envelope and not isinstance(envelope["speak"], bool):
+            raise ValueError("speak must be boolean")
+        if "emotion" in envelope:
+            emotion = envelope["emotion"]
+            if not isinstance(emotion, Mapping):
+                raise ValueError("emotion must be an object")
+            for field in ("id", "intensity", "confidence"):
+                if field not in emotion:
+                    raise ValueError(f"emotion is missing {field}")
+            _bounded_text(emotion["id"], "emotion.id")
+            _unit_interval(emotion["intensity"], "emotion.intensity")
+            _unit_interval(emotion["confidence"], "emotion.confidence")
+        return
+
     missing = [field for field in _REQUIRED_ENVELOPE_FIELDS if field not in envelope]
     if missing:
         raise ValueError(f"response envelope is missing fields: {', '.join(missing)}")
     unknown = sorted(set(envelope) - _ALLOWED_ENVELOPE_FIELDS)
     if unknown:
         raise ValueError(f"response envelope contains unknown fields: {', '.join(unknown)}")
-    if isinstance(envelope["schema_version"], bool) or envelope["schema_version"] != 1:
-        raise ValueError("unsupported response envelope schema")
-    for field in ("response_id", "turn_id"):
-        _bounded_text(envelope[field], field, limit=128)
-        if not _SAFE_ID.fullmatch(envelope[field]):
-            raise ValueError(f"{field} contains unsupported characters")
     _bounded_text(envelope["text"], "response text", allow_empty=True, limit=_MAX_ENVELOPE_TEXT)
     for field in ("speak", "interruptible", "proactive"):
         if not isinstance(envelope[field], bool):
@@ -140,6 +163,10 @@ class TextGateway:
     _brain_status: str = field(default="mock", init=False, repr=False)
     _turns: list[dict[str, Any]] = field(default_factory=list, repr=False)
     history_store: ConversationHistory | None = field(default=None, repr=False)
+    event_policy: Any | None = field(default=None, repr=False)
+    perception_fusion: Any | None = field(default=None, repr=False)
+    scene_state: Any | None = field(default=None, repr=False)
+    vision_timeout_s: float = 3.0
 
     @staticmethod
     def _invoke_responder(method: Callable[..., Any], text: str, *, cancel_event: Any, correlation_id: str) -> Any:
@@ -153,15 +180,106 @@ class TextGateway:
             kwargs["correlation_id"] = correlation_id
         return method(text, **kwargs)
 
+    def _enrich_visual_context(
+        self, text: str, history_user_text: str | None = None,
+        cancel_event: Any | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Detects visual intent and enriches query with honest epistemic observation."""
+        raw_query = str(history_user_text if history_user_text is not None else text).strip()
+        if not raw_query:
+            return text, None
+
+        policy = self.event_policy
+        if policy is None:
+            try:
+                from .event_policy import EventPolicy
+                policy = EventPolicy()
+            except ImportError:
+                policy = None
+
+        if policy is None or not getattr(policy, "is_visual_query", lambda q: False)(raw_query):
+            self.latest_epistemic_observation = None
+            return text, None
+
+        target, region = policy.extract_visual_target(raw_query)
+        should_refresh, target, reason = policy.should_refresh_vision(raw_query, self.scene_state)
+
+        obs: dict[str, Any] | None = None
+        if should_refresh and self.perception_fusion is not None and hasattr(self.perception_fusion, "fetch_top_down_observation"):
+            timeout_s = getattr(self, "vision_timeout_s", 3.0)
+            obs = self.perception_fusion.fetch_top_down_observation(
+                raw_query, target=target, region=region, timeout_s=timeout_s, cancel_event=cancel_event
+            )
+        elif self.scene_state is not None and hasattr(self.scene_state, "evaluate_observation_status"):
+            eval_res = self.scene_state.evaluate_observation_status(target)
+            obs = {
+                "status": eval_res.get("status"),
+                "target": target,
+                "region": region,
+                "semantic_age_ms": eval_res.get("freshness_ms", 0.0),
+                "inspection_quality": eval_res.get("inspection_quality", 0.85),
+                "details": str(eval_res.get("evidence") or eval_res.get("inspection") or ""),
+                "reason": eval_res.get("reason", ""),
+            }
+
+        if obs is None:
+            obs = {
+                "status": "not_observed",
+                "target": target,
+                "region": region,
+                "semantic_age_ms": 0.0,
+                "inspection_quality": 0.0,
+                "details": "",
+                "reason": "Top-down visual inspection unavailable or disabled",
+            }
+
+        status = obs.get("status", "not_observed")
+        sem_age = obs.get("semantic_age_ms", 0.0)
+        qual = obs.get("inspection_quality", 0.0)
+        details = obs.get("details", "")
+        obs_reason = obs.get("reason", "")
+
+        epistemic_block = (
+            f"\n\n[EPISTEMIC SCENE OBSERVATION]\n"
+            f"Target: {target}\n"
+            f"Region: {region}\n"
+            f"Status: {status}\n"
+            f"Semantic Freshness Age: {sem_age}ms\n"
+            f"Inspection Quality: {qual}\n"
+            f"Observation Details: {details}\n"
+            f"Reason: {obs_reason}\n"
+            f"Instruction: If status is 'not_observed', explicitly inform the user that this element is not observed or visual state is unknown. NEVER invent or claim that an unobserved element is absent or present. If status is 'observed_absent', state that inspection did not detect it within the checked area (bounded absence, not absolute truth).\n"
+            f"[END EPISTEMIC SCENE OBSERVATION]"
+        )
+        self.latest_epistemic_observation = obs
+        return text + epistemic_block, obs
+
     def handle_text(
         self, text: str, session_id: str = "local", correlation_id: str | None = None,
         history_user_text: str | None = None,
+        priority: TurnPriority | int = TurnPriority.USER_FINAL,
     ) -> dict[str, Any]:
         clean = str(text or "").strip()
+        original_user_text = history_user_text if history_user_text is not None else clean
         response_id = str(uuid4())
         correlation = str(correlation_id or f"turn-{uuid4().hex}")[:128]
-        token = self.arbiter.begin(TurnPriority.USER_FINAL)
+        token = self.arbiter.begin(priority)
         turn_id = token.turn_id
+
+        if not self.arbiter.is_current(token):
+            self.arbiter.cancel(token, "turn_deferred_for_higher_priority_work")
+            return {
+                "schema_version": 1,
+                "response_id": response_id,
+                "turn_id": turn_id,
+                "admitted": False,
+                "status": "deferred",
+                "reason": "higher_priority_work_active",
+                "text": "",
+                "speak": False,
+                "emotion": {"id": "neutral", "intensity": 0.0, "confidence": 1.0},
+            }
+
         native_envelope: dict[str, Any] | None = None
         terminal_error = False
         if not clean:
@@ -169,6 +287,9 @@ class TextGateway:
             speak = False
             emotion = {"id": "confused", "intensity": 0.25, "confidence": 1.0}
         else:
+            clean, epistemic_obs = self._enrich_visual_context(
+                clean, history_user_text=original_user_text, cancel_event=token.cancel_event
+            )
             try:
                 if self.responder:
                     envelope_method = getattr(self.responder, "respond_envelope", None)
@@ -214,12 +335,19 @@ class TextGateway:
                 emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
 
         try:
+            is_proactive = (
+                TurnPriority(int(priority)) == TurnPriority.PROACTIVE
+                if isinstance(priority, (TurnPriority, int))
+                else False
+            )
             envelope = (
                 self._preserve_native_envelope(native_envelope)
                 if native_envelope is not None
-                else self._build_envelope(clean, answer, response_id, turn_id, speak=speak, emotion=emotion)
+                else self._build_envelope(
+                    clean, answer, response_id, turn_id, speak=speak, emotion=emotion, proactive=is_proactive
+                )
             )
-            stored_user_text = history_user_text if history_user_text is not None else clean
+            stored_user_text = original_user_text
             self._record_turn(session_id, correlation, stored_user_text, envelope)
             return envelope
         finally:
@@ -231,6 +359,7 @@ class TextGateway:
     ) -> Iterator[dict[str, Any]]:
         """Stream safe responder deltas and finish with one canonical envelope."""
         clean = str(text or "").strip()
+        original_user_text = history_user_text if history_user_text is not None else clean
         response_id = str(uuid4())
         correlation = str(correlation_id or f"turn-{uuid4().hex}")[:128]
         token = self.arbiter.begin(TurnPriority.USER_FINAL)
@@ -242,6 +371,9 @@ class TextGateway:
                 speak = False
                 emotion = {"id": "confused", "intensity": 0.25, "confidence": 1.0}
             else:
+                clean, epistemic_obs = self._enrich_visual_context(
+                    clean, history_user_text=original_user_text, cancel_event=token.cancel_event
+                )
                 chunks: list[str] = []
                 try:
                     envelope_method = getattr(self.responder, "respond_envelope", None) if self.responder else None
@@ -390,7 +522,7 @@ class TextGateway:
                 if native_envelope is not None
                 else self._build_envelope(clean, answer, response_id, token.turn_id, speak=speak, emotion=emotion)
             )
-            stored_user_text = history_user_text if history_user_text is not None else clean
+            stored_user_text = original_user_text
             self._record_turn(session_id, correlation, stored_user_text, envelope)
             yield {"type": "final", "response": envelope, "correlation_id": correlation}
         finally:
@@ -405,6 +537,7 @@ class TextGateway:
         *,
         speak: bool,
         emotion: dict[str, Any],
+        proactive: bool = False,
     ) -> dict[str, Any]:
         envelope = {
             "schema_version": 1,
@@ -421,7 +554,7 @@ class TextGateway:
             "voice": {"provider": "not_connected", "voice_id": "main_ru", "rate": 1.0},
             "actions": [],
             "interruptible": True,
-            "proactive": False,
+            "proactive": proactive,
         }
         validate_response_envelope(envelope)
         return envelope
@@ -519,6 +652,13 @@ class TextGateway:
 
     @staticmethod
     def _mock_response(text: str) -> str:
+        if "[EPISTEMIC SCENE OBSERVATION]" in text:
+            if "Status: not_observed" in text:
+                return "Этот объект сейчас не наблюдается, и его визуальное состояние неизвестно."
+            elif "Status: observed_absent" in text:
+                return "В проверенной области данный объект не обнаружен."
+            elif "Status: observed_present" in text:
+                return "Объект зафиксирован в поле зрения."
         lowered = text.casefold()
         if any(greeting in lowered for greeting in ("привет", "здравствуй", "добрый день")):
             return "Привет. Я на связи и готова помочь."

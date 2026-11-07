@@ -5,7 +5,7 @@ param(
     [string]$Model = 'big-pickle'
 )
 $ErrorActionPreference = 'Stop'
-$repo = 'G:\AI\JAWL-VoiceCompanion'
+$repo = 'G:\AI\JAWL-VoiceCompanion-V0.5'
 $python = Join-Path $repo 'runtime\jawl-daily-venv\Scripts\python.exe'
 $script = Join-Path $repo 'scripts\voice_reflection.py'
 $log = Join-Path $repo 'runtime\reflection.log'

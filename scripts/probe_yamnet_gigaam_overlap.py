@@ -19,7 +19,8 @@ import onnxruntime as ort
 
 ROOT = Path(__file__).resolve().parents[1]
 RATE = 16_000
-ASR_EXE = Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
+_INTREE_CRISP = ROOT / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+ASR_EXE = _INTREE_CRISP if _INTREE_CRISP.exists() else Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
 ASR_MODEL = ROOT / "runtime/models/asr/gigaam-v3-e2e-rnnt-q8_0.gguf"
 YAMNET_DIR = ROOT / "runtime/models/audio/yamnet-onnx-f25b741c2f0bdc6d7e6db24b5fddda23347dbafd"
 SPEECH = {

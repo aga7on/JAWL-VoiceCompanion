@@ -174,6 +174,14 @@ class SensoryHistoryRedactionTests(unittest.TestCase):
         self.assertNotIn("переписка в личном окне", reopened.context_text(seconds=3600))
         self.assertEqual(reopened.state()["recent_event_count"], 0)
 
+    def test_redaction_reports_failure_to_persist(self):
+        parent = Path(self.tmp.name) / "not-a-directory"
+        parent.write_text("fixture", encoding="utf-8")
+        store = SensoryHistoryStore(parent / "history.json", enabled=True)
+        result = store.redact(["evidence-1"])
+        self.assertEqual(result["status"], "partial")
+        self.assertFalse(result["persisted"])
+
     def test_shared_evidence_id_is_kept_verbatim(self):
         store = SensoryHistoryStore(self.path, enabled=True)
         recorded = store.record("visual", "смена сцены", event_id="evidence-42")
@@ -348,6 +356,41 @@ class MemoryOwnershipHttpTests(unittest.TestCase):
         )
         self.assertEqual(self.native.archived[0][0], memory_key)
         self.assertEqual(result["redacted"]["status"], "redacted")
+
+    def test_native_provenance_is_read_before_record_disappears(self):
+        evidence = "ev-native-preference"
+        self.server.ambient_memory.ingest_visual("fixture", confidence=0.9, event_id=evidence)
+        self.server.sensory_history.record("visual", "fixture", event_id=evidence, verified=False)
+
+        class ActiveOnlyJawl(_FakeJawl):
+            active = True
+
+            def structured_memory(self, kind=None, limit=50):
+                rows = [{"memory_key": "key-1", "provenance": {"source_event_ids": [evidence]}}] if self.active and kind == "preference" else []
+                return {"memory": {"memories": rows}}
+
+            def forget_memory(self, memory_key, reason=""):
+                self.active = False
+                return super().forget_memory(memory_key, reason)
+
+        self.native = ActiveOnlyJawl()
+        self.server.gateway.jawl_web = self.native
+        _, result = self.post("/api/jawl/memory", {"operation": "forget", "memory_key": "key-1"})
+        self.assertEqual(result["redacted"]["status"], "redacted")
+        self.assertEqual(result["redacted"]["sensory_history"]["recent_events"], 1)
+        self.assertFalse(self.native.active)
+
+    def test_forget_reports_partial_when_history_cannot_persist_redaction(self):
+        class BrokenHistory:
+            def redact(self, *_args, **_kwargs):
+                return {"status": "partial", "persisted": False}
+
+        self.server.sensory_history = BrokenHistory()
+        self.server.remember_memory_sources("key-1", ["evidence-1"])
+        _, result = self.post("/api/jawl/memory", {"operation": "forget", "memory_key": "key-1"})
+        self.assertEqual(result["redacted"]["status"], "partial")
+        self.assertFalse(result["redacted"]["sensory_history"]["persisted"])
+        self.assertEqual(self.native.forgotten[0][0], "key-1")
 
     def test_ambient_payload_declares_ownership_and_handoff_state(self):
         status, payload = self.get("/api/ambient-memory")

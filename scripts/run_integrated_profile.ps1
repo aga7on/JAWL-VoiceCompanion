@@ -27,12 +27,12 @@
 [int]$VoxCPMPort = 9891,
 [int]$OmniVoicePort = 9890,
 [string]$VoxCPMReferenceWav = '',
-[string]$OmniVoiceRefWav = 'G:\AI\JAWL-VoiceCompanion\runtime\models\asr\voice_ref_aleksandra.wav',
+[string]$OmniVoiceRefWav = 'runtime\models\tts\refs\voice_ref_aleksandra.wav',
 [string]$OmniVoiceRefText = 'Сначала подготовься. Покажи, чего ты стоишь. В таком виде у тебя нет шансов против демонов. Неплохо. Но прекрасный принц.',
 [switch]$EnableProsodyPlanner,
 [switch]$EnableStreamingAsr,
-[string]$StreamingAsrExe = 'G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe',
-[string]$StreamingAsrModel = 'G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf',
+[string]$StreamingAsrExe = 'runtime\bin\crispasr\crispasr.exe',
+[string]$StreamingAsrModel = 'runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf',
 [string]$ProsodyModel = 'gemma-3-1b-it',
 [string]$ProsodyUrl = 'http://127.0.0.1:8987/v1',
 [string]$SensoryFile = '',
@@ -119,7 +119,7 @@ function Resolve-LauncherRuntimeDefaults {
         ControlPort = $Manifest.ports.control
         RunSeconds = $Manifest.launch.run_seconds
         ProfileName = $Manifest.profile
-        TtsPort = $Manifest.ports.tera_tts
+        TtsPort = if ($Manifest.launch.tts_provider -eq 'omnivoice' -and $Manifest.ports.omnivoice_tts) { $Manifest.ports.omnivoice_tts } else { $Manifest.ports.tera_tts }
         TtsProvider = $Manifest.launch.tts_provider
         TeraPython = $Manifest.models.tera_python
         TeraRelease = $Manifest.models.tera_release
@@ -188,12 +188,43 @@ $visualQwenModel = Resolve-RepoPath $VisualDescriberModelPath
 $visualQwenMmproj = Resolve-RepoPath $VisualDescriberMmprojPath
 $voxcpmPy = 'G:\AI\VoxCPM\.venv\Scripts\python.exe'
 $voxcpmModelDir = 'G:\AI\VoxCPM\models\models--openbmb--VoxCPM2\snapshots\32279effe8c19989596f05d353d1447f51d9e915'
-$omniPy = 'G:\AI\OmniVoice\venv\Scripts\python.exe'
-$omniModelDir = 'G:\AI\OmniVoice\models\k2-fsa-OmniVoice'
+$inTreeOmniPy = Join-Path $repo 'runtime\omnivoice-venv\Scripts\python.exe'
+$omniPy = if (Test-Path -LiteralPath $inTreeOmniPy) { $inTreeOmniPy } else { 'G:\AI\OmniVoice\venv\Scripts\python.exe' }
+$inTreeOmniModel = Join-Path $repo 'runtime\models\tts\k2-fsa-OmniVoice'
+$omniModelDir = if (Test-Path -LiteralPath $inTreeOmniModel) { $inTreeOmniModel } else { 'G:\AI\OmniVoice\models\k2-fsa-OmniVoice' }
+if ($OmniVoiceRefWav) {
+    $resolvedRef = Resolve-RepoPath $OmniVoiceRefWav
+    if (Test-Path -LiteralPath $resolvedRef) {
+        $OmniVoiceRefWav = $resolvedRef
+    } else {
+        $inTreeRef = Join-Path $repo 'runtime\models\tts\refs\voice_ref_aleksandra.wav'
+        if (Test-Path -LiteralPath $inTreeRef) {
+            $OmniVoiceRefWav = $inTreeRef
+        } else {
+            $OmniVoiceRefWav = Resolve-RepoPath 'runtime\models\asr\voice_ref_aleksandra.wav'
+        }
+    }
+}
+if ($StreamingAsrExe) {
+    $resolvedAsr = Resolve-RepoPath $StreamingAsrExe
+    if (Test-Path -LiteralPath $resolvedAsr) {
+        $StreamingAsrExe = $resolvedAsr
+    } else {
+        $inTreeCrisp = Join-Path $repo 'runtime\bin\crispasr\crispasr.exe'
+        if (Test-Path -LiteralPath $inTreeCrisp) {
+            $StreamingAsrExe = $inTreeCrisp
+        } else {
+            $StreamingAsrExe = 'G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe'
+        }
+    }
+}
+if ($StreamingAsrModel) { $StreamingAsrModel = Resolve-RepoPath $StreamingAsrModel }
 $ttsWorkerName = if ($TtsProvider -eq 'voxcpm') { 'VoxCPM2' } elseif ($TtsProvider -eq 'omnivoice') { 'OmniVoice' } else { 'TeraTTSv2' }
 $ttsWorkerPort = if ($TtsProvider -eq 'voxcpm') { $VoxCPMPort } elseif ($TtsProvider -eq 'omnivoice') { $OmniVoicePort } else { $TtsPort }
-$asrPy = 'G:\AI\JAWL-VoiceCompanion\runtime\vision-venv\Scripts\python.exe'
-$voicememPy = 'G:\AI\VoiceMem\.venv\Scripts\python.exe'
+$inTreeAsrPy = Join-Path $repo 'runtime\vision-venv\Scripts\python.exe'
+$asrPy = if (Test-Path -LiteralPath $inTreeAsrPy) { $inTreeAsrPy } else { $py }
+$inTreeVmPy = Join-Path $repo '.venv\Scripts\python.exe'
+$voicememPy = if (Test-Path -LiteralPath $inTreeVmPy) { $inTreeVmPy } elseif (Test-Path -LiteralPath 'G:\AI\VoiceMem\.venv\Scripts\python.exe') { 'G:\AI\VoiceMem\.venv\Scripts\python.exe' } else { $py }
 $voicememMemoryRoot = Join-Path $profileHome 'data\sensory\voicemem'
 
 if (-not (Test-Path -LiteralPath $py)) { throw "Owned runtime Python is missing: $py" }
@@ -338,7 +369,13 @@ function New-RuntimeProcess {
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    foreach ($entry in $Environment.GetEnumerator()) { $info.Environment[$entry.Key] = [string]$entry.Value }
+    foreach ($entry in $Environment.GetEnumerator()) {
+        try {
+            $info.Environment[$entry.Key] = [string]$entry.Value
+        } catch {
+            $info.EnvironmentVariables[$entry.Key] = [string]$entry.Value
+        }
+    }
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
     $process.EnableRaisingEvents = $true
@@ -687,7 +724,6 @@ $jawlEnv = @{}
     }
     if ($SensoryFile) {
         $companionArgs += " --ambient-memory --sensory-file `"$SensoryFile`""
-        if ($AmbientTriageSeconds -gt 0) { $companionArgs += " --ambient-triage-interval $AmbientTriageSeconds" }
     }
     if ($EnableAmbientAudio) {
         # Explicit opt-in for bounded Windows system-audio loopback. Capture
@@ -702,6 +738,9 @@ $jawlEnv = @{}
             $companionArgs += " --audio-describer qwen-omni --audio-describer-url `"$AudioDescriberUrl`" --audio-describer-model `"$AudioDescriberModel`""
         }
         if ($StartAmbientAudio) { $companionArgs += ' --ambient-audio-autostart' }
+    }
+    if ($AmbientTriageSeconds -gt 0 -and ($SensoryFile -or $EnableAmbientAudio)) {
+        $companionArgs += " --ambient-triage-interval $AmbientTriageSeconds"
     }
     if ($EnableVoiceDeliveryCues) {
         $companionArgs += ' --voice-delivery-cues'

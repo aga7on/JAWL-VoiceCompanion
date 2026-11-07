@@ -16,9 +16,10 @@ import time
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
+ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / "runtime" / "supervised-entry-live-20260929.json"
-VOICEMEM_PY = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
+_INTREE_VM_PY = ROOT / ".venv" / "Scripts" / "python.exe"
+VOICEMEM_PY = str(_INTREE_VM_PY) if _INTREE_VM_PY.exists() else r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 
 
 def free_port() -> int:

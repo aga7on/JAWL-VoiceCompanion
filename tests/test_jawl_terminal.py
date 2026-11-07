@@ -152,8 +152,21 @@ class JawlTerminalGatewayTests(unittest.TestCase):
         self.assertEqual([event["type"] for event in events], ["delta", "final"])
         self.assertEqual(events[0]["text"], "Привет, ")
         self.assertEqual(events[1]["response"]["text"], "Привет, мир")
+        self.assertEqual(server.lines[0]["text"], "тест")
         self.assertEqual(server.handshakes[0], "JAWL_GATEWAY 0")
         self.assertEqual(gateway.chat_status(), "connected")
+
+    def test_explicit_quick_remains_opt_in(self):
+        def on_message(server, connection, parsed):
+            server.turn_id = str(parsed.get("turn_id") or "")
+            server.send_event(connection, "assistant.final", {"response": _envelope(server.turn_id, "Готово")}, 1)
+
+        server = FakeTerminal(on_message=on_message).start()
+        self.addCleanup(server.stop)
+        gateway = JawlTerminalGateway(self._port_file(server.port), timeout_seconds=2)
+        self.addCleanup(gateway.close)
+        list(gateway.stream_envelope("/quick статус", correlation_id="quick-check"))
+        self.assertEqual(server.lines[0]["text"], "/quick статус")
 
     def test_cancel_sends_control_line(self):
         def on_message(server, connection, parsed):

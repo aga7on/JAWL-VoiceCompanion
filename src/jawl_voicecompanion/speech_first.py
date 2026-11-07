@@ -18,14 +18,26 @@ _SNAPSHOT = (
 if str(_SNAPSHOT) not in sys.path:
     sys.path.insert(0, str(_SNAPSHOT))
 
+import src.l3_agent.llm.speech_first as _upstream_speech_first
+
+# Canonical terminal reply tool names and aliases recognized across JAWL
+EXTENDED_TERMINAL_TOOL_NAMES: tuple[str, ...] = (
+    "HostTerminalMessages.send_message_to_terminal",
+    "HostOSTerminal.send_message_to_terminal",
+    "HostOSJournalMessages.send_message_to_terminal",
+    "send_message_to_terminal",
+)
+_upstream_speech_first.TERMINAL_TOOL_NAMES = EXTENDED_TERMINAL_TOOL_NAMES
+
 from src.l3_agent.llm.speech_first import (  # noqa: E402
-    TERMINAL_TOOL_NAMES,
     SpeechChunk,
     SpeechFirstGate,
     extract_speech_text,
     first_speakable_chunk,
     looks_like_reply_action,
 )
+
+TERMINAL_TOOL_NAMES = EXTENDED_TERMINAL_TOOL_NAMES
 
 __all__ = [
     "TERMINAL_TOOL_NAMES",

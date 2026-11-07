@@ -25,7 +25,9 @@ def main() -> int:
     except (OSError, ValueError, RecursionError):
         print("runtime manifest could not be resolved", file=sys.stderr)
         return 1
-    print(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")))
+    # PowerShell 5.1 may decode native stdout using an ANSI/OEM code page.
+    # JSON escapes keep non-ASCII device names intact across that boundary.
+    print(json.dumps(manifest, ensure_ascii=True, separators=(",", ":")))
     return 0
 
 

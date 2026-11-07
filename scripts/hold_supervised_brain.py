@@ -1,4 +1,4 @@
-﻿"""Standalone supervised brain holder (ADR-041 stage 2).
+"""Standalone supervised brain holder (ADR-041 stage 2).
 
 Raises one llama-server worker (the local brain) through RuntimeSupervisor and
 holds it alive until terminated. Used by the local-brain wrapper when the JAWL
@@ -43,14 +43,16 @@ def _manifest_defaults(manifest_path: Path | None = None) -> dict:
     ports = manifest.get("ports", {})
     return {
         "port": ports.get("brain_port", 8990),
-        "llm_exe": models.get("brain_server_exe", r"G:\AI\llamacpp-prism\build-fa\bin\llama-server.exe"),
-        "model": models.get("bonsai_model", ""),
+        "llm_exe": models.get("brain_server_exe", "runtime/bin/llama-server/llama-server.exe"),
+        "model": models.get("sensenova_model") or models.get("brain_model") or models.get("bonsai_model", ""),
         "alias": brain.get("model", "local-bonsai2"),
         "threads": brain.get("threads", 12),
         "ctx_size": brain.get("context_size", 65536),
         "max_tokens": brain.get("max_output_tokens", 2048),
         "gpu_layers": brain.get("gpu_layers", 99),
         "device": brain.get("device", "CUDA1"),
+        "cache_type_k": brain.get("cache_type_k", ""),
+        "cache_type_v": brain.get("cache_type_v", ""),
         "url": brain.get("llm_url", "http://127.0.0.1:8990/v1"),
     }
 
@@ -89,13 +91,18 @@ def _worker_command(args: argparse.Namespace, *, mmproj: str = "") -> list[str]:
             "--device", args.device, "--max-new-tokens", str(args.max_tokens),
         ]
     vision_flags = ["--mmproj", mmproj] if mmproj else []
+    cache_flags = []
+    if getattr(args, "cache_type_k", ""):
+        cache_flags.extend(["--cache-type-k", args.cache_type_k])
+    if getattr(args, "cache_type_v", ""):
+        cache_flags.extend(["--cache-type-v", args.cache_type_v])
     return [
         args.llm_exe, "--model", args.model, "--alias", args.alias,
         "--host", "127.0.0.1", "--port", str(args.port),
         "--threads", str(args.threads), "--ctx-size", str(args.ctx_size),
         "--n-predict", str(args.max_tokens), "--parallel", "1",
         "--gpu-layers", str(args.gpu_layers), "--device", args.device,
-        *vision_flags, "--reasoning", args.reasoning, "--no-webui",
+        *vision_flags, *cache_flags, "--reasoning", args.reasoning, "--no-webui",
     ]
 
 
@@ -126,6 +133,10 @@ def main() -> int:
     parser.add_argument("--max-tokens", type=int, default=defaults["max_tokens"])
     parser.add_argument("--gpu-layers", type=int, default=defaults["gpu_layers"])
     parser.add_argument("--device", default=defaults["device"])
+    parser.add_argument("--cache-type-k", default=defaults.get("cache_type_k", ""),
+                        help="KV cache quantization type for K (e.g. q4_0, q8_0)")
+    parser.add_argument("--cache-type-v", default=defaults.get("cache_type_v", ""),
+                        help="KV cache quantization type for V (e.g. q4_0, q8_0)")
     parser.add_argument("--reasoning", choices=("on", "off", "auto"), default="off")
     parser.add_argument("--mmproj", default="",
                         help="optional multimodal projector GGUF; enables image input when the model ships a separate projector")

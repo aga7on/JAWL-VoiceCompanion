@@ -26,10 +26,12 @@ import urllib.request
 import wave
 from pathlib import Path
 
-ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
-CRISPASR = Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
-GIGAAM = Path(r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf")
-VOICEMEM_PY = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
+ROOT = Path(__file__).resolve().parents[1]
+_INTREE_CRISP = ROOT / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+CRISPASR = _INTREE_CRISP if _INTREE_CRISP.exists() else Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
+GIGAAM = ROOT / "runtime" / "models" / "asr" / "gigaam-v3-e2e-rnnt-q8_0.gguf"
+_INTREE_VM_PY = ROOT / ".venv" / "Scripts" / "python.exe"
+VOICEMEM_PY = str(_INTREE_VM_PY) if _INTREE_VM_PY.exists() else r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 RESULT = ROOT / "runtime" / "live-asr-slice-adr044.json"
 
 

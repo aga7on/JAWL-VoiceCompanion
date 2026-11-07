@@ -10,8 +10,8 @@ from pathlib import Path
 import bpy
 import addon_utils
 
-VRM = sys.argv[sys.argv.index("--") + 1] if "--" in sys.argv else r"G:\AI\JAWL-VoiceCompanion\runtime\vrm-models\Jawlie.vrm"
-OUT_DIR = Path(r"G:\AI\JAWL-VoiceCompanion\runtime\browser-evidence")
+VRM = sys.argv[sys.argv.index("--") + 1] if "--" in sys.argv else r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\vrm-models\Jawlie.vrm"
+OUT_DIR = Path(r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\browser-evidence")
 
 bpy.ops.wm.read_factory_settings(use_empty=False)
 bpy.ops.object.select_all(action="SELECT")

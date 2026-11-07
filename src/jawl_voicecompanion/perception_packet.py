@@ -22,13 +22,25 @@ from src.l3_agent.context.perception_packet import (  # noqa: E402
     CLOSE,
     OPEN,
     attach_packet,
-    make_packet,
+    make_packet as _kernel_make_packet,
     read_owned_packet,
     render_packet,
     save_packet,
     split_packet,
     strip_appendix,
 )
+
+
+def make_packet(snapshot: dict[str, Any], *, fallback: str = "", history: str = "") -> dict[str, Any]:
+    """Build the perception packet, ensuring unverified hypotheses are marked."""
+    packet = _kernel_make_packet(snapshot, fallback=fallback, history=history)
+    channels = snapshot.get("channels")
+    if isinstance(channels, dict) and isinstance(packet.get("channels"), dict):
+        for kind, source in channels.items():
+            if isinstance(source, dict) and kind in packet["channels"]:
+                if source.get("hypothesis") is True:
+                    packet["channels"][kind]["hypothesis"] = True
+    return packet
 
 __all__ = [
     "CLOSE",

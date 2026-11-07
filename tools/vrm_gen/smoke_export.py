@@ -74,7 +74,7 @@ for obj in bpy.data.objects:
     obj.select_set(True)
 
 # VRM export via the addon (VRM 1.0)
-out = r"G:\AI\JAWL-VoiceCompanion\runtime\vrm-models\_smoke_minimal.vrm"
+out = r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\vrm-models\_smoke_minimal.vrm"
 props = bpy.ops.export_scene.vrm.get_rna_type().properties.keys()
 print("EXPORT_PROPS:", sorted(p for p in props if 'vrm' in p.lower() or 'export' in p.lower())[:30])
 bpy.ops.export_scene.vrm(filepath=out)

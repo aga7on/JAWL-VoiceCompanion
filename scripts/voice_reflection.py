@@ -28,7 +28,8 @@ REPO = Path(__file__).resolve().parents[1]
 DEFAULT_HISTORY = REPO / "runtime" / "conversation.ndjson"
 DEFAULT_STATE = REPO / "runtime" / "reflection-state.json"
 DEFAULT_JOURNAL = REPO / "runtime" / "reflection-journal.ndjson"
-VOICEMEM_PYTHON = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
+_INTREE_VM_PY = REPO / ".venv" / "Scripts" / "python.exe"
+VOICEMEM_PYTHON = str(_INTREE_VM_PY) if _INTREE_VM_PY.exists() else r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 INGEST_HELPER = REPO / "services" / "voicemem_ingest_helper.py"
 
 PROMPT = (

@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-MODEL_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else r"G:\AI\JAWL-VoiceCompanion\runtime\models\laya-multilingual")
+MODEL_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "runtime" / "models" / "laya-multilingual")
 DEVICE = sys.argv[2] if len(sys.argv) > 2 else "cpu"
 
 STATES = [

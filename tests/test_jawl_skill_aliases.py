@@ -6,7 +6,14 @@ import sys
 import unittest
 
 
-SOURCE = Path(__file__).parents[1] / "runtime/jawl-sources/jawl-20260905-daily-v1/src"
+def _resolve_source() -> Path:
+    base = Path(__file__).parents[1] / "runtime" / "jawl-sources"
+    for candidate in base.glob("jawl-*/src"):
+        if (candidate / "l3_agent/skills/registry.py").is_file():
+            return candidate
+    return base / "jawl-20260906-daily-v2/src"
+
+SOURCE = _resolve_source()
 
 
 class JawlSkillAliasTests(unittest.TestCase):

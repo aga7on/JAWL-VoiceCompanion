@@ -202,6 +202,9 @@ function createAppWindow() {
           saved.clickThrough = false;
           require('fs').writeFileSync(stateFile, JSON.stringify(saved), 'utf8');
         } catch (_) {}
+        try {
+          appWindow.webContents?.send?.('jawl-click-through-changed', false);
+        } catch (_) {}
       }
     });
   } catch (_) {}

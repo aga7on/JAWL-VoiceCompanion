@@ -34,7 +34,8 @@ LLAMA_SERVER = ROOT / "runtime/gemma4-e4b-cpu/llama.cpp/llama-server.exe"
 QWEN_PORT = 8994
 VIDEO_DIR = ROOT / "runtime/vlm-cpu-bench/video"
 AUDIO_DIR = ROOT / "runtime/synthetic-questions"
-ASR_EXE = Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
+_INTREE_CRISP = ROOT / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+ASR_EXE = _INTREE_CRISP if _INTREE_CRISP.exists() else Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
 ASR_MODEL = ROOT / "runtime/models/asr/gigaam-v3-e2e-rnnt-q8_0.gguf"
 
 

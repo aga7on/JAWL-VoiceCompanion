@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path(r"G:\AI\JAWL-VoiceCompanion")
+REPO = Path(__file__).resolve().parents[1]
 SEED = Path(sys.argv[1] if len(sys.argv) > 1 else REPO / "config" / "needle_system1_seed.jsonl")
 TOOLS = Path(sys.argv[2] if len(sys.argv) > 2 else REPO / "config" / "needle_system1_tools.json")
 WEIGHTS = Path(sys.argv[3] if len(sys.argv) > 3 else REPO / "runtime" / "models" / "needle3" / "needle3.cact")

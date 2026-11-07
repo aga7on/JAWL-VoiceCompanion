@@ -30,6 +30,10 @@ from .resources import ResourceGovernor
 _AUDIO_EVENT = "AMBIENT_AUDIO_OBSERVATION"
 _VISUAL_EVENT = "AMBIENT_VISUAL_OBSERVATION"
 _EPISODE_EVENT = "AMBIENT_EPISODE_CANDIDATE"
+_AUDIO_TIMESTAMP_SOURCES = frozenset({
+    "host_callback_receipt_monotonic", "host_pipe_receipt_monotonic",
+    "consumer_receipt_monotonic", "upstream_monotonic_unspecified", "mixed", "unknown",
+})
 _PRIVATE = re.compile(
     r"password|passwd|token|secret|api[_ -]?key|парол|токен|секрет|ключ\s+api",
     re.IGNORECASE,
@@ -66,6 +70,14 @@ def _confidence(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0.5
     return round(max(0.0, min(1.0, float(value))), 3)
+
+
+def _audio_timestamp_sources(payloads: list[dict[str, Any]]) -> list[str]:
+    """Summarize audio timing provenance without inventing it for legacy data."""
+    return list(dict.fromkeys(
+        str(payload.get("timestamp_source") or "unknown")
+        for payload in payloads if payload.get("stream") == "system_audio"
+    ))
 
 
 @dataclass
@@ -108,6 +120,7 @@ class AmbientMemoryBuffer:
         self._bytes = 0
         self._episode_bytes = 0
         self._lock = RLock()
+        self._privacy_epoch = 0
 
     def ingest(self, event: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
         """Normalize one ambient event without retaining raw media or unknown fields."""
@@ -159,6 +172,11 @@ class AmbientMemoryBuffer:
             "retention_until": retention_until,
         }
         if stream == "system_audio":
+            timestamp_source = _bounded_text(payload.get("timestamp_source"), 80)
+            if timestamp_source:
+                normalized_payload["timestamp_source"] = (
+                    timestamp_source if timestamp_source in _AUDIO_TIMESTAMP_SOURCES else "unknown"
+                )
             raw_audio_kind = _bounded_text(payload.get("audio_kind"), 20)
             audio_kind = raw_audio_kind
             if audio_kind and audio_kind not in AUDIO_KINDS:
@@ -239,6 +257,7 @@ class AmbientMemoryBuffer:
         event_id: str | None = None,
         session_id: str = "ambient-audio",
         now: float | None = None,
+        timestamp_source: str | None = None,
     ) -> dict[str, Any]:
         return self.ingest(
             {
@@ -252,6 +271,7 @@ class AmbientMemoryBuffer:
                     "confidence_calibrated": False,
                     "evidence_type": "asr_transcript",
                     "source_app": source_app,
+                    "timestamp_source": timestamp_source,
                 },
             },
             now=now,
@@ -265,6 +285,7 @@ class AmbientMemoryBuffer:
         event_id: str | None = None,
         session_id: str = "ambient-audio",
         now: float | None = None,
+        timestamp_source: str | None = None,
     ) -> dict[str, Any]:
         """Store validated text metadata from a non-speech audio provider."""
         clip_id = str(description.get("clip_id") or "audio-clip") if isinstance(description, dict) else "audio-clip"
@@ -289,6 +310,7 @@ class AmbientMemoryBuffer:
                     "confidence_calibrated": False,
                     "evidence_type": "audio_description",
                     "source_app": source_app,
+                    "timestamp_source": timestamp_source,
                     "audio_kind": normalized["kind"],
                     "tags": normalized["tags"],
                     "mood": normalized["mood"],
@@ -465,7 +487,7 @@ class AmbientMemoryBuffer:
 
         if isinstance(event_ids, (str, bytes)):
             event_ids = [event_ids]
-        wanted = {_bounded_text(item, 120) for item in (event_ids or []) if _bounded_text(item, 120)}
+        wanted = {_bounded_text(item, 256) for item in (event_ids or []) if _bounded_text(item, 256)}
         if not wanted:
             return {"status": "ignored", "reason": "no_event_ids"}
         with self._lock:
@@ -473,11 +495,18 @@ class AmbientMemoryBuffer:
             kept: deque[_StoredObservation] = deque()
             for stored in self._observations:
                 identifiers = {str(stored.event.get("event_id") or "")}
+                if stored.event.get("memory_key"):
+                    identifiers.add(str(stored.event.get("memory_key")))
                 payload = stored.event.get("payload")
                 if isinstance(payload, dict):
                     source = payload.get("source_event_ids")
                     if isinstance(source, list):
-                        identifiers.update(str(item) for item in source[:32])
+                        identifiers.update(str(item) for item in source if item)
+                    for key in ("promoted_memory_key", "handed_off_memory_key", "canonical_memory_key", "memory_key"):
+                        val = payload.get(key)
+                        if val:
+                            identifiers.add(str(val))
+                identifiers.discard("")
                 if identifiers & wanted:
                     self._bytes -= stored.size
                 else:
@@ -488,10 +517,17 @@ class AmbientMemoryBuffer:
             for episode in self._episodes:
                 payload = episode.get("payload")
                 identifiers = {str(episode.get("event_id") or "")}
+                if episode.get("memory_key"):
+                    identifiers.add(str(episode.get("memory_key")))
                 if isinstance(payload, dict):
                     source = payload.get("source_event_ids")
                     if isinstance(source, list):
-                        identifiers.update(str(item) for item in source[:32])
+                        identifiers.update(str(item) for item in source if item)
+                    for key in ("promoted_memory_key", "handed_off_memory_key", "canonical_memory_key", "memory_key"):
+                        val = payload.get(key)
+                        if val:
+                            identifiers.add(str(val))
+                identifiers.discard("")
                 if identifiers & wanted:
                     self._episode_bytes -= self._serialized_size(episode)
                 else:
@@ -535,6 +571,7 @@ class AmbientMemoryBuffer:
 
     def clear(self) -> dict[str, Any]:
         with self._lock:
+            self._privacy_epoch += 1
             observations = len(self._observations)
             episodes = len(self._episodes)
             self._observations.clear()
@@ -545,6 +582,8 @@ class AmbientMemoryBuffer:
 
     def set_enabled(self, enabled: bool) -> dict[str, Any]:
         with self._lock:
+            if not enabled:
+                self._privacy_epoch += 1
             self.enabled = bool(enabled)
             if not enabled:
                 self.paused = False
@@ -552,6 +591,7 @@ class AmbientMemoryBuffer:
 
     def pause(self) -> dict[str, Any]:
         with self._lock:
+            self._privacy_epoch += 1
             self.paused = True
         return self.state()
 
@@ -613,6 +653,9 @@ class AmbientMemoryBuffer:
             for item in source_payloads
         )
         episode_payload = dict(payload)
+        timestamp_sources = _audio_timestamp_sources(source_payloads)
+        if timestamp_sources:
+            episode_payload["timestamp_sources"] = timestamp_sources
         summary = _bounded_text(episode_payload.get("summary"), 600)
         if has_unscored_asr and summary and not summary.startswith("Непроверенная ASR-расшифровка:"):
             episode_payload["summary"] = f"Непроверенная ASR-расшифровка: {summary}"[:600]
@@ -638,6 +681,7 @@ class AmbientMemoryBuffer:
 
     def _episode(self, group: list[_StoredObservation], now: float) -> dict[str, Any] | None:
         payloads = [item.event["payload"] for item in group]
+        timestamp_sources = _audio_timestamp_sources(payloads)
         confidence = round(sum(float(item.get("confidence", 0.5)) for item in payloads) / len(payloads), 3)
         texts = [str(item.get("text") or item.get("summary") or "").strip() for item in payloads]
         combined = " ".join(text for text in texts if text)[:600]
@@ -650,7 +694,12 @@ class AmbientMemoryBuffer:
             return None
         salient = bool(_SALIENT.search(combined))
         importance = "promote_candidate" if salient and confidence >= 0.7 and not has_unscored_asr else "retain"
-        summary = f"Непроверенная ASR-расшифровка: {combined}" if has_unscored_asr else combined
+        source_apps = [str(item.get("source_app")) for item in payloads if item.get("source_app")]
+        primary_app = source_apps[0] if source_apps else None
+        if has_unscored_asr:
+            summary = f"Непроверенная ASR-расшифровка ({primary_app}): {combined}" if primary_app else f"Непроверенная ASR-расшифровка: {combined}"
+        else:
+            summary = combined
         topics = [name for name, pattern in _TOPICS if pattern.search(combined)][:5]
         streams = {str(item.get("stream")) for item in payloads}
         source = next(iter(streams)) if len(streams) == 1 else "mixed"
@@ -671,7 +720,10 @@ class AmbientMemoryBuffer:
                 "confidence": confidence,
                 "verified": all(item.get("verified") is True for item in payloads),
                 "source": source,
-                "source_event_ids": [item.event["event_id"] for item in group[:32]],
+                "source_app": primary_app,
+                "source_apps": list(dict.fromkeys(source_apps))[:5] if source_apps else None,
+                **({"timestamp_sources": timestamp_sources} if timestamp_sources else {}),
+                "source_event_ids": [item.event["event_id"] for item in group],
                 "observed_from": min(observed) if observed else _iso(group[0].received_at),
                 "observed_until": max(observed) if observed else _iso(group[-1].received_at),
                 "retention_until": retention_until,

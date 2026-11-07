@@ -9,6 +9,9 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 from jawl_voicecompanion.gateway import TextGateway, validate_response_envelope  # noqa: E402
 from jawl_voicecompanion.jawl_gateway_contract import JawlGatewayEvent  # noqa: E402
 from jawl_voicecompanion.jawl_adapter import JawlTurnCancelled  # noqa: E402
+from jawl_voicecompanion.arbiter import TurnArbiter, TurnPriority  # noqa: E402
+from jawl_voicecompanion.perception_fusion import CognitiveTurnDecision, SenseNovaPerceptionBridge  # noqa: E402
+from jawl_voicecompanion.attention import AttentionPresence  # noqa: E402
 
 
 class GatewayTests(unittest.TestCase):
@@ -286,6 +289,148 @@ class GatewayTests(unittest.TestCase):
                 **base,
                 "payload": {"action_id": "action-1", "arguments": {"cmd": "whoami"}},
             })
+
+    def test_proactive_turn_deferred_when_user_final_active(self):
+        """When USER_FINAL is active, a PROACTIVE turn must NOT cancel the user,
+
+        must NOT invoke responder, and bridge must return llm_invoked=False, audio_delivered=False.
+        """
+        arbiter = TurnArbiter()
+        responder_calls: list[str] = []
+
+        def tracked_responder(text: str, cancel_event=None):
+            del cancel_event
+            responder_calls.append(text)
+            return "Ответ нейросети"
+
+        gateway = TextGateway(responder=tracked_responder, arbiter=arbiter)
+        bridge = SenseNovaPerceptionBridge(sensenova_client=gateway)
+
+        # 1. Activate user token with USER_FINAL priority
+        user_tok = arbiter.begin(TurnPriority.USER_FINAL)
+        self.assertTrue(arbiter.is_current(user_tok))
+        self.assertFalse(user_tok.cancelled)
+
+        # 2. Invoke proactive turn through bridge
+        decision = CognitiveTurnDecision(
+            action="proactive_turn",
+            proactive_packet={"prompt": "Пользователь молчит уже 10 секунд"},
+            reason="Silence gap threshold met",
+        )
+        res = bridge.process_turn_decision(decision)
+
+        # 3. Assertions required by specification:
+        # - user_tok.cancelled строго False! Исходный user token НЕ отменился!
+        self.assertIs(user_tok.cancelled, False)
+        self.assertTrue(arbiter.is_current(user_tok))
+
+        # - responder НЕ вызывался!
+        self.assertEqual(len(responder_calls), 0)
+
+        # - Bridge вернул llm_invoked=False, audio_delivered=False
+        self.assertFalse(res["llm_invoked"])
+        self.assertFalse(res["audio_delivered"])
+        self.assertFalse(res["dispatched"])
+
+    def test_user_final_supersedes_and_cancels_previous_user_final(self):
+        """A new USER_FINAL must supersede and cancel the previous active USER_FINAL."""
+        arbiter = TurnArbiter()
+        tok1 = arbiter.begin(TurnPriority.USER_FINAL)
+        self.assertTrue(arbiter.is_current(tok1))
+        self.assertFalse(tok1.cancelled)
+
+        tok2 = arbiter.begin(TurnPriority.USER_FINAL)
+        self.assertTrue(tok1.cancelled)
+        self.assertEqual(tok1.cancel_reason, "superseded_by_newer_priority_turn")
+        self.assertTrue(tok1.cancel_event.is_set())
+        self.assertFalse(tok2.cancelled)
+        self.assertTrue(arbiter.is_current(tok2))
+
+    def test_proactive_turn_succeeds_when_no_higher_priority_active(self):
+        """When no user turn is active, PROACTIVE turn is admitted and runs."""
+        arbiter = TurnArbiter()
+        responder_calls: list[str] = []
+
+        def tracked_responder(text: str, cancel_event=None):
+            del cancel_event
+            responder_calls.append(text)
+            return "Проактивное приветствие"
+
+        gateway = TextGateway(responder=tracked_responder, arbiter=arbiter)
+        bridge = SenseNovaPerceptionBridge(sensenova_client=gateway)
+
+        decision = CognitiveTurnDecision(
+            action="proactive_turn",
+            proactive_packet={"prompt": "Пора сделать перерыв"},
+        )
+        res = bridge.process_turn_decision(decision)
+
+        self.assertTrue(res["dispatched"])
+        self.assertTrue(res["llm_invoked"])
+        self.assertEqual(len(responder_calls), 1)
+        self.assertEqual(res["speech_output"], "Проактивное приветствие")
+
+    def test_proactive_turn_suppressed_when_dnd_active(self):
+        """DND active via packet or attention must suppress proactive turn immediately."""
+        arbiter = TurnArbiter()
+        responder_calls: list[str] = []
+
+        def tracked_responder(text: str, cancel_event=None):
+            del cancel_event
+            responder_calls.append(text)
+            return "Ответ"
+
+        gateway = TextGateway(responder=tracked_responder, arbiter=arbiter)
+
+        # 1. DND active in packet
+        bridge1 = SenseNovaPerceptionBridge(sensenova_client=gateway)
+        decision_dnd_packet = CognitiveTurnDecision(
+            action="proactive_turn",
+            proactive_packet={"prompt": "Привет", "dnd": True},
+        )
+        res1 = bridge1.process_turn_decision(decision_dnd_packet)
+        self.assertFalse(res1["dispatched"])
+        self.assertEqual(res1["reason"], "dnd_active")
+        self.assertFalse(res1["llm_invoked"])
+        self.assertEqual(len(responder_calls), 0)
+
+        # 2. DND active in attention
+        attention = AttentionPresence(dnd=True)
+        bridge2 = SenseNovaPerceptionBridge(sensenova_client=gateway, attention=attention)
+        decision_normal = CognitiveTurnDecision(
+            action="proactive_turn",
+            proactive_packet={"prompt": "Привет"},
+        )
+        res2 = bridge2.process_turn_decision(decision_normal)
+        self.assertFalse(res2["dispatched"])
+        self.assertEqual(res2["reason"], "dnd_active")
+        self.assertFalse(res2["llm_invoked"])
+        self.assertEqual(len(responder_calls), 0)
+
+    def test_gateway_handle_text_returns_safe_deferred_envelope(self):
+        """Direct call to handle_text with lower priority returns deferred envelope."""
+        arbiter = TurnArbiter()
+        user_tok = arbiter.begin(TurnPriority.USER_FINAL)
+
+        called = False
+
+        def mock_responder(text, cancel_event=None):
+            nonlocal called
+            called = True
+            return "Не должно выполниться"
+
+        gateway = TextGateway(responder=mock_responder, arbiter=arbiter)
+        resp = gateway.handle_text("Фоновая проверка", priority=TurnPriority.PROACTIVE)
+
+        self.assertFalse(called)
+        self.assertFalse(user_tok.cancelled)
+        self.assertFalse(resp["admitted"])
+        self.assertEqual(resp["status"], "deferred")
+        self.assertEqual(resp["reason"], "higher_priority_work_active")
+        self.assertEqual(resp["text"], "")
+        self.assertFalse(resp["speak"])
+        self.assertEqual(resp["schema_version"], 1)
+        validate_response_envelope(resp)
 
 
 class ConversationHistoryTests(unittest.TestCase):

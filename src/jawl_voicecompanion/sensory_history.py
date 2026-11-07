@@ -77,9 +77,14 @@ class SensoryHistoryStore:
             return False
 
     @staticmethod
-    def _key(item: dict[str, Any]) -> tuple[str, str, str]:
+    def _key(item: dict[str, Any]) -> tuple[str, str, str, str]:
         text = re.sub(r"\W+", " ", str(item.get("text") or "").casefold()).strip()
-        return str(item.get("modality") or ""), str(item.get("scene_id") or ""), text
+        return (
+            str(item.get("modality") or ""),
+            str(item.get("scene_id") or ""),
+            str(item.get("source") or ""),
+            text,
+        )
 
     def record(self, modality: str, text: str, *, observed_at: float | str | None = None,
                source: str = "", scene_id: str = "", frame_id: str = "",
@@ -98,15 +103,17 @@ class SensoryHistoryStore:
             return {"status": "ignored", "reason": "unsupported_modality"}
         now = self._clock()
         stamp = _timestamp(observed_at) or now
+        clean_eid = _clean(event_id, 120)
+        clean_source = _clean(source, 100)
+        clean_scene = _clean(scene_id, 64)
+        clean_frame = _clean(frame_id, 64)
         meta = metadata if isinstance(metadata, dict) else {}
         replayed_ids = {
-            str(value) for value in (meta.get("event_id"), frame_id, scene_id) if str(value or "").strip()
+            str(value) for value in (clean_eid, meta.get("event_id"), meta.get("mirrored_event_id"), clean_frame, clean_scene) if str(value or "").strip()
         }
-        if replayed_ids & set(self._redactions):
-            return {"status": "suppressed", "reason": "redacted_event"}
         importance = 1
         reasons: list[str] = []
-        if modality == "visual" and scene_id:
+        if modality == "visual" and clean_scene:
             importance += 1
             reasons.append("scene_observation")
             if meta.get("scene_changed") is True:
@@ -135,16 +142,19 @@ class SensoryHistoryStore:
         # A caller may share one evidence id across stores (ambient buffer and
         # this history).  That shared id is what lets JAWL's forget/archive
         # cascade reach the observations behind a canonical record.
-        item = {"event_id": _clean(event_id, 120) or str(uuid4()),
+        item = {"event_id": clean_eid or str(uuid4()),
                 "observed_at": _iso(stamp), "timestamp": stamp,
-                "modality": modality, "text": body, "source": _clean(source, 100),
-                "scene_id": _clean(scene_id, 64), "frame_id": _clean(frame_id, 64),
+                "modality": modality, "text": body, "source": clean_source,
+                "scene_id": clean_scene, "frame_id": clean_frame,
                 "confidence": round(max(0.0, min(1.0, float(confidence))), 3)
                 if isinstance(confidence, (int, float)) and not isinstance(confidence, bool) else None,
                 "verified": bool(verified) if isinstance(verified, bool) else False,
                 "importance": min(8, importance), "importance_reason": ",".join(reasons) or "observation",
-                "first_seen_at": _iso(stamp), "last_seen_at": _iso(stamp), "sample_count": 1}
+                "first_seen_at": _iso(stamp), "last_seen_at": _iso(stamp), "sample_count": 1,
+                "evidence_ids": [clean_eid] if clean_eid else []}
         with self._lock:
+            if replayed_ids & set(self._redactions):
+                return {"status": "suppressed", "reason": "redacted_event"}
             self._prune(now)
             existing = next((event for event in reversed(self._recent)
                              if self._key(event) == self._key(item)
@@ -154,6 +164,10 @@ class SensoryHistoryStore:
                 existing["observed_at"] = _iso(stamp)
                 existing["last_seen_at"] = _iso(stamp)
                 existing["sample_count"] = min(1_000_000, int(existing.get("sample_count", 1)) + 1)
+                if clean_eid and clean_eid != existing.get("event_id"):
+                    ev_ids = existing.setdefault("evidence_ids", [])
+                    if clean_eid not in ev_ids and len(ev_ids) < 64:
+                        ev_ids.append(clean_eid)
                 self._update_hour(existing, repeated=True)
                 status, event_id = "coalesced", existing["event_id"]
             else:
@@ -173,12 +187,17 @@ class SensoryHistoryStore:
         if not repeated:
             bucket["event_count"] = int(bucket.get("event_count", 0)) + 1
         fields = ("event_id", "observed_at", "last_seen_at", "modality", "text", "source",
-                  "scene_id", "confidence", "verified", "importance", "importance_reason", "sample_count")
+                  "scene_id", "confidence", "verified", "importance", "importance_reason", "sample_count", "evidence_ids")
         candidate = {name: item[name] for name in fields if item.get(name) is not None}
         moments = bucket.setdefault("moments", [])
         existing = next((entry for entry in moments if entry.get("event_id") == item.get("event_id")), None)
         if existing:
             existing.update(candidate)
+            if item.get("evidence_ids"):
+                m_evs = existing.setdefault("evidence_ids", [])
+                for eid in item["evidence_ids"]:
+                    if eid not in m_evs and len(m_evs) < 64:
+                        m_evs.append(eid)
         else:
             moments.append(candidate)
         self._compact_hour_moments(moments)
@@ -218,10 +237,16 @@ class SensoryHistoryStore:
 
     def _prune(self, now: float) -> None:
         cutoff = now - self.recent_seconds
-        while self._recent and float(self._recent[0].get("timestamp", 0)) < cutoff:
-            self._recent.popleft()
-        while len(self._recent) > self.max_recent_events:
-            self._recent.popleft()
+        if any(float(event.get("timestamp", 0)) < cutoff for event in self._recent):
+            self._recent = deque(event for event in self._recent if float(event.get("timestamp", 0)) >= cutoff)
+        if self._recent:
+            sorted_events = sorted(
+                self._recent,
+                key=lambda event: (float(event.get("timestamp", 0)), str(event.get("event_id") or "")),
+            )
+            if len(sorted_events) > self.max_recent_events:
+                sorted_events = sorted_events[-self.max_recent_events:]
+            self._recent = deque(sorted_events)
         week_cutoff = now - self.retention_seconds
         self._hours = {key: bucket for key, bucket in self._hours.items()
                        if (_timestamp(bucket.get("hour_start")) or 0) >= week_cutoff}
@@ -258,7 +283,7 @@ class SensoryHistoryStore:
                     continue
                 stamp = _timestamp(event.get("timestamp") or event.get("observed_at"))
                 text = _clean(event.get("text"))
-                if str(event.get("event_id") or "") in self._redactions:
+                if str(event.get("event_id") or "") in self._redactions or ({str(x) for x in event.get("evidence_ids", []) if str(x or "").strip()} & set(self._redactions)):
                     continue
                 if stamp is not None and text:
                     normalized = dict(event); normalized["timestamp"] = stamp; normalized["text"] = text
@@ -269,7 +294,7 @@ class SensoryHistoryStore:
                         "event_count": max(0, int(bucket.get("event_count", 0) or 0)),
                         "moments": [dict(moment) for moment in bucket.get("moments", [])[:self.max_moments_per_hour]
                                     if isinstance(moment, dict) and _clean(moment.get("text"))
-                                    and str(moment.get("event_id") or "") not in self._redactions]}
+                                    and str(moment.get("event_id") or "") not in self._redactions and not ({str(x) for x in moment.get("evidence_ids", []) if str(x or "").strip()} & set(self._redactions))]}
             self._prune(self._clock())
         except (OSError, ValueError, TypeError):
             self._recent.clear()
@@ -429,15 +454,37 @@ class SensoryHistoryStore:
         with self._lock:
             now = self._clock()
             remembered = len(wanted)
-            removed_recent = sum(1 for event in self._recent if str(event.get("event_id") or "") in wanted)
+            def is_wanted(entry: dict[str, Any]) -> bool:
+                eid = str(entry.get("event_id") or "")
+                if eid in wanted:
+                    return True
+                ev_ids = {str(x) for x in entry.get("evidence_ids", []) if str(x or "").strip()}
+                return bool(ev_ids & wanted)
+
+            for event in self._recent:
+                if is_wanted(event):
+                    wanted.add(str(event.get("event_id") or ""))
+                    for ev in event.get("evidence_ids", []):
+                        if str(ev or "").strip():
+                            wanted.add(str(ev).strip())
+
+            for bucket in self._hours.values():
+                for moment in bucket.get("moments") or []:
+                    if is_wanted(moment):
+                        wanted.add(str(moment.get("event_id") or ""))
+                        for ev in moment.get("evidence_ids", []):
+                            if str(ev or "").strip():
+                                wanted.add(str(ev).strip())
+
+            removed_recent = sum(1 for event in self._recent if is_wanted(event))
             if removed_recent:
                 self._recent = deque(
-                    event for event in self._recent if str(event.get("event_id") or "") not in wanted
+                    event for event in self._recent if not is_wanted(event)
                 )
             removed_moments = 0
             for bucket in self._hours.values():
                 moments = bucket.get("moments") or []
-                kept = [moment for moment in moments if str(moment.get("event_id") or "") not in wanted]
+                kept = [moment for moment in moments if not is_wanted(moment)]
                 removed_moments += len(moments) - len(kept)
                 bucket["moments"] = kept
             for event_id in sorted(wanted):
@@ -447,8 +494,10 @@ class SensoryHistoryStore:
                 for stale in list(self._redactions)[:overflow]:
                     self._redactions.pop(stale, None)
             self._flush(now)
+            persisted = not self._load_blocked and self._last_error is None
         return {
-            "status": "redacted",
+            "status": "redacted" if persisted else "partial",
+            "persisted": persisted,
             "event_ids": remembered,
             "recent_events": removed_recent,
             "moments": removed_moments,

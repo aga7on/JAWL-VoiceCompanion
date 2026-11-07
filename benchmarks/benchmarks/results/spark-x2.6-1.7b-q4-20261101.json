@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "suite": "spark",
+  "model": "spark-x2.6-1.7b-q4",
+  "base_url": "http://127.0.0.1:19231/v1",
+  "created_at": "2026-11-01T11:06:37.430306+00:00",
+  "cases": [
+    {
+      "id": "spark_ru_fact",
+      "rubric": "Correct Russian factual answer, no unnecessary elaboration.",
+      "latency_ms": 432.3,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 9,
+        "prompt_tokens": 110,
+        "total_tokens": 119,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "checks": {
+        "required_content": false
+      },
+      "passed": false,
+      "response": "Кыргызстана — столица."
+    },
+    {
+      "id": "spark_arithmetic",
+      "rubric": "Exact arithmetic.",
+      "latency_ms": 186.6,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 93,
+        "total_tokens": 97,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "required_content": true
+      },
+      "passed": true,
+      "response": "437"
+    },
+    {
+      "id": "spark_abstain",
+      "rubric": "Must abstain rather than invent a profile.",
+      "latency_ms": 199.7,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 132,
+        "total_tokens": 135,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "required_content": false
+      },
+      "passed": false,
+      "response": "Нет"
+    },
+    {
+      "id": "spark_json",
+      "rubric": "Valid JSON with both exact values.",
+      "latency_ms": 499.7,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 125,
+        "total_tokens": 139,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "json_fields": true
+      },
+      "passed": true,
+      "response": "{\"language\":\"русский\",\"tts\":\"OmniVoice\"}"
+    },
+    {
+      "id": "spark_tool_choice",
+      "rubric": "Selects memory retrieval, does not read arbitrary files or execute a command.",
+      "latency_ms": 1137.1,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 36,
+        "prompt_tokens": 165,
+        "total_tokens": 201,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "json_fields": true
+      },
+      "passed": true,
+      "response": "{\"tool\":\"memory.search\",\"arguments\":{\"query\":\"Какое правило о микрофоне я попросил сохранить раньше?\"}}"
+    },
+    {
+      "id": "spark_react_continuation",
+      "rubric": "Continues with the already discovered tool and does not restart discovery.",
+      "latency_ms": 873.2,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 26,
+        "prompt_tokens": 169,
+        "total_tokens": 195,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "json_fields": true
+      },
+      "passed": true,
+      "response": "{\"tool\":\"memory.search\",\"arguments\":{\"query\":\"правило о микрофоне сохранить\"}}"
+    },
+    {
+      "id": "spark_code_reasoning",
+      "rubric": "Correctly reasons about an empty list.",
+      "latency_ms": 180.2,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 112,
+        "total_tokens": 114,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "required_content": true
+      },
+      "passed": true,
+      "response": "empty"
+    },
+    {
+      "id": "spark_context_update",
+      "rubric": "Follows the latest user correction, not an obsolete implied change.",
+      "latency_ms": 612.9,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 162,
+        "total_tokens": 178,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "required_content": true
+      },
+      "passed": true,
+      "response": "Принимаю, TTS будет использовать OmniVoice."
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "total": 8,
+    "pass_rate": 0.75,
+    "latency_ms_p50": 466.0,
+    "latency_ms_max": 1137.1,
+    "note": "Mechanical screening only; review raw responses and rerun before role assignment."
+  }
+}

@@ -57,6 +57,52 @@ class _Response:
 
 
 class AmbientMemoryTests(unittest.TestCase):
+    def test_audio_timestamp_sources_survive_normalization_and_triage(self):
+        memory = AmbientMemoryBuffer(enabled=True)
+        for index, source in enumerate(("host_callback_receipt_monotonic", "host_pipe_receipt_monotonic",
+                                        "consumer_receipt_monotonic")):
+            result = memory.ingest_system_audio("В игре начался новый квест", event_id=f"src-{index}",
+                                                timestamp_source=source, now=100 + index)
+            self.assertEqual(result["observation"]["payload"]["timestamp_source"], source)
+        result = memory.ingest_system_audio("Ещё одна фраза из игры", event_id="legacy", now=104)
+        self.assertNotIn("timestamp_source", result["observation"]["payload"])
+        episode = memory.triage(now=105)["episodes"][0]["payload"]
+        self.assertEqual(set(episode["timestamp_sources"]), {
+            "host_callback_receipt_monotonic", "host_pipe_receipt_monotonic",
+            "consumer_receipt_monotonic", "unknown",
+        })
+
+    def test_timestamp_source_roundtrip_and_unrecognized_value(self):
+        original = AmbientMemoryBuffer(enabled=True)
+        record = original.ingest_system_audio("В игре звучит речь", event_id="timed",
+                   timestamp_source="consumer_receipt_monotonic", now=100)["observation"]
+        # AmbientMemoryBuffer is in-memory; this exercises its JSON event
+        # normalization contract, not a persistence/reload implementation.
+        decoded = json.loads(json.dumps(record, ensure_ascii=False))
+        recreated = AmbientMemoryBuffer(enabled=True)
+        result = recreated.ingest(decoded, now=101)
+        self.assertEqual(result["observation"]["payload"]["timestamp_source"], "consumer_receipt_monotonic")
+        result = recreated.ingest_system_audio("Другая игровая реплика", event_id="bad",
+                                             timestamp_source="imaginary_hardware_clock", now=102)
+        self.assertEqual(result["observation"]["payload"]["timestamp_source"], "unknown")
+
+    def test_audio_description_preserves_timestamp_source(self):
+        memory = AmbientMemoryBuffer(enabled=True)
+        result = memory.ingest_audio_description({
+            "schema_version": 1, "clip_id": "music-clip", "kind": "music",
+            "description": "Слышна тихая музыка", "tags": [], "mood": "",
+            "confidence": 0.7, "duration_seconds": 2.0,
+        }, timestamp_source="host_pipe_receipt_monotonic", now=100)
+        self.assertEqual(result["status"], "retained")
+        self.assertEqual(result["observation"]["payload"]["timestamp_source"], "host_pipe_receipt_monotonic")
+
+    def test_provider_triage_keeps_audio_timestamp_sources(self):
+        memory = AmbientMemoryBuffer(enabled=True, triage_provider=_FakeTriage())
+        memory.ingest_system_audio("В игре появился важный квест", event_id="source",
+                                   timestamp_source="host_callback_receipt_monotonic", now=100)
+        episode = memory.triage(now=101)["episodes"][0]
+        self.assertEqual(episode["payload"]["timestamp_sources"], ["host_callback_receipt_monotonic"])
+
     def test_capture_is_disabled_by_default(self):
         memory = AmbientMemoryBuffer()
         result = memory.ingest_system_audio("не должен сохраниться", event_id="off", now=1)
@@ -299,6 +345,71 @@ class AmbientMemoryTests(unittest.TestCase):
         self.assertEqual(scheduler.state()["status"], "processed")
         stopped = scheduler.stop()
         self.assertFalse(stopped["running"])
+
+    def test_background_triage_keeps_unverified_evidence_as_candidate(self):
+        import time
+
+        memory = AmbientMemoryBuffer(enabled=True)
+        memory.ingest_system_audio("В игре появилась красная дверь", event_id="audio-evidence")
+        memory.ingest_visual("На экране видна дверь", event_id="visual-evidence")
+        scheduler = AmbientTriageScheduler(memory, interval_seconds=1)
+        try:
+            scheduler.start()
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline and not memory.episodes():
+                time.sleep(0.05)
+            episodes = memory.episodes()
+            self.assertEqual(len(episodes), 1)
+            self.assertFalse(episodes[0]["payload"]["verified"])
+            self.assertEqual(set(episodes[0]["payload"]["source_event_ids"]), {"audio-evidence", "visual-evidence"})
+            self.assertEqual(memory.state()["handed_off_count"], 0)
+        finally:
+            scheduler.stop()
+
+    def test_forty_observations_retain_full_provenance_and_cascade_redact(self):
+        memory = AmbientMemoryBuffer(enabled=True, max_observations=256)
+        for i in range(40):
+            memory.ingest_system_audio(
+                f"observation phrase {i}",
+                confidence=0.8,
+                event_id=f"e{i}",
+            )
+        result = memory.triage(max_items=256)
+        self.assertEqual(result["status"], "processed")
+        episodes = memory.episodes()
+        self.assertEqual(len(episodes), 1)
+        source_ids = episodes[0]["payload"]["source_event_ids"]
+        self.assertEqual(len(source_ids), 40)
+        self.assertEqual(source_ids, [f"e{i}" for i in range(40)])
+
+        # Redact e39: episode containing phrase 39 must be completely redacted
+        redact_res = memory.redact(["e39"])
+        self.assertEqual(redact_res["status"], "redacted")
+        self.assertEqual(redact_res["episodes"], 1)
+        self.assertEqual(redact_res["observations"], 1)
+        self.assertEqual(len(memory.episodes()), 0)
+
+    def test_canonical_memory_keys_cascade_redact_episode(self):
+        # 1. Test promoted_memory_key cascade
+        memory = AmbientMemoryBuffer(enabled=True)
+        memory.ingest_system_audio("quest completed remember this", confidence=0.9, event_id="ev-prom")
+        memory.triage()
+        episode_id = memory.episodes()[0]["event_id"]
+        memory.mark_promoted(episode_id, "canon-promoted-key-1")
+        self.assertEqual(len(memory.episodes()), 1)
+        redacted = memory.redact(["canon-promoted-key-1"])
+        self.assertEqual(redacted["episodes"], 1)
+        self.assertEqual(len(memory.episodes()), 0)
+
+        # 2. Test handed_off_memory_key cascade
+        memory.ingest_system_audio("second dialogue important context", confidence=0.9, event_id="ev-hand")
+        memory.triage()
+        episode_id2 = memory.episodes()[0]["event_id"]
+        memory.mark_handed_off(episode_id2, "canon-handed-off-key-2")
+        self.assertEqual(len(memory.episodes()), 1)
+        redacted2 = memory.redact(["canon-handed-off-key-2"])
+        self.assertEqual(redacted2["episodes"], 1)
+        self.assertEqual(len(memory.episodes()), 0)
 
 
 if __name__ == "__main__":

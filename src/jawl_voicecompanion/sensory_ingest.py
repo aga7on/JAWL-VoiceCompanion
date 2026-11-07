@@ -47,6 +47,7 @@ class SensoryIngestor:
         self.governor = governor
         self._offset_path = self.path.with_name(self.path.name + ".offset")
         self._offset = self._load_offset()
+        self._last_file_id: tuple[int, int] | None = self._file_identity(self.path)
         self._counters: dict[str, int] = {
             "lines": 0, "visual": 0, "music": 0, "speech": 0,
             "ignored": 0, "errors": 0,
@@ -128,33 +129,95 @@ class SensoryIngestor:
         except OSError:
             pass
 
+    @staticmethod
+    def _file_identity(p: Path) -> tuple[int, int] | None:
+        try:
+            st = p.stat()
+            ino = getattr(st, "st_ino", 0)
+            ctime = int(getattr(st, "st_ctime_ns", int(st.st_ctime * 1e9)))
+            return (ino, ctime)
+        except OSError:
+            return None
+
     def poll_once(self, now: float | None = None) -> dict[str, Any]:
         """Read new complete lines once; safe to call from tests."""
         now = time.time() if now is None else float(now)
         try:
-            size = self.path.stat().st_size
+            st = self.path.stat()
+            size = st.st_size
+            curr_id = (getattr(st, "st_ino", 0), int(getattr(st, "st_ctime_ns", int(st.st_ctime * 1e9))))
         except OSError:
             return {"status": "missing", "processed": 0}
-        if size < self._offset:
+
+        rotated = False
+        if self._last_file_id is not None and curr_id != self._last_file_id:
+            rotated = True
+        elif size < self._offset:
+            rotated = True
+
+        drained_processed = 0
+        if rotated:
+            # Check candidate rotated files for unread tail
+            candidates = [
+                self.path.with_name(self.path.name + ".1"),
+                self.path.with_name(self.path.name + ".old"),
+                self.path.with_suffix(self.path.suffix + ".1"),
+            ]
+            for cand in candidates:
+                try:
+                    if cand.is_file() and cand.stat().st_size > self._offset:
+                        with cand.open("rb") as stream:
+                            stream.seek(self._offset)
+                            rot_chunk = stream.read(_MAX_CHUNK_BYTES)
+                        rot_lines = rot_chunk.split(b"\n")
+                        rot_lines_with_ending = [line + b"\n" for line in rot_lines[:-1]]
+                        for raw in rot_lines_with_ending:
+                            drained_processed += 1
+                            try:
+                                event = json.loads(raw.decode("utf-8", "replace"))
+                            except json.JSONDecodeError:
+                                self._counters["errors"] += 1
+                                continue
+                            if not isinstance(event, dict):
+                                self._counters["ignored"] += 1
+                                continue
+                            try:
+                                self._handle(event, now)
+                            except Exception as exc:  # noqa: BLE001
+                                self._counters["errors"] += 1
+                                self._last_error = f"{type(exc).__name__}: {exc}"[:240]
+                        self._counters["lines"] += drained_processed
+                        break
+                except OSError:
+                    pass
+
             self._offset = 0
+            self._last_file_id = curr_id
             self._save_offset()
+            if drained_processed > 0:
+                return {"status": "ok", "processed": drained_processed, "drained_rotated": True}
+
+        self._last_file_id = curr_id
         if size == self._offset:
+            if drained_processed > 0:
+                return {"status": "ok", "processed": drained_processed, "drained_rotated": True}
             return {"status": "idle", "processed": 0}
         with self.path.open("rb") as stream:
             stream.seek(self._offset)
             chunk = stream.read(_MAX_CHUNK_BYTES)
         lines = chunk.split(b"\n")
-        if chunk.endswith(b"\n"):
-            lines = lines[:-1]
-            consumed = len(chunk)
-        else:
-            partial = lines.pop() if lines else b""
-            consumed = len(chunk) - len(partial)
+        lines_with_ending = [line + b"\n" for line in lines[:-1]]
+        if not lines_with_ending:
+            if drained_processed > 0:
+                return {"status": "ok", "processed": drained_processed, "drained_rotated": True}
+            return {"status": "idle", "processed": 0}
+        batch = lines_with_ending[: self.max_events_per_poll]
+        consumed = sum(len(line) for line in batch)
         self._offset += consumed
         self._save_offset()
         processed = 0
         results: dict[str, int] = {}
-        for raw in lines[: self.max_events_per_poll]:
+        for raw in batch:
             processed += 1
             try:
                 event = json.loads(raw.decode("utf-8", "replace"))
@@ -164,10 +227,15 @@ class SensoryIngestor:
             if not isinstance(event, dict):
                 self._counters["ignored"] += 1
                 continue
-            outcome = self._handle(event, now)
+            try:
+                outcome = self._handle(event, now)
+            except Exception as exc:  # noqa: BLE001
+                self._counters["errors"] += 1
+                self._last_error = f"{type(exc).__name__}: {exc}"[:240]
+                outcome = "error"
             results[outcome] = results.get(outcome, 0) + 1
         self._counters["lines"] += processed
-        return {"status": "ok", "processed": processed, "results": results}
+        return {"status": "ok", "processed": processed + drained_processed, "results": results}
 
     def _mirror_history(
         self,

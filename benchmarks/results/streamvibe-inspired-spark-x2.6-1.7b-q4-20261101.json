@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "suite": "streamvibe",
+  "model": "spark-x2.6-1.7b-q4",
+  "base_url": "http://127.0.0.1:19231/v1",
+  "created_at": "2026-11-01T11:06:47.915391+00:00",
+  "cases": [
+    {
+      "id": "sv_explicit_before_trigger",
+      "rubric": "Stay silent before the explicit event trigger.",
+      "latency_ms": 1019.1,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 34,
+        "prompt_tokens": 127,
+        "total_tokens": 161,
+        "prompt_tokens_details": {
+          "cached_tokens": 65
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": false
+      },
+      "passed": false,
+      "response": "```json\n{\"decision\":\"speak\",\"message\":\"Когда чайник закипит, он начинает кипеть.\"}\n```"
+    },
+    {
+      "id": "sv_explicit_trigger",
+      "rubric": "Notify at the event, grounded in the observation.",
+      "latency_ms": 982.8,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 136,
+        "total_tokens": 168,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": true,
+        "grounded_message": true
+      },
+      "passed": true,
+      "response": "```json\n{\"decision\":\"speak\",\"message\":\"На видео вода бурно кипит, пар идёт.\"}\n```"
+    },
+    {
+      "id": "sv_implicit_stuck",
+      "rubric": "Infers a useful help point from task progress without claiming unseen details.",
+      "latency_ms": 982.4,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 29,
+        "prompt_tokens": 187,
+        "total_tokens": 216,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": true,
+        "grounded_message": true
+      },
+      "passed": true,
+      "response": "{\"decision\":\"speak\",\"message\":\"Пожалуйста, выберите каталог, чтобы продолжить установку.\"}"
+    },
+    {
+      "id": "sv_implicit_normal_progress",
+      "rubric": "Does not interrupt normal progress with generic advice.",
+      "latency_ms": 1255.4,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 40,
+        "prompt_tokens": 158,
+        "total_tokens": 198,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": false
+      },
+      "passed": false,
+      "response": "{\"decision\":\"speak\",\"message\":\"Установка в процессе, индикатор движется, ошибок нет. Подготовка к завершению.\"}"
+    },
+    {
+      "id": "sv_dynamic_revision",
+      "rubric": "Uses the latest revised intent.",
+      "latency_ms": 1034.3,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 160,
+        "total_tokens": 192,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": true
+      },
+      "passed": true,
+      "response": "```json\n{\"decision\":\"silent\",\"message\":\"Установка идёт штатно, ошибок нет.\"}\n```"
+    },
+    {
+      "id": "sv_dynamic_error_after_revision",
+      "rubric": "Responds to the revised trigger and cites the visible error.",
+      "latency_ms": 2130.9,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 74,
+        "prompt_tokens": 142,
+        "total_tokens": 216,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": true,
+        "grounded_message": true
+      },
+      "passed": true,
+      "response": "```json\n{\"decision\":\"speak\",\"message\":\"Внимание: в последнем кадре виден красный баннер «Не удалось сохранить файл: нет доступа». Поскольку это явная ошибка, необходимо сообщить пользователю о ситуации.\"}\n```"
+    },
+    {
+      "id": "sv_false_positive_transient",
+      "rubric": "Does not turn a transient loading indicator into an error alert.",
+      "latency_ms": 997.0,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 140,
+        "total_tokens": 172,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": false
+      },
+      "passed": false,
+      "response": "```json\n{\"decision\":\"speak\",\"message\":\"Пока выполняется загрузка, нет ошибки.\"}\n```"
+    },
+    {
+      "id": "sv_interruption",
+      "rubric": "Honors the user's interruption and avoids unsolicited help.",
+      "latency_ms": 1977.0,
+      "finish_reason": "stop",
+      "usage": {
+        "completion_tokens": 67,
+        "prompt_tokens": 156,
+        "total_tokens": 223,
+        "prompt_tokens_details": {
+          "cached_tokens": 66
+        }
+      },
+      "checks": {
+        "valid_json": true,
+        "decision": true
+      },
+      "passed": true,
+      "response": "```json\n{\"decision\":\"silent\",\"message\":\"Пожалуйста, не делайте шагов. Вы можете самостоятельно решить, что нужно делать, и я буду ждать, пока вы закончите свой вариант.\"}\n```"
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "total": 8,
+    "pass_rate": 0.625,
+    "latency_ms_p50": 1026.7,
+    "latency_ms_max": 2130.9,
+    "note": "Mechanical screening only; review raw responses and rerun before role assignment."
+  }
+}

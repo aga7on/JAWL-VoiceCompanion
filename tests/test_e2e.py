@@ -345,10 +345,12 @@ class _JawlHandler(socketserver.StreamRequestHandler):
             return
         message = json.loads(self.rfile.readline().decode("utf-8"))
         _JawlHandler.messages.append(message)
-        if message["text"] == "no broadcast":
+        raw_text = message.get("text", "")
+        text = raw_text.split("[CURRENT USER MESSAGE]\n", 1)[1] if "[CURRENT USER MESSAGE]\n" in raw_text else raw_text
+        if text == "no broadcast":
             time.sleep(0.25)
             return
-        answer = {"text": f"JAWL E2E: {message['text']}"}
+        answer = {"text": f"JAWL E2E: {text}"}
         self.wfile.write((json.dumps(answer, ensure_ascii=False) + "\n").encode("utf-8"))
 
 
@@ -398,7 +400,8 @@ class _JawlChatWebHandler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        text = payload.get("text", "")
+        raw_text = payload.get("text", "")
+        text = raw_text.split("[CURRENT USER MESSAGE]\n", 1)[1] if "[CURRENT USER MESSAGE]\n" in raw_text else raw_text
         with _JawlChatWebHandler.condition:
             _JawlChatWebHandler.sequence += 1
             user = {"seq": _JawlChatWebHandler.sequence, "sender": "User", "text": text}
@@ -533,7 +536,8 @@ class _NativeCompanionHandler(BaseHTTPRequestHandler):
             return
 
         turn_id = payload.get("turn_id")
-        text = payload.get("text")
+        raw_text = payload.get("text")
+        text = raw_text.split("[CURRENT USER MESSAGE]\n", 1)[1] if raw_text and "[CURRENT USER MESSAGE]\n" in raw_text else raw_text
         with self.condition:
             _NativeCompanionHandler.event_seq += 1
             started = {

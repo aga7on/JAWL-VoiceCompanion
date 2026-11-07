@@ -10,11 +10,17 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+from .jawl_adapter import JawlTurnCancelled
+
 MAX_LLM_CHARS = 12_000
 
 
 class LLMUnavailable(ConnectionError):
     """The configured chat provider is unavailable or returned invalid data."""
+
+
+class LLMCancelled(LLMUnavailable, JawlTurnCancelled):
+    """The LLM request was cancelled by a newer turn."""
 
 
 def _chat_url(value: str) -> str:
@@ -68,7 +74,7 @@ class OpenAICompatibleChatClient:
         if not clean or len(clean) > MAX_LLM_CHARS:
             raise ValueError("LLM text must be non-empty and at most 12000 characters")
         if cancel_event is not None and cancel_event.is_set():
-            raise LLMUnavailable("LLM request cancelled")
+            raise LLMCancelled("LLM request cancelled")
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
@@ -94,7 +100,7 @@ class OpenAICompatibleChatClient:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise LLMUnavailable("LLM endpoint returned invalid JSON") from exc
         if cancel_event is not None and cancel_event.is_set():
-            raise LLMUnavailable("LLM request cancelled")
+            raise LLMCancelled("LLM request cancelled")
         answer = self._extract_text(payload)
         if not answer:
             raise LLMUnavailable("LLM endpoint returned empty text")
@@ -181,7 +187,7 @@ class OpenAICompatibleChatClient:
     @staticmethod
     def _check_cancel(cancel_event: threading.Event | None) -> None:
         if cancel_event is not None and cancel_event.is_set():
-            raise LLMUnavailable("LLM request cancelled")
+            raise LLMCancelled("LLM request cancelled")
 
     @staticmethod
     def _extract_delta(payload: Any) -> str:

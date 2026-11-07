@@ -925,6 +925,32 @@ class WebTests(unittest.TestCase):
         self.assertEqual(context.exception.code, 400)
         context.exception.close()
 
+    def test_structured_memory_mutations_forward_operations(self):
+        class MemoryAdapter:
+            def __init__(self):
+                self.calls = []
+
+            def remember_memory(self, **values):
+                self.calls.append(("remember", values))
+                return {"status": "synchronized"}
+
+            def revise_memory(self, memory_key, **values):
+                self.calls.append(("revise", memory_key, values))
+                return {"status": "synchronized"}
+
+            def forget_memory(self, memory_key, reason=""):
+                self.calls.append(("forget", memory_key, reason))
+                return {"status": "synchronized"}
+
+        native = MemoryAdapter()
+        self.server.gateway.jawl_web = native
+        self.post_json('/api/jawl/memory', {'operation': 'remember', 'kind': 'fact', 'subject': 'user', 'predicate': 'likes', 'value': 'tea'})
+        self.post_json('/api/jawl/memory', {'operation': 'revise', 'memory_key': 'fixture', 'value': 'coffee'})
+        self.post_json('/api/jawl/memory', {'operation': 'forget', 'memory_key': 'fixture', 'reason': 'operator'})
+        self.assertEqual([call[0] for call in native.calls], ['remember', 'revise', 'forget'])
+        self.assertEqual(native.calls[-2][1:], ('fixture', {'value': 'coffee'}))
+        self.assertEqual(native.calls[-1][1:], ('fixture', 'operator'))
+
     def test_product_api_facades_are_session_bound_and_versioned(self):
         native = _FakeProductApi()
         self.server.gateway.jawl_web = native
@@ -1097,6 +1123,23 @@ class _FakeFusion:
 
 
 class CurrentPerceptionEnrichmentTests(unittest.TestCase):
+    def test_module_question_receives_bounded_runtime_facts(self):
+        class ASR:
+            def health(self):
+                return {"configured": True, "engine": "gigaam", "secret": "must-not-leak"}
+
+        class Context:
+            gateway = type("Gateway", (), {})()
+            perception_fusion = None
+            asr = ASR()
+
+        result = CompanionServer.enrich_turn_text(Context(), "Доложи статус модулей сенсорики и памяти")
+        self.assertIn('"engine": "gigaam"', result)
+        self.assertIn('"sensory_history": {"configured": false}', result)
+        self.assertNotIn("must-not-leak", result)
+        ordinary = CompanionServer.enrich_turn_text(Context(), "Привет, как дела?")
+        self.assertNotIn("LOCAL RUNTIME STATUS", ordinary)
+
     def test_persisted_dialogue_is_rehydrated_without_losing_current_text(self):
         class Arbiter:
             @staticmethod

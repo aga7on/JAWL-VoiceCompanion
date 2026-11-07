@@ -28,8 +28,12 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _SNAPSHOT_SRC = Path(
-    r"G:\AI\JAWL-VoiceCompanion\runtime\jawl-sources\jawl-20260906-daily-v2\src"
+    os.environ.get(
+        "JAWL_SNAPSHOT_SRC",
+        str(_REPO_ROOT / "runtime" / "jawl-sources" / "jawl-20260906-daily-v2" / "src"),
+    )
 )
 
 

@@ -18,7 +18,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIP_DIR = ROOT / "runtime/multimodal-realclips-20261024/probes/lowrate"
-ASR_EXE = Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
+_INTREE_CRISP = ROOT / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+ASR_EXE = _INTREE_CRISP if _INTREE_CRISP.exists() else Path(r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe")
 ASR_MODEL = ROOT / "runtime/models/asr/gigaam-v3-e2e-rnnt-q8_0.gguf"
 RATE = 16_000
 CLIPS = ("01_ru_trailer", "02_anime", "03_gameplay", "04_coding_ui", "05_aqua_song")

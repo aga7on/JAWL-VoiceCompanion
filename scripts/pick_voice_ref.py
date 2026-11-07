@@ -18,11 +18,12 @@ from pathlib import Path
 
 import soundfile as sf
 
-ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
+ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(r"G:\AI\kyutai-ru\voice\RU_Famale_ALEKSANDRA_KOSTINSKAYa.mp3")
 OUT = ROOT / "runtime" / "models" / "asr" / "voice_ref_aleksandra.wav"
-CRISP = r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe"
-MODEL = r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf"
+_INTREE_CRISP = ROOT / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+CRISP = str(_INTREE_CRISP) if _INTREE_CRISP.exists() else r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe"
+MODEL = str(ROOT / "runtime" / "models" / "asr" / "gigaam-v3-e2e-rnnt-q8_0.gguf")
 
 
 def transcribe(wav: Path) -> str:

@@ -563,7 +563,17 @@ class VisionLookService:
             "capture_profile": profile,
         }
 
-    def look(self, prompt: str, *, force: bool = False, session_id: str = "local") -> dict[str, Any]:
+    def look(
+        self,
+        prompt: str,
+        *,
+        force: bool = False,
+        session_id: str = "local",
+        cancel_event: Any | None = None,
+    ) -> dict[str, Any]:
+        if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+            return {"status": "cancelled", "reason": "turn_cancelled", "persisted": False}
+
         clean_prompt = str(prompt or "").strip()[:1200]
         if not clean_prompt:
             return {"status": "failed", "reason": "vision_prompt_required"}
@@ -576,6 +586,8 @@ class VisionLookService:
                 session_id=session_id,
             )
         )
+        if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+            return {"status": "cancelled", "reason": "turn_cancelled", "persisted": False}
         if capture.get("status") != "verified":
             return {
                 "status": capture.get("status", "degraded"),
@@ -628,6 +640,9 @@ class VisionLookService:
             }
         if self.describer is None:
             return {"status": "degraded", "reason": "vision_describer_not_configured", "persisted": False}
+
+        if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+            return {"status": "cancelled", "reason": "turn_cancelled", "persisted": False}
 
         self._last_seen_digest = digest
         self._last_vlm_at = now

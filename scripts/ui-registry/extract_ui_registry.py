@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-REPO = Path(r"G:\AI\JAWL-VoiceCompanion")
+REPO = Path(r"G:\AI\JAWL-VoiceCompanion-V0.5")
 SNAP = REPO / "runtime" / "jawl-sources" / "jawl-20260906-daily-v2"
 OUT = REPO / "docs" / "ui-registry"
 OUT.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-11-02T02:15:00+03:00",
+  "environment": {
+    "repo": "G:\\AI\\JAWL-VoiceCompanion-V0.5",
+    "python": "3.11.15",
+    "platform": "win32"
+  },
+  "benchmarks": {
+    "asr_crispasr_gigaam": [
+      {
+        "sample": "voice_ref_aleksandra.wav",
+        "audio_duration_s": 8.0,
+        "latency_s": 0.321,
+        "rtf": 24.9,
+        "status": "PASS",
+        "sample_text": "Сначала подготовься. Покажи, чего ты стоишь. В таком виде у "
+      }
+    ],
+    "embedding_gemma_onnx": {
+      "dimension": 768,
+      "init_time_s": 0.0,
+      "p50_latency_ms": 52.03,
+      "p95_latency_ms": 1726.35,
+      "min_latency_ms": 48.28,
+      "max_latency_ms": 2141.98,
+      "status": "PASS"
+    },
+    "query_classifier": {
+      "init_time_s": 0.0,
+      "p50_latency_ms": 53.94,
+      "p95_latency_ms": 2000.16,
+      "status": "PASS"
+    },
+    "local_sqlite_memory": {
+      "total_records_tested": 100,
+      "insert_p50_ms": 2.96,
+      "insert_p95_ms": 3.4,
+      "search_top5_p50_ms": 0.18,
+      "search_top5_p95_ms": 0.89,
+      "status": "PASS"
+    },
+    "sensory_ambient_store": {
+      "write_200_items_total_ms": 45.95,
+      "write_per_item_ms": 0.23,
+      "context_text_gen_ms": 6.223,
+      "state_read_ms": 0.011,
+      "handoff_packet_serialization_ms": 0.0174,
+      "status": "PASS"
+    },
+    "test_suites": {
+      "pytest_core_integration": {
+        "tests": 143,
+        "passed": 143,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "status": "PASS"
+      },
+      "pytest_web_gateway": {
+        "tests": 88,
+        "subtests": 45,
+        "passed": 88,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "status": "PASS"
+      },
+      "node_desktop_ui": {
+        "tests": 64,
+        "passed": 64,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "status": "PASS"
+      },
+      "jawl_core_l0_l1_smoke": {
+        "exit_code": 0,
+        "status": "PASS"
+      }
+    }
+  }
+}

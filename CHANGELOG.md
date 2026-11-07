@@ -1,5 +1,7 @@
 ## 2026-10-29 — Qwen visual OCR handoff
 
+Управление активной структурированной памятью: поиск, фильтрация, добавление, редактирование и исключение записи с предупреждением об истории и ограничении выдачи.
+
 - Qwen capture requests Windows OCR only on startup, pending visual changes, or
   the static refresh interval. OCR remains a separate redaction-filtered channel
   with a 5s live TTL and is delivered through the structured VA packet.
@@ -11,6 +13,52 @@
 - Full live-profile behavior and CPU cost remain open; launch requires
   `--screen-ocr`.
 # Изменения
+
+## 2026-11-05 — Рекалибровка Round 10 Шаг 2.5: Сквозной когнитивный цикл и арбитраж инициативы
+
+- **Исправление методологии и устранение oracle leakage**:
+  - Полностью удален oracle leakage: в режиме реального восприятия раннер больше не берет текстовые описания персонажей и транскрипты из эталонной разметки `ground_truth_180s.json`. При пропусках детектора SSDLite вызывается реальная модель `Qwen3.5-0.8B VL` на актуальных кадрах (16 вызовов, 16 успешных семантических распознаваний).
+  - Прежние артефакты (`step25_e2e_metrics.json`, `step25_e2e_predictions.json`, `step25_concurrent_load.json`) помечены как `UNRELIABLE_SIMULATED` (сохранены для аудита без удаления).
+  - Выпущен проверенный скрипт `scripts/recalibrate_e2e_cognitive_loop_step25.py` и новые артефакты `step25_recalibrated_metrics.json` и `step25_recalibrated_predictions.json`.
+- **Трехуровневая модель наблюдения (`EpistemicObservationState`)**:
+  - В `src/jawl_voicecompanion/scene_state.py` внедрен класс `EpistemicObservationState` и метод `SceneState.evaluate_observation_status`:
+    - `observed_present`: объект или признак зафиксирован активным наблюдением.
+    - `observed_absent`: область/объект были явно проверены целевой инспекцией и подтверждено их отсутствие.
+    - `not_observed`: область не проверялась или наблюдение устарело (`staleness > max_staleness_ms`).
+  - Устранена когнитивная ошибка «отсутствие данных в стейте = отсутствие на экране».
+- **Реализация Top-Down Visual Refresh**:
+  - В интерактивном режиме при вопросе о текущем кадре система выполняет направленный запрос к `Qwen3.5-0.8B VL` по изображению перед ответом SenseNova (задержка обновления кадра 162–272 мс).
+- **Изолированный замер конкуренции за GPU (RTX 5080)**:
+  - Устранено искажение замеров из-за `join` потоков: изолированное время инференса Qwen составило 285.1 мс, под фоновым декодингом SenseNova — 336.4 мс (реальный фактор замедления вычислительных ядер составил 1.18x, а не 3.56x).
+  - VRAM по `nvidia-smi live query`: 10 817 МиБ занято / 5 161 МиБ свободно.
+- **Тестирование**:
+  - Добавлены тесты `test_epistemic_observation_three_states` и `test_epistemic_observation_staleness` в `tests/test_scene_state.py`.
+  - 15/15 тестов `test_scene_state.py` и `test_event_policy.py` успешно пройдены.
+
+
+## 2026-11-03 — JAWL-VoiceCompanion-V0.5: Полная сквозная интеграция и аудит (8/8 пунктов)
+
+- **Chameleon HUD & Electron IPC**:
+  - `desktop/panel-preload.js`: экспортированы методы `setWindowMode` и `onClickThroughChanged` в контексты `window.jawlDesktop` и `window.__jawlDesktop`.
+  - Добавлен юнит-тест `desktop/tests/panel-preload.test.js`, подтверждающий двусторонний IPC для компактного режима (360x540) и прозрачности для мыши (Ctrl+Shift+G).
+- **Three.js VRM Bust Shot & Pausing**:
+  - `desktop/app-scene.js`: реализовано адаптивное кадрирование `applyCameraFraming(vrm)`, обеспечивающее поясной портрет (Bust Shot) в компактном окне HUD (увеличение лица и верхней части тела в 2.5 раза).
+  - Внедрена пауза рендер-лупа `setRenderPaused` по событиям `visibilitychange` и `pagehide`, снижающая нагрузку на GPU до 0% при неактивном окне.
+  - Добавлен тест `desktop/tests/avatar-camera-pause.test.mjs`.
+- **Эргономика интерфейса и безопасность памяти**:
+  - `desktop/app.html`, `desktop/app.js`: добавлен компактный текстовый ввод `#hud-quick-bar` в HUD и перемещён речевой баббл `#avatar-caption` в верхнюю область над головой персонажа.
+  - Устранён блокирующий модальный диалог `window.confirm()` при удалении записей памяти, реализовано двухэтапное инлайн-подтверждение («Точно удалить?») с автосбросом. Протестировано в `desktop/memory-ui.test.js`.
+  - `src/jawl_voicecompanion/config_hub.py`: устранён жёсткий абсолютный путь к снапшоту JAWL, `tests/test_web.py` проходит на 100% (89/89).
+- **Оптимизация задержки речи Stream-Before-Close**:
+  - `src/jawl_voicecompanion/speech_first.py`: расширен список терминальных инструментов `TERMINAL_TOOL_NAMES` каноническими алиасами JAWL (`HostOSTerminal.send_message_to_terminal`, `HostOSJournalMessages.send_message_to_terminal`, `send_message_to_terminal`). Задержка старта речи снижена до <2.5с.
+- **Синхронизация конфигурации и манифеста**:
+  - `config/runtime.manifest.json`, `src/jawl_voicecompanion/runtime_manifest.py`: зарегистрирован порт `omnivoice_tts: 9890` и параметры моделей OmniVoice.
+  - `scripts/run_integrated_profile.ps1`: синхронизировано автоопределение OmniVoice TTS (порт 9890), восстановлен UTF-8 BOM для совместимости с Windows PowerShell 5.1.
+- **Результаты тестов**:
+  - 142/142 Node.js desktop tests PASS.
+  - 152/152 Pytest core tests PASS.
+  - 89/89 web tests PASS.
+
 
 ## 2026-11-01 — Память по правилам JAWL: кандидат вместо записи
 

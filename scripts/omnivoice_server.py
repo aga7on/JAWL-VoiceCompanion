@@ -12,7 +12,7 @@ RU quality verified verbatim through GigaAM.
 Voice: the reference sample (wav + its transcript) is configured once; a
 request may pass a different voice id to pick another prepared reference.
 Run:
-  G:/AI/OmniVoice/venv/Scripts/python.exe -X utf8 scripts/omnivoice_server.py \
+  runtime/omnivoice-venv/Scripts/python.exe -X utf8 scripts/omnivoice_server.py \
       --host 127.0.0.1 --port 9890 \
       [--ref-audio path.wav --ref-text "транскрипт"]
 """
@@ -31,24 +31,35 @@ from pathlib import Path
 
 MAX_TEXT_CHARS = 4000
 
-sys.path.insert(0, r"G:\AI\OmniVoice")
-sys.path.insert(0, r"G:\AI\OmniVoice\omnivoice")
+ROOT = Path(__file__).resolve().parents[1]
+_INTREE_MODEL = ROOT / "runtime" / "models" / "tts" / "k2-fsa-OmniVoice"
+MODEL_DIR = _INTREE_MODEL if _INTREE_MODEL.exists() else Path(r"G:\AI\OmniVoice\models\k2-fsa-OmniVoice")
+
+_INTREE_REF = ROOT / "runtime" / "models" / "tts" / "refs" / "voice_ref_aleksandra.wav"
+DEFAULT_REF = _INTREE_REF if _INTREE_REF.exists() else Path(r"G:\AI\OmniVoice\bench\ru_ref.wav")
+DEFAULT_REF_TEXT = "Привет! Я твой голосовой компаньон, рад тебя слышать."
+
+# Allow vendored or system omnivoice
+for candidate in (
+    ROOT / "runtime" / "OmniVoice",
+    Path(r"G:\AI\OmniVoice"),
+    Path(r"G:\AI\OmniVoice\omnivoice"),
+):
+    if candidate.exists() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 from omnivoice import OmniVoice  # noqa: E402
-
-MODEL_DIR = Path(r"G:\AI\OmniVoice\models\k2-fsa-OmniVoice")
-DEFAULT_REF = Path(r"G:\AI\OmniVoice\bench\ru_ref.wav")
-DEFAULT_REF_TEXT = "Привет! Я твой голосовой компаньон, рад тебя слышать."
 
 _state = {"model": None, "lock": threading.Lock(), "ref": None, "ref_text": "", "started_at": 0.0}
 
 
-def load_model(device: str) -> None:
+def load_model(device: str, model_dir: Path | None = None) -> None:
     import torch
 
     began = time.perf_counter()
     dtype = torch.float16 if device.startswith("cuda") else torch.float32
-    model = OmniVoice.from_pretrained(str(MODEL_DIR), device_map=device, dtype=dtype)
+    target_dir = model_dir or MODEL_DIR
+    model = OmniVoice.from_pretrained(str(target_dir), device_map=device, dtype=dtype)
     # Warmup: compile kernels once so the first user request is not slow.
     model.generate(text="Готов.")
     _state["model"] = model
@@ -146,21 +157,23 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9890)
     parser.add_argument("--device", default="cuda:1")
+    parser.add_argument("--model-dir", default=str(MODEL_DIR))
     parser.add_argument("--ref-audio", default=str(DEFAULT_REF))
     parser.add_argument("--ref-text", default=DEFAULT_REF_TEXT)
     args = parser.parse_args()
 
+    model_dir = Path(args.model_dir)
     _state["ref"] = Path(args.ref_audio)
     _state["ref_text"] = str(args.ref_text)
-    if not MODEL_DIR.exists():
-        print(f"[omnivoice] model dir is missing: {MODEL_DIR}", file=sys.stderr)
+    if not model_dir.exists():
+        print(f"[omnivoice] model dir is missing: {model_dir}", file=sys.stderr)
         return 2
     if not _state["ref"].exists():
         print(f"[omnivoice] reference sample is missing: {_state['ref']}", file=sys.stderr)
         return 2
 
     # Load before serving so /health tells the truth from the first request.
-    load_model(args.device)
+    load_model(args.device, model_dir=model_dir)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[omnivoice] serving on http://{args.host}:{args.port}", flush=True)

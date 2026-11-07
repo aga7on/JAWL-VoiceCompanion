@@ -16,7 +16,7 @@ import os
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 _DEFAULT_BLOCKED_TITLE_TERMS = (
@@ -116,8 +116,18 @@ class ScreenCaptureAdapter:
         ocr_provider: Any | None = None,
         redaction_rects: Iterable[Iterable[int]] = (),
         redaction_terms: Iterable[str] = _DEFAULT_REDACTION_TERMS,
+        display_index: int = 0,
+        enabled_fn: Callable[[], bool] | None = None,
+        scene_state: Any | None = None,
+        delta_detector: Any | None = None,
     ) -> None:
         self.enabled = bool(enabled)
+        self.display_index = int(display_index or 0)
+        self.enabled_fn = enabled_fn
+        self.scene_state = scene_state
+        self.delta_detector = delta_detector
+        self._last_foreground_hwnd: int | None = None
+        self._scene_seq: int = 0
         self.max_width = max(320, min(int(max_width), 3840))
         self.max_height = max(240, min(int(max_height), 2160))
         self.max_bytes = max(64_000, min(int(max_bytes), 5_000_000))
@@ -134,6 +144,102 @@ class ScreenCaptureAdapter:
         self.redaction_terms = tuple(
             str(term).casefold() for term in redaction_terms if str(term).strip()
         )
+
+    def grab_pil_with_timestamp(
+        self, max_dimension: int | None = 1280
+    ) -> tuple[Any | None, float]:
+        """Capture one display frame for top-down visual inspection if enabled and not paused."""
+        if not self.enabled:
+            return None, 0.0
+        if self.enabled_fn is not None:
+            try:
+                if not self.enabled_fn():
+                    return None, 0.0
+            except Exception:
+                return None, 0.0
+        if os.name != "nt":
+            return None, 0.0
+        try:
+            import win32api
+            import win32gui
+            from PIL import Image, ImageGrab
+        except ImportError:
+            return None, 0.0
+
+        try:
+            monitors = win32api.EnumDisplayMonitors()
+        except Exception:
+            monitors = []
+        rects: list[tuple[int, int, int, int]] = []
+        for monitor in monitors:
+            try:
+                rect = monitor[2]
+                left, top, right, bottom = (int(v) for v in rect)
+            except (TypeError, ValueError, IndexError):
+                continue
+            if right > left and bottom > top:
+                rects.append((left, top, right, bottom))
+        if not rects:
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(win32gui.GetDesktopWindow())
+                if right > left and bottom > top:
+                    rects.append((left, top, right, bottom))
+            except Exception:
+                rects = []
+        if not rects:
+            return None, 0.0
+
+        target_idx = max(0, min(int(self.display_index), len(rects) - 1))
+        left, top, right, bottom = rects[target_idx]
+        try:
+            # Keep the focused-window exclusion used by observe() when the
+            # selected display contains the currently focused sensitive app.
+            hwnd = win32gui.GetForegroundWindow()
+            if hwnd and win32gui.IsWindowVisible(hwnd) and not win32gui.IsIconic(hwnd):
+                if self._last_foreground_hwnd is not None and hwnd != self._last_foreground_hwnd:
+                    self._scene_seq += 1
+                    if self.scene_state is not None and hasattr(self.scene_state, "transition_scene"):
+                        try:
+                            self.scene_state.transition_scene(f"scene-win-{self._scene_seq}")
+                        except Exception:
+                            pass
+                self._last_foreground_hwnd = hwnd
+                window_rect = win32gui.GetWindowRect(hwnd)
+                overlaps = (window_rect[0] < right and window_rect[2] > left
+                            and window_rect[1] < bottom and window_rect[3] > top)
+                if overlaps and self._is_blocked_window(
+                    str(win32gui.GetWindowText(hwnd) or ""),
+                    str(win32gui.GetClassName(hwnd) or ""),
+                ):
+                    return None, 0.0
+            image = ImageGrab.grab(
+                bbox=(left, top, right, bottom),
+                all_screens=True,
+                include_layered_windows=False,
+            ).convert("RGB")
+            t_capture = time.monotonic()
+            # Rectangles and OCR bounds are in original capture coordinates;
+            # redact before any resizing or inference sees the pixels.
+            _, redaction_rects = self._collect_ocr(image, enabled=self.ocr_enabled)
+            self._redact_pixels(image, redaction_rects)
+            if max_dimension and max(image.size) > max_dimension:
+                scale = float(max_dimension) / float(max(image.size))
+                new_w = max(1, int(round(image.size[0] * scale)))
+                new_h = max(1, int(round(image.size[1] * scale)))
+                image = image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+            if self.delta_detector is not None and hasattr(self.delta_detector, "compute_delta"):
+                try:
+                    delta, is_change, new_sid = self.delta_detector.compute_delta(image, commit=True)
+                    if is_change:
+                        if delta >= 0.35 and self.scene_state is not None and hasattr(self.scene_state, "transition_scene"):
+                            self.scene_state.transition_scene(new_sid)
+                        elif self.scene_state is not None and hasattr(self.scene_state, "advance_frame"):
+                            self.scene_state.advance_frame()
+                except Exception:
+                    pass
+            return image, t_capture
+        except Exception:
+            return None, 0.0
 
     def capture_displays(
         self, *, max_displays: int = 2, include_ocr: bool | None = None,
@@ -153,6 +259,28 @@ class ScreenCaptureAdapter:
                 }
                 for index in range(count)
             ]
+        if self.enabled_fn is not None:
+            try:
+                if not self.enabled_fn():
+                    return [
+                        {
+                            "status": "degraded",
+                            "reason": "screen_observation_paused",
+                            "display_index": index,
+                            "persisted": False,
+                        }
+                        for index in range(count)
+                    ]
+            except Exception:
+                return [
+                    {
+                        "status": "degraded",
+                        "reason": "screen_observation_paused",
+                        "display_index": index,
+                        "persisted": False,
+                    }
+                    for index in range(count)
+                ]
         if os.name != "nt":
             return [
                 {
@@ -278,6 +406,20 @@ class ScreenCaptureAdapter:
                 "reason": "screen_observation_disabled",
                 "persisted": False,
             }
+        if self.enabled_fn is not None:
+            try:
+                if not self.enabled_fn():
+                    return {
+                        "status": "degraded",
+                        "reason": "screen_observation_paused",
+                        "persisted": False,
+                    }
+            except Exception:
+                return {
+                    "status": "degraded",
+                    "reason": "screen_observation_paused",
+                    "persisted": False,
+                }
         if os.name != "nt":
             return {
                 "status": "degraded",
@@ -298,6 +440,15 @@ class ScreenCaptureAdapter:
         hwnd = win32gui.GetForegroundWindow()
         if not hwnd or not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
             return {"status": "degraded", "reason": "focused_window_unavailable", "persisted": False}
+
+        if self._last_foreground_hwnd is not None and hwnd != self._last_foreground_hwnd:
+            self._scene_seq += 1
+            if self.scene_state is not None and hasattr(self.scene_state, "transition_scene"):
+                try:
+                    self.scene_state.transition_scene(f"scene-win-{self._scene_seq}")
+                except Exception:
+                    pass
+        self._last_foreground_hwnd = hwnd
 
         title = str(win32gui.GetWindowText(hwnd) or "")[:240]
         class_name = str(win32gui.GetClassName(hwnd) or "")[:120]
@@ -383,6 +534,20 @@ class ScreenCaptureAdapter:
                 "reason": "screen_observation_disabled",
                 "persisted": False,
             }
+        if self.enabled_fn is not None:
+            try:
+                if not self.enabled_fn():
+                    return {
+                        "status": "degraded",
+                        "reason": "screen_observation_paused",
+                        "persisted": False,
+                    }
+            except Exception:
+                return {
+                    "status": "degraded",
+                    "reason": "screen_observation_paused",
+                    "persisted": False,
+                }
         if os.name != "nt":
             return {
                 "status": "degraded",

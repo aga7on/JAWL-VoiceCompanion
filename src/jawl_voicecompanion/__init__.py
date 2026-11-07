@@ -46,6 +46,52 @@ from .windows_pointer import WindowsPointerAdapter
 from .windows_keyboard import WindowsKeyboardAdapter
 from .llm import LLMUnavailable, OpenAICompatibleChatClient
 from .system_audio import SystemAudioLoopback, SystemAudioUnavailable
+from .process_loopback import ProcessLoopbackBridge, ProcessLoopbackError
+try:
+    from .visual_stream import DXGIScreenCapture, SceneDeltaDetector, VisualStreamWorker
+except ImportError:
+    DXGIScreenCapture = None  # type: ignore
+    SceneDeltaDetector = None  # type: ignore
+    VisualStreamWorker = None  # type: ignore
+
+try:
+    from .episodic_visual_memory import EpisodicVisualMemory
+except ImportError:
+    EpisodicVisualMemory = None  # type: ignore
+
+try:
+    from .affective_engine import AffectiveEngine
+except ImportError:
+    AffectiveEngine = None  # type: ignore
+
+try:
+    from .windows_smtc import WindowsSMTCAdapter
+except ImportError:
+    WindowsSMTCAdapter = None  # type: ignore
+
+try:
+    from .narrative_consolidator import NarrativeConsolidator
+except ImportError:
+    NarrativeConsolidator = None  # type: ignore
+
+try:
+    from .event_policy import EventPolicy, PolicyDecision
+except ImportError:
+    EventPolicy = None  # type: ignore
+    PolicyDecision = None  # type: ignore
+
+try:
+    from .scene_state import EpistemicObservationState, SceneState
+except ImportError:
+    EpistemicObservationState = None  # type: ignore
+    SceneState = None  # type: ignore
+
+try:
+    from .perception_fusion import CognitiveTurnDecision, PerceptionFusion, SenseNovaPerceptionBridge
+except ImportError:
+    CognitiveTurnDecision = None  # type: ignore
+    PerceptionFusion = None  # type: ignore
+    SenseNovaPerceptionBridge = None  # type: ignore
 from .audit import AuditLog
 from .stream_chat import StreamChatIngestor, StreamChatLimits
 from .runtime_profile import RuntimeProfile
@@ -115,6 +161,22 @@ __all__ = [
     "OpenAICompatibleChatClient",
     "SystemAudioLoopback",
     "SystemAudioUnavailable",
+    "ProcessLoopbackBridge",
+    "ProcessLoopbackError",
+    "DXGIScreenCapture",
+    "SceneDeltaDetector",
+    "VisualStreamWorker",
+    "EpisodicVisualMemory",
+    "AffectiveEngine",
+    "WindowsSMTCAdapter",
+    "NarrativeConsolidator",
+    "EventPolicy",
+    "PolicyDecision",
+    "SceneState",
+    "EpistemicObservationState",
+    "CognitiveTurnDecision",
+    "PerceptionFusion",
+    "SenseNovaPerceptionBridge",
     "AuditLog",
     "StreamChatIngestor",
     "StreamChatLimits",

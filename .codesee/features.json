@@ -104,9 +104,15 @@
             },
             {
               "file": "tests/test_prepare_daily_profile.py"
+            },
+            {
+              "file": "scripts/resolve_runtime_manifest.py"
+            },
+            {
+              "file": "tests/test_runtime_manifest.py"
             }
           ],
-          "note": "Managed local wrapper передаёт фактический BrainContextSize в NativeContextWindowTokens. Budget базового16k профиля масштабируется вниз и до8x вверх; для выбранного64k сервера dynamic=48000 chars, а при окне12,288 — 9000 chars. Точный legacy receipt допускается только для миграции; полный managed JAWL budget требует окно не меньше12,288. Модель/окно/GPU не меняются. Deterministic .native-context-budget.json подтверждает approved leaves при relaunch, чужие edits остаются conflict. EnableNativeBrowser меняет лишь выбранный profile."
+          "note": "Managed local wrapper передаёт фактический BrainContextSize в NativeContextWindowTokens. Budget базового16k профиля масштабируется вниз и до8x вверх; для выбранного64k сервера dynamic=48000 chars, а при окне12,288 — 9000 chars. Точный legacy receipt допускается только для миграции; полный managed JAWL budget требует окно не меньше12,288. Модель/окно/GPU не меняются. Deterministic .native-context-budget.json подтверждает approved leaves при relaunch, чужие edits остаются conflict. EnableNativeBrowser меняет лишь выбранный profile. При активном ambient audio интервал фоновой группировки по умолчанию 300 секунд; имя Maxwell проходит через ASCII-escaped JSON."
         },
         {
           "id": "workers",
@@ -1777,10 +1783,16 @@
           "id": "triage",
           "name": "Триаж",
           "role": "compute",
-          "note": "importance — ранг внимания, а не решение о памяти",
+          "note": "importance — ранг внимания, а не решение о памяти Планировщик группирует наблюдения в непроверенные кандидаты и сам не пишет долговременную память.",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/ambient_memory.py"
+            },
+            {
+              "file": "scripts/run_local_bonsai_integrated.ps1"
+            },
+            {
+              "file": "scripts/run_integrated_profile.ps1"
             }
           ]
         },
@@ -2080,6 +2092,9 @@
           "refs": [
             {
               "file": "src/jawl_voicecompanion/presence.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
             }
           ]
         },
@@ -2394,7 +2409,8 @@
               "file": "scripts/run_owned_jawl_console.py"
             },
             {
-              "file": "desktop/app.js"
+              "file": "desktop/app.js",
+              "note": "Кнопка отправляет содержимое поля без передачи события мыши как текста; браузерный тест использует изолированную историю."
             },
             {
               "file": "tests/test_console_entry.py"
@@ -2739,7 +2755,7 @@
           "id": "submit",
           "name": "Отправка хода",
           "role": "input",
-          "note": "newline-JSON {text, turn_id}"
+          "note": "newline-JSON {text, turn_id} Обычные реплики больше не переводятся в /quick автоматически; явная команда сохраняется."
         },
         {
           "id": "events",
@@ -3014,13 +3030,20 @@
           "id": "audio-events",
           "name": "Выделить звуковые события",
           "role": "compute",
-          "note": "YAMNet CPU подтверждает музыку при raw score ≥ 0.35 и пороге по окнам. raw max ≥ 0.20 ниже шлюза идёт в краткую гипотезу музыкального/тонального фона с сырым максимумом и частотой окон (не вероятность): скрининг дал 0/181 ESC-10 немуз. клипов, 0/3 речевых контролей, 1/5 реальных медиаклипов и 11/54 смесей; данные исследовательские, без человеческой разметки. Сигнал некалиброван, не факт и не сохраняется как музыка; live loopback и SFX остаются OPEN. Ambient GigaAM/VoiceMem transcripts share a narrow artifact filter (filler/repeated/CJK-Hangul), and absent ASR confidence remains 0.0; ambient audio/screen entries retain verified=false through VA, triage and episodes, with triage instructed to preserve uncertainty; unscored GigaAM transcripts of at least eight characters can enter the seven-day archive as retain-only unverified hypotheses and are not auto-promoted. This is provenance, not accuracy validation. The system-sensor card exposes loopback ASR mode/count/filter/freshness without transcript text. Plausible hallucination and live mixed-loopback accuracy remain open.",
+          "note": "YAMNet CPU подтверждает музыку при raw score ≥ 0.35 и пороге по окнам. raw max ≥ 0.20 ниже шлюза идёт в краткую гипотезу музыкального/тонального фона с сырым максимумом и частотой окон (не вероятность): скрининг дал 0/181 ESC-10 немуз. клипов, 0/3 речевых контролей, 1/5 реальных медиаклипов и 11/54 смесей; данные исследовательские, без человеческой разметки. Сигнал некалиброван, не факт и не сохраняется как музыка; live loopback и SFX остаются OPEN. Ambient GigaAM/VoiceMem transcripts share a narrow artifact filter (filler/repeated/CJK-Hangul), and absent ASR confidence remains 0.0; ambient audio/screen entries retain verified=false through VA, triage and episodes, with triage instructed to preserve uncertainty; unscored GigaAM transcripts of at least eight characters can enter the seven-day archive as retain-only unverified hypotheses and are not auto-promoted. This is provenance, not accuracy validation. The system-sensor card exposes loopback ASR mode/count/filter/freshness without transcript text. Plausible hallucination and live mixed-loopback accuracy remain open. Смешанный loopback не атрибутируется одному активному приложению, а исключённые блоки не передаются в soundscape или streaming tap.",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/yamnet_soundscape.py"
             },
             {
               "file": "src/jawl_voicecompanion/ambient_audio.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/ambient_segments.py",
+              "note": "Разрывы и смена источника сбрасывают незавершённый сегмент; сохраняется происхождение метки времени. Live-аудио остаётся непроверенным."
+            },
+            {
+              "file": "src/jawl_voicecompanion/streaming_perception.py"
             },
             {
               "file": "src/jawl_voicecompanion/perception_fusion.py"
@@ -3072,6 +3095,19 @@
             },
             {
               "file": "docs/research/ambient-asr-status-20261029.md"
+            },
+            {
+              "file": "src/jawl_voicecompanion/app_audio_router.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/system_audio.py",
+              "note": "Один выбранный PID запускает изолированный процессный захват; состояние подтверждает запуск, а не качество распознавания. Одновременные источники и сквозная проверка остаются открыты."
+            },
+            {
+              "file": "tests/test_ambient_source_switch.py"
+            },
+            {
+              "file": "tests/test_app_audio_integration.py"
             }
           ]
         }
@@ -3127,7 +3163,7 @@
           "from": "sensory-timeline",
           "to": "compose",
           "kind": "conditional",
-          "condition": "User asks for sensory history"
+          "condition": "Current user turn requests sensory history, including prior music or a relative time in minutes or hours; older recall is limited to retained moments"
         },
         {
           "from": "note",
@@ -3153,7 +3189,8 @@
         {
           "from": "audio-events",
           "to": "compose",
-          "kind": "next"
+          "kind": "next",
+          "condition": "Loopback starts only on explicit command or autostart; retained ASR, descriptions, YAMNet and SMTC preserve shared evidence IDs across ambient and sensory history; paused or private soundscape results are suppressed"
         },
         {
           "from": "audio-events",
@@ -4227,9 +4264,13 @@
           "id": "observe",
           "name": "Снять свежий кадр",
           "role": "input",
+          "note": "Top-down кадр выбранного дисплея применяет настроенные маски и OCR-редактирование до изменения размера; при чувствительном активном окне захват отклоняется. Другие видимые окна отдельно не проверены.",
           "refs": [
             {
               "file": "src/jawl_voicecompanion/screen_adapter.py"
+            },
+            {
+              "file": "tests/test_screen_adapter.py"
             }
           ]
         },
@@ -4604,6 +4645,791 @@
       "confidence": 0.9,
       "provenance": "ai",
       "updated_at": "2026-10-29T00:20:00Z"
+    },
+    {
+      "id": "f-managed-structured-memory",
+      "name": "Управление памятью",
+      "summary": "Поиск и изменение активных структурированных записей JAWL",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "ui",
+          "detail": "Вкладка памяти компаньона"
+        }
+      ],
+      "steps": [
+        {
+          "id": "view",
+          "name": "Открыть записи",
+          "role": "data-read",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            }
+          ]
+        },
+        {
+          "id": "filter",
+          "name": "Найти запись",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/app.html"
+            }
+          ]
+        },
+        {
+          "id": "validate",
+          "name": "Проверить версию",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            }
+          ]
+        },
+        {
+          "id": "change",
+          "name": "Изменить запись",
+          "role": "data-write",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/web.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/jawl_web.py"
+            }
+          ]
+        },
+        {
+          "id": "feedback",
+          "name": "Показать итог",
+          "role": "output",
+          "refs": [
+            {
+              "file": "desktop/app.js"
+            },
+            {
+              "file": "desktop/memory-ui.test.js"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "view",
+          "to": "filter",
+          "kind": "next"
+        },
+        {
+          "from": "filter",
+          "to": "validate",
+          "kind": "conditional",
+          "condition": "Владелец изменяет существующую запись"
+        },
+        {
+          "from": "validate",
+          "to": "change",
+          "kind": "conditional",
+          "condition": "Версия совпадает"
+        },
+        {
+          "from": "filter",
+          "to": "change",
+          "kind": "conditional",
+          "condition": "Владелец добавляет запись"
+        },
+        {
+          "from": "change",
+          "to": "feedback",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.9,
+      "provenance": "ai",
+      "updated_at": "2026-11-01T15:05:05.805881Z"
+    },
+    {
+      "id": "f-episodic-visual-memory",
+      "name": "Зрительная память LanceDB",
+      "summary": "Экспериментальный поиск ключевых кадров через CLIP ONNX; в рабочем visual stream сохранение кадров отключено, вызов поиска не подключён",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "Смена сцены SceneDeltaDetector"
+        },
+        {
+          "kind": "ui",
+          "detail": "Вопрос о внешности или деталях прошлого видео"
+        }
+      ],
+      "steps": [
+        {
+          "id": "ingest",
+          "name": "Принять кадр",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/episodic_visual_memory.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
+            },
+            {
+              "file": "tests/test_visual_stream.py"
+            }
+          ]
+        },
+        {
+          "id": "compress",
+          "name": "Сжать WebP",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/episodic_visual_memory.py"
+            }
+          ]
+        },
+        {
+          "id": "embed",
+          "name": "Вектор CLIP",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/episodic_visual_memory.py"
+            }
+          ]
+        },
+        {
+          "id": "persist",
+          "name": "Запись Lance",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/episodic_visual_memory.py"
+            }
+          ]
+        },
+        {
+          "id": "search",
+          "name": "Поиск кадров",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/episodic_visual_memory.py"
+            },
+            {
+              "file": "tests/test_episodic_visual_memory.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "ingest",
+          "to": "compress",
+          "kind": "next"
+        },
+        {
+          "from": "compress",
+          "to": "embed",
+          "kind": "next"
+        },
+        {
+          "from": "embed",
+          "to": "persist",
+          "kind": "next"
+        },
+        {
+          "from": "persist",
+          "to": "search",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-11-03T18:07:06.876Z"
+    },
+    {
+      "id": "f-affective-engine",
+      "name": "Аффективный движок и такт",
+      "summary": "Двухосевой контроль Valence/Arousal, паузы диалога, BlendShapes и бэкканалинг",
+      "epicId": "presence",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "PCM16 поток из ProcessLoopback"
+        },
+        {
+          "kind": "event",
+          "detail": "Изменение трека Windows SMTC"
+        }
+      ],
+      "steps": [
+        {
+          "id": "audio-in",
+          "name": "Звук",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/process_loopback.py"
+            }
+          ]
+        },
+        {
+          "id": "acoustic-calc",
+          "name": "Расчет",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/affective_engine.py"
+            }
+          ]
+        },
+        {
+          "id": "silence-detect",
+          "name": "Пауза",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/affective_engine.py"
+            }
+          ]
+        },
+        {
+          "id": "smtc-meta",
+          "name": "SMTC",
+          "role": "data-read",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/windows_smtc.py"
+            }
+          ]
+        },
+        {
+          "id": "blendshapes",
+          "name": "Мимика",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/affective_engine.py"
+            },
+            {
+              "file": "tests/test_affective_engine.py"
+            }
+          ]
+        },
+        {
+          "id": "backchannel",
+          "name": "Бэкканал",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/affective_engine.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "audio-in",
+          "to": "acoustic-calc",
+          "kind": "next"
+        },
+        {
+          "from": "acoustic-calc",
+          "to": "silence-detect",
+          "kind": "next"
+        },
+        {
+          "from": "silence-detect",
+          "to": "blendshapes",
+          "kind": "next"
+        },
+        {
+          "from": "silence-detect",
+          "to": "backchannel",
+          "kind": "conditional",
+          "condition": "всплеск энергии при звучащей речи"
+        },
+        {
+          "from": "smtc-meta",
+          "to": "blendshapes",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-11-03T18:07:06.876Z"
+    },
+    {
+      "id": "f-narrative-consolidator",
+      "name": "Нарративная консолидация A-MEM",
+      "summary": "Фоновая сборка однострочного лога сюжета и карточек персонажей в метаданные памяти",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "Пауза в диалоге или интервал 3 минуты"
+        }
+      ],
+      "steps": [
+        {
+          "id": "feed",
+          "name": "Принять",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/narrative_consolidator.py"
+            }
+          ]
+        },
+        {
+          "id": "check",
+          "name": "Триггер",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/narrative_consolidator.py"
+            }
+          ]
+        },
+        {
+          "id": "synth",
+          "name": "Сюжет",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/narrative_consolidator.py"
+            }
+          ]
+        },
+        {
+          "id": "cards",
+          "name": "Карточки",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/narrative_consolidator.py"
+            },
+            {
+              "file": "tests/test_narrative_consolidator.py"
+            }
+          ]
+        },
+        {
+          "id": "redact",
+          "name": "Редукция",
+          "role": "side-effect",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/narrative_consolidator.py"
+            },
+            {
+              "file": "tests/test_narrative_consolidator.py"
+            },
+            {
+              "file": "tests/test_history_lifecycle_e2e.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "feed",
+          "to": "check",
+          "kind": "next"
+        },
+        {
+          "from": "check",
+          "to": "synth",
+          "kind": "next"
+        },
+        {
+          "from": "synth",
+          "to": "cards",
+          "kind": "next"
+        },
+        {
+          "from": "cards",
+          "to": "redact",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-11-03T18:45:00.000Z"
+    },
+    {
+      "id": "f-sensenova-perception-bridge",
+      "name": "Когнитивный мост SenseNova",
+      "summary": "Разделение быстрого акустического бэкканала и тяжелого проактивного хода SenseNova",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "Акустический всплеск или пауза тишины >= 1.5с"
+        }
+      ],
+      "steps": [
+        {
+          "id": "arbitrate",
+          "name": "Арбитраж",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            }
+          ]
+        },
+        {
+          "id": "backchannel",
+          "name": "Бэкканал",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            }
+          ]
+        },
+        {
+          "id": "sensenova",
+          "name": "SenseNova",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "tests/test_sprint4_cognitive_core.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "arbitrate",
+          "to": "backchannel",
+          "kind": "conditional",
+          "condition": "акустический всплеск d_arousal >= 0.35"
+        },
+        {
+          "from": "arbitrate",
+          "to": "sensenova",
+          "kind": "conditional",
+          "condition": "пауза диалога >= 1.5с"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-11-03T18:45:00.000Z"
+    },
+    {
+      "id": "f-incremental-spatial-matrix",
+      "name": "Инкрементальная пространственная матрица",
+      "summary": "Кэширование признаков сетки 21x30 (VLMCache / EP-ViT) с отслеживанием dirty-тайлов и фовеальным вырезом 1:1",
+      "epicId": "initiative",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "Кадр из настроенного ScreenCaptureAdapter с существующими масками; при паузе или ошибке разрешения захват запрещён"
+        }
+      ],
+      "steps": [
+        {
+          "id": "partition",
+          "name": "Разбить",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
+            },
+            {
+              "file": "tests/test_incremental_spatial_matrix.py"
+            }
+          ]
+        },
+        {
+          "id": "cache-diff",
+          "name": "Тайлы",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
+            }
+          ]
+        },
+        {
+          "id": "motion-shift",
+          "name": "Сдвиг",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
+            }
+          ]
+        },
+        {
+          "id": "gate-vlm",
+          "name": "Гейт",
+          "role": "validation",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
+            }
+          ]
+        },
+        {
+          "id": "foveal-crop",
+          "name": "Кроп 1:1",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
+            },
+            {
+              "file": "scripts/probe_incremental_vision_matrix.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "partition",
+          "to": "cache-diff",
+          "kind": "next"
+        },
+        {
+          "from": "cache-diff",
+          "to": "motion-shift",
+          "kind": "conditional",
+          "condition": "векторы сдвига DXGI MoveRects"
+        },
+        {
+          "from": "cache-diff",
+          "to": "gate-vlm",
+          "kind": "next"
+        },
+        {
+          "from": "gate-vlm",
+          "to": "foveal-crop",
+          "kind": "conditional",
+          "condition": "dirty_ratio >= threshold"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-11-04T18:45:00.000Z"
+    },
+    {
+      "id": "f-scenestate-cognitive-core",
+      "name": "Когнитивное ядро SceneState и Re-ID",
+      "summary": "3-уровневое когнитивное состояние с гипотезами Re-ID и семантическими диффами",
+      "epicId": "mind",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "События dirty-тайлов, детекции движения и реплики ASR"
+        }
+      ],
+      "steps": [
+        {
+          "id": "spatial-agg",
+          "name": "Агрегация",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/scene_state.py"
+            },
+            {
+              "file": "scripts/test_scene_state.py"
+            }
+          ]
+        },
+        {
+          "id": "entity-match",
+          "name": "IoU-трек",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/scene_state.py"
+            }
+          ]
+        },
+        {
+          "id": "reid-hypo",
+          "name": "Re-ID гипотезы",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/scene_state.py"
+            }
+          ]
+        },
+        {
+          "id": "vlm-semantic-gate",
+          "name": "VLM-гейт",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "scripts/benchmark_qwen_vl_step24.py"
+            },
+            {
+              "file": "runtime/instances/daily/data/sensory/youtube_watch/step24_qwen_metrics.json"
+            }
+          ]
+        },
+        {
+          "id": "speaker-bind",
+          "name": "Спикер",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/scene_state.py"
+            },
+            {
+              "file": "tests/test_scene_state.py"
+            },
+            {
+              "file": "scripts/benchmark_speaker_binding_step23.py"
+            }
+          ]
+        },
+        {
+          "id": "semantic-diff",
+          "name": "Семант.дифф",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/scene_state.py"
+            }
+          ]
+        },
+        {
+          "id": "event-policy",
+          "name": "Арбитраж",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/event_policy.py"
+            },
+            {
+              "file": "tests/test_event_policy.py"
+            },
+            {
+              "file": "scripts/run_e2e_cognitive_loop_step25.py"
+            }
+          ]
+        },
+        {
+          "id": "epistemic-status",
+          "name": "Статус",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/scene_state.py"
+            },
+            {
+              "file": "tests/test_scene_state.py"
+            }
+          ]
+        },
+        {
+          "id": "topdown-vision",
+          "name": "Top-Down Vision",
+          "role": "compute",
+          "note": "Автономная приёмка Step 2.7 завершена: смена окна Win32 HWND отменяет устаревший инференс (source=scene_changed), barge-in отменяет анализ за <50мс, отказ/пауза памяти не блокирует зрение, Qwen 0.8B на GPU1, GigaAM v3 CPU и OmniVoice 0.6B GPU1 подтверждены. Интерактивный диалог с владельцем остаётся OPEN до возвращения человека.",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/gateway.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/perception_fusion.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/event_policy.py"
+            },
+            {
+              "file": "tests/test_gateway_vision.py"
+            },
+            {
+              "file": "scripts/benchmark_topdown_vision_step26.py"
+            },
+            {
+              "file": "scripts/run_live_presence_acceptance.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/visual_stream.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/screen_adapter.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/qwen_visual_sensor.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "spatial-agg",
+          "to": "entity-match",
+          "kind": "next"
+        },
+        {
+          "from": "entity-match",
+          "to": "reid-hypo",
+          "kind": "conditional",
+          "condition": "потеря / новый ракурс"
+        },
+        {
+          "from": "entity-match",
+          "to": "speaker-bind",
+          "kind": "next"
+        },
+        {
+          "from": "reid-hypo",
+          "to": "vlm-semantic-gate",
+          "kind": "conditional",
+          "condition": "проверка гипотезы"
+        },
+        {
+          "from": "vlm-semantic-gate",
+          "to": "semantic-diff",
+          "kind": "next"
+        },
+        {
+          "from": "speaker-bind",
+          "to": "semantic-diff",
+          "kind": "next"
+        },
+        {
+          "from": "semantic-diff",
+          "to": "epistemic-status",
+          "kind": "next"
+        },
+        {
+          "from": "epistemic-status",
+          "to": "event-policy",
+          "kind": "next"
+        },
+        {
+          "from": "event-policy",
+          "to": "topdown-vision",
+          "kind": "conditional",
+          "condition": "визуальный интент / not_observed"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-11-05T03:00:00.000Z"
     }
   ],
   "cross_feature": [
@@ -4718,6 +5544,47 @@
       "kind": "flow",
       "mode": "async",
       "note": "Распознанные аудиособытия и кадры постепенно пополняют общий контекст"
+    },
+    {
+      "from": "f-ambient-memory",
+      "to": "f-managed-structured-memory",
+      "kind": "flow",
+      "note": "Переданные эпизоды могут стать структурированными записями после решения JAWL."
+    },
+    {
+      "from": "f-narrative-consolidator",
+      "to": "f-episodic-visual-memory",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Логи эпизодов и черты персонажей дополняют метаданные кадров LanceDB"
+    },
+    {
+      "from": "f-affective-engine",
+      "to": "f-sensenova-perception-bridge",
+      "kind": "flow",
+      "mode": "sync",
+      "note": "Всплески энергии и паузы диалога передаются в когнитивный арбитр"
+    },
+    {
+      "from": "f-narrative-consolidator",
+      "to": "f-sensenova-perception-bridge",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Сюжетная линия упаковывается в проактивный контекст для SenseNova"
+    },
+    {
+      "from": "f-incremental-spatial-matrix",
+      "to": "f-episodic-visual-memory",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Грязный BBox передаётся в 1:1 фовеальный кроп и LanceDB"
+    },
+    {
+      "from": "f-incremental-spatial-matrix",
+      "to": "f-sensenova-perception-bridge",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Порог изменений пробуждает мультимодальный декодер"
     }
   ],
   "epic_flow": [

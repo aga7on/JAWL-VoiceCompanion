@@ -13,7 +13,11 @@ from queue import Full, Queue
 from threading import Event, RLock, Thread, current_thread
 from typing import Any, Callable
 import importlib
+import inspect
 import math
+import os
+from pathlib import Path
+import subprocess
 import time
 
 
@@ -24,12 +28,39 @@ class SystemAudioUnavailable(RuntimeError):
 PcmConsumer = Callable[[bytes, int, int, str], None]
 
 
+def _accepts_keyword(consumer: PcmConsumer, name: str) -> bool:
+    """Detect the extended callback once, without retrying consumer exceptions."""
+    try:
+        parameters = inspect.signature(consumer).parameters
+    except (TypeError, ValueError):
+        return False
+    parameter = parameters.get(name)
+    return bool(
+        parameter is not None and parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+    )
+
+
+def _deliver(consumer: PcmConsumer, timed: bool, gaps: bool, source: bool, chunk: "_Chunk",
+             session_id: str, discontinuity: bool) -> None:
+    kwargs: dict[str, Any] = {}
+    if timed:
+        kwargs["captured_at"] = chunk.captured_monotonic
+    if gaps:
+        kwargs["discontinuity"] = discontinuity
+    if source:
+        kwargs["timestamp_source"] = chunk.timestamp_source
+    consumer(chunk.data, chunk.sample_rate, chunk.channels, session_id, **kwargs)
+
+
 @dataclass(frozen=True)
 class _Chunk:
     data: bytes
     sample_rate: int
     channels: int
     captured_monotonic: float
+    sequence: int = 0
+    timestamp_source: str = "unknown"
 
 
 class SystemAudioLoopback:
@@ -50,6 +81,11 @@ class SystemAudioLoopback:
         if not callable(consumer):
             raise TypeError("system audio consumer must be callable")
         self.consumer = consumer
+        self._consumer_accepts_capture_time = _accepts_keyword(consumer, "captured_at")
+        self._consumer_accepts_discontinuity = _accepts_keyword(consumer, "discontinuity")
+        self._consumer_accepts_timestamp_source = _accepts_keyword(consumer, "timestamp_source")
+        self._source_sequence = 0
+        self._last_delivered_sequence = 0
         self.backend = backend
         self.session_id = str(session_id or "ambient-audio")[:120]
         self.output_device_name = str(output_device_name or "").strip()[:160] or None
@@ -110,6 +146,7 @@ class SystemAudioLoopback:
                 queue: Queue[_Chunk] = Queue(maxsize=self.queue_size)
                 self._stop.clear()
                 self._queue = queue
+                self._source_sequence = self._last_delivered_sequence = 0
                 self._signal_window.clear()
                 self._last_chunk_monotonic = None
                 self._last_consumer_chunk_monotonic = None
@@ -218,6 +255,9 @@ class SystemAudioLoopback:
                 "configured": self.backend is not None or self._backend_name != "not_loaded",
                 "backend": self._backend_name,
                 "running": self._stream is not None and self._worker is not None and self._worker.is_alive(),
+                "stopping": bool(self._stop.is_set() and self._worker is not None and self._worker.is_alive()),
+                "consumer_alive": bool(self._worker is not None and self._worker.is_alive()),
+                "timestamp_source": "host_callback_monotonic",
                 "device": self._device_name or None,
                 "device_index": self._device_index,
                 "host_api_index": self._host_api_index,
@@ -340,6 +380,14 @@ class SystemAudioLoopback:
             return exact[0]
         if len(exact) > 1:
             raise SystemAudioUnavailable("configured WASAPI loopback device is ambiguous")
+        partial = [
+            item for item in candidates
+            if requested in " ".join(str(item.get("name") or "").casefold().split())
+        ]
+        if len(partial) == 1:
+            return partial[0]
+        if len(partial) > 1:
+            raise SystemAudioUnavailable("configured WASAPI loopback device is ambiguous")
         raise SystemAudioUnavailable("configured WASAPI loopback device was not found")
 
     def _callback(self, in_data: Any, _frame_count: int, _time_info: Any, _status: Any) -> tuple[Any, int]:
@@ -352,17 +400,30 @@ class SystemAudioLoopback:
         if not data or queue is None or self._stop.is_set():
             return (None, self._continue_flag())
         width = max(2, channels * 2)
-        data = data[: self.max_chunk_bytes - (self.max_chunk_bytes % width)]
+        limit = self.max_chunk_bytes - (self.max_chunk_bytes % width)
+        truncated = len(data) > limit
+        data = data[:limit]
         if not data:
             return (None, self._continue_flag())
+        with self._lock:
+            self._source_sequence += 1
+            sequence = self._source_sequence
         try:
-            queue.put_nowait(_Chunk(data, rate, channels, captured_monotonic))
+            queue.put_nowait(_Chunk(data, rate, channels, captured_monotonic, sequence,
+                                    "host_callback_receipt_monotonic"))
             with self._lock:
                 self._chunks += 1
                 self._last_chunk_monotonic = captured_monotonic
                 self._queue_high_water = max(self._queue_high_water, queue.qsize())
         except Full:
             with self._lock:
+                self._dropped_chunks += 1
+                self._last_drop_monotonic = captured_monotonic
+        if truncated:
+            # An oversized callback loses a suffix after this chunk. Advance
+            # sequence so the next delivered chunk cannot be spliced to it.
+            with self._lock:
+                self._source_sequence += 1
                 self._dropped_chunks += 1
                 self._last_drop_monotonic = captured_monotonic
         return (None, self._continue_flag())
@@ -399,7 +460,13 @@ class SystemAudioLoopback:
                 while self._signal_window and self._signal_window[0][0] < cutoff:
                     self._signal_window.popleft()
             try:
-                self.consumer(chunk.data, chunk.sample_rate, chunk.channels, self.session_id)
+                discontinuity = bool(chunk.sequence and self._last_delivered_sequence and
+                                     chunk.sequence != self._last_delivered_sequence + 1)
+                _deliver(self.consumer, self._consumer_accepts_capture_time,
+                         self._consumer_accepts_discontinuity, self._consumer_accepts_timestamp_source,
+                         chunk, self.session_id, discontinuity)
+                if chunk.sequence:
+                    self._last_delivered_sequence = chunk.sequence
             except Exception as exc:
                 with self._lock:
                     self._last_error = self._safe_error(exc)
@@ -437,4 +504,180 @@ class SystemAudioLoopback:
         return f"{type(exc).__name__}: {str(exc)[:160]}"[:200]
 
 
-__all__ = ["PcmConsumer", "SystemAudioLoopback", "SystemAudioUnavailable"]
+class ProcessAudioLoopback:
+    """Explicit process-tree capture through the owned Windows native helper."""
+
+    _HEADER = b"JAWLPCM1"
+
+    def __init__(self, consumer: PcmConsumer, pid: int, *, helper: str | Path,
+                 session_id: str | None = None, queue_size: int = 32,
+                 spawn: Callable[..., Any] | None = None) -> None:
+        if not callable(consumer) or isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise ValueError("a consumer and positive process ID are required")
+        self.consumer, self.pid, self.helper = consumer, pid, Path(helper)
+        self._consumer_accepts_capture_time = _accepts_keyword(consumer, "captured_at")
+        self._consumer_accepts_discontinuity = _accepts_keyword(consumer, "discontinuity")
+        self._consumer_accepts_timestamp_source = _accepts_keyword(consumer, "timestamp_source")
+        self._source_sequence = 0
+        self._last_delivered_sequence = 0
+        self.session_id = str(session_id or f"process-audio-{pid}")[:120]
+        self.queue_size = max(1, min(int(queue_size), 256))
+        self._spawn = spawn
+        self._lock = RLock()
+        self._stop = Event()
+        self._ready = Event()
+        self._done = Event()
+        self._queue: Queue[_Chunk] | None = None
+        self._process: Any | None = None
+        self._reader: Thread | None = None
+        self._worker: Thread | None = None
+        self._chunks = self._consumer_chunks = self._dropped_chunks = 0
+        self._last_error: str | None = None
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return bool(self._process is not None and self._process.poll() is None
+                        and self._reader is not None and self._reader.is_alive()
+                        and self._worker is not None and self._worker.is_alive() and self._ready.is_set())
+
+    def start(self) -> dict[str, Any]:
+        with self._lock:
+            if self.running:
+                return self.state()
+            if any(thread is not None and thread.is_alive() for thread in (self._reader, self._worker)):
+                raise SystemAudioUnavailable("process-audio consumer is still stopping")
+            if self._process is not None:
+                raise SystemAudioUnavailable("process capture must be stopped before restart")
+            if self._spawn is None and (os.name != "nt" or not self.helper.is_file()):
+                raise SystemAudioUnavailable("process loopback helper is unavailable")
+            from .owned_pipe import spawn_owned_pipe
+            self._stop.clear()
+            self._ready.clear()
+            self._done.clear()
+            self._queue = Queue(maxsize=self.queue_size)
+            self._source_sequence = self._last_delivered_sequence = 0
+            self._last_error = None
+            self._process = (self._spawn or spawn_owned_pipe)([str(self.helper), str(self.pid)], bufsize=0)
+            process = self._process
+            self._reader = Thread(target=self._read, args=(process,), name=f"process-audio-reader-{self.pid}", daemon=True)
+            self._worker = Thread(target=self._consume, name=f"process-audio-consumer-{self.pid}", daemon=True)
+            self._reader.start()
+            self._worker.start()
+        if not self._ready.wait(16) or self._last_error:
+            error = self._last_error or "process audio activation timed out"
+            self.stop()
+            raise SystemAudioUnavailable(error)
+        return self.state()
+
+    def _read(self, process: Any) -> None:
+        try:
+            header = bytearray()
+            while len(header) < len(self._HEADER):
+                chunk = process.stdout.read(len(self._HEADER) - len(header))
+                if not chunk:
+                    raise RuntimeError("process audio activation failed")
+                header.extend(chunk)
+            if bytes(header) != self._HEADER:
+                raise RuntimeError("invalid process audio handshake")
+            self._ready.set()
+            remainder = b""
+            while not self._stop.is_set():
+                data = process.stdout.read(8192)
+                if not data:
+                    break
+                data = remainder + data
+                remainder = data[len(data) - len(data) % 4:] if len(data) % 4 else b""
+                data = data[:len(data) - len(data) % 4]
+                if not data:
+                    continue
+                with self._lock:
+                    queue = self._queue
+                    self._chunks += 1
+                    self._source_sequence += 1
+                    sequence = self._source_sequence
+                if queue is None:
+                    break
+                try:
+                    # Native helper protocol has no capture timestamp; this is
+                    # host pipe receipt time, not a hardware capture clock.
+                    queue.put_nowait(_Chunk(data, 44100, 2, time.monotonic(), sequence,
+                                            "host_pipe_receipt_monotonic"))
+                except Full:
+                    with self._lock:
+                        self._dropped_chunks += 1
+            if remainder and not self._stop.is_set():
+                raise RuntimeError("incomplete process audio frame")
+        except Exception as exc:
+            with self._lock:
+                self._last_error = SystemAudioLoopback._safe_error(exc)
+        finally:
+            self._ready.set()
+            self._done.set()
+
+    def _consume(self) -> None:
+        while not self._stop.is_set():
+            queue = self._queue
+            if queue is None:
+                return
+            try:
+                chunk = queue.get(timeout=0.1)
+            except Exception:
+                if self._done.is_set():
+                    return
+                continue
+            try:
+                discontinuity = bool(chunk.sequence and self._last_delivered_sequence and
+                                     chunk.sequence != self._last_delivered_sequence + 1)
+                _deliver(self.consumer, self._consumer_accepts_capture_time,
+                         self._consumer_accepts_discontinuity, self._consumer_accepts_timestamp_source,
+                         chunk, self.session_id, discontinuity)
+                if chunk.sequence:
+                    self._last_delivered_sequence = chunk.sequence
+                with self._lock:
+                    self._consumer_chunks += 1
+            except Exception as exc:
+                with self._lock:
+                    self._last_error = SystemAudioLoopback._safe_error(exc)
+
+    def stop(self, timeout: float = 3.0) -> dict[str, Any]:
+        with self._lock:
+            process, reader, worker = self._process, self._reader, self._worker
+            self._stop.set()
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    process.stdin.write(b"q")
+                    process.stdin.flush()
+                except (OSError, ValueError):
+                    pass
+            try:
+                process.wait(timeout=max(0.1, min(float(timeout), 10.0)))
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                process.wait(timeout=3)
+        for thread in (reader, worker):
+            if thread is not None and thread is not current_thread():
+                thread.join(timeout=2)
+        if any(thread is not None and thread.is_alive() for thread in (reader, worker)):
+            return self.state()
+        with self._lock:
+            self._process = self._reader = self._worker = self._queue = None
+        return self.state()
+
+    def state(self) -> dict[str, Any]:
+        with self._lock:
+            consumer_alive = self._worker is not None and self._worker.is_alive()
+            reader_alive = self._reader is not None and self._reader.is_alive()
+            stopping = bool(self._stop.is_set() and (consumer_alive or reader_alive))
+            return {"configured": True, "backend": "windows_process_loopback", "running": self.running,
+                    "stopping": stopping, "consumer_alive": consumer_alive, "reader_alive": reader_alive,
+                    "timestamp_source": "host_pipe_receipt_monotonic",
+                    "pid": self.pid, "sample_rate": 44100, "channels": 2, "queue_size": self.queue_size,
+                    "queue_depth": self._queue.qsize() if self._queue is not None else 0,
+                    "chunks": self._chunks, "consumer_chunks": self._consumer_chunks,
+                    "dropped_chunks": self._dropped_chunks, "last_error": self._last_error,
+                    "raw_persisted": False}
+
+
+__all__ = ["PcmConsumer", "SystemAudioLoopback", "ProcessAudioLoopback", "SystemAudioUnavailable"]

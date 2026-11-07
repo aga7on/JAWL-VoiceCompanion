@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "suite": "sleep",
+  "model": "spark-x2.6-1.7b-q4",
+  "base_url": "http://127.0.0.1:19231/v1",
+  "created_at": "2026-11-01T11:06:59.621359+00:00",
+  "cases": [
+    {
+      "id": "sleep_stable_preference",
+      "rubric": "Retain a stable explicit preference without treating unrelated discussion as a change.",
+      "consolidation_ms": 3262.4,
+      "recall_ms": 511.7,
+      "checks": {
+        "memory_content": true,
+        "recall_answer": false,
+        "forgetting": true
+      },
+      "passed": false,
+      "memory": "**Заметка:**\nВладелец сообщил, что OmniVoice удовлетворяет, TTS не нужно менять; обсуждались визуальные тесты и смена CPU-кандидатов, но TTS-решение не изменилось. Удалить устойчивые решения, последние исправления и неопределённость источника; забыть то, что владелец явно попросил забыть.",
+      "answer": "ТTS не оставляем."
+    },
+    {
+      "id": "sleep_latest_correction",
+      "rubric": "The latest correction must override the earlier exploration.",
+      "consolidation_ms": 1542.2,
+      "recall_ms": 893.9,
+      "checks": {
+        "memory_content": true,
+        "recall_answer": true,
+        "forgetting": true
+      },
+      "passed": true,
+      "memory": "**Заметка:**\nПроверить другой TTS. Уточнение: «Останови эту идею, OmniVoice меня устраивает, TTS не трогай».",
+      "answer": "Останови эту идею, OmniVoice меня устраивает, TTS не трогай."
+    },
+    {
+      "id": "sleep_uncertain_observation",
+      "rubric": "Preserve provenance/uncertainty; do not promote a sensor hypothesis to fact.",
+      "consolidation_ms": 1989.3,
+      "recall_ms": 382.8,
+      "checks": {
+        "memory_content": true,
+        "recall_answer": true,
+        "forgetting": true
+      },
+      "passed": true,
+      "memory": "**Наблюдение сенсора: «возможно, игра выдала предупреждение о сети», OCR нечёткий, подтверждения пользователя нет. Сохранить факт с явной неопределённостью.**",
+      "answer": "Неизвестен."
+    },
+    {
+      "id": "sleep_forget_request",
+      "rubric": "Explicit forgetting must remove the value, not merely mark it stale.",
+      "consolidation_ms": 2259.1,
+      "recall_ms": 770.5,
+      "checks": {
+        "memory_content": true,
+        "recall_answer": false,
+        "forgetting": false
+      },
+      "passed": false,
+      "memory": "**Долговременная заметка:**\n\n**Временная заметка:** контрольная фраза «blue-lantern-4721».\n**Владелец:** явно попросил забыть эту контрольную фразу и не включать её в долговременную память.",
+      "answer": "Контрольная фраза «blue-lantern-4721»."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "total": 4,
+    "pass_rate": 0.5,
+    "latency_ms_p50": 2732.8,
+    "latency_ms_max": 3774.1,
+    "note": "Mechanical screening only; review raw responses and rerun before role assignment."
+  }
+}

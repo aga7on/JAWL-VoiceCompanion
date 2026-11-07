@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-MODEL_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else r"G:\AI\JAWL-VoiceCompanion\runtime\models\laya-multilingual")
+MODEL_DIR = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "runtime" / "models" / "laya-multilingual")
 
 CASES = [
     ("Снова завис браузер, не могу работать с отчётом", "technical"),

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import websocket
 
-ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
+ROOT = Path(r"G:\AI\JAWL-VoiceCompanion-V0.5")
 DEBUG_PORT = 9222
 
 

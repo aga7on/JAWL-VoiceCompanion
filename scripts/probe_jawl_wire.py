@@ -2,6 +2,10 @@
 import json
 import time
 import urllib.request
+from jawl_voicecompanion.runtime_manifest import load_runtime_manifest
+
+manifest = load_runtime_manifest()
+model_alias = manifest["brain"]["model"]
 
 system = (
     "You are the JAWL agent. Native discovery, persona, policy, Goal Protocol v2. "
@@ -23,7 +27,7 @@ schema = {
     "additionalProperties": True,
 }
 body = {
-    "model": "local-bonsai2",
+    "model": model_alias,
     "messages": [
         {"role": "system", "content": system},
         {"role": "user", "content": "## ACTIVE COMPANION TURN\n...\nFast conversational reply mode: Return one JSON envelope with exactly one HostTerminalMessages.send_message_to_terminal action using its `text` argument.\n\nПривет! Проверка связи: ответь одной короткой фразой."},

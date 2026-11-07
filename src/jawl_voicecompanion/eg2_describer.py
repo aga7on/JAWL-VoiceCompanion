@@ -1510,6 +1510,8 @@ class Eg2VisionDescriber:
 
     def __init__(self, describer: DetailedSensoryDescriber) -> None:
         self.describer = describer
+        self.model = "embeddinggemma-2"
+        self.source = "eg2"
 
     def describe(self, prompt: str, observation: dict[str, Any]) -> str:
         image = observation.get("image") if isinstance(observation, dict) else None

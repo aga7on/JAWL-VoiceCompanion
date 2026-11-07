@@ -776,6 +776,7 @@ class JawlWebChatAdapter(JawlWebAdapter):
     """Use JAWL's web POST plus SSE stream as a correlated chat transport."""
 
     _MAX_CHAT_RESPONSE_BYTES = 128 * 1024
+    manages_history = True
 
     def __init__(
         self,

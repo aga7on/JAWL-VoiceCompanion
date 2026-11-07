@@ -197,7 +197,7 @@ def wire_probe(brain_url, model, source):
 
 
 def run_mode(mode, run_root, env, snapshot, model, brain, *, suite="chat", soak_seconds=28800, voice_turns=20,
-             soak_interval_seconds=300):
+             soak_interval_seconds=300, manifest_path=None):
     profile = "turn-series-" + mode + "-" + uuid4().hex[:10]
     ports = free_ports(2)
     console, control = ports
@@ -222,6 +222,8 @@ def run_mode(mode, run_root, env, snapshot, model, brain, *, suite="chat", soak_
                "-JawlTemperatureOverride", "0.3", "-JawlChatTimeoutSeconds", "120",
                "-NativeContextWindowTokens", env.get("JAWL_ACCEPTANCE_CONTEXT_WINDOW_TOKENS", "0"),
                "-JawlSourceRoot", snapshot["source"]]
+    if manifest_path is not None:
+        command.extend(["-ManifestPath", str(manifest_path)])
     if mode == "supervised":
         command.append("-EnableSupervisor")
     if suite == "agent-work":
@@ -399,6 +401,8 @@ def main():
     parser.add_argument("--soak-seconds", type=float, default=28800)
     parser.add_argument("--soak-interval-seconds", type=float, default=300)
     parser.add_argument("--voice-turns", type=int, default=20)
+    parser.add_argument("--manifest", type=Path, default=None,
+                        help="isolated runtime manifest for a candidate model")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     if not args.live:
@@ -413,9 +417,10 @@ def main():
         parser.error("voice turns must be between 3 and 60")
     if not 0 <= args.soak_interval_seconds <= 3600:
         parser.error("soak interval must be between zero and3600 seconds")
-    manifest = load_runtime_manifest(repo_root=ROOT)
-    if manifest["brain"]["device"].casefold() != "cuda1":
-        parser.error("this acceptance is scoped to the selected GPU1 brain")
+    manifest = load_runtime_manifest(repo_root=ROOT, manifest_path=args.manifest)
+    device = manifest["brain"]["device"].casefold()
+    if device != "cuda1" and not (device == "none" and manifest["brain"]["gpu_layers"] == 0):
+        parser.error("this acceptance requires CUDA1 or an explicitly CPU-only brain")
     snapshot = verify(ROOT / "runtime/jawl-sources/jawl-20260906-daily-v2")
     run_root = ROOT / "runtime" / ("gateway-series-" + uuid4().hex[:12])
     run_root.mkdir()
@@ -432,6 +437,8 @@ def main():
     model = manifest["brain"]["model"]
     command = [sys.executable, "-B", str(ROOT / "scripts/hold_supervised_brain.py"),
                "--port", str(brain_port), "--url", brain_url]
+    if args.manifest is not None:
+        command.extend(["--manifest", str(args.manifest)])
     brain = RuntimeSupervisor([WorkerSpec(
         name="brain", command=logged_command(run_root / "brain.log", command), env=env,
         cwd=str(ROOT), probe=lambda: model_ready(brain_port, model), startup_timeout_seconds=240,
@@ -448,7 +455,7 @@ def main():
         for mode in (("ordinary", "supervised") if args.mode == "both" else (args.mode,)):
             result = run_mode(mode, run_root, env, snapshot, model, brain, suite=args.suite,
                               soak_seconds=args.soak_seconds, voice_turns=args.voice_turns,
-                              soak_interval_seconds=args.soak_interval_seconds)
+                              soak_interval_seconds=args.soak_interval_seconds, manifest_path=args.manifest)
             report["modes"].append(result)
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

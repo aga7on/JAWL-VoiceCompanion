@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-REPO = Path(r"G:\AI\JAWL-VoiceCompanion")
+REPO = Path(r"G:\AI\JAWL-VoiceCompanion-V0.5")
 reg = json.loads((REPO / "docs" / "ui-registry" / "registry.json").read_text(encoding="utf-8"))
 
 lines = []

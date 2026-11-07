@@ -76,8 +76,38 @@ const EMOTION_PRESETS = {
 
 function setStatus(text) { statusEl.textContent = text; }
 
+let renderPaused = false;
+let rafId = null;
+
+function setRenderPaused(paused) {
+  const next = Boolean(paused);
+  if (renderPaused === next) return;
+  renderPaused = next;
+  if (!renderPaused) {
+    clock.getDelta();
+    if (!rafId) {
+      rafId = requestAnimationFrame(tick);
+    }
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    setRenderPaused(document.hidden);
+  });
+  window.addEventListener?.('pagehide', () => setRenderPaused(true));
+  window.addEventListener?.('pageshow', () => setRenderPaused(false));
+}
+if (typeof window !== 'undefined') {
+  window.__jawlSetRenderPaused = setRenderPaused;
+}
+
 function tick() {
-  requestAnimationFrame(tick);
+  if (renderPaused) {
+    rafId = null;
+    return;
+  }
+  rafId = requestAnimationFrame(tick);
   const delta = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.elapsedTime;
   const vrm = state.vrm;
@@ -324,12 +354,52 @@ function applyIdle(vrm, delta, elapsed) {
   }
 }
 
+function applyCameraFraming(vrm) {
+  if (!vrm?.scene) return;
+  const isCompact = typeof document !== 'undefined' && Boolean(document.body?.classList?.contains('compact-mode'));
+  const box = new THREE.Box3().setFromObject(vrm.scene);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const head = vrm.humanoid?.getNormalizedBoneNode('head');
+  const chest = vrm.humanoid?.getNormalizedBoneNode('upperChest') || vrm.humanoid?.getNormalizedBoneNode('chest');
+  const halfFovRad = (camera.fov * Math.PI) / 360;
+
+  if (isCompact && head) {
+    const headPos = new THREE.Vector3();
+    head.getWorldPosition(headPos);
+    let bustBottomY;
+    if (chest) {
+      const chestPos = new THREE.Vector3();
+      chest.getWorldPosition(chestPos);
+      bustBottomY = chestPos.y - 0.16;
+    } else {
+      bustBottomY = headPos.y - 0.52;
+    }
+    const topY = Math.max(headPos.y + 0.22, box.max.y);
+    const bustHeight = Math.max(0.48, topY - bustBottomY);
+    const targetY = bustBottomY + bustHeight * 0.52;
+    const distance = (bustHeight / 2) / Math.tan(halfFovRad) * 1.10;
+
+    camera.position.set(headPos.x, targetY, headPos.z + distance);
+    camera.lookAt(headPos.x, targetY, headPos.z);
+    state.lookTarget.set(headPos.x, targetY + 0.05, headPos.z + distance);
+  } else {
+    const distance = (Math.max(size.y, size.x * 1.2) / 2) / Math.tan(halfFovRad) * 1.15;
+    camera.position.set(center.x, center.y, center.z + distance);
+    camera.lookAt(center.x, center.y, center.z);
+    state.lookTarget.set(center.x, center.y, center.z + distance);
+  }
+}
+
 function resize() {
   const width = canvas.clientWidth || 1;
   const height = canvas.clientHeight || 1;
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  if (state.vrm) {
+    applyCameraFraming(state.vrm);
+  }
 }
 window.addEventListener('resize', resize);
 
@@ -427,17 +497,13 @@ function frameCamera(vrm) {
   // their world-space history so the first frame is not a 180-degree impulse.
   vrm.springBoneManager?.reset();
   vrm.update(0.0);
-  const box = new THREE.Box3().setFromObject(vrm.scene);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const distance = (Math.max(size.y, size.x * 1.2) / 2) / Math.tan((camera.fov * Math.PI) / 360) * 1.15;
-  camera.position.set(center.x, center.y, center.z + distance);
-  camera.lookAt(center.x, center.y, center.z);
-  state.lookTarget.set(center.x, center.y, center.z + distance);
+  applyCameraFraming(vrm);
   const head = vrm.humanoid?.getNormalizedBoneNode('head');
-  window.__jawlFacing = head
-    ? Math.round(new THREE.Vector3(0, 0, 1).applyQuaternion(head.getWorldQuaternion(new THREE.Quaternion())).z * 100) / 100
-    : null;
+  if (typeof window !== 'undefined') {
+    window.__jawlFacing = head
+      ? Math.round(new THREE.Vector3(0, 0, 1).applyQuaternion(head.getWorldQuaternion(new THREE.Quaternion())).z * 100) / 100
+      : null;
+  }
   resize();
 }
 

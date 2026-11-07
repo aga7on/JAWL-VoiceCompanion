@@ -56,8 +56,8 @@ VLM-описание + точное кириллическое OCR + RU TTS, в�
    (замена VLM-слоя / TTS / добавление OCR).
 
 ## Артефакты
-- Репо: G:\AI\JAWL-VoiceCompanion\runtime\crane-repo
-- Веса: G:\AI\JAWL-VoiceCompanion\runtime\models\crane\...
+- Репо: G:\AI\JAWL-VoiceCompanion-V0.5\runtime\crane-repo
+- Веса: G:\AI\JAWL-VoiceCompanion-V0.5\runtime\models\crane\...
 - Скачиватель: C:\Users\ARTEM\AppData\Local\Temp\opencode\slice_download.ps1
 - Логи: runtime\crane\logs\...
 

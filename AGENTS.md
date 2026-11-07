@@ -39,7 +39,7 @@ D3 можно вести параллельно D2 в непересекающи
 
 ## Границы работы
 
-Единственное development repo: `G:\AI\JAWL-VoiceCompanion`.
+Единственное development repo: `G:\AI\JAWL-VoiceCompanion-V0.5`.
 Read-only: `G:\AI\JAWL-Coding`, `G:\AI\VoiceMem`, `G:\RE`,
 `runtime/jawl-sources/jawl-20260906-daily-v2` и внешние reference/release деревья.
 Запрет включает pycache/log/config/cache и API, меняющие чужой экземпляр.

@@ -35,6 +35,16 @@ def _manifest() -> dict[str, object]:
     }
 
 
+def test_manifest_cli_preserves_unicode_device_across_legacy_shells(tmp_path: Path) -> None:
+    value = _manifest()
+    value["audio"] = {"loopback_output_device_name": "Динамики (Game-Audeze Maxwell)"}
+    _write_manifest(tmp_path / "config" / "runtime.manifest.json", value)
+    result = subprocess.run([sys.executable, str(SCRIPT), "--repo-root", str(tmp_path)],
+                            capture_output=True, check=True)
+    decoded = result.stdout.decode("ascii")
+    assert json.loads(decoded)["audio"]["loopback_output_device_name"] == value["audio"]["loopback_output_device_name"]
+
+
 def test_legacy_defaults_keep_model_identity_and_allow_missing_model_files(tmp_path: Path) -> None:
     canonical = tmp_path / "config" / "runtime.manifest.json"
     original = _manifest()

@@ -53,6 +53,8 @@ _PORT_KEYS = frozenset(
         "qwen3_vl",
         "bonsai_coding",
         "tera_tts",
+        "omnivoice_tts",
+        "voxcpm_tts",
         "brain_port",
         "reserved",
     }
@@ -65,8 +67,13 @@ _MODEL_PATH_KEYS = frozenset(
         "qwen3_vl_mmproj",
         "bonsai_model",
         "bonsai_mmproj",
+        "sensenova_model",
+        "brain_model",
         "tera_python",
         "tera_release",
+        "omnivoice_python",
+        "omnivoice_model_dir",
+        "omnivoice_ref_wav",
     }
 )
 _BRAIN_KEYS = frozenset(
@@ -82,6 +89,8 @@ _BRAIN_KEYS = frozenset(
         "device",
         "threads",
         "gpu_layers",
+        "cache_type_k",
+        "cache_type_v",
     }
 )
 _RELAY_KEYS = frozenset({"note", "model", "relay_port"})
@@ -296,7 +305,7 @@ def _validate(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("runtime manifest brain must be an object")
     _validate_keys(brain, _BRAIN_KEYS, "brain")
     _label(brain.get("model"), "brain.model")
-    for key in ("provider", "model", "device"):
+    for key in ("provider", "model", "device", "cache_type_k", "cache_type_v"):
         if key in brain and key != "model":
             _label(brain[key], f"brain.{key}")
     for key in ("raised_by",):

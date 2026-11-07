@@ -1115,6 +1115,33 @@ class AmbientAudioTests(unittest.TestCase):
         self.assertEqual(stopped["flush"]["status"], "flushed")
         self.assertEqual(memory.observations()[0]["event_id"], "ambient-flush-1")
 
+    def test_visual_mode_does_not_implicitly_control_loopback(self):
+        from jawl_voicecompanion.streaming_perception import StreamingPerception
+
+        for mode in ("eg2", "qwen"):
+            with self.subTest(mode=mode):
+                bridge = AmbientAudioASRBridge(_FakeVoiceMem(final_on_feed=False), AmbientMemoryBuffer(enabled=True))
+                capture = _FakeCapture()
+                service = AmbientAudioService(bridge, capture=capture)
+                # EG2 constructs a stream subscriber; Qwen has no EG2 worker.
+                worker = StreamingPerception(screen_capture=None, cortex=None, describer=None,
+                                             fusion=None, ambient_audio=service) if mode == "eg2" else None
+                if worker:
+                    worker.start()
+                try:
+                    self.assertFalse(capture.running)  # enable only
+                    self.assertTrue(service.start()["capture"]["running"])  # explicit start
+                    service.pause()
+                    self.assertFalse(capture.running)
+                    if worker:
+                        worker.stop()
+                        worker.start()
+                    self.assertFalse(capture.running)  # video restart cannot override pause
+                finally:
+                    if worker:
+                        worker.stop()
+                    service.stop()
+
     def test_service_stop_closes_bridge_even_when_capture_reports_crashed(self):
         memory = AmbientMemoryBuffer(enabled=True)
         bridge = AmbientAudioASRBridge(_FakeVoiceMem(final_on_feed=False), memory)
@@ -1235,6 +1262,213 @@ class AmbientAudioTests(unittest.TestCase):
         self.assertFalse(commit.is_alive())
         self.assertFalse(stop.is_alive())
         self.assertFalse(fusion.current_state("speech")["fresh"])
+
+
+def test_system_capture_preserves_source_time_through_real_bridge():
+    from queue import Queue
+    from jawl_voicecompanion.system_audio import SystemAudioLoopback, _Chunk
+
+    received = []
+    done = Event()
+    class Segmenter:
+        def submit(self, *args, **kwargs):
+            received.append(kwargs["captured_at"])
+            done.set()
+            return {"status": "accepted"}
+
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), AmbientMemoryBuffer(enabled=True))
+    bridge._session_id = "ambient-audio"
+    bridge._segmenter = Segmenter()
+    capture = SystemAudioLoopback(bridge.consume, session_id="ambient-audio")
+    capture._queue = Queue(maxsize=2)
+    source_time = time.monotonic() - 20
+    capture._queue.put(_Chunk(b"\x01\x00" * 160, 16000, 1, source_time))
+    worker = Thread(target=capture._consume, daemon=True)
+    worker.start()
+    try:
+        assert done.wait(2)
+        assert received == [source_time]
+    finally:
+        capture._stop.set()
+        worker.join(2)
+    assert not worker.is_alive()
+
+
+def test_explicit_stop_cannot_be_undone_by_late_pcm():
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), AmbientMemoryBuffer(enabled=True))
+    bridge.start("ambient-audio")
+    bridge.stop("ambient-audio", flush=False)
+    result = bridge.consume(b"\x01\x00" * 160, 16000, 1, "ambient-audio")
+    assert result["status"] == "degraded"
+    assert result["error"] in {"ambient_capture_stopped", "ambient_stopping"}
+    assert bridge.state()["lifecycle"] != "running"
+
+
+def test_system_capture_overflow_signals_gap_to_extended_consumer():
+    from queue import Queue
+    from jawl_voicecompanion.system_audio import SystemAudioLoopback
+
+    first_entered, release, second_seen, third_seen = Event(), Event(), Event(), Event()
+    received = []
+    def consume(data, rate, channels, session_id, *, captured_at=None, discontinuity=False):
+        received.append((data, captured_at, discontinuity))
+        if len(received) == 1:
+            first_entered.set()
+            release.wait(3)
+        elif len(received) == 2:
+            second_seen.set()
+        elif len(received) == 3:
+            third_seen.set()
+
+    capture = SystemAudioLoopback(consume, queue_size=1)
+    capture._queue = Queue(maxsize=1)
+    capture._sample_rate = 16000
+    capture._channels = 1
+    worker = Thread(target=capture._consume, daemon=True)
+    worker.start()
+    try:
+        capture._callback(b"\x01\x00" * 160, 160, None, None)
+        assert first_entered.wait(1)
+        capture._callback(b"\x02\x00" * 160, 160, None, None)
+        capture._callback(b"\x03\x00" * 160, 160, None, None)
+        assert capture.state()["dropped_chunks"] == 1
+        release.set()
+        assert second_seen.wait(1)
+        capture._callback(b"\x04\x00" * 160, 160, None, None)
+        assert third_seen.wait(1)
+        assert [item[2] for item in received] == [False, False, True]
+        assert all(isinstance(item[1], float) for item in received)
+    finally:
+        release.set()
+        capture._stop.set()
+        worker.join(2)
+
+
+def test_bridge_propagates_capture_gap_to_segmenter_without_splicing():
+    from jawl_voicecompanion.ambient_segments import AmbientSegmenter
+
+    segments = []
+    segmenter = AmbientSegmenter(segments.append, max_segment_bytes=4096)
+    segmenter.start("ambient-audio")
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), AmbientMemoryBuffer(enabled=True))
+    bridge._session_id = "ambient-audio"
+    bridge._segmenter = segmenter
+    try:
+        before = time.monotonic()
+        assert bridge.consume(b"\x01\x00" * 160, 16000, 1, "ambient-audio", captured_at=before)["status"] == "accepted"
+        segmenter._queue.join()
+        assert bridge.consume(b"\x02\x00" * 160, 16000, 1, "ambient-audio", captured_at=before + .1, discontinuity=True)["status"] == "accepted"
+        segmenter._queue.join()
+        segmenter.stop(flush=True)
+        assert [s.pcm16 for s in segments] == [b"\x02\x00" * 160]
+        assert segmenter.state()["discontinuity_discarded_bytes"] == 320
+    finally:
+        segmenter.stop(flush=False)
+
+
+def test_legacy_audio_without_capture_timestamp_is_labeled_consumer_receipt():
+    seen = []
+    class Segmenter:
+        def submit(self, *args, **kwargs):
+            seen.append(kwargs)
+            return {"status": "accepted"}
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), AmbientMemoryBuffer(enabled=True))
+    bridge._session_id = "ambient-audio"
+    bridge._segmenter = Segmenter()
+    before = time.monotonic()
+    assert bridge.consume(b"\x01\x00" * 160, 16000, 1, "ambient-audio")["status"] == "accepted"
+    assert seen[0]["timestamp_source"] == "consumer_receipt_monotonic"
+    assert before <= seen[0]["captured_at"] <= time.monotonic()
+
+
+def test_bridge_only_marks_source_isolated_when_process_loopback_is_running():
+    from types import SimpleNamespace
+    seen = []
+    class Segmenter:
+        def submit(self, *args, **kwargs):
+            seen.append(kwargs)
+            return {"status": "accepted"}
+    class Router:
+        isolated = False
+        def filter_and_attribute(self, **kwargs):
+            return True, SimpleNamespace(name="player.exe", category="desktop_app",
+                                         title="player", pid=123), "accepted"
+        def is_using_process_loopback(self): return self.isolated
+    router = Router()
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), AmbientMemoryBuffer(enabled=True), app_router=router)
+    bridge._session_id = "ambient-audio"
+    bridge._segmenter = Segmenter()
+    assert bridge.consume(b"\x01\x00" * 160, 16000, 1, "ambient-audio")["status"] == "accepted"
+    router.isolated = True
+    assert bridge.consume(b"\x01\x00" * 160, 16000, 1, "ambient-audio")["status"] == "accepted"
+    assert [item["source_isolated"] for item in seen] == [False, True]
+    assert [item["app_name"] for item in seen] == [None, "player.exe"]
+
+
+def test_asr_history_and_fusion_keep_original_time_and_source():
+    class Memory(AmbientMemoryBuffer):
+        def __init__(self): super().__init__(enabled=True); self.received = None
+        def ingest_system_audio(self, text, **kwargs):
+            self.received = kwargs
+            return {"status": "retained"}
+    class Fusion:
+        def __init__(self): self.received = None
+        def note(self, kind, text, **kwargs): self.received = (kind, kwargs)
+        def invalidate(self, *args, **kwargs): pass
+
+    memory, fusion = Memory(), Fusion()
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), memory, perception_fusion=fusion)
+    bridge.start("ambient-audio")
+    try:
+        end = time.monotonic() - 20
+        segment = AmbientSegment(segment_id="test", session_id="ambient-audio", generation=bridge._generation,
+                                 sequence=0, pcm16=b"\0\0", sample_rate=16000, channels=1,
+                                 started_at=end - 1, ended_at=end,
+                                 timestamp_source="host_pipe_receipt_monotonic")
+        assert bridge._commit_transcript(segment, "В игре начался новый квест", confidence=0, event_id="e1")["status"] == "retained"
+        assert abs(memory.received["now"] - (time.time() - 20)) < .5
+        assert memory.received["timestamp_source"] == "host_pipe_receipt_monotonic"
+        assert fusion.received[1]["now"] == end
+        assert fusion.received[1]["metadata"]["timestamp_source"] == "host_pipe_receipt_monotonic"
+    finally:
+        bridge.stop("ambient-audio", flush=False)
+
+
+def test_music_ingest_keeps_source_timestamp_provenance():
+    memory = AmbientMemoryBuffer(enabled=True)
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), memory)
+    bridge.start("ambient-audio")
+    try:
+        end = time.monotonic() - 1
+        segment = AmbientSegment(segment_id="music-timing", session_id="ambient-audio", generation=bridge._generation,
+                                 sequence=0, pcm16=b"\0\0", sample_rate=16000, channels=1,
+                                 started_at=end - 2, ended_at=end,
+                                 timestamp_source="host_callback_receipt_monotonic")
+        soundscape = {"kind": "music", "description": "Слышна музыка", "confidence": 0.7,
+                      "duration_seconds": 2.0, "tags": []}
+        assert bridge._ingest_soundscape(soundscape, segment, "test", music_frame={"state": "music"})
+        observation = memory.observations()[0]
+        assert observation["payload"]["timestamp_source"] == "host_callback_receipt_monotonic"
+    finally:
+        bridge.stop("ambient-audio", flush=False)
+
+
+def test_bridge_clears_stream_tap_buffer_before_delivering_after_gap():
+    class Segmenter:
+        def submit(self, *args, **kwargs): return {"status": "accepted"}
+    calls = []
+    class TapOwner:
+        def pause_audio(self): calls.append("pause")
+        def resume_audio(self): calls.append("resume")
+
+    bridge = AmbientAudioASRBridge(_FakeVoiceMem(), AmbientMemoryBuffer(enabled=True))
+    bridge._session_id = "ambient-audio"
+    bridge._segmenter = Segmenter()
+    bridge.stream_tap_owner = TapOwner()
+    bridge.stream_tap = lambda *args: calls.append("pcm")
+    result = bridge.consume(b"\x01\x00" * 160, 16000, 1, "ambient-audio", discontinuity=True)
+    assert result["status"] == "accepted"
+    assert calls == ["pause", "resume", "pcm"]
 
 
 if __name__ == "__main__":

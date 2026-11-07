@@ -13,7 +13,7 @@ from pathlib import Path
 
 COMFY = "http://127.0.0.1:8189"
 WORKFLOW = Path(__file__).parent / "concept_workflow.json"
-OUTPUT = Path(r"G:\AI\JAWL-VoiceCompanion\runtime\browser-evidence")
+OUTPUT = Path(r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\browser-evidence")
 
 
 def post(path: str, payload: dict):

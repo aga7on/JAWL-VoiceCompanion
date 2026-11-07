@@ -1,6 +1,8 @@
 import sys
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
@@ -12,6 +14,44 @@ from jawl_voicecompanion.screen_adapter import (  # noqa: E402
 
 
 class ScreenCaptureAdapterTests(unittest.TestCase):
+    def test_topdown_display_redacts_before_resizing(self):
+        from PIL import Image, ImageGrab
+
+        api = types.SimpleNamespace(EnumDisplayMonitors=lambda: [(1, None, (0, 0, 64, 64))])
+        gui = types.SimpleNamespace(GetForegroundWindow=lambda: 0)
+        adapter = ScreenCaptureAdapter(
+            enabled=True, redaction_rects=[(0, 0, 16, 16)], ocr_enabled=True,
+            ocr_provider=lambda _image: [
+                {"text": "Password: secret", "bbox": [32, 32, 48, 48], "confidence": 99},
+            ],
+        )
+        with patch.dict(sys.modules, {"win32api": api, "win32gui": gui}), patch.object(
+            ImageGrab, "grab", return_value=Image.new("RGB", (64, 64), (255, 0, 0))
+        ):
+            image, captured_at = adapter.grab_pil_with_timestamp(max_dimension=32)
+        self.assertGreater(captured_at, 0)
+        self.assertEqual(image.size, (32, 32))
+        self.assertEqual(image.getpixel((4, 4)), (0, 0, 0))
+        self.assertEqual(image.getpixel((20, 20)), (0, 0, 0))
+        self.assertEqual(image.getpixel((28, 28)), (255, 0, 0))
+
+    def test_topdown_display_rejects_focused_sensitive_window(self):
+        from PIL import ImageGrab
+
+        api = types.SimpleNamespace(EnumDisplayMonitors=lambda: [(1, None, (0, 0, 64, 64))])
+        gui = types.SimpleNamespace(
+            GetForegroundWindow=lambda: 1, IsWindowVisible=lambda _hwnd: True,
+            IsIconic=lambda _hwnd: False, GetWindowRect=lambda _hwnd: (0, 0, 64, 64),
+            GetWindowText=lambda _hwnd: "Password manager",
+            GetClassName=lambda _hwnd: "Window",
+        )
+        adapter = ScreenCaptureAdapter(enabled=True)
+        with patch.dict(sys.modules, {"win32api": api, "win32gui": gui}), patch.object(
+            ImageGrab, "grab"
+        ) as grab:
+            self.assertEqual(adapter.grab_pil_with_timestamp(), (None, 0.0))
+            grab.assert_not_called()
+
     def test_capture_profile_is_bounded_and_exposed_without_paths(self):
         adapter = ScreenCaptureAdapter(max_width=960, max_height=720, max_bytes=1_000_000)
         profile = adapter.profile()

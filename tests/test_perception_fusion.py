@@ -444,6 +444,61 @@ class DisplayFusionTests(unittest.TestCase):
             self.assertNotIn(forbidden, text)
             self.assertEqual(describer.display_audio_args, [{}])
 
+    def test_cross_modal_arbitration_verified_smtc_protects_against_unverified_hypothesis(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            history_file = Path(tmp_dir) / "test_hist.json"
+            store = SensoryHistoryStore(history_file, enabled=True)
+            fusion = PerceptionFusion(history_store=store)
+
+            # 1. Verified SMTC observation arrives
+            track_payload = {
+                "has_active_playback": True,
+                "title": "Stairway to Heaven",
+                "artist": "Led Zeppelin",
+                "playback_status": "Playing",
+                "app_id": "spotify.exe",
+            }
+            ok = fusion.observe_smtc(track_payload, now=100.0)
+            self.assertTrue(ok)
+            comp1 = fusion.compose(now=101.0)
+            self.assertIn("Stairway to Heaven", comp1)
+            self.assertIn("Led Zeppelin", comp1)
+
+            # Verify history store has recorded the verified music observation
+            recent_ev = list(store._recent)
+            self.assertEqual(len(recent_ev), 1)
+            self.assertEqual(recent_ev[0]["modality"], "music")
+            self.assertTrue(recent_ev[0]["verified"])
+
+            # 2. Conflicting unverified acoustic candidate arrives 1 second later
+            fusion.note(
+                "music",
+                "YAMNet unverified acoustic noise",
+                now=102.0,
+                metadata={"verified": False, "hypothesis": True, "source": "yamnet"},
+            )
+
+            # Verified observation must be preserved, not overwritten by hypothesis
+            comp2 = fusion.compose(now=103.0)
+            self.assertIn("Stairway to Heaven", comp2)
+            self.assertNotIn("YAMNet unverified acoustic noise", comp2)
+
+            # Sensory history must NOT be polluted with duplicate unverified music
+            recent_ev2 = list(store._recent)
+            self.assertEqual(len(recent_ev2), 1)
+            self.assertIn("Stairway to Heaven", recent_ev2[0]["text"])
+
+            # 3. After SMTC stops and is invalidated, new observation can be recorded
+            fusion.invalidate("music", now=130.0)
+            fusion.note(
+                "music",
+                "Ambient background soundscape",
+                now=131.0,
+                metadata={"verified": False, "hypothesis": True, "source": "ambient"},
+            )
+            comp3 = fusion.compose(now=132.0)
+            self.assertIn("Ambient background soundscape", comp3)
+
 
 if __name__ == "__main__":
     unittest.main()

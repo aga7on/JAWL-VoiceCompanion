@@ -16,7 +16,7 @@ def main() -> int:
         message = json.loads(ws.recv())
         if message.get("id") == 1:
             png = base64.b64decode(message["result"]["data"])
-            out = r"G:\AI\JAWL-VoiceCompanion\runtime\browser-evidence\desktop-app.png"
+            out = r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\browser-evidence\desktop-app.png"
             with open(out, "wb") as handle:
                 handle.write(png)
             print(f"saved: {out} ({len(png)} bytes)")

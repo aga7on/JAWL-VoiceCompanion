@@ -952,3 +952,40 @@ Status: Accepted (2026-11-01)
 Границы: ядро JAWL и pinned snapshot не изменяются; `retention_tier` пока не
 исполняется в JAWL автоматически и трактуется как обещание, а не удаление.
 Детали, отображение в UI и список доказанного — `docs/MEMORY_OWNERSHIP.md`.
+
+
+## ADR-054 — Умное прослушивание приложений (OBS-style Audio Capture) и акустическая атрибуция
+
+Status: Accepted (2026-11-02)
+
+### Контекст
+В OBS реализована функция захвата аудио из окна конкретного приложения (Application Audio Capture).
+Для мультимодальной сенсорики агента JAWL необходимо слушать все приложения в системе,
+исключая собственные процессы компаньона (TTS, OmniVoice, фоновые воркеры), и сохранять точную
+акустическую атрибуцию (provenance) в память — чтобы агент мог точно различать:
+реплика поступила из видео на YouTube, стрима Twitch, конференции в Discord, или системного плеера.
+
+### Решение
+1. **AppAudioRouter (`app_audio_router.py`)**:
+   - Сканирует системные аудиосессии Windows CoreAudio/WASAPI через `AudioUtilities.GetAllSessions()`.
+   - Опрашивает пиковые уровни громкости `IAudioMeterInformation.GetPeakValue()` для детекции активного источника звука.
+   - Поддерживает режимы: `all_except_self` (по умолчанию), `target_app` (фокус на одном приложении) и `all`.
+2. **Иерархическое самоисключение (Self-Exclusion)**:
+   - Автоматически резолвит PID текущего процесса и рекурсивно всех дочерних процессов (`psutil.Process.children()`).
+   - Исключает процессы компаньона и TTS-движков, предотвращая возникновение акустических петель (feedback loop) и ложных ASR-распознаваний собственной речи.
+3. **Динамическая классификация и привязка заголовков окон**:
+   - Связывает PID аудиосессии с видимыми окнами верхнего уровня через Win32 API (`EnumWindows`, `GetWindowThreadProcessId`).
+   - Автоматически категоризирует поток по сигнатурам и заголовкам:
+     - `browser_youtube` (браузеры с "YouTube" / "Ютуб" в заголовке вкладки),
+     - `browser_twitch` / `browser_music` / `browser_call`,
+     - `chat_voip` (Discord, Telegram, Teams, Zoom, Slack),
+     - `media_player` (Spotify, VLC, foobar2000, AIMP, MPC-HC),
+     - `companion_self` (процессы рантайма и TTS JAWL).
+4. **Сквозная атрибуция в ASR и память**:
+   - `AmbientSegmenter` и `AmbientSegment` сохраняют атрибуты `app_name`, `app_category`, `app_title`, `app_pid`.
+   - `AmbientAudioASRBridge` подавляет собственный звук, фильтрует нецелевые приложения в режиме `target_app` и аннотирует расшифровки ASR.
+   - Метаданные источника (`source: app:<name>`, `source_app`, `app_category`, `app_title`, `app_pid`) передаются в `perception_fusion.note("speech", ...)` и сохраняются в `SensoryHistoryStore` и `AmbientMemoryBuffer`.
+5. **Control Plane HTTP API**:
+   - `GET /api/audio/sessions` — перечисление активных аудиосессий с пиковыми уровнями, категорией и заголовками окон.
+   - `GET /api/audio/router` — текущее состояние маршрутизатора (режим, целевое приложение, статистика подавления).
+   - `POST /api/audio/router` — переключение режима и целевого приложения с валидацией сессии.

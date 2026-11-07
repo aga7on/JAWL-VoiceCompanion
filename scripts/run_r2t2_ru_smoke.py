@@ -11,16 +11,17 @@ import time
 from pathlib import Path
 
 REPO = Path(os.environ.get("R2T2_REPO", r"G:\AI\_tmp\companion-repos\r2t2"))
+ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WAVS = [
-    r"G:\AI\JAWL-VoiceCompanion\runtime\voice-native-ru-clean-20260906.wav",
-    r"G:\AI\JAWL-VoiceCompanion\runtime\voice-native-command-20260906.wav",
-    r"G:\AI\JAWL-VoiceCompanion\runtime\bench\rumbench_ru\ref_ru.wav",
+    str(ROOT / "runtime" / "voice-native-ru-clean-20260906.wav"),
+    str(ROOT / "runtime" / "voice-native-command-20260906.wav"),
+    str(ROOT / "runtime" / "bench" / "rumbench_ru" / "ref_ru.wav"),
 ]
 
 
 def main() -> int:
     args = sys.argv[1:]
-    model_dir = Path(args[0]) if args else Path(r"G:\AI\JAWL-VoiceCompanion\runtime\models\r2t2")
+    model_dir = Path(args[0]) if args else (ROOT / "runtime" / "models" / "r2t2")
     # After model_dir, optional language; first non-flag positional afterwards is a WAV.
     language = "Russian"
     wavs: list[str] = []

@@ -315,9 +315,13 @@ def main() -> None:
     parser.add_argument("--screen-cadence", type=float, default=0.5)
     parser.add_argument("--music-cadence", type=float, default=5.0)
     parser.add_argument("--speech-cadence", type=float, default=5.0)
-    parser.add_argument("--crispasr-exe", default=r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe",
+    _intree_crisp = Path(__file__).resolve().parents[1] / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+    _default_crisp = str(_intree_crisp) if _intree_crisp.exists() else r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe"
+    _intree_gigaam = Path(__file__).resolve().parents[1] / "runtime" / "models" / "asr" / "gigaam-v3-e2e-rnnt-q8_0.gguf"
+    _default_gigaam = str(_intree_gigaam) if _intree_gigaam.exists() else r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf"
+    parser.add_argument("--crispasr-exe", default=_default_crisp,
                         help="GigaAM (crispasr) executable used for ambient speech")
-    parser.add_argument("--gigaam-model", default=r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf",
+    parser.add_argument("--gigaam-model", default=_default_gigaam,
                         help="GigaAM GGUF model used for ambient speech")
     args = parser.parse_args()
 

@@ -21,11 +21,12 @@ import urllib.request
 import wave
 from pathlib import Path
 
-ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
+ROOT = Path(__file__).resolve().parents[1]
 WAV = ROOT / "runtime" / "voice-native-ru-clean-20260906.wav"
-VOICEMEM_PY = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
+_INTREE_VM_PY = ROOT / ".venv" / "Scripts" / "python.exe"
+VOICEMEM_PY = str(_INTREE_VM_PY) if _INTREE_VM_PY.exists() else r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 BOGUS_EXE = r"G:\AI\crispasr\does-not-exist\crispasr.exe"
-REAL_MODEL = r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf"
+REAL_MODEL = str(ROOT / "runtime" / "models" / "asr" / "gigaam-v3-e2e-rnnt-q8_0.gguf")
 REPORT = ROOT / "runtime" / "asr-fault-injection-adr044.json"
 
 

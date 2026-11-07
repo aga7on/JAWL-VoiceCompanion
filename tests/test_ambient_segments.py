@@ -159,6 +159,91 @@ class AmbientSegmenterTests(unittest.TestCase):
         self.assertAlmostEqual(segments[1].ended_at, 11.0)
         self.assertAlmostEqual(segments[1].started_at, 10.872)
 
+    def test_discontinuity_discards_incomplete_prefix_before_next_segment(self):
+        segments = []
+        segmenter = AmbientSegmenter(segments.append, max_segment_bytes=4096)
+        segmenter.start("gap")
+        try:
+            segmenter.submit(b"\x01\x00" * 160, 16000, 1)
+            segmenter._queue.join()
+            segmenter.submit(b"\x02\x00" * 160, 16000, 1, discontinuity=True)
+            segmenter._queue.join()
+            segmenter.stop(flush=True)
+            self.assertEqual([s.pcm16 for s in segments], [b"\x02\x00" * 160])
+            self.assertEqual(segmenter.state()["discontinuities"], 1)
+            self.assertEqual(segmenter.state()["discontinuity_discarded_bytes"], 320)
+        finally:
+            segmenter.stop(flush=False)
+
+    def test_segment_preserves_timestamp_provenance_and_marks_mixed_source(self):
+        segments = []
+        segmenter = AmbientSegmenter(segments.append, max_segment_bytes=4096)
+        segmenter.start("provenance")
+        try:
+            segmenter.submit(b"\x01\x00" * 160, 16000, 1,
+                             timestamp_source="host_callback_receipt_monotonic")
+            segmenter._queue.join()
+            segmenter.stop(flush=True)
+            self.assertEqual(segments[0].timestamp_source, "host_callback_receipt_monotonic")
+            segmenter.start("mixed")
+            segmenter.submit(b"\x01\x00" * 160, 16000, 1, timestamp_source="host_pipe_receipt_monotonic")
+            segmenter._queue.join()
+            segmenter.submit(b"\x02\x00" * 160, 16000, 1, timestamp_source="consumer_receipt_monotonic")
+            segmenter._queue.join()
+            segmenter.stop(flush=True)
+            self.assertEqual(segments[1].timestamp_source, "mixed")
+        finally:
+            segmenter.stop(flush=False)
+
+    def test_source_change_and_unknown_cannot_relabel_buffered_pcm(self):
+        segments = []
+        segmenter = AmbientSegmenter(segments.append, max_segment_bytes=4096)
+        segmenter.start("sources")
+        try:
+            segmenter.submit(b"\x01\x00" * 160, 16000, 1, app_name="A", app_pid=100, source_isolated=True)
+            segmenter._queue.join()
+            segmenter.submit(b"\x02\x00" * 160, 16000, 1, app_name="B", app_pid=200, source_isolated=True)
+            segmenter._queue.join()
+            segmenter.submit(b"\x03\x00" * 160, 16000, 1)
+            segmenter._queue.join()
+            segmenter.stop(flush=True)
+            self.assertEqual(len(segments), 1)
+            self.assertEqual(segments[0].pcm16, b"\x03\x00" * 160)
+            self.assertIsNone(segments[0].app_name)
+            self.assertIsNone(segments[0].app_pid)
+            self.assertFalse(segments[0].source_isolated)
+            self.assertEqual(segmenter.state()["source_changes"], 2)
+            self.assertEqual(segmenter.state()["source_change_discarded_bytes"], 640)
+        finally:
+            segmenter.stop(flush=False)
+
+    def test_queue_overflow_marks_next_accepted_chunk_as_discontinuous(self):
+        entered, release = threading.Event(), threading.Event()
+        segments = []
+        def consume(segment):
+            segments.append(segment)
+            if len(segments) == 1:
+                entered.set()
+                release.wait(3)
+
+        segmenter = AmbientSegmenter(consume, queue_size=1, max_chunk_bytes=4096, max_segment_bytes=4096)
+        segmenter.start("overflow-gap")
+        try:
+            segmenter.submit(b"\x01\x00" * 2048, 16000, 1)
+            self.assertTrue(entered.wait(1))
+            self.assertEqual(segmenter.submit(b"\x02\x00" * 160, 16000, 1)["status"], "accepted")
+            self.assertEqual(segmenter.submit(b"\x03\x00" * 160, 16000, 1)["status"], "dropped")
+            release.set()
+            segmenter._queue.join()
+            self.assertEqual(segmenter.submit(b"\x04\x00" * 160, 16000, 1)["status"], "accepted")
+            segmenter._queue.join()
+            segmenter.stop(flush=True)
+            self.assertEqual(segments[-1].pcm16, b"\x04\x00" * 160)
+            self.assertEqual(segmenter.state()["discontinuity_discarded_bytes"], 320)
+        finally:
+            release.set()
+            segmenter.stop(flush=False)
+
 
 if __name__ == "__main__":
     unittest.main()

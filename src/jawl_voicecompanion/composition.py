@@ -169,20 +169,34 @@ def build_companion_runtime(
                 max_bytes=args.screen_max_bytes,
                 ocr_enabled=args.screen_ocr,
                 redaction_rects=screen_redaction_rects,
+                display_index=getattr(args, "visual_describer_display_index", None) or getattr(args, "screen_display_index", 0) or 0,
             ),
         )
         hostos_executor.browser = BrowserAdapter(ui_automation=hostos_executor.ui_automation)
 
+    visual_desc_mode = getattr(args, "visual_describer", "eg2")
+    qwen_url = getattr(args, "visual_describer_url", None) or args.vision_url
+    qwen_model = getattr(args, "visual_describer_model", None) or args.vision_model or "qwen3.5-0.8b"
+
     vision_describer = None
-    if args.vision_url or args.vision_model:
-        if not args.vision_url or not args.vision_model:
-            error("--vision-url and --vision-model must be provided together")
-        vision_describer = OpenAICompatibleVisionClient(
-            args.vision_url,
-            args.vision_model,
-            api_key=os.environ.get(args.vision_api_key_env, ""),
-            timeout_seconds=args.vision_timeout,
-        )
+    if visual_desc_mode == "qwen":
+        if qwen_url:
+            vision_describer = OpenAICompatibleVisionClient(
+                qwen_url,
+                qwen_model,
+                api_key=os.environ.get(args.vision_api_key_env, ""),
+                timeout_seconds=args.vision_timeout,
+            )
+    else:
+        if args.vision_url or args.vision_model:
+            if not args.vision_url or not args.vision_model:
+                error("--vision-url and --vision-model must be provided together")
+            vision_describer = OpenAICompatibleVisionClient(
+                args.vision_url,
+                args.vision_model,
+                api_key=os.environ.get(args.vision_api_key_env, ""),
+                timeout_seconds=args.vision_timeout,
+            )
     if args.screen_watch:
         eg2_model = project_root / "runtime" / "models" / "embeddinggemma-2-onnx" / "onnx" / "model_q4.onnx"
         if not (args.hostos_live and args.screen_enabled and (vision_describer or eg2_model.is_file())):
@@ -267,6 +281,10 @@ def build_companion_runtime(
     if args.ambient_triage_interval < 0:
         error("--ambient-triage-interval must be zero or positive")
     ambient_memory = AmbientMemoryBuffer(enabled=args.ambient_memory, triage_provider=triage_provider)
+    if hostos_executor is not None and getattr(hostos_executor, "screen_capture", None) is not None:
+        hostos_executor.screen_capture.enabled_fn = (
+            lambda: not getattr(ambient_memory, "paused", False)
+        )
     ambient_scheduler = (
         AmbientTriageScheduler(ambient_memory, args.ambient_triage_interval)
         if args.ambient_triage_interval > 0 else None
@@ -290,7 +308,35 @@ def build_companion_runtime(
         enabled=lambda: ambient_memory.enabled and not ambient_memory.paused,
     )
     perception_fusion.history_store = sensory_history
-    if getattr(args, "visual_describer", "eg2") == "qwen":
+
+    episodic_visual_memory = None
+    try:
+        from .episodic_visual_memory import EpisodicVisualMemory
+        vis_db_dir = history_root / "data" / "episodic_visual" / "lancedb"
+        vis_cache_dir = history_root / "data" / "episodic_visual" / "keyframes"
+        episodic_visual_memory = EpisodicVisualMemory(
+            db_path=vis_db_dir,
+            image_cache_dir=vis_cache_dir,
+        )
+        perception_fusion.episodic_visual_memory = episodic_visual_memory
+    except Exception as exc:  # noqa: BLE001
+        print(f"[episodic-visual] disabled: {type(exc).__name__}: {str(exc)[:160]}")
+        episodic_visual_memory = None
+
+    narrative_consolidator = None
+    try:
+        from .narrative_consolidator import NarrativeConsolidator
+        narrative_path = history_root / "data" / "episodic_visual" / "narrative.json"
+        narrative_consolidator = NarrativeConsolidator(
+            episodic_memory=episodic_visual_memory,
+            storage_path=narrative_path,
+        )
+        perception_fusion.narrative_consolidator = narrative_consolidator
+    except Exception as exc:  # noqa: BLE001
+        print(f"[narrative-consolidator] disabled: {type(exc).__name__}: {str(exc)[:160]}")
+        narrative_consolidator = None
+
+    if visual_desc_mode == "qwen":
         perception_fusion.include_eg2_media_in_scene = False
     try:
         if (DEFAULT_EG2_ONNX_ROOT / "onnx" / "model_q4.onnx").is_file():
@@ -300,13 +346,31 @@ def build_companion_runtime(
             try:
                 from .eg2_describer import DetailedSensoryDescriber, Eg2VisionDescriber
                 perception_fusion.describer = DetailedSensoryDescriber(perception_fusion.eg2)
-                if vision_describer is None:
+                if vision_describer is None and visual_desc_mode == "eg2":
                     vision_describer = Eg2VisionDescriber(perception_fusion.describer)
             except Exception:  # noqa: BLE001
                 perception_fusion.describer = None
     except Exception:  # noqa: BLE001 - optional sensory cortex must not block startup
         perception_fusion.eg2 = None
         perception_fusion.describer = None
+
+    try:
+        from .scene_state import SceneState
+        from .event_policy import EventPolicy
+        scene_state = SceneState()
+        event_policy = EventPolicy()
+        perception_fusion.scene_state = scene_state
+        perception_fusion.event_policy = event_policy
+        if vision_describer is not None:
+            perception_fusion.vision_describer = vision_describer
+        if hostos_executor is not None and getattr(hostos_executor, "screen_capture", None) is not None:
+            perception_fusion.screen_capture = hostos_executor.screen_capture
+            hostos_executor.screen_capture.scene_state = scene_state
+        gateway.event_policy = event_policy
+        gateway.perception_fusion = perception_fusion
+        gateway.scene_state = scene_state
+    except Exception as exc:  # noqa: BLE001
+        print(f"[scene-state] initialization error: {exc}")
 
     eg2_audio_describer = None
     if getattr(args, "audio_describer", "eg2") == "qwen-omni":
@@ -399,9 +463,16 @@ def build_companion_runtime(
         )
         sensory_ingestor.start()
     ambient_audio = None
+    app_audio_router = None
     if args.ambient_audio:
         if voice_mem is None:
             error("--ambient-audio requires --voicemem-python")
+        try:
+            from .app_audio_router import AppAudioRouter
+
+            app_audio_router = AppAudioRouter()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[app-audio-router] disabled: {type(exc).__name__}: {str(exc)[:160]}")
         yamnet_soundscape_detector = None
         try:
             from .yamnet_soundscape import YamnetSoundscapeDetector
@@ -409,6 +480,14 @@ def build_companion_runtime(
             yamnet_soundscape_detector = YamnetSoundscapeDetector()
         except Exception as exc:  # noqa: BLE001 - ASR must remain available without optional soundscape model
             print(f"[soundscape] disabled: {type(exc).__name__}: {str(exc)[:160]}")
+
+        smtc_adapter = None
+        try:
+            from .windows_smtc import WindowsSMTCAdapter
+            smtc_adapter = WindowsSMTCAdapter()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[smtc] disabled: {type(exc).__name__}: {str(exc)[:160]}")
+
         ambient_bridge = AmbientAudioASRBridge(
             voice_mem,
             ambient_memory,
@@ -416,6 +495,8 @@ def build_companion_runtime(
             audio_describer=eg2_audio_describer,
             soundscape_detector=yamnet_soundscape_detector,
             perception_fusion=perception_fusion,
+            app_router=app_audio_router,
+            smtc_adapter=smtc_adapter,
         )
         ambient_capture = SystemAudioLoopback(
             ambient_bridge.consume,
@@ -491,6 +572,7 @@ def build_companion_runtime(
                     screen_capture=screen_capture,
                     describer=qwen_describer,
                     fusion=perception_fusion,
+                    scene_state=scene_state,
                     roi=_parse_visual_roi(getattr(args, "visual_describer_roi", "0,0,1,1")),
                     target_title=os.environ.get("JAWL_SCREEN_TARGET_TITLE", ""),
                     display_index=getattr(args, "visual_describer_display_index", None),
@@ -509,6 +591,7 @@ def build_companion_runtime(
             "omnivoice": TeraTTSHttpClient,  # ADR-045: same /health + /tts WAV contract
         }[args.tts_provider]
         tts_service = TTSService(tts_client(args.tts_url, timeout_seconds=args.tts_timeout))
+        tts_service.model_provider = args.tts_provider
         if getattr(args, "prosody_planner", False) and args.tts_provider == "tera":
             planner = ProsodyPlanner(
                 args.prosody_url,
@@ -535,6 +618,39 @@ def build_companion_runtime(
 
     log_dir = Path(args.jawl_log_dir) if args.jawl_log_dir else None
 
+    visual_stream_worker = None
+    if getattr(args, "visual_stream", False):
+        try:
+            from .visual_stream import SceneDeltaDetector, VisualStreamWorker
+            # Reuse the configured redaction/authorization boundary. A raw
+            # DXGI capture here bypasses the user's screen masks and pause.
+            vis_capture = getattr(hostos_executor, "screen_capture", None)
+            if vis_capture is None or not vis_capture.enabled:
+                raise RuntimeError("visual stream requires enabled screen capture")
+            vis_detector = SceneDeltaDetector(grid_size=64, change_threshold=0.12)
+            cadence = float(getattr(args, "visual_stream_cadence", 0.5))
+            min_ingest = float(getattr(args, "visual_stream_min_ingest_interval", 5.0))
+            screen_enabled_flag = bool(getattr(args, "screen_enabled", True))
+            visual_stream_worker = VisualStreamWorker(
+                # No persistent raw-frame archive: retain text observations
+                # until a separately bounded image-retention policy exists.
+                episodic_memory=None,
+                narrative_consolidator=narrative_consolidator,
+                perception_fusion=perception_fusion,
+                scene_state=scene_state,
+                capture=vis_capture,
+                delta_detector=vis_detector,
+                poll_interval_s=cadence,
+                min_ingest_interval_s=min_ingest,
+                resource_governor=resource_governor,
+                enabled_fn=lambda: screen_enabled_flag and not getattr(ambient_memory, "paused", False),
+            )
+            visual_stream_worker.start()
+            perception_fusion.visual_stream_worker = visual_stream_worker
+        except Exception as exc:  # noqa: BLE001
+            print(f"[visual-stream] disabled: {type(exc).__name__}: {str(exc)[:160]}")
+            visual_stream_worker = None
+
     server = create_server(
         args.host,
         args.port,
@@ -559,6 +675,9 @@ def build_companion_runtime(
         perception_fusion=perception_fusion,
         streaming_perception=streaming_perception,
         visual_sensor=qwen_visual_sensor,
+        visual_memory=episodic_visual_memory,
+        narrative_consolidator=narrative_consolidator,
+        visual_stream_worker=visual_stream_worker,
         config_hub=config_hub,
         log_dir=log_dir,
         activity_provider=(
@@ -575,6 +694,7 @@ def build_companion_runtime(
         voice_delivery_enabled=bool(getattr(args, "voice_delivery_cues", False)),
         tls_cert_file=args.tls_cert,
         tls_key_file=args.tls_key,
+        app_audio_router=app_audio_router,
     )
     if qwen_visual_sensor is not None:
         from .arbiter import TurnPriority
@@ -604,6 +724,71 @@ def build_companion_runtime(
 
         qwen_visual_sensor.on_observation = _qwen_attention
         qwen_visual_sensor.start()
+
+    perception_bridge = None
+    try:
+        from .perception_fusion import SenseNovaPerceptionBridge
+
+        from datetime import datetime, timezone
+
+        def _broadcast_to_clients(payload: dict[str, Any]) -> dict[str, Any]:
+            if hasattr(server, "broadcast_event") and callable(server.broadcast_event):
+                try:
+                    res = server.broadcast_event(payload)
+                    if isinstance(res, dict):
+                        return res
+                    return {"accepted": True, "channels": ["server_broadcast_event"], "errors": []}
+                except Exception as exc:
+                    return {"accepted": False, "channels": [], "errors": [f"server.broadcast_event: {exc}"]}
+
+            result: dict[str, Any] = {
+                "accepted": False,
+                "enqueued_proactive": False,
+                "stream_chat_delivered": False,
+                "channels": [],
+                "errors": [],
+            }
+            text = str(payload.get("text") or "").strip()
+            feed = getattr(server, "proactive_feed", None)
+            if text and feed is not None and hasattr(feed, "_enqueue"):
+                now = time.time()
+                item = {
+                    "id": f"proactive-{int(now * 1000)}",
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "text": text[:2000],
+                    "queued_at": now,
+                }
+                if "speak" in payload:
+                    item["speak"] = bool(payload["speak"])
+                try:
+                    feed._enqueue(item)
+                    result["accepted"] = True
+                    result["enqueued_proactive"] = True
+                    result["channels"].append("proactive_feed")
+                except Exception as exc:
+                    result["errors"].append(f"proactive_feed: {exc}")
+
+            sink = getattr(server, "stream_chat_event_sink", None)
+            if sink is not None and callable(sink):
+                try:
+                    sink(payload)
+                    result["accepted"] = True
+                    result["stream_chat_delivered"] = True
+                    result["channels"].append("stream_chat_event_sink")
+                except Exception as exc:
+                    result["errors"].append(f"stream_chat_event_sink: {exc}")
+
+            return result
+
+        perception_bridge = SenseNovaPerceptionBridge(
+            sensenova_client=gateway,
+            perception_fusion=perception_fusion,
+            tts_service=tts_service,
+            broadcast_fn=_broadcast_to_clients,
+        )
+        server.perception_bridge = perception_bridge
+    except Exception as exc:  # noqa: BLE001
+        print(f"[perception-bridge] disabled: {type(exc).__name__}: {str(exc)[:160]}")
 
     return CompanionRuntime(server)
 

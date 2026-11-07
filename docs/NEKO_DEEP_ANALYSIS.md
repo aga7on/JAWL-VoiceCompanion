@@ -7,7 +7,7 @@
 
 Дата: 2026-09-12. Источник: shallow-клон `G:\AI\N-E-K-O`
 (github.com/Project-N-E-K-O/N.E.K.O, ~48 МБ Python, 4581 файл, 799 тестовых
-файлов). Сравнение с нашим `G:\AI\JAWL-VoiceCompanion`.
+файлов). Сравнение с нашим `G:\AI\JAWL-VoiceCompanion-V0.5`.
 
 ## Вердикт в одном абзаце
 

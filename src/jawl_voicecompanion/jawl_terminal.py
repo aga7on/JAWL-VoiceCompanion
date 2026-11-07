@@ -45,6 +45,7 @@ class JawlTerminalGateway:
     """Native correlated turns over one persistent terminal connection."""
 
     supports_native_envelope = True
+    manages_history = True
 
     def __init__(
         self,
@@ -450,6 +451,7 @@ class JawlChatRouter:
     """Route chat turns through the terminal gateway, everything else to the console."""
 
     supports_native_envelope = True
+    manages_history = True
 
     def __init__(self, console: Any, terminal: JawlTerminalGateway) -> None:
         self.console = console

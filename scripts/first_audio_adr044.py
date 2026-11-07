@@ -20,10 +20,12 @@ import urllib.request
 import wave
 from pathlib import Path
 
-ROOT = Path(r"G:\AI\JAWL-VoiceCompanion")
-CRISPASR = r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe"
-GIGAAM = r"G:\AI\JAWL-VoiceCompanion\runtime\models\asr\gigaam-v3-e2e-rnnt-q8_0.gguf"
-VOICEMEM_PY = r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
+ROOT = Path(__file__).resolve().parents[1]
+_INTREE_CRISP = ROOT / "runtime" / "bin" / "crispasr" / "crispasr.exe"
+CRISPASR = str(_INTREE_CRISP) if _INTREE_CRISP.exists() else r"G:\AI\crispasr\crispasr-windows-x86_64-cpu\crispasr.exe"
+GIGAAM = str(ROOT / "runtime" / "models" / "asr" / "gigaam-v3-e2e-rnnt-q8_0.gguf")
+_INTREE_VM_PY = ROOT / ".venv" / "Scripts" / "python.exe"
+VOICEMEM_PY = str(_INTREE_VM_PY) if _INTREE_VM_PY.exists() else r"G:\AI\VoiceMem\.venv\Scripts\python.exe"
 TERA_PY = r"G:\AI\tts_env\Scripts\python.exe"
 TERA_RELEASE = r"G:\AI\tts_models\TeraSpace__TeraTTSv2"
 WAV = ROOT / "runtime" / "voice-native-ru-clean-20260906.wav"

@@ -35,7 +35,7 @@ TRIAGE_SCHEMA: dict[str, Any] = {
         "topics": {"type": "array", "items": {"type": "string", "maxLength": 40}, "maxItems": 5},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "source": {"type": "string", "enum": sorted(_SOURCES)},
-        "source_event_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 32},
+        "source_event_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 256},
     },
 }
 
@@ -67,7 +67,7 @@ def validate_triage_result(result: Any, event_ids: set[str]) -> dict[str, Any]:
         "topics": [item.replace("\x00", "").strip()[:40] for item in topics][:5],
         "confidence": round(float(confidence), 3),
         "source": source,
-        "source_event_ids": ids[:32],
+        "source_event_ids": ids[:256],
     }
 
 
@@ -96,7 +96,7 @@ class OllamaTriageProvider:
         self._opener = opener
 
     def triage(self, observations: Sequence[dict[str, Any]]) -> dict[str, Any]:
-        safe = [self._safe_observation(item) for item in list(observations)[:64]]
+        safe = [self._safe_observation(item) for item in list(observations)[:256]]
         if not safe:
             raise AmbientTriageUnavailable("triage batch is empty")
         event_ids = {item["event_id"] for item in safe}
@@ -191,7 +191,7 @@ class OpenAICompatibleTriageProvider:
         self._opener = opener
 
     def triage(self, observations: Sequence[dict[str, Any]]) -> dict[str, Any]:
-        safe = [OllamaTriageProvider._safe_observation(item) for item in list(observations)[:64]]
+        safe = [OllamaTriageProvider._safe_observation(item) for item in list(observations)[:256]]
         if not safe:
             raise AmbientTriageUnavailable("triage batch is empty")
         event_ids = {item["event_id"] for item in safe}

@@ -698,7 +698,7 @@ def main() -> int:
 
     out = args.out
     if not out:
-        out = str(Path(r"G:\AI\JAWL-VoiceCompanion\runtime\vrm-models") / f"{preset.get('name', 'Jawlie')}.vrm")
+        out = str(Path(r"G:\AI\JAWL-VoiceCompanion-V0.5\runtime\vrm-models") / f"{preset.get('name', 'Jawlie')}.vrm")
 
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.export_scene.vrm(filepath=out)

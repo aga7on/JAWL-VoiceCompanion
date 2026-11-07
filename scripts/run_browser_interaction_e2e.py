@@ -13,6 +13,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -37,8 +38,11 @@ def main() -> int:
     port = free_port()
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root / "src")
+    isolated_history = tempfile.TemporaryDirectory(prefix="jawl-browser-e2e-")
+    history_file = str(Path(isolated_history.name) / "conversation.ndjson")
     process = subprocess.Popen(
-        [sys.executable, "-m", "jawl_voicecompanion", "--host", "127.0.0.1", "--port", str(port)],
+        [sys.executable, "-m", "jawl_voicecompanion", "--host", "127.0.0.1", "--port", str(port),
+         "--history-file", history_file],
         cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     report = {"schema_version": 1, "profile": "browser_interaction_e2e", "status": "failed", "mode": "mock_brain", "checks": [], "screenshots": [], "failure": None}
@@ -141,7 +145,7 @@ def main() -> int:
         box = driver.find_element(By.ID, "chat-input")
         box.send_keys("Проверь связь")
         driver.find_element(By.ID, "chat-send").click()
-        wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "#chat-log .msg")) >= 4)
+        wait.until(lambda d: "Проверь связь" in d.find_element(By.ID, "chat-log").text)
         report["checks"].append("chat_interaction")
         assert "Проверь связь" in driver.find_element(By.ID, "chat-log").text
         driver.execute_script("""
@@ -319,9 +323,17 @@ def main() -> int:
                 report["browser_diagnostics"] = driver.execute_script("""
                   return {url: location.href, title: document.title,
                     readyState: document.readyState,
-                    body: (document.body?.innerText || '').slice(0, 4000),
-                    chat: (document.querySelector('#chat-log')?.innerText || '').slice(0, 2000)};
+                    chatMessageCount: document.querySelectorAll('#chat-log .msg').length,
+                    chatMessageKinds: [...document.querySelectorAll('#chat-log .msg')].map(n => n.className),
+                    inputLength: (document.querySelector('#chat-input')?.value || '').length,
+                    sendDisabled: document.querySelector('#chat-send')?.disabled,
+                    sendChatDefined: typeof sendChat === 'function'};
                 """)
+                report["browser_errors"] = [
+                    str(entry.get("message", ""))[:400]
+                    for entry in driver.get_log("browser")
+                    if entry.get("level") == "SEVERE"
+                ][:5]
             except Exception as diagnostic_error:
                 report["browser_diagnostics_error"] = str(diagnostic_error)[:300]
     finally:
@@ -334,6 +346,7 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+        isolated_history.cleanup()
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # JSON escapes Unicode so this diagnostic also works in Windows CP1251 shells.

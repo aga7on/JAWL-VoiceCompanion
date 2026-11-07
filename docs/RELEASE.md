@@ -145,7 +145,7 @@ P0-A в [TODO](../TODO.md). Нельзя ради smoke менять рабоч�
 ## Историческая инструкция: демонстрация UI
 
 ```powershell
-cd G:\AI\JAWL-VoiceCompanion
+cd G:\AI\JAWL-VoiceCompanion-V0.5
 .\scripts\run_web.ps1
 ```
 

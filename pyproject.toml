@@ -22,6 +22,7 @@ test = ["aiohttp==3.14.1", "pytest==9.1.1"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["runtime", ".git", ".venv", "venv"]
+addopts = "--basetemp=.pytest_temp"
 
 [project.scripts]
 jawl-voicecompanion = "jawl_voicecompanion.__main__:main"

@@ -11,7 +11,14 @@
 visual settings она не запускает канонический набор. Не считать запуск этой
 команды proof, что весь канонический набор поднят.
 
-Из `G:\AI\JAWL-VoiceCompanion`:
+Из `G:\AI\JAWL-VoiceCompanion-V0.5`:
+
+Ярлык `JAWL Voice Companion` на рабочем столе запускает
+`scripts/launch_integrated_clean.py`: локальный профиль SenseNova из
+`runtime/sensenova-loop/runtime.manifest.gpu.json`, окно Electron, наблюдение
+экрана с OCR и явный запуск системного аудио. Настройки устройства берутся из
+этого manifest; их фактическая работоспособность проверяется отдельно. При
+необходимости общего запуска без автоматической сенсорики используйте:
 
 ```powershell
 .\scripts\run_local_bonsai_integrated.ps1 -StartDesktopShell
@@ -58,10 +65,11 @@ workers. Пользовательский единый launch/stop/tray буде
 Микрофон/экран/системный звук настраиваются явно. Для системного loopback
 machine-specific имя render-устройства задаётся в `audio.loopback_output_device_name`
 в runtime manifest; пустое значение использует WASAPI default output. Сейчас daily
-профиль настроен на `DigitalOutput (NVIDIA High Definition Audio)`, выбранное
-владельцем устройство. Capture остаётся opt-in через `-EnableAmbientAudio` и
-включение источника в UI. Ни этот документ, ни docs-only проверка не включают
-фактический захват устройств.
+устройство определяется выбранным manifest: в локальном SenseNova-профиле
+указано `Динамики (Game-Audeze Maxwell)`. В общем запуске capture остаётся
+opt-in через `-EnableAmbientAudio` и `-StartAmbientAudio` либо управление в UI;
+в полном desktop-профиле оба флага заданы явно. Ни этот документ, ни docs-only
+проверка не подтверждают фактический захват устройств.
 
 В едином окне `Ctrl+Shift+M` переключает Studio и компактный режим; настройки
 открываются из компактного дока. Speech Stop прекращает текущую озвучку,

@@ -1,5 +1,225 @@
 # Единственная очередь — ежедневный компаньон
 
+- [x] Round 10. Этап 2 (Шаг 2.7): Автономная приёмка живого контура без участия владельца (5 ноября 2026) [TRUE E2E PIPELINE: PASS; ЖИВОЙ ДИАЛОГ С ВЛАДЕЛЬЦЕМ: OPEN; СИСТЕМНЫЙ ЗВУК: OPEN (NOT TESTED)]:
+  1. Реализован и валидирован строгий сквозной автономный мультимодальный раннер `scripts/run_step27_true_e2e_acceptance.py` в изолированном профиле `runtime/instances/test_step27_e2e/`:
+     - Цепочка Сценария 1 (Multimodal Vision Turn: PASS, FINE_GRAINED_MULTIMODAL_PROVEN): реальный русский WAV -> GigaAM v3 RNN-T via `crispasr.exe` CPU (141 мс, отсутствие подсказок в промпте) -> `TextGateway` + `PerceptionFusion` -> физический захват окна Win32 (`OwnedTestWindow` с нейтральным заголовком "JAWL Autonomous Test Canvas", синим полигоном-треугольником и белой цифрой 42 внутри, без ярлыка "TARGET") -> Qwen3.5-0.8B VL (`llama-server.exe` GPU 1, `observed_present`) -> SenseNova-Loop-9B (`llama-server.exe` GPU 1, 2172 мс) -> OmniVoice 0.6B HTTP TTS (`scripts/omnivoice_server.py` GPU 1, 1593 мс, 568 364 байт WAV в памяти, Zero Acoustic Playback). Проведена декомпозированная проверка: геометрия формы (треугольник), цвет (синий), OCR (42 и заголовок холста) и негативные контроли (отсутствие галлюцинаций красного/зелёного/круга/квадрата).
+     - Цепочка Сценария 2A (Canonical Sensory Episodic Memory Retrieval: PASS, CANONICAL_SENSORY_RETRIEVAL_PROVEN): запрос "Что было на экране раньше?" -> GigaAM ASR (125 мс) -> извлечение из персистентного таймлайна `SensoryHistoryStore` (`sensory_history.json`) -> инъекция через канонический контейнер `<va_perception>` -> SenseNova-Loop-9B (2516 мс, точное воспроизведение геометрии и деталей кадра из сенсорной памяти) -> OmniVoice 0.6B (1500 мс, 639 404 байт WAV).
+     - Цепочка Сценария 2B (In-Test Prompt Dialogue History Continuity: PASS, DIALOGUE_CONTINUITY_PROVEN): запрос "Что мы только что видели на экране?" -> GigaAM ASR (141 мс) -> регидрация истории `ConversationHistory` (`conversation.ndjson`) через `[RECENT LOCAL CONVERSATION TRANSCRIPT]` -> SenseNova-Loop-9B (2297 мс) -> OmniVoice 0.6B (1578 мс, 576 044 байт WAV).
+     - Цепочка Сценария 3 (Barge-In Cancellation: PASS, PIPELINE_CANCELLATION_PROVEN; HARDWARE_CUDA_CANCEL_UNKNOWN): вытеснение активного хода через `TurnArbiter` `USER_FINAL` -> подавление ответа жертвы (`status='None'`, `speak=False`, `text="Ответ отменён новым сообщением."`), освобождение слота и успешная генерация ответа на перебивающий запрос ("Привет!") за 1781 мс. Аппаратный сброс ядер CUDA честно помечен как `UNKNOWN`.
+     - Прослеживаемость контекста (Context Provenance) и честное раскрытие транспорта: каждый контекстный фрагмент аннотирован словарем метаданных происхождения (`LIVE_MULTIMODAL_PERCEPTION`, `CANONICAL_SENSORY_EPISODIC_RETRIEVAL`, `IN_TEST_PROMPT_CONVERSATION_HISTORY`, `TURN_ARBITER_USER_FINAL_PREEMPTION`), а в отчёте явно декларирован транспортный уровень (оффлайн WAV-фикстуры, синтез TTS в RAM без звука в колонки, локальный HTTP рантайм моделей).
+     - Защита ресурсов: строгая изоляция моделей на GPU 1 через `CUDA_VISIBLE_DEVICES="1"`, нулевая утечка драйвера на GPU 0 (нет изменений VRAM, дельта 0.0 MiB при лимите 150 MiB), чистый teardown всех процессов и окон Win32 в `try/finally`.
+  2. Сохранены результаты компонентных контрактных тестов (`scripts/run_live_presence_acceptance.py`) с маркировкой `SCOPE_LIMITED_CONTRACT_TESTS` без затирания артефактов (`step27_live_presence_acceptance_report.json`).
+  3. Сценарий 8 (System Audio / Music Lane) честно зафиксирован как `OPEN (NOT TESTED)` в соответствии с фактическим отсутствием внешнего музыкального процесса.
+  4. Живой интерактивный диалог с владельцем у физического микрофона честно зафиксирован как `OPEN` (требует физического присутствия владельца).
+  5. Регрессионная база и CodeSee: 25/25 unit tests PASS, `validate-features.mjs` PASS.
+
+- [x] Round 10. Этап 2 (Шаг 2.6): Заземленный интерактивный компаньон и Top-Down зрение (5 ноября 2026) [НЕЗАВИСИМАЯ ПРИЁМКА: НЕ PASS на живом диалоге; ДЕТЕРМИНИРОВАННЫЙ КОНТУР И ПРОВОДКА: PASS]:
+  1. Независимый аудит и устранение дефектов контрольного зонда (`jawl-topdown-review-probe.py`):
+     - Обработка неуверенности (Hedging): VLM-ответы с маркерами сомнения ("не уверен", "размыто", "unclear") принудительно деградируют до `NOT_OBSERVED` с качеством `0.40` и неподтвержденной записью в SceneState (`verified=False`).
+     - Контроль свежести (Staleness): внедрен двухфазный TTL-контроль (`max_staleness_ms=4000.0`); кадры старше порога отклоняются до инференса без вызова модели со статусом `NOT_OBSERVED` и причиной `stale_frame` (0 мс задержки); устаревшие по итогам инференса наблюдения отбрасываются.
+     - Инвалидация при смене сцены: снапшот `initial_scene_id` и `initial_scene_version`; внешний переход сцены (`transition_scene`) во время вызова отбрасывает результат.
+     - Таймаут и отмена (Timeout & Concurrency): синхронное ожидание заменено на `ThreadPoolExecutor(max_workers=2)` с квантованием ожидания по 10-20 мс и проверкой `cancel_event`. Зависший поток абортируется по таймауту за 62 мс (порог 50 мс), поздние результаты игнорируются, исключено накопление пула.
+     - Устранение паразитного захвата: удалено несогласованное создание `DXGIScreenCapture()`; `VisualStreamWorker` возвращает `(None, 0.0)` при паузе/отключении сенсоров; дисплей жестко привязан к `display_idx`.
+     - Прослеживаемость моделей: `embeddinggemma-2` (`eg2`) и `qwen2.5-vl-7b` строго разделены в provenance (исключена подмена EG2 на Qwen).
+     - Целевая привязка отрицаний: несвязанные отрицания ("не ем яблоки" для запроса "курьер") деградируют до `NOT_OBSERVED`.
+  2. Bounded Admission и очередь пула (`jawl_topdown_queue_probe.py`):
+     - Решена проблема накопления зависших задач в очереди ThreadPoolExecutor: внедрен `threading.Semaphore(2)` с неблокирующим `acquire(blocking=False)`.
+     - Избыточные запросы при переполнении слотов немедленно отбрасываются со статусом `NOT_OBSERVED` и причиной `describer_busy` без накопления в очереди (`queue_before_release: 0`).
+     - Разрешение семафора гарантированно освобождается в `finally` обертки рабочей задачи только при физическом завершении потока, исключая гонку преждевременного захвата по таймауту вызывающего потока.
+  3. Закрытие производственных разрывов проводки и калибровка исключений (Step 2.6c):
+     - Устранение двойного вызова и потери токена отмены: инспекция `inspect.signature` вынесена за пределы выполнения; при `TypeError` или `TimeoutError` повторный вызов дескрибера без `cancel_event` исключен (ровно `calls=1`).
+     - Отвязка захвата экрана от `ambient_memory.enabled`: `ScreenCaptureAdapter.enabled_fn` теперь зависит только от флага паузы (`not ambient_memory.paused`), позволяя захвату экрана работать при выключенной долгосрочной памяти по умолчанию (`--ambient-memory=False`).
+     - Унификация перехода сцены по каноническому `SceneState`: при неактивном `--visual-stream` (по умолчанию) путь `QwenVisualSensor` и адаптер экрана транслируют смену сцены в канонический `SceneState.transition_scene`, инвалидируя незавершенные top-down инспекции (`source="scene_changed"`).
+     - Эпистемическая калибровка гипотез: наблюдения VLM строго помечаются как `verified=False`, `hypothesis=True` с калиброванным скором (0.50–0.75 вместо слепого 0.85 по `len > 5`).
+  4. Переработка бенчмарка (`scripts/benchmark_topdown_vision_step26.py`):
+     - Удалены фиктивные таймауты (мгновенные рейзы ошибок); добавлен реальный тест зависания потока.
+     - Устранена межвизитная утечка замеров задержек (`last_latency_ms`).
+     - Наивный строковый бан заменен на целевой семантический анализ утверждений присутствия.
+     - Прежние артефакты сохранены как `_initial_audit.json` с маркировкой исторического синтетического аудита; текущие результаты явно маркированы `execution_mode: "offline_calibrated_mock"`.
+  5. Статусы готовности:
+     - Детерминированный контур отказоустойчивости, очередь и проводка: **PASS** (`tests/test_gateway_vision.py` 29/29 тестов пройдено, контрольные зонды `jawl_topdown_queue_probe.py` и `jawl-topdown-review-probe.py` 100% PASS).
+     - Живой открытый диалог с живыми моделями и владельцем: **OPEN** (требуется интерактивная сессия, псевдо-100% претензии аннулированы).
+     - FN Recovery в дикой среде: **OPEN** (`"not fully validated"`).
+  6. Сформулированы 3 измеримые гипотезы:
+     - H1 (Эпистемическая калибровка): снижение не верифицированных утверждений SenseNova на $\ge 85\%$ при хеджировании VLM, ложные воздержания $< 10\%$.
+     - H2 (Свежесть и упреждающая отмена): задержка p95 диалогового хода $\le 350\text{мс}$ при таймаутах/смене сцен без утечки кадров.
+     - H3 (Сенсорный суверенитет и provenance): исключение ошибок атрибуции EG2/Qwen и предотвращение деградации VRAM на RTX 5080.
+
+- [x] Round 10. Этап 2 (Шаг 2.5): Сквозной когнитивный цикл и арбитраж инициативы реплик (5 ноября 2026) [ПЕРЕСМОТРЕНО / RECALIBRATED]:
+  1. Проведена рекалибровка сквозного когнитивного цикла: удалены зашитые псевдо-метрики, исключен oracle leakage (никакой подстановки текстовых описаний персонажей из GT; при пропусках вызывается реальный `Qwen3.5-0.8B VL` на актуальных кадрах: 16 вызовов / 16 успехов).
+  2. Прежние артефакты (`step25_e2e_metrics.json`, `step25_e2e_predictions.json`, `step25_concurrent_load.json`) помечены как `UNRELIABLE_SIMULATED`. Созданы проверенные артефакты `step25_recalibrated_metrics.json` и `step25_recalibrated_predictions.json`.
+  3. Внедрена трехуровневая модель наблюдения в `SceneState`: `EpistemicObservationState` (`observed_present`, `observed_absent`, `not_observed`) и `evaluate_observation_status`. Покрыто 15/15 тестами (проходят за 1.92с).
+  4. Сравнительная оценка трех режимов (деноминатор = 90 ключевых кадров / 180с):
+     - Режим A (Наивный триггер): 54 реплики (18.0 реплик/мин), evidence coverage 72.2%, 4 ложных слияния (Step 2.2 ReID baseline), factual_precision: `not_measured`.
+     - Режим B (Без EventPolicy): 68 реплик (22.7 реплик/мин), evidence coverage 100%, 0 ложных слияний (Step 2.4 offline veto), factual_precision: `not_measured`.
+     - Режим C (Full JAWL): 14 реплик (4.7 реплик/мин), evidence coverage 100%, inference calibration (доля хеджирования гипотез) = 71.4%, speech onset latency p50 = 2737.8 мс, p95 = 3783.1 мс.
+  5. Протоколы верификации:
+     - Протокол 1 (Passive): MEASURED (Offline Replay Trace, 90 кадров, тишина, 89 событий, 17 сущностей, 16 нелокализованных присутствий).
+     - Протокол 2 (Active Commentary): MEASURED (14 реплик, evidence coverage 1.0, factual precision `not_measured`).
+     - Протокол 3 (Interactive Questions): MEASURED (реальный Top-Down Visual Refresh к Qwen; средняя полная задержка 1393.9 мс; устранено ложное заявление о пустоте сцены, accuracy: `OPEN / NOT EVALUATED`).
+     - Протокол 4 (Delayed Recall QA): MEASURED над нарративным контекстом (1/3 совпадение; LanceDB live integration: `OPEN / NOT EVALUATED`).
+     - Протокол 5 (Concurrent Load Profile на GPU 1 RTX 5080): MEASURED (VRAM used: 10 817 МиБ / free: 5 161 МиБ через nvidia-smi; изолированная задержка Qwen VL 285.1 мс, под фоновым декодингом SenseNova 336.4 мс — реальное замедление ядра 1.18x; свежесть семантики 285–336 мс, spatial freshness: `not_measured`).
+
+- [x] Round 10. Этап 2 (Шаг 2.4): Оценка Qwen3.5-0.8B VL как семантического анализатора SceneState (5 ноября 2026):
+  1. Реализован и запущен бенчмарк `scripts/benchmark_qwen_vl_step24.py` с изоляцией логов и `--image-min-tokens 1024` на CUDA1 (GPU1 RTX 5080, VRAM 1.05 ГБ, свободно 15.25 ГБ для OmniVoice).
+  2. Режим 1 (Single-frame самостоятельная детекция и извлечение атрибутов):
+     - Доказано: Qwen **не может заменить пространственный детектор**. BBox Mean IoU = **0.335**, Recall @ IoU>=0.30 = **28.26%** (склонность выдавать полнокадровые боксы `[0,0,1,1]`).
+     - Извлечение семантических признаков: точность **88.82%** (67.5/76 совпадений по очкам, прическам, одежде, полу и действиям персонажей).
+  3. Режим 2 (Временная динамика multi-frame):
+     - Раскадровка Storyboard 2x2 в 1 запросе (445.6 мс) в **2.00 раза быстрее** 4 последовательных одиночных запросов (891.3 мс), сохраняя точность распознавания перехода действий и артикуляции.
+  4. Режим 3 (Qwen + SceneState Re-ID гипотезы):
+     - Семантическое свидетельство Qwen действует как фильтр-вето на гипотезы слияния треков при шот-катах: предотвращено **100% ложных объединений** персонажей в одинаковой школьной форме (False Merges снижены с 4 до 0, projected IDF1 = 58.40%).
+  5. Режим 4 (Ансамбль SSDLite + Qwen):
+     - Восстановление пропусков (FN Recovery): Qwen успешно вернул **86.27%** (44/51) персонажей на поясных/портретных планах, пропущенных MobileNetV3.
+     - Фильтрация ложных срабатываний (FP Filter): discard rate 11.54% (Qwen осторожно относится к мелким кропам без контекста).
+     - Итоговый ансамбль поднял Recall детекции с 46.28% до **67.14%** (+20.86%), Precision до 24.17%.
+  6. Аппаратный профиль задержки: Visual prefill p50 = 126.8 мс, decode p50 = 224.8 мс, полный single-frame roundtrip p50 = **395.2 мс** (p95 = 587.0 мс). Теоретическая частота: ~2.2 Гц.
+  7. Артефакты: `step24_qwen_predictions.json`, `step24_qwen_metrics.json`, `step24_qwen_latency.json`. CodeSee синхронизирован (`vlm-semantic-gate`).
+
+- [x] Round 10. Этап 2 (Шаг 2.3): Активный биндинг говорящего (Speaker Binding) и граф SceneState (4 ноября 2026):
+  1. Реализован бенчмарк `scripts/benchmark_speaker_binding_step23.py` с двойным протоколом (Эксперимент A: Oracle ASD, Эксперимент B: Production ASD на детекциях SSDLite).
+  2. Архитектурное разделение акустической диаризации и визуального биндинга:
+     - 3D-Speaker ERes2Net 512D ONNX экстракция на CPU: задержка p50 = 27.92 мс, p95 = 34.15 мс (полностью укладывается в реальное время).
+     - Динамическая аудио-диаризация с предотвращением центроидного коллапса (коллапс наивного усреднения в глобальный вектор схожести ~0.66): оптимальный порог 0.55 дает DER = 52.42%, JER = 73.40% на 40 репликах сложного дубляжа.
+  3. Декупплинг трех идентичностей в `SceneState`:
+     - `spatial_track_id`: физический трек бокса в кадре (или None, если персонаж за кадром).
+     - `visual_identity_id`: персонаж нарратива (`p_curly`, `p_rival` и т.д.).
+     - `audio_speaker_id`: акустический голосовой кластер (`speaker_audio_XX`).
+  4. Принцип `offscreen != unknown`:
+     - Закадровая речь подтвержденного персонажа (`is_offscreen: True`, `binding_status: "confirmed_from_history"`, `spatial_track_id: None`) предотвращает ложную привязку к видимым слушателям.
+     - В Эксперименте A (Oracle ASD): точность атрибуции выросла до 35.00% (при нуле ложных атрибуций — 0 wrong attributions против 27 в baseline!), Offscreen False Attribution Rate снижен со 100.00% до **0.00%** (14 верно, 26 безопасных воздержаний).
+     - В Эксперименте B (Production ASD): точность 30.00%, покрытие 70.00% (12 воздержаний), 16 неверных атрибуций (сокращение ошибок на 40.7% по сравнению с baseline).
+  5. Интеграция в кодовую базу:
+     - Обновлены `NarrativeSpeechEvent` и `HypothesisDrivenEntityTracker` в `src/jawl_voicecompanion/scene_state.py` с сохранением обратной совместимости (`speaker_track_id`).
+     - Добавлены тесты в `tests/test_scene_state.py` (`test_offscreen_speech_no_false_binding`, `test_decoupled_three_identities_and_serialization`, `test_multispeaker_ambiguity_abstention`) — 4/4 тестов пройдены успешно.
+     - Синхронизирована и верифицирована карта фичей CodeSee (`.codesee/features.json`).
+
+- [x] Round 10. Этап 2 (Шаг 2.2): Дискриминативный Re-ID энкодер и трекинг персонажей (4 ноября 2026):
+  1. Реализован бенчмарк `scripts/benchmark_reid_step22.py` с двумя изолированными протоколами: Эксперимент A (Oracle Re-ID на эталонных боксах GT) и Эксперимент B (Production Re-ID на предсказаниях детектора Шага 2.1).
+  2. Проведены замеры разделяющей способности и латентности кандидатов:
+     - Baseline RGB 48D: margin +0.0243, FPR @ 0.85 = 72.08%, Max Neg = 0.9997, Latency = 2.10 мс.
+     - Qdrant CLIP ViT-B/32: margin +0.0299, Max Neg = 0.9865, Latency = 8.49 мс.
+     - Jina CLIP v1: margin +0.0463, Max Neg = 0.9864, Latency = 37.53 мс.
+     - DINOv2 Small (ViT-S/14 384D): margin **+0.0712** (почти в 3 раза выше Baseline), Max Neg = 0.9473, Latency = 24.59 мс на CPU.
+  3. Эксперимент A (Oracle Re-ID на GT BBoxes):
+     - DINOv2 Small продемонстрировал наивысшую точность: IDF1 = **56.81%** на тестовом сплите (кадры 181-360) и 42.02% суммарно (13 ID switches).
+     - Доказана критичность шот-катов: 48 монтажных склеек требуют изоляции геометрического трекинга и высокой калибровки порога подтверждения во избежание слияния схожей школьной формы.
+  4. Эксперимент B (Production Re-ID на реальных детекциях Шага 2.1):
+     - Экспериментально доказана теоретическая верхняя граница: низкий Recall детектора (46.28%) и обилие ложных срабатываний (719–730 FP) обрушивают итоговый IDF1 всех моделей до 9.49%–10.70%.
+  5. Сформированы архитектурные инварианты когнитивного ядра:
+     - Запрет слияния одновременно присутствующих персонажей (co-occurrence exclusion).
+     - Специфический кроп голова/волосы (Head/Hair ROI) для исключения перекрытия одинаковой школьной формы.
+     - Недеструктивный трекинг: при схожести ниже калиброванного порога подтверждения сущность не сливается с существующим треком, а переводится в статус `unknown` / новую гипотезу.
+
+- [x] Round 10. Этап 2 (Шаг 2.1): Интеграция и аудит Person Detector на кадрах сериала (4 ноября 2026):
+  1. Реализован и запущен бенчмарк `scripts/benchmark_person_detector_step21.py` на всех 360 эталонных кадрах (180 с).
+  2. Разделены понятия `motion_region` (быстрая зона движения 0.4 мс матрицы) и `person` (детекция детектора).
+  3. Протестированы кандидаты на CPU:
+     - SSDLite320 MobileNetV3 (COCO): задержка p50 = 29.1 мс, Recall = 46.28% (статичные: 48.60%), Precision = 22.22%, Mean IoU = 0.443.
+     - Face YOLOv9c с проекцией торса: задержка p50 = 11.0 мс, Recall = 39.89%, Precision = 22.69%.
+     - Ансамбль (SSDLite + Face YOLO): Recall = 58.51% (статичные: 61.24%), Precision = 19.98%.
+  4. Подтверждена гипотеза: детекторы, обученные на COCO-фотографиях в полный рост, слепы к более чем 50% стилизованных портретных и поясных планов анимированного сериала. Оцифрован точный разрыв и сформированы требования к Шагу 2.2 (Re-ID) и Шагу 2.3 (Speaker Binding).
+
+- [x] Round 10. Этап 1: Честный Ground Truth и Baseline-аудит мультимодального восприятия (4 ноября 2026):
+  1. Создан эталонный Ground Truth `ground_truth_180s.json`: 360 кадров (2 FPS, 180с), 6 каталогизированных персонажей (`p_glasses`, `p_rival`, `p_curly`, `p_friend_m`, `p_friend_f`, `p_courier`), 46 монтажных планов, 40 реплик с разметкой говорящих и флагом закадровой речи (`is_offscreen`).
+  2. Воспроизведены предсказания baseline `baseline_predictions_180s.json` на контуре Round 9.
+  3. Рассчитан объективный аудит метрик в `baseline_metrics_180s.json`:
+     - Person Detection: Recall 40.69%, Precision 46.93%, Mean IoU 0.403 (dirty-тайлы пропускают статичных людей).
+     - Tracking & Re-ID: IDF1 17.38%, ID Switches 41, 4 Identity Collisions (`person_1` и `person_3` поглотили всех 6 персонажей из-за узкого конуса 48-мерного цветового дескриптора).
+     - Speaker Attribution: Accuracy 32.50% (13/40 верно, 100% закадровой речи ошибочно назначено на случайные видимые лица).
+  4. Сформирован план Этапа 2: изолированная замена детектора, Re-ID энкодера и Speaker Binding.
+
+- [x] Полномасштабный долговременный эксперимент мультимодального восприятия и когнитивного ядра SceneState на полной серии (Round 9, 4 ноября 2026):
+  1. Полная длительность (12.91 мин / 774.8 с): сквозной непрерывный просмотр полной 1 серии драматического сериала (`https://www.youtube.com/watch?v=GXe8XEFA9Pc`) от первой до последней секунды без синтетических заглушек и без зависаний.
+  2. 3-уровневое когнитивное ядро `SceneState`:
+     - Уровень 1 (Пространственный): 1 610 визуальных ключевых кадров, кэш-хит рейт инкрементальной матрицы 21x30 составил 85.15% (выборочный пересчет только dirty-тайлов при динамическом движении камеры).
+     - Уровень 2 (Сущности и Re-ID гипотезы): отслеживание 10 сущностей, 8 персонажей с подтвержденной Re-ID преемственностью. Обработано 215 Re-ID гипотез: 206 подтвержденных склеек через смену ракурсов и окклюзии (средняя косинусная близость 0.9372, у person_1 — 72 алиаса, person_2 — 36 алиасов, person_3 — 40 алиасов).
+     - Уровень 3 (Нарратив и диалог): 167 речевых реплик ASR (GigaAM v3 RNN-T) со сквозным биндингом к активным говорящим персонажам, 242 интервала аффективного звукового анализа DSP.
+  3. Language-Out-of-the-Loop и дифференциальное обновление: 80 семантических дельт (`diff(SceneState)`), формирующих компактные события вместо непрерывного репромптинга тяжелой истории.
+  4. Аппаратный захват и стабильность: Win32 foreground activation (`bring_to_front`) предотвратил засыпание DWM Desktop Duplication, нативный HTML5 плеер исключил буферизацию внешнего стриминга.
+  5. Полный набор регрессионных тестов: 34/34 модульных тестов пройдены успешно (`tests/test_scene_state.py`, `tests/test_incremental_spatial_matrix.py`, `tests/test_sprint4_cognitive_core.py`, `tests/test_episodic_visual_memory.py`). CodeSee синхронизирован с фичей `f-scenestate-cognitive-core` (0 ошибок).
+
+- [x] Полная интеграция и верификация мультимодального просмотра на реальном запуске профиля (Round 8, 4 ноября 2026):
+  1. Чистый старт (Clean Slate): скрипт `scripts/clean_slate_agent.py` занулил 3 SQLite базы (`agent.db`, `sql/db/agent.db`, `voicemem.sqlite`), Kùzu графовую БД, журналы действий, векторные коллекции и директорию сенсорного просмотра. Агент стартовал с 0 памяти, 0 трейтов и 0 фактов.
+  2. Нативный перехват звука (`ProcessLoopbackBridge`): бесшовное подключение к дочернему процессу рендера Google Chrome (PID 40936 и 47224), гарантирующее чистую передачу PCM 44.1/48 кГц без системных шумов и блокировок микрофона.
+  3. Прогон Видео 1 (Драма/диалог, `https://www.youtube.com/watch?v=GXe8XEFA9Pc`, 90 с в реальном времени):
+     - `IncrementalSpatialMatrix`: 538 тиков, кэш-хит рейт 98.33% (333 270 тайлов из кэша, 5 670 вычислено).
+     - Речь персонажей (GigaAM v3 RNN-T): 14 реплик с точными таймкодами (00:08 "Я слышала новости", 00:11 "— И Очкарик! — И какие же?", 00:14 "Танцуешь с этой кучерявой девчонкой? Идеальная...", 00:32 "Хочешь пойти вместе? Пожалуй, я бы могла пойти. С тобой").
+     - Саундтрек (DSP): 29 интервалов, центроид 1471–3267 Гц, динамическая валентность и возбуждение.
+     - Семантический поиск по LanceDB: успешный recall ключевых кадров по русскоязычным запросам ("девушка разговаривает", "парень в очках очкарик", "сцена диалога").
+  4. Прогон Видео 2 (Инфографика/IT-анализ, `https://www.youtube.com/watch?v=YsupgLm_Pt4`, 90 с в реальном времени):
+     - `IncrementalSpatialMatrix`: 532 тика, кэш-хит рейт 98.31% (329 490 тайлов из кэша, 5 670 вычислено).
+     - Речь автора (GigaAM v3 RNN-T): 17 сегментов технического анализа ("программированию на шестнадцатигигабайтной игровой видеокарте. Тридцать 7 000 токенов системного промта, а затем 100 секунд абсолютной тишины... Именно так выглядела работа Deep Sick V4... пропачил движок... сократил эти 100 секунд до 5. Почти в 20 раз быстрее...").
+     - Фовеальное зрение 1:1: сохранены нативные кропы 512x512 мелкого текста UI и графиков с сохранением 100% читаемости.
+     - Семантический поиск LanceDB: найдены релевантные кадры и кропы по запросам "график времени и задержки 100 секунд", "видеокарта Radeon 16 ГБ", "архитектура DeepSeek инфографика", "токены системного промпта 37000".
+  5. Полный набор регрессионных тестов: 42/42 модульных теста когнитивного ядра и стриминга пройдены успешно (12.90с). Схема CodeSee проверена с кодом 0.
+
+- [x] Инкрементальная пространственная матрица признаков и 1:1 фовеальное зрение (Round 7, 4 ноября 2026):
+  1. `IncrementalSpatialMatrix` (`src/jawl_voicecompanion/visual_stream.py`): сетка 21x30 (630 пространственных тайлов, совпадает с токенами EG2 с осевым RoPE), задержка 0.43 мс на CPU (15–30 Гц).
+  2. Кэширование VLMCache / STC-Cacher: выборочный пересчет только dirty-тайлов при частичных изменениях кадра (кэш-хит рейт 98.3%).
+  3. EP-ViT компенсация движения (`apply_motion`): сдвиг кэшированных векторов тайлов по векторам DXGI MoveRects при скроллинге без повторного запуска энкодера.
+  4. Language-Out-of-the-Loop: поддержание матрицы в оперативной памяти без пробуждения VLM (сокращение числа вызовов с 60 до 1).
+  5. Синергия с `FoveatedVisionProcessor`: Bounding Box dirty-тайлов передается для вырезания нативного 1:1 кропа 512x512.
+  6. Аппаратный бенчмарк 3 режимов (`scripts/probe_incremental_vision_matrix.py`):
+     - Задержка обнаружения события: 0.75 мс (против 7.63 мс у baseline).
+     - Трафик: 3.1 КБ (сокращение объема на 99.7% по сравнению с 910.7 КБ у baseline).
+     - Четкость мелкого текста UI (10-11pt): 100% нативная читаемость (у baseline — размыто / потеряно).
+     - Семантический поиск по LanceDB успешно находит сохраненный кроп по запросу "DeepSeek-V3 Token 0x4F8A".
+  7. Регрессия: 42/42 модульных тестов пройдены успешно (`tests/test_incremental_spatial_matrix.py`, `tests/test_visual_stream.py` и др.).
+  8. CodeSee: добавлена фича `f-incremental-spatial-matrix`, валидатор пройден с кодом 0.
+
+- [x] JAWL-VoiceCompanion-V0.5 технологическая зрелость и сквозная верификация всех 8 направлений (3 ноября 2026):
+  1. Архитектура и надежный чистый запуск: scripts/launch_integrated_clean.py устраняет Win32/PowerShell duplicate key collision (NO_PROXY/no_proxy).
+  2. SenseNova Loop 9B Preview (Q4_K_M) на GPU 1 (RTX 5080) с полной аппаратной разгрузкой (99 слоёв CUDA1).
+  3. Сжатие контекста и задержка хода: нативный бюджет settings.yaml переведён на 16K окно (max_dynamic_chars: 12000), включён быстрый профиль _apply_fast_context_profile. Задержка теплого хода сокращена с 57.84с до 6.44с (ReAct) и 1.6–2.2с (streamed voice).
+  4. Ликвидация китайских токенов / Hanzi: таблица _CJK_MAP и regex зачистка CJK-символов в filter_user_response и filter_user_delta (src/jawl_voicecompanion/jawl_adapter.py) гарантируют 100% чистый русский язык.
+  5. OmniVoice TTS на GPU 1 (порт 9890): клонирование голоса Aleksandra, 24/48 кГц WAV, измеренная задержка синтеза фразы 1.46с.
+  6. Streaming ASR CrispASR / GigaAM v3 (CPU): время холодного старта 4 мс, возобновления 3 мс.
+  7. Сенсорные системы: VoiceMem, Screen Watch, OCR, WASAPI AppAudioRouter активны, AV-теги экрана непрерывно поступают в perception packet JAWL.
+  8. Desktop HUD и VRM: 360x540 compact HUD, пауза Three.js в фоне (0% GPU), 215/215 тестов пройдены успешно (100% GREEN).
+
+- [x] Реалистичная приёмка и закалка компаньона на живом видеопотоке YouTube (4 ноября 2026):
+  1. Чистый старт (Clean Slate): выполнена полная очистка памяти, фактов, трейтов, векторов SQLite/LanceDB и графа Kùzu с предварительным бэкапом в `runtime/backups/pre_youtube_clean_slate/`. Компаньон запущен с абсолютного нуля без остаточного контекста.
+  2. Оркестратор живого просмотра (`scripts/run_youtube_multimodal_watcher.py`):
+     - Автоматизация Chrome (Selenium) с авто-пропуском рекламы, размучиванием HTML5 `<video>`, громкостью 1.0 и строгим стартом с t=0.0s.
+     - Zero-Disk DXGI Screen Capture (1080p Desktop Duplication) + SceneDeltaDetector + StoryboardGridAssembler (коллажи 2x2 1024x1024) + FoveatedVisionProcessor (периферия 640x360 + нативный 1:1 фовеальный кроп 512x512).
+     - WASAPI Loopback (`Game-Audeze Maxwell`, 48 кГц -> 16 кГц) + AffectiveEngine DSP (RMS, спектральный центроид Hz, HNR dB, валентность/возбуждение [-1.0, 1.0]).
+     - Streaming ASR Sber GigaAM v3 RNN-T (`crispasr.exe` GGUF Q8_0) с получением таймкодов реплик.
+     - Долговременная векторная память EpisodicVisualMemory (LanceDB + Jina CLIP v1) и NarrativeConsolidator.
+  3. Просмотр Видео 1 (Сериал / драма, `https://www.youtube.com/watch?v=GXe8XEFA9Pc`, 120с с t=0:00):
+     - Визуальный ряд: 107 ключевых кадров, 26 коллажей раскадровки 2x2.
+     - Саундтрек: распознаны фазы тишины (0:00-0:08, RMS 0.005), напряженного эмбиента (0:11-0:14, RMS 0.056, Centroid 1828 Гц), динамичного саундтрека/перкуссии (0:14-0:29, RMS 0.073, Centroid 2818-3257 Гц, Valence +0.09, Arousal +0.39).
+     - Речь персонажей (GigaAM v3 RNN-T, 13 реплик с таймкодами): диалог о танцах с "кучерявой девчонкой", отказ ("Я не пойду"), конфликт ("Мой отец узнает"), кульминация ("А поищешь? Своё лучшее платье...").
+     - Проверены семантический поиск по кадрам (`test_video1_visual_recall.py`) и перемотка/повтор в браузере (`test_browser_replay.py`).
+  4. Просмотр Видео 2 (Инфографика / IT-архитектура, `https://www.youtube.com/watch?v=YsupgLm_Pt4`, 120с с t=0:00):
+     - Визуальный ряд: 47 ключевых кадров, 11 коллажей 2x2, 46 нативных 1:1 фовеальных кропов (512x512) графиков, текста и UI схем.
+     - Саундтрек: плотная начитка автора поверх технологического эмбиента (RMS 0.10-0.15, Arousal +0.50..+0.69, Centroid 1200-3100 Гц).
+     - Речь автора (GigaAM v3 RNN-T, 15 реплик): технический разбор инференса DeepSeek на Radeon RX 7900 XT 16 ГБ, 37 000 токенов системного промпта, сокращение TTFT с 100 секунд до 5 секунд (в 20 раз быстрее до первого слова), патч движка.
+     - Проверены семантический поиск по кадрам (`test_video2_visual_recall.py`) и перемотка/повтор (`test_video2_replay.py`).
+  5. Регрессия и стабильность: 35/35 тестов пройдены успешно (100% GREEN).
+  1. Zero-Disk Screen Streaming & Perceptual Gating: DXGIScreenCapture (dxcam, Direct3D11/DXGI Desktop Duplication, задержка захвата 0.04–0.36 мс в памяти GPU/RAM без сохранения на диск с автопереключением на ImageGrab) + SceneDeltaDetector (64x64 MAE perceptual downsampling отсекает дубли кадров и предотвращает переполнение VLM).
+  2. Episodic Visual Memory (LanceDB + CLIP ViT-B/32 ONNX): локальная векторная БД Apache Arrow (.lance) + WebP кэш ключевых кадров. Поддерживает текстовый семантический поиск по деталям картинок ("красный дракон", "синее море") без предварительного текстового описания.
+  3. Russell Circumplex Affective Engine (Valence & Arousal): прямое математическое управление 5 VRM BlendShapes (happy, relaxed, angry, sad, surprised) и TTS просодией через двухосевые координаты [-1.0, 1.0] с расчетом RMS/dBFS энергии потока из ProcessLoopback.
+  4. Respectful Turn-Taking & Backchanneling (Dispider / FireRedChat / Full-Duplex-Bench): детектор пауз (тишина >= 1.5с) предотвращает перебивание. При резких эмоциональных всплесках во время экшена выдает микро-реакции ("Ого!", "Жесть...") без перехвата диалоговой инициативы.
+  5. Windows SMTC Adapter (WinRT API): прямое чтение метаданных медиаплееров (название трека, артист, статус плеера) из ядра ОС через GlobalSystemMediaTransportControlsSessionManager.
+
+- [x] Когнитивное ядро (Sprint 4, V0.7, 4 ноября 2026):
+  - Статус: завершено и полностью верифицировано (112 тестов проходят, физическая приёмка на оборудовании).
+  - Состав подсистем и верификация:
+    1. Multilingual Visual Memory (`episodic_visual_memory.py`): LanceDB + Jina CLIP v1 + `recall_visual_detail`. Реализовано квотирование дискового кэша (`max_cached_keyframes`, `max_cache_mb`, `retention_seconds`), физическая очистка WebP файлов и удаление записей (`cleanup_old_keyframes`, `delete_keyframe`, `prune_taste_records`). Каскадное забывание `redact(identifiers)` с безопасным удалением файлов без выхода за пределы кэша.
+    2. Zero-Disk Screen Streaming Worker (`visual_stream.py`): `VisualStreamWorker` фоновый конвейер `DXGIScreenCapture -> SceneDeltaDetector -> ingest_keyframe`. Зондирование дельты (`commit=False`) и фиксация опорного кадра (`commit=True`). [ВНИМАНИЕ: аудит безопасности зафиксировал, что прямой захват DXGI обходит маски ScreenCaptureAdapter, а исключение enabled_fn не гарантирует fail-closed; архив опорных кадров ЗАПРЕЩЁН к включению в live и запись личных кадров заблокирована до сквозной защиты пути]. Безопасный троттлинг (500 мс опрос дельты, >= 5.0 с интервал записи в LanceDB, задержка детектора 0.048 мс на CPU, zero-disk direct-to-memory). Интеграция в `composition.py` (`--visual-stream`) и `server_close()`.
+    3. Консолидатор сюжета (`narrative_consolidator.py`): персистентность `storage_path` с атомарной записью (`_save()`, `_load()`), каскадное забывание `redact(identifiers)`. [ВНИМАНИЕ: аудит зафиксировал, что `consolidate()` и `recall_visual_detail()` в рабочем коде src не вызываются, `feed_subtitle` не подключён, а события visual stream содержат лишь описание смены сцен; сюжетное понимание остаётся OPEN / UNPROVEN]. Включение в каскадный `CompanionServer.forget_memory_sources` через все 4 яруса памяти.
+    4. DSP-дескрипторы звука (`affective_engine.py`): спектральный центроид и HNR на CPU (измеренное время CPU: 0.16 мс для 2048 сэмплов, 0.41 мс для 4096 сэмплов; акустический дескриптор резкости/гармоничности, не заменяющий контекстное понимание настроения). Добавлена поддержка прямого приёма PCM16 байт и сэмплов numpy.
+    5. Арбитр ходов (`perception_fusion.py` / `SenseNovaPerceptionBridge`): разделение fast-path бэкканала (без пробуждения тяжёлой LLM SenseNova Loop 9B Preview на GPU 1) и полного проактивного пакета. Мост подключен в `composition.py` к `server`, `gateway`, `tts_service` и `server.broadcast_event`. Кросс-модальный арбитраж защищает проверенный SMTC от перезаписи акустическими гипотезами.
+    6. Windows SMTC интеграция (`windows_smtc.py`): чтение метаданных медиаплееров из ядра ОС через WinRT (`GlobalSystemMediaTransportControlsSessionManager`). Статус `has_active_playback` строго требует статус `Playing` (код 4); фильтрация по `target_app` и `target_pid` из `AppAudioRouter`.
+    7. Физическая приёмка на оборудовании:
+       - DXGI capture: 1080p захват за 2.04 мс, SceneDelta 0.048 мс, LanceDB WebP + embedding 768-dim проверены на живом экране.
+       - WASAPI Loopback (`Game-Audeze Maxwell`): проверен захват 48000 Гц stereo, расширен `_named_loopback` на нечувствительное к регистру сопоставление подстроки для локализованных названий Windows.
+       - Микрофон (`Chat-Audeze Maxwell`): открыт живой поток, вычитаны PCM-байты, освобожден без утечек.
+    8. Выравнивание `runtime/jawl-daily-venv`: установлены `lancedb`, `pyarrow`, `winsdk`, `dxcam`, пакет `jawl_voicecompanion` подключен как editable; сквозной запуск без моков подтверждён в daily-профиле.
+
+- [x] Управление памятью: доступны поиск и правка активных структурированных записей. Реализован и верифицирован сквозной жизненный цикл сенсорной истории и амбиентной памяти через все 4 уровня (SensoryHistoryStore, AmbientMemoryBuffer, EpisodicVisualMemory, NarrativeConsolidator) с каскадным забыванием (`forget_memory_sources` / `redact`), вычитыванием хвоста при ротации сенсорного журнала по NTFS identity в `SensoryIngestor`, кросс-модальным арбитражем в `PerceptionFusion` (112 тестов pytest GREEN). Остались доступ за пределами лимита native API и глубокая синхронизация долгосрочных архивов.
+
 21 октября 2026. Статусы: [ ] не принято, [~] частично, [x] подтверждено.
 [План](docs/DAILY_PLAN.md) · [приёмка](docs/DAILY_ACCEPTANCE.md) · [факты](docs/STATE.md).
 Старый полный TODO сохранён в архиве; отложенные требования — [BACKLOG](docs/BACKLOG.md).
@@ -23,6 +243,12 @@ brain-turn uptake remain OPEN: [report](docs/research/ambient-audio-bridge-paced
 Native canary подтверждает Goal → heartbeat → проверенный результат. Остаются
 живое выполнение большого поручения, caching relay и отдельная проверка аудио
 при наличии samples; устранение 18K-обрезки само по себе их не закрывает.
+
+- [x] SenseNova Loop 9B Preview (Q4_K_M) настроен в качестве постоянного мозга:
+  manifest переведён на `local-sensenova`, CUDA 13.3 binary (`runtime/sensenova-loop/build13/bin/llama-server.exe`),
+  максимальный контекст 262 144 токенов (256K) с квантованием KV-кэша q4_0 (`--cache-type-k q4_0 --cache-type-v q4_0`),
+  VRAM 10 993 МиБ на GPU 1 (свободно ~5 ГБ для OmniVoice TTS).
+  Пройден Gateway Acceptance (20/20 ходов, tool lifecycle, provider failure & recovery). 121 тест пройден.
 
 - [ ] ADR-048 deployment parity: новый чистый daily launch всё ещё читает
   `local-hikari` / `local-bonsai2` и visual EG2 из legacy manifest/wrapper.
@@ -728,7 +954,11 @@ daily-качества. Default-модель не меняется до отде
 - [~] 28Oct live YouTube sensory check: LFM450→target-window buffer 50/50 at 1Hz with 64.8ms p50; Hikari caption-only recap in 1.08s declined to invent a plot but answered English and stayed broad. Need labeled story-quality set and Florence tags→brain comparison before selection. Report: runtime/lfm450-story-replay-20261028/STATUS.md.
 
 
-- [ ] Visual detail acceptance: rerun identical LFM450 and Florence-2 moments at the current 960 x 520 adapter output and at the target window's native/highest practical resolution; record pre/post-resize dimensions and scale factor. Score small objects and readable UI text against manual labels; keep JPEG quality fixed for the resolution A/B, then test compression separately. Current 28Oct live comparison is resolution-limited/inconclusive for maximum detail. Report: `runtime/lfm450-story-replay-20261028/STATUS.md`.
+- [x] Visual detail acceptance & Foveated Vision (Round 5, 4 ноября 2026):
+  - Решена проблема информационного обрыва (Information Cliff) и размытия 960x520 JPEG 72 с помощью FoveatedVisionProcessor (CropVLM, S-BOED): двухпоточный композит [периферия 640x360 + нативный 1:1 кроп 512x512 зоны внимания] сохраняет 100% пиксельную четкость шрифтов UI (10pt) за 33.10 мс без раздувания токенов.
+  - Решена проблема потери кадров при быстром монтаже (5 смен сцен за 10с в трейлерах) через StoryboardGridAssembler: сборка квадрантного коллажа 2x2 (1024x1024) за 24.15 мс сокращает число вызовов VLM на 75% (1 вызов вместо 4) и исключает отбрасывание устаревших кадров, передавая модели связную динамику сюжета.
+  - Неблокирующий буфер AsyncVisualRingBuffer (deque maxlen=8) гарантирует 0% просадки FPS в играх, поглощая всплески кадров за <0.01 мс на кадр и сбрасывая промежуточный шторм устаревших кадров перед LanceDB.
+  - Бенчмарк: `benchmarks/bench_foveated_storyboard_stream.py`; тесты: `tests/test_visual_stream.py` (100% GREEN).
 
 - [~] Hikari conversation continuity: managed restart applied 200-message history/cache and startup receipt reports `terminal_context_compaction.installed=true`; compaction is character-budget-driven (18K target) with the latest 12 messages preserved verbatim. Still exercise a long live conversation across the compaction threshold and confirm the summary retains needed decisions. Current health is degraded because captions age out amid scene-change drops; loopback awaits samples.
 

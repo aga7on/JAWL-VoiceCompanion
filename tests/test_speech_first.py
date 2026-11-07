@@ -149,6 +149,17 @@ class SpeechFirstGateTests(unittest.TestCase):
         self.assertGreaterEqual(state["extracted_chars"], 0)
         self.assertGreaterEqual(state["buffered_chars"], 0)
 
+    def test_extended_terminal_aliases_recognized(self):
+        for tool in ("HostOSTerminal.send_message_to_terminal", "HostOSJournalMessages.send_message_to_terminal", "send_message_to_terminal"):
+            with self.subTest(tool=tool):
+                raw = json.dumps({"actions": [{"tool_name": tool, "parameters": {"text": "Тест связи."}}]}, ensure_ascii=False)
+                self.assertTrue(looks_like_reply_action(raw))
+                text, complete, is_reply = extract_speech_text(raw)
+                self.assertTrue(is_reply)
+                self.assertTrue(complete)
+                self.assertEqual(text, "Тест связи.")
+
+
 
 if __name__ == "__main__":
     unittest.main()

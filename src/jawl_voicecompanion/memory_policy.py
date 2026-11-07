@@ -96,7 +96,7 @@ def _event_ids(values: Any) -> list[str]:
         text = _bounded(item, 120)
         if text and text not in result:
             result.append(text)
-    return result[:32]
+    return result[:256]
 
 
 def candidate_provenance(
