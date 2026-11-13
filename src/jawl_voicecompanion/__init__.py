@@ -96,6 +96,9 @@ from .audit import AuditLog
 from .stream_chat import StreamChatIngestor, StreamChatLimits
 from .runtime_profile import RuntimeProfile
 from .companion_runtime import CompanionRuntime
+from .memory_consolidation import EpisodicObservation, MemoryProposal, OfflineConsolidator
+from .cowatch_engine import CharacterBinding, CoWatchCommentaryBid, CoWatchEngine, CoWatchObservation, SceneCutEvent
+from .music_perception import MusicPerceptionAnalyzer, MusicPerceptionResult
 
 __all__ = [
     "AccessLevel",
@@ -182,4 +185,14 @@ __all__ = [
     "StreamChatLimits",
     "RuntimeProfile",
     "CompanionRuntime",
+    "OfflineConsolidator",
+    "MemoryProposal",
+    "EpisodicObservation",
+    "CoWatchEngine",
+    "CoWatchObservation",
+    "CoWatchCommentaryBid",
+    "CharacterBinding",
+    "SceneCutEvent",
+    "MusicPerceptionAnalyzer",
+    "MusicPerceptionResult",
 ]

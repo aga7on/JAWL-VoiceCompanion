@@ -381,6 +381,9 @@ def build_companion_runtime(
     except Exception as exc:  # noqa: BLE001
         print(f"[scene-state] initialization error: {exc}")
 
+    from .music_perception import MusicPerceptionAnalyzer
+
+    music_perception_analyzer = MusicPerceptionAnalyzer()
     eg2_audio_describer = None
     if getattr(args, "audio_describer", "eg2") == "qwen-omni":
         audio_url = str(getattr(args, "audio_describer_url", "") or "").strip()
@@ -409,6 +412,14 @@ def build_companion_runtime(
                 Eg2AudioDescriptionProvider(perception_fusion.describer)
             )
         except Exception:  # noqa: BLE001 - ambient audio still works without descriptions
+            eg2_audio_describer = None
+    if eg2_audio_describer is None:
+        try:
+            from .audio_understanding import AudioDescriptionService
+
+            eg2_audio_describer = AudioDescriptionService(music_perception_analyzer)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[audio-describer] fallback disabled: {type(exc).__name__}: {str(exc)[:160]}")
             eg2_audio_describer = None
 
     def _describe_displays(max_displays: int = 2, audio_wav_bytes: bytes | None = None) -> dict[str, Any]:
@@ -659,6 +670,21 @@ def build_companion_runtime(
         except Exception as exc:  # noqa: BLE001
             print(f"[visual-stream] disabled: {type(exc).__name__}: {str(exc)[:160]}")
             visual_stream_worker = None
+    from .cowatch_engine import CoWatchEngine
+    from .memory_consolidation import OfflineConsolidator
+
+    offline_consolidator = OfflineConsolidator(
+        idle_threshold_s=float(getattr(args, "user_activity_idle_seconds", 300.0)),
+        storage_path=Path(args.jawl_event_dir) / "offline_proposals.json" if getattr(args, "jawl_event_dir", None) else None,
+    )
+    if getattr(args, "user_activity", False):
+        offline_consolidator.start()
+    cowatch_engine = CoWatchEngine(
+        scene_id="scene_init",
+        cooldown_s=float(getattr(args, "cowatch_cooldown", 45.0)),
+        dnd=False,
+        quiet_hours=getattr(args, "quiet_hours", None),
+    )
 
     server = create_server(
         args.host,
@@ -704,7 +730,13 @@ def build_companion_runtime(
         tls_cert_file=args.tls_cert,
         tls_key_file=args.tls_key,
         app_audio_router=app_audio_router,
+        offline_consolidator=offline_consolidator,
+        cowatch_engine=cowatch_engine,
+        music_analyzer=music_perception_analyzer,
     )
+    server.offline_consolidator = offline_consolidator
+    server.cowatch_engine = cowatch_engine
+    server.music_analyzer = music_perception_analyzer
     if qwen_visual_sensor is not None:
         from .arbiter import TurnPriority
 

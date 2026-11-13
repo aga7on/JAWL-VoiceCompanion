@@ -952,6 +952,18 @@ class WebTests(unittest.TestCase):
         self.assertEqual(native.calls[-2][1:], ('fixture', {'value': 'coffee'}))
         self.assertEqual(native.calls[-1][1:], ('fixture', 'operator'))
 
+
+    def test_structured_memory_forget_records_tombstone_in_offline_consolidator(self):
+        class MemoryAdapter:
+            def forget_memory(self, memory_key, reason=""):
+                return {"status": "synchronized"}
+
+        self.server.gateway.jawl_web = MemoryAdapter()
+        from jawl_voicecompanion.memory_consolidation import OfflineConsolidator
+        consolidator = OfflineConsolidator()
+        self.server.offline_consolidator = consolidator
+        self.post_json('/api/jawl/memory', {'operation': 'forget', 'memory_key': 'favorite_color', 'reason': 'user requested'})
+        self.assertTrue(consolidator.is_tombstoned("favorite_color"))
     def test_product_api_facades_are_session_bound_and_versioned(self):
         native = _FakeProductApi()
         self.server.gateway.jawl_web = native

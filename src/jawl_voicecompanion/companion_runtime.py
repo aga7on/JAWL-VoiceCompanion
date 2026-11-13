@@ -21,6 +21,17 @@ class CompanionRuntime:
     _closed: bool = False
     _control_closed: bool = False
     _sensory_history_flushed: bool = False
+    @property
+    def offline_consolidator(self) -> Any | None:
+        return getattr(self.control, "offline_consolidator", None)
+
+    @property
+    def cowatch_engine(self) -> Any | None:
+        return getattr(self.control, "cowatch_engine", None)
+
+    @property
+    def music_analyzer(self) -> Any | None:
+        return getattr(self.control, "music_analyzer", None)
 
     def serve_forever(self) -> None:
         """Run the control plane; all adapters remain owned by its server."""

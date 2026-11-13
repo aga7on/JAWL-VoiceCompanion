@@ -114,6 +114,20 @@ class CompanionRuntimeTests(unittest.TestCase):
         runtime.close()
         self.assertEqual(control.close_calls, 2)
 
+    def test_properties_delegate_to_control(self):
+        control = _Closable()
+        control.offline_consolidator = "fake_consolidator"
+        control.cowatch_engine = "fake_engine"
+        control.music_analyzer = "fake_analyzer"
+        runtime = CompanionRuntime(control)
+        self.assertEqual(runtime.offline_consolidator, "fake_consolidator")
+        self.assertEqual(runtime.cowatch_engine, "fake_engine")
+        self.assertEqual(runtime.music_analyzer, "fake_analyzer")
+        empty_runtime = CompanionRuntime(object())
+        self.assertIsNone(empty_runtime.offline_consolidator)
+        self.assertIsNone(empty_runtime.cowatch_engine)
+        self.assertIsNone(empty_runtime.music_analyzer)
+
 
 if __name__ == "__main__":
     unittest.main()

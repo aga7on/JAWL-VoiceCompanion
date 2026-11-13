@@ -22,6 +22,38 @@
 
 ## Остальная очередь
 
+- [x] **Living Companion Subsystems: Offline Sleep Memory Consolidation, Multimodal Co-Watching & Pure-CPU Music DSP (13 ноября 2026)**:
+  1. **Эпизодическая память и оффлайн консолидация («сон»)** (`src/jawl_voicecompanion/memory_consolidation.py`):
+     - `OfflineConsolidator`, `EpisodicObservation`, `MemoryProposal`.
+     - Префиксная и точная фильтрация tombstone-записей (`is_tombstoned(key)`), немедленная очистка кандидатов при надгробиях, TTL-экспирация устаревших наблюдений без воскрешения удалённых/истекших фактов.
+     - Агрегация в кластеры, взвешенная формула уверенности, строгое разделение фактов (`status="fact"`) и гипотез (`status="hypothesis"`).
+     - Стейджинг предложений и атомарный экспорт `export_staged_proposals()` с поддержкой кооперативной отмены `cancel_check`.
+     - Детерминированные тесты: `tests/test_memory_consolidation.py` **11/11 PASS**.
+  2. **Мультимодальный движок ко-вотчинга (аниме, кино, игры)** (`src/jawl_voicecompanion/cowatch_engine.py`):
+     - 3-уровневое разделение идентичностей: `spatial_track_id`, `visual_identity_id`, `audio_speaker_id`.
+     - Поддержка закадрового голоса без ложной визуальной привязки к экранным персонажам.
+     - Мгновенный сброс визуальных треков и активных гипотез при детекции смены сцены (`SceneCutEvent`).
+     - Гейтинг внимания: DND, quiet hours, активная речь пользователя (`user_speaking`), кулдаун инициативы (45–60 с).
+     - Рутинные сцены отдают `action="silence"`, текст `"тишина"`.
+     - Мост к игровому контексту (`record_gameplay_observation`): инвентарь, боссы, здоровье, кооперативные цели.
+     - Интеграция мгновенного barge-in (`barge_in_abort <= 300 ms`).
+     - Детерминированные тесты: `tests/test_cowatch_engine.py` **10/10 PASS**.
+  3. **Чистый CPU DSP музыкальный анализатор тональностей и настроения** (`src/jawl_voicecompanion/music_perception.py`):
+     - Чистый NumPy CPU DSP: Krumhansl-Schmuckler chroma key correlation, BPM по спектральному потоку, Russell circumplex (valence/arousal/mood).
+     - Строгие DSP-пороги: тишина (< -55 dBFS) -> `kind="unknown"`, шум (flatness > 0.55) -> `kind="sound"`, чистая речь -> `kind="speech"`, чистая музыка -> `kind="music"`, перекрытие -> `speech_overlap=True`.
+     - Адаптер `as_audio_description_provider()` для интеграции в `AudioDescriptionService` с нулевым оверхедом VRAM.
+     - Детерминированные тесты: `tests/test_music_perception.py` **9/9 PASS**.
+  4. **Сквозная интеграция и рантайм**:
+     - `src/jawl_voicecompanion/__init__.py`: экспорт публичных классов.
+     - `src/jawl_voicecompanion/composition.py`: инициализация `MusicPerceptionAnalyzer`, fallback `AudioDescriptionService`, `OfflineConsolidator`, `CoWatchEngine`.
+     - `src/jawl_voicecompanion/web.py`: подключение в `CompanionServer`, безусловная запись надгробия в `forget_memory_sources(key)` до проверки сенсорных ID, shutdown в `server_close`.
+     - `src/jawl_voicecompanion/companion_runtime.py`: свойства-делегаты (`offline_consolidator`, `cowatch_engine`, `music_analyzer`).
+     - Интеграционные тесты: `tests/test_companion_runtime.py` **7/7 PASS**, `tests/test_web.py` **94/94 PASS**, Node desktop suite **144/144 PASS**.
+  5. **Бюджет VRAM**:
+     - GPU 0: 0 MiB аллокаций ($\Delta\text{VRAM} = 0$).
+     - GPU 1: зарезервирован под Bonsai LLM и OmniVoice TTS.
+     - Консолидация памяти, ко-вотчинг и музыкальный DSP строго на CPU/RAM.
+
 - [x] **Баг (TTS): слышно только первое предложение до точки.** Корень: `LiveSpeechSession._run` умирал при первой ошибке синтеза (`break` вместо continue) — всё, что после упавшего предложения, замолкало, `state.error` никто не читал. Исправлено: ошибка записывается, предложение пропускается, очередь продолжается. Регрессия: `tests/test_live_speech_error_resilience.py`. **Требуется рестарт companion-процесса, чтобы код применился.**
 - [x] **Комментирование происходящего на экране.** Реализовано как initiative lane `src/jawl_voicecompanion/screen_commentary.py` (10.11): ScreenDeltaWatcher-события → bounded observation turn («ответь "тишина" если не стоит комментировать») → доставка через новый `ProactiveFeed.deliver_direct` с rate limits (min gap 600 с, ≤2/час, idle 90 с после хода, mute/quiet respect). Тесты: `tests/test_screen_commentary.py` 8/8. Требует рестарта.
 - [ ] **Собрать свою foreground/background архитектуру** по образцу OpenMOSS/MOSS-Live (модель несвободна, архитектура открытая): foreground = SenseNova-Loop realtime voice lane (barge-in, backchannel, удержание хода, быстрые ответы), background = JAWL ReAct (сейчас), coordination = SQLTasks/Goal state + speech sink; результат фона вставляется в естественной паузе. Референсы: OpenMOSS/MOSS-Live (GitHub), arxiv 2611.01639 "Local or Escalate? Post-Training Expert Routing for Real-Time Duplex Speech Models", 2610.35581 (interruptions/backchannels reward window). Первая часть (foreground turn-taking) начата в чек-листе выше.

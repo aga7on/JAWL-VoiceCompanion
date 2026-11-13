@@ -347,6 +347,9 @@ class CompanionServer(ThreadingHTTPServer):
         app_audio_router: Any | None = None,
         screen_commentary: Any | None = None,
         enable_fast_lane: bool | None = None,
+        offline_consolidator: Any | None = None,
+        cowatch_engine: Any | None = None,
+        music_analyzer: Any | None = None,
     ):
         bind_host = str(server_address[0])
         if not is_loopback_host(bind_host) and not lan_mode:
@@ -438,6 +441,9 @@ class CompanionServer(ThreadingHTTPServer):
         )
         self.config_hub = config_hub
         self.screen_commentary = screen_commentary
+        self.offline_consolidator = offline_consolidator
+        self.cowatch_engine = cowatch_engine
+        self.music_analyzer = music_analyzer
         self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
@@ -587,6 +593,13 @@ class CompanionServer(ThreadingHTTPServer):
         """
 
         ids = self.memory_sources(memory_key) if event_ids is None else event_ids
+        if getattr(self, "offline_consolidator", None) is not None:
+            try:
+                self.offline_consolidator.record_tombstone(str(memory_key))
+                for eid in (ids or []):
+                    self.offline_consolidator.record_tombstone(str(eid))
+            except Exception:  # noqa: BLE001
+                pass
         if not ids:
             return {"status": "nothing_to_redact", "memory_key": memory_key, "event_ids": 0}
         result: dict[str, Any] = {"status": "redacted", "memory_key": memory_key, "event_ids": len(ids)}
@@ -618,8 +631,16 @@ class CompanionServer(ThreadingHTTPServer):
                 )
             except Exception as exc:  # noqa: BLE001
                 result["narrative_consolidator"] = {"status": "error", "error": type(exc).__name__}
+        if getattr(self, "offline_consolidator", None) is not None:
+            try:
+                for eid in ids:
+                    self.offline_consolidator.record_tombstone(str(eid))
+                self.offline_consolidator.record_tombstone(str(memory_key))
+                result["offline_consolidator"] = {"status": "redacted", "tombstones": len(ids) + 1}
+            except Exception as exc:  # noqa: BLE001
+                result["offline_consolidator"] = {"status": "error", "error": type(exc).__name__}
         if any(isinstance(result.get(name), dict) and result[name].get("status") != "redacted"
-               for name in ("sensory_history", "ambient_memory", "visual_memory", "narrative_consolidator")):
+               for name in ("sensory_history", "ambient_memory", "visual_memory", "narrative_consolidator", "offline_consolidator")):
             result["status"] = "partial"
         return result
 
@@ -1212,6 +1233,8 @@ class CompanionServer(ThreadingHTTPServer):
             step("ambient_scheduler", self.ambient_scheduler.stop)
         if self.sensory_ingestor is not None:
             step("sensory_ingestor", self.sensory_ingestor.stop)
+        if getattr(self, "offline_consolidator", None) is not None:
+            step("offline_consolidator", self.offline_consolidator.stop)
         step("hostos", self.hostos.stop_all)
         if self.voice_mem_async is not None:
             step("voice_mem_async", self.voice_mem_async.close)
@@ -4182,6 +4205,9 @@ def create_server(
     app_audio_router: Any | None = None,
     sensory_motivation: Any | None = None,
     enable_fast_lane: bool | None = None,
+    offline_consolidator: Any | None = None,
+    cowatch_engine: Any | None = None,
+    music_analyzer: Any | None = None,
 ) -> CompanionServer:
     if lan_mode:
         _validate_lan_access_token(lan_access_token)
@@ -4315,6 +4341,9 @@ def create_server(
         app_audio_router=app_audio_router,
         screen_commentary=screen_commentary_scheduler,
         enable_fast_lane=enable_fast_lane,
+        offline_consolidator=offline_consolidator,
+        cowatch_engine=cowatch_engine,
+        music_analyzer=music_analyzer,
     )
     if watcher is not None:
         watcher.start()

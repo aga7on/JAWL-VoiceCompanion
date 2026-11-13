@@ -1,3 +1,42 @@
+## 2026-11-13 — Living Companion Subsystems: Offline Sleep Memory Consolidation, Multimodal Co-Watching & Pure-CPU Music DSP
+- **Эпизодическая память и оффлайн консолидация («сон»)**:
+  - `src/jawl_voicecompanion/memory_consolidation.py`: `OfflineConsolidator`, `EpisodicObservation`, `MemoryProposal`.
+  - Префиксная и точная фильтрация tombstone-записей (`is_tombstoned(key)`), немедленная очистка кандидатов при надгробиях, TTL-экспирация устаревших наблюдений без воскрешения удалённых/истекших фактов.
+  - Агрегация в кластеры по схожести ключей и значений, взвешенный расчёт доверия $C = 1 - (1 - c_0) \cdot e^{-\alpha (N-1)}$.
+  - Разделение статусов: факты (`status="fact"`, confidence >= threshold и N >= 3) vs гипотезы (`status="hypothesis"`).
+  - Стейджинг предложений и атомарный экспорт `export_staged_proposals()` с поддержкой кооперативной отмены `cancel_check`.
+- **Мультимодальный движок ко-вотчинга (аниме, кино, игры)**:
+  - `src/jawl_voicecompanion/cowatch_engine.py`: `CharacterBinding`, `SceneCutEvent`, `CoWatchObservation`, `CoWatchCommentaryBid`, `CoWatchEngine`.
+  - 3-уровневое разделение идентичностей (`spatial_track_id`, `visual_identity_id`, `audio_speaker_id`).
+  - Поддержка закадровой речи (speaker без визуального bounding-box) без ложного связывания с экранными персонажами.
+  - Мгновенный сброс визуальных связок и неподтверждённых гипотез при детекции смены сцены (`SceneCutEvent`).
+  - Гейтинг внимания: подавление комментариев при `is_dnd`, `is_quiet_hours`, активной речи пользователя (`user_speaking`), неистекшем кулдауне (45–60 с).
+  - Рутинные сцены отдают `action="silence"`, текст `"тишина"`.
+  - Мост к игровому контексту (`record_gameplay_observation`): инвентарь, боссы, здоровье, кооперативные цели.
+  - Интеграция мгновенного barge-in (`barge_in_abort <= 300 ms`).
+- **Чистый CPU DSP музыкальный анализатор тональностей и настроения**:
+  - `src/jawl_voicecompanion/music_perception.py`: `MusicPerceptionResult`, `MusicPerceptionAnalyzer` (NumPy FFT, STFT, chroma filterbank 12 полутонов).
+  - Распознавание тональности (Krumhansl-Schmuckler chroma correlation) и BPM (спектральный поток 50–200 BPM).
+  - Маппинг валентности, возбуждения и настроения по Russell circumplex.
+  - Адаптер `as_audio_description_provider()` для бесшовной интеграции в `AudioDescriptionService` с нулевым оверхедом VRAM.
+  - Строгие DSP-пороги: тишина (< -55 dBFS) -> `kind="unknown"`, шум (flatness > 0.55) -> `kind="sound"`, речь -> `kind="speech"`, музыка -> `kind="music"`, перекрытие -> `speech_overlap=True`.
+- **Сквозная интеграция и рантайм**:
+  - `src/jawl_voicecompanion/__init__.py`: экспорт публичных классов.
+  - `src/jawl_voicecompanion/composition.py`: инициализация `MusicPerceptionAnalyzer`, fallback `AudioDescriptionService`, `OfflineConsolidator`, `CoWatchEngine`.
+  - `src/jawl_voicecompanion/web.py`: подключение в `CompanionServer`, безусловная запись надгробия в `forget_memory_sources(key)` до проверки сенсорных ID, shutdown в `server_close`.
+  - `src/jawl_voicecompanion/companion_runtime.py`: свойства-делегаты `@property` (`offline_consolidator`, `cowatch_engine`, `music_analyzer`).
+- **Регрессия (числа/доказательства)**:
+  - `tests/test_memory_consolidation.py`: **11/11 PASS** (контракты, TTL, надгробия, префиксы, логическое забывание без воскрешения, разделение гипотез и фактов, cooldown, экспорт, кооперативная отмена).
+  - `tests/test_cowatch_engine.py`: **10/10 PASS** (смена сцены, 3-уровневое разделение, закадровый голос, DND/quiet hours/user speaking гейтинг, тишина в рутине, геймплейный мост, barge-in mute).
+  - `tests/test_music_perception.py`: **9/9 PASS** (тишина, шум, чистая речь, синтезированная музыка, тональность, смешанный поток, ручной вызов, адаптер `AudioDescriptionProvider`, нулевой VRAM).
+  - `tests/test_companion_runtime.py`: **7/7 PASS** (делегирование свойств рантайма).
+  - `tests/test_web.py`: **94/94 PASS** (включая сквозной тест `test_structured_memory_forget_records_tombstone_in_offline_consolidator`).
+  - Desktop suite (`node --test desktop/*.test.* desktop/tests/*.test.*`): **144/144 PASS**.
+- **Бюджет VRAM**:
+  - GPU 0: 0 MiB аллокаций ($\Delta\text{VRAM} = 0$).
+  - GPU 1: зарезервирован под Bonsai LLM и OmniVoice TTS.
+  - Консолидация памяти, ко-вотчинг и музыкальный DSP строго на CPU/RAM.
+
 ## 2026-11-13 — Cycle 13 / Live Voice (Phase C): Stream-First Duplex, Dual-Lane TurnTrace, Generation Epochs и мгновенный Barge-In
 - **Архитектура Stream-First Duplex (H1/P0 > H2/P1)**:
   - `src/jawl_voicecompanion/duplex_cascade.py`: `StreamPhraseSegmenter` буферизует streaming-токены от Bonsai LLM и нарезает фразы по естественным знакам пунктуации (`[.?!…\n]`, мин. 12 символов / 3 слова), немедленно передавая первую фразу в OmniVoice TTS.
