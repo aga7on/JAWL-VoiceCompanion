@@ -29,6 +29,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 from datetime import datetime, timezone
+import enum
 import logging
 import re
 import threading
@@ -42,12 +43,324 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "CharacterBinding",
+    "CharacterOpinion",
+    "CharacterOpinionTracker",
     "CoWatchCommentaryBid",
     "CoWatchEngine",
     "CoWatchObservation",
+    "CoWatchOpinionEngine",
+    "MediaNarrativeTracker",
+    "NarrativeArcKind",
+    "NarrativeSnapshot",
     "SceneCutEvent",
 ]
 
+
+class NarrativeArcKind(str, enum.Enum):
+    """Dramatic narrative arc phases in movies, anime, and games."""
+
+    EXPOSITION = "exposition"
+    RISING_ACTION = "rising_action"
+    CLIMAX = "climax"
+    FALLING_ACTION = "falling_action"
+    RESOLUTION = "resolution"
+    CLIFFHANGER = "cliffhanger"
+    PLOT_TWIST = "plot_twist"
+
+
+@dataclasses.dataclass
+class CharacterOpinion:
+    """Subjective companion opinion and assessment of a media or game character."""
+
+    character_name: str
+    affinity: float = 0.0  # -1.0 (disliked/villainous) to +1.0 (adored)
+    sympathy: float = 0.5  # 0.0 to 1.0
+    morality_judgment: str = "neutral"  # "heroic", "flawed_good", "neutral", "morally_grey", "villainous", "pure_evil"
+    competence: float = 0.5  # 0.0 to 1.0
+    notes: list[str] = dataclasses.field(default_factory=list)
+    voice_acting_remark: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "character_name": self.character_name,
+            "affinity": round(self.affinity, 2),
+            "sympathy": round(self.sympathy, 2),
+            "morality_judgment": self.morality_judgment,
+            "competence": round(self.competence, 2),
+            "notes": list(self.notes),
+            "voice_acting_remark": self.voice_acting_remark,
+        }
+
+
+class CharacterOpinionTracker:
+    """Maintains subjective, evolving companion opinions and character relationships."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._opinions: dict[str, CharacterOpinion] = {}
+
+    def get_opinion(self, character_name: str) -> CharacterOpinion:
+        with self._lock:
+            key = character_name.strip()
+            if key not in self._opinions:
+                self._opinions[key] = CharacterOpinion(character_name=key)
+            return self._opinions[key]
+
+    def record_act(
+        self,
+        character_name: str,
+        act_description: str,
+        *,
+        valence_delta: float = 0.0,
+        morality_judgment: str | None = None,
+        competence_delta: float = 0.0,
+        voice_acting_remark: str | None = None,
+    ) -> CharacterOpinion:
+        with self._lock:
+            key = character_name.strip()
+            if key not in self._opinions:
+                self._opinions[key] = CharacterOpinion(character_name=key)
+            op = self._opinions[key]
+
+            new_aff = max(-1.0, min(1.0, op.affinity + valence_delta))
+            new_sym = max(0.0, min(1.0, op.sympathy + (valence_delta * 0.5)))
+            new_comp = max(0.0, min(1.0, op.competence + competence_delta))
+            new_morality = morality_judgment or op.morality_judgment
+
+            notes = list(op.notes)
+            if act_description:
+                notes.append(act_description)
+                if len(notes) > 20:
+                    notes = notes[-20:]
+
+            updated_voice = voice_acting_remark if voice_acting_remark is not None else op.voice_acting_remark
+
+            updated = CharacterOpinion(
+                character_name=key,
+                affinity=new_aff,
+                sympathy=new_sym,
+                morality_judgment=new_morality,
+                competence=new_comp,
+                notes=notes,
+                voice_acting_remark=updated_voice,
+            )
+            self._opinions[key] = updated
+            return updated
+
+    def all_opinions(self) -> dict[str, CharacterOpinion]:
+        with self._lock:
+            return dict(self._opinions)
+
+
+@dataclasses.dataclass
+class NarrativeSnapshot:
+    """Temporal state of media plot tension, current arc, and musical mood."""
+
+    timestamp: float
+    arc: NarrativeArcKind
+    tension: float
+    summary: str
+    music_mood: str = ""
+    is_twist: bool = False
+
+
+class MediaNarrativeTracker:
+    """Tracks plot progression, tension curves, twists, and sound/OST aesthetics."""
+
+    def __init__(self, *, max_history: int = 200) -> None:
+        self._lock = threading.Lock()
+        self.max_history = max_history
+        self._history: collections.deque[NarrativeSnapshot] = collections.deque(maxlen=max_history)
+        self._current_arc = NarrativeArcKind.EXPOSITION
+        self._tension = 0.3
+        self._predictions: list[str] = []
+        self._soundtrack_notes: list[str] = []
+        self._sound_design_notes: list[str] = []
+
+    @property
+    def current_arc(self) -> NarrativeArcKind:
+        with self._lock:
+            return self._current_arc
+
+    @property
+    def tension(self) -> float:
+        with self._lock:
+            return self._tension
+
+    def update_scene(
+        self,
+        *,
+        arc: NarrativeArcKind | str,
+        tension: float,
+        summary: str = "",
+        music_mood: str = "",
+        is_twist: bool = False,
+        timestamp: float | None = None,
+    ) -> NarrativeSnapshot:
+        with self._lock:
+            ts = time.time() if timestamp is None else float(timestamp)
+            if isinstance(arc, str):
+                try:
+                    arc_kind = NarrativeArcKind(arc)
+                except ValueError:
+                    arc_kind = NarrativeArcKind.RISING_ACTION
+            else:
+                arc_kind = arc
+
+            clamped_tension = max(0.0, min(1.0, float(tension)))
+            self._current_arc = arc_kind
+            self._tension = clamped_tension
+
+            snap = NarrativeSnapshot(
+                timestamp=ts,
+                arc=arc_kind,
+                tension=clamped_tension,
+                summary=summary,
+                music_mood=music_mood,
+                is_twist=is_twist,
+            )
+            self._history.append(snap)
+            return snap
+
+    def add_soundtrack_critique(self, note: str) -> None:
+        with self._lock:
+            self._soundtrack_notes.append(note)
+
+    def add_sound_design_critique(self, note: str) -> None:
+        with self._lock:
+            self._sound_design_notes.append(note)
+
+    def add_plot_prediction(self, prediction: str) -> None:
+        with self._lock:
+            self._predictions.append(prediction)
+
+    def get_narrative_context(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "current_arc": self._current_arc.value,
+                "tension": round(self._tension, 2),
+                "snapshots_count": len(self._history),
+                "recent_snapshots": [dataclasses.asdict(s) for s in list(self._history)[-5:]],
+                "soundtrack_notes": list(self._soundtrack_notes[-5:]),
+                "sound_design_notes": list(self._sound_design_notes[-5:]),
+                "predictions": list(self._predictions[-3:]),
+            }
+
+
+class CoWatchOpinionEngine:
+    """Generates natural, opinionated companion remarks on anime/movies/streams."""
+
+    def __init__(self, *, default_language: str = "ru") -> None:
+        self.default_language = "ru" if default_language.lower().startswith("ru") else "en"
+
+    def opinion_on_character(
+        self,
+        character_name: str,
+        tracker: CharacterOpinionTracker,
+        *,
+        language: str | None = None,
+    ) -> str:
+        lang = (language or self.default_language).lower()
+        is_ru = lang.startswith("ru")
+        op = tracker.get_opinion(character_name)
+
+        if is_ru:
+            if op.affinity > 0.5:
+                base = f"{op.character_name} — просто золото, один из любимых персонажей здесь!"
+            elif op.affinity < -0.3:
+                base = f"{op.character_name} меня жутко раздражает своими поступками."
+            elif op.morality_judgment == "morally_grey":
+                base = f"{op.character_name} очень неоднозначный... сложно сказать, на чьей он стороне."
+            else:
+                base = f"За {op.character_name} интересно наблюдать, характер держится уверенно."
+
+            if op.voice_acting_remark:
+                base += f" Кстати, озвучка шикарная — {op.voice_acting_remark}."
+            return base
+        else:
+            if op.affinity > 0.5:
+                base = f"{op.character_name} is absolute gold, definitely one of my favorites here!"
+            elif op.affinity < -0.3:
+                base = f"{op.character_name} is really getting on my nerves with these choices."
+            elif op.morality_judgment == "morally_grey":
+                base = f"{op.character_name} is so morally grey... hard to tell where the loyalties lie."
+            else:
+                base = f"{op.character_name} is fascinating to watch, solid character development."
+
+            if op.voice_acting_remark:
+                base += f" Also, the voice performance is brilliant: {op.voice_acting_remark}."
+            return base
+
+    def opinion_on_plot(
+        self,
+        narrative: MediaNarrativeTracker,
+        *,
+        language: str | None = None,
+    ) -> str:
+        lang = (language or self.default_language).lower()
+        is_ru = lang.startswith("ru")
+        arc = narrative.current_arc
+        tension = narrative.tension
+
+        if is_ru:
+            if arc == NarrativeArcKind.PLOT_TWIST or (arc == NarrativeArcKind.CLIMAX and tension >= 0.8):
+                return "Вот это поворот! Честно, такого развития сюжета я вообще не ожидала!"
+            elif arc == NarrativeArcKind.CLIFFHANGER:
+                return "Нет, ну закончить серию на таком месте — это просто жестоко! Что же дальше будет?"
+            elif arc == NarrativeArcKind.CLIMAX:
+                return "Напряжение на пределе! Сейчас решится исход всей арки."
+            elif arc == NarrativeArcKind.RISING_ACTION:
+                return "Сюжет отлично разгоняется, ставки растут с каждой минутой."
+            elif arc == NarrativeArcKind.FALLING_ACTION:
+                return "После такого накала страстей наконец-то дают немного перевести дух."
+            elif arc == NarrativeArcKind.RESOLUTION:
+                return "Красиво закрыли сюжетные линии. Очень приятное послевкусие."
+            else:
+                return "Спокойная завязка, пока вводят в курс дела и расставляют фигуры."
+        else:
+            if arc == NarrativeArcKind.PLOT_TWIST or (arc == NarrativeArcKind.CLIMAX and tension >= 0.8):
+                return "What a twist! Honestly didn't see that coming at all!"
+            elif arc == NarrativeArcKind.CLIFFHANGER:
+                return "Leaving it on a cliffhanger right here?! That's so brutal, what happens next?!"
+            elif arc == NarrativeArcKind.CLIMAX:
+                return "Tension is through the roof! The stakes couldn't be higher right now."
+            elif arc == NarrativeArcKind.RISING_ACTION:
+                return "The plot is building up really nicely, tension is steadily rising."
+            elif arc == NarrativeArcKind.FALLING_ACTION:
+                return "Nice breathing room after that intense confrontation."
+            elif arc == NarrativeArcKind.RESOLUTION:
+                return "Clean resolution. Tied up the character arcs quite satisfyingly."
+            else:
+                return "Solid exposition and atmosphere building."
+
+    def opinion_on_soundtrack_and_sound(
+        self,
+        *,
+        soundtrack_mood: str = "",
+        sound_design_note: str = "",
+        language: str | None = None,
+    ) -> str:
+        lang = (language or self.default_language).lower()
+        is_ru = lang.startswith("ru")
+
+        if is_ru:
+            parts = []
+            if soundtrack_mood:
+                parts.append(f"Саундтрек здесь потрясающе подобран — {soundtrack_mood}, идеальный эмоциональный тон.")
+            if sound_design_note:
+                parts.append(f"И звуковой дизайн очень детальный: {sound_design_note}.")
+            if not parts:
+                return "Звуковое оформление сцены очень атмосферное, погружение стопроцентное."
+            return " ".join(parts)
+        else:
+            parts = []
+            if soundtrack_mood:
+                parts.append(f"The soundtrack choice here is brilliant — {soundtrack_mood}, nails the emotional tone.")
+            if sound_design_note:
+                parts.append(f"And the sound design is so detailed: {sound_design_note}.")
+            if not parts:
+                return "The ambient audio and sound design create great immersion here."
+            return " ".join(parts)
 
 @dataclasses.dataclass
 class CharacterBinding:
@@ -193,6 +506,11 @@ class CoWatchEngine:
         self.recent_observations: collections.deque[CoWatchObservation] = collections.deque(
             maxlen=self.max_history
         )
+
+        # Narrative, character opinion, and critique engines
+        self.opinion_tracker = CharacterOpinionTracker()
+        self.narrative_tracker = MediaNarrativeTracker(max_history=self.max_history)
+        self.opinion_engine = CoWatchOpinionEngine()
 
         # Activity and rate-limiting
         self._lock = threading.RLock()
@@ -667,7 +985,72 @@ class CoWatchEngine:
                 "character_bindings": active_bindings,
                 "recent_cuts": recent_cuts,
                 "recent_events": recent_events,
+                "narrative": self.narrative_tracker.get_narrative_context(),
+                "character_opinions": {
+                    k: op.to_dict() for k, op in self.opinion_tracker.all_opinions().items()
+                },
                 "dnd": self.dnd,
                 "quiet_hours_active": self.is_quiet(),
                 "in_flight_speech": self._in_flight_speech,
             }
+
+    def record_character_act(
+        self,
+        character_name: str,
+        act_description: str,
+        *,
+        valence_delta: float = 0.0,
+        morality_judgment: str | None = None,
+        competence_delta: float = 0.0,
+        voice_acting_remark: str | None = None,
+    ) -> CharacterOpinion:
+        """Records character behavior and updates companion's affinity and moral evaluation."""
+        return self.opinion_tracker.record_act(
+            character_name=character_name,
+            act_description=act_description,
+            valence_delta=valence_delta,
+            morality_judgment=morality_judgment,
+            competence_delta=competence_delta,
+            voice_acting_remark=voice_acting_remark,
+        )
+
+    def update_narrative_scene(
+        self,
+        *,
+        arc: NarrativeArcKind | str,
+        tension: float,
+        summary: str = "",
+        music_mood: str = "",
+        is_twist: bool = False,
+        timestamp: float | None = None,
+    ) -> NarrativeSnapshot:
+        """Updates current plot arc, tension level, and background music atmosphere."""
+        return self.narrative_tracker.update_scene(
+            arc=arc,
+            tension=tension,
+            summary=summary,
+            music_mood=music_mood,
+            is_twist=is_twist,
+            timestamp=timestamp,
+        )
+
+    def generate_cowatch_opinion(
+        self,
+        *,
+        character_name: str | None = None,
+        soundtrack_mood: str = "",
+        sound_design_note: str = "",
+        language: str | None = None,
+    ) -> str:
+        """Produces a companion critique or remark on narrative, character, or audio."""
+        if character_name:
+            return self.opinion_engine.opinion_on_character(
+                character_name, self.opinion_tracker, language=language
+            )
+        if soundtrack_mood or sound_design_note:
+            return self.opinion_engine.opinion_on_soundtrack_and_sound(
+                soundtrack_mood=soundtrack_mood,
+                sound_design_note=sound_design_note,
+                language=language,
+            )
+        return self.opinion_engine.opinion_on_plot(self.narrative_tracker, language=language)

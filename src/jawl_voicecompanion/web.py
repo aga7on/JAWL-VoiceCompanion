@@ -350,6 +350,10 @@ class CompanionServer(ThreadingHTTPServer):
         offline_consolidator: Any | None = None,
         cowatch_engine: Any | None = None,
         music_analyzer: Any | None = None,
+        model_slot_registry: Any | None = None,
+        moss_coordinator: Any | None = None,
+        scene_memory: Any | None = None,
+        game_controller: Any | None = None,
     ):
         bind_host = str(server_address[0])
         if not is_loopback_host(bind_host) and not lan_mode:
@@ -444,6 +448,14 @@ class CompanionServer(ThreadingHTTPServer):
         self.offline_consolidator = offline_consolidator
         self.cowatch_engine = cowatch_engine
         self.music_analyzer = music_analyzer
+        self.model_slot_registry = model_slot_registry
+        self.moss_coordinator = moss_coordinator
+        self.scene_memory = (
+            scene_memory
+            if scene_memory is not None
+            else getattr(perception_fusion, "scene_memory", None)
+        )
+        self.game_controller = game_controller
         self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
@@ -1235,6 +1247,8 @@ class CompanionServer(ThreadingHTTPServer):
             step("sensory_ingestor", self.sensory_ingestor.stop)
         if getattr(self, "offline_consolidator", None) is not None:
             step("offline_consolidator", self.offline_consolidator.stop)
+        if getattr(self, "moss_coordinator", None) is not None:
+            step("moss_coordinator", self.moss_coordinator.shutdown)
         step("hostos", self.hostos.stop_all)
         if self.voice_mem_async is not None:
             step("voice_mem_async", self.voice_mem_async.close)
@@ -2062,6 +2076,46 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 return
             self._json({"approvals": self.server.approvals.list(self.server.session_token)})
             return
+        if path in {
+            "/api/models/slots",
+            "/api/moss/queue",
+            "/api/game/gamepad",
+            "/api/scene/summary",
+        }:
+            try:
+                self._require_browser_session()
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
+                return
+            if path == "/api/models/slots":
+                if getattr(self.server, "model_slot_registry", None) is None:
+                    self._json({"configured": False, "slots": {}})
+                else:
+                    self._json({"configured": True, "slots": self.server.model_slot_registry.snapshot()})
+                return
+            if path == "/api/moss/queue":
+                coord = getattr(self.server, "moss_coordinator", None)
+                if coord is None:
+                    self._json({"configured": False, "items": []})
+                else:
+                    q = coord.pause_queue
+                    items = [item.to_dict() for item in q.items]
+                    self._json({"configured": True, "size": len(q), "items": items})
+                return
+            if path == "/api/game/gamepad":
+                gc = getattr(self.server, "game_controller", None)
+                if gc is None:
+                    self._json({"configured": False})
+                else:
+                    self._json({"configured": True, **gc.get_gamepad_state()})
+                return
+            if path == "/api/scene/summary":
+                sm = getattr(self.server, "scene_memory", None)
+                if sm is None:
+                    self._json({"configured": False})
+                else:
+                    self._json({"configured": True, "frame_count": len(sm.frames), "capacity": sm.capacity, "ttl": sm.ttl_seconds})
+                return
         if path == "/mic-processor.js":
             # AudioWorklet modules are loaded as a separate browser request;
             # serve only the pinned frontend worker, never arbitrary files.
@@ -3132,6 +3186,87 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 if "target_app" in payload:
                     router.set_target_app(str(target_app) if target_app else None)
                 self._json({"ok": True, "router": router.state()})
+                return
+            if self.path == "/api/models/swap":
+                registry = getattr(self.server, "model_slot_registry", None)
+                if registry is None:
+                    self._json({"error": "model_slot_registry_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                slot_name = payload.get("slot")
+                if not slot_name:
+                    raise ValueError("slot is required")
+                from .model_slots import (
+                    ModelSlot,
+                    MockModelAdapter,
+                    OpenAICompatibleAdapter,
+                    LlamaServerAdapter,
+                    ModelCapabilities,
+                )
+                try:
+                    slot = ModelSlot(slot_name)
+                except ValueError:
+                    self._json({"error": f"invalid_slot: {slot_name}"}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                adapter_type = str(payload.get("adapter_type", "mock")).lower()
+                model_name = str(payload.get("model_name", "unknown"))
+                base_url = str(payload.get("base_url", "http://127.0.0.1:8990"))
+                api_key = payload.get("api_key")
+                caps_data = payload.get("capabilities", {})
+                caps = ModelCapabilities(**caps_data) if isinstance(caps_data, dict) and caps_data else None
+                if adapter_type == "llama_server":
+                    adapter = LlamaServerAdapter(base_url=base_url, model_name=model_name, capabilities=caps)
+                elif adapter_type == "openai":
+                    adapter = OpenAICompatibleAdapter(base_url=base_url, api_key=api_key or "", model_name=model_name, capabilities=caps)
+                else:
+                    adapter = MockModelAdapter(model_name=model_name, capabilities=caps)
+                registry.swap(slot, adapter)
+                self._json({"ok": True, "slot": slot.value, "model_name": model_name, "adapter_type": adapter_type})
+                return
+            if self.path == "/api/moss/task":
+                coord = getattr(self.server, "moss_coordinator", None)
+                if coord is None:
+                    self._json({"error": "moss_coordinator_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                prompt = str(payload.get("prompt", "") or "").strip()
+                if not prompt:
+                    raise ValueError("prompt is required")
+                task = coord.dispatch_background_task(prompt)
+                task_id = getattr(task, "task_id", str(task))
+                self._json({"ok": True, "task_id": task_id})
+                return
+            if self.path == "/api/game/gamepad/press":
+                gc = getattr(self.server, "game_controller", None)
+                if gc is None:
+                    self._json({"error": "game_controller_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                btn = payload.get("button")
+                if not btn:
+                    raise ValueError("button is required")
+                duration = payload.get("duration_ms")
+                res = gc.press_button(btn, duration_ms=duration)
+                self._json({"ok": True, "result": res})
+                return
+            if self.path == "/api/scene/query":
+                sm = getattr(self.server, "scene_memory", None)
+                if sm is None:
+                    self._json({"error": "scene_memory_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                query_type = payload.get("type", "entity")
+                if query_type == "entity":
+                    name = str(payload.get("name", ""))
+                    attr = payload.get("attribute")
+                    res = sm.query_entity_attribute(name, attr)
+                    self._json({"ok": True, "result": res.to_dict()})
+                elif query_type == "ocr":
+                    pattern = str(payload.get("pattern", ""))
+                    res = sm.query_ocr_text(pattern)
+                    self._json({"ok": True, "result": res.to_dict()})
+                elif query_type == "acoustic":
+                    event = str(payload.get("event", ""))
+                    res = sm.query_acoustic_events(event)
+                    self._json({"ok": True, "result": res.to_dict()})
+                else:
+                    self._json({"error": f"unsupported query type: {query_type}"}, status=HTTPStatus.BAD_REQUEST)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -4208,6 +4343,10 @@ def create_server(
     offline_consolidator: Any | None = None,
     cowatch_engine: Any | None = None,
     music_analyzer: Any | None = None,
+    model_slot_registry: Any | None = None,
+    moss_coordinator: Any | None = None,
+    scene_memory: Any | None = None,
+    game_controller: Any | None = None,
 ) -> CompanionServer:
     if lan_mode:
         _validate_lan_access_token(lan_access_token)
@@ -4254,6 +4393,8 @@ def create_server(
             perception_fusion.vision_describer = vision_describer
         if getattr(perception_fusion, "visual_stream_worker", None) is None and visual_stream_worker is not None:
             perception_fusion.visual_stream_worker = visual_stream_worker
+        if getattr(perception_fusion, "scene_memory", None) is None and scene_memory is not None:
+            perception_fusion.scene_memory = scene_memory
     event_sink = JawlEventFileSink(jawl_event_dir) if jawl_event_dir else None
     active_attention = attention or AttentionPresence(
         intent_sink=event_sink.publish if event_sink is not None else None,
@@ -4344,6 +4485,10 @@ def create_server(
         offline_consolidator=offline_consolidator,
         cowatch_engine=cowatch_engine,
         music_analyzer=music_analyzer,
+        model_slot_registry=model_slot_registry,
+        moss_coordinator=moss_coordinator,
+        scene_memory=scene_memory,
+        game_controller=game_controller,
     )
     if watcher is not None:
         watcher.start()

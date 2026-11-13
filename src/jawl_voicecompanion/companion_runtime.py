@@ -21,6 +21,12 @@ class CompanionRuntime:
     _closed: bool = False
     _control_closed: bool = False
     _sensory_history_flushed: bool = False
+    _model_slot_registry: Any | None = None
+    _moss_coordinator: Any | None = None
+    _scene_memory: Any | None = None
+    _game_controller: Any | None = None
+    _coordinator_closed: bool = False
+
     @property
     def offline_consolidator(self) -> Any | None:
         return getattr(self.control, "offline_consolidator", None)
@@ -33,6 +39,45 @@ class CompanionRuntime:
     def music_analyzer(self) -> Any | None:
         return getattr(self.control, "music_analyzer", None)
 
+    @property
+    def model_slot_registry(self) -> Any | None:
+        if self._model_slot_registry is not None:
+            return self._model_slot_registry
+        return getattr(self.control, "model_slot_registry", None)
+
+    @model_slot_registry.setter
+    def model_slot_registry(self, value: Any | None) -> None:
+        self._model_slot_registry = value
+
+    @property
+    def moss_coordinator(self) -> Any | None:
+        if self._moss_coordinator is not None:
+            return self._moss_coordinator
+        return getattr(self.control, "moss_coordinator", None)
+
+    @moss_coordinator.setter
+    def moss_coordinator(self, value: Any | None) -> None:
+        self._moss_coordinator = value
+
+    @property
+    def scene_memory(self) -> Any | None:
+        if self._scene_memory is not None:
+            return self._scene_memory
+        return getattr(self.control, "scene_memory", None)
+
+    @scene_memory.setter
+    def scene_memory(self, value: Any | None) -> None:
+        self._scene_memory = value
+
+    @property
+    def game_controller(self) -> Any | None:
+        if self._game_controller is not None:
+            return self._game_controller
+        return getattr(self.control, "game_controller", None)
+
+    @game_controller.setter
+    def game_controller(self, value: Any | None) -> None:
+        self._game_controller = value
     def serve_forever(self) -> None:
         """Run the control plane; all adapters remain owned by its server."""
         if self._closed:
@@ -76,7 +121,19 @@ class CompanionRuntime:
                     self._sensory_history_flushed = True
             else:
                 self._sensory_history_flushed = True
-        self._closed = self._control_closed
+        if not self._coordinator_closed:
+            coordinator = self.moss_coordinator
+            shutdown = getattr(coordinator, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except BaseException as exc:  # noqa: BLE001 - keep teardown best-effort
+                    errors.append(exc)
+                else:
+                    self._coordinator_closed = True
+            else:
+                self._coordinator_closed = True
+        self._closed = self._control_closed and self._coordinator_closed
         if errors:
             raise errors[0]
 

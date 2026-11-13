@@ -164,6 +164,7 @@ class PerceptionFusion:
     include_eg2_media_in_scene: bool = field(default=True, init=True)
     history_store: Any | None = field(default=None, init=True, repr=False)
     prompt_snapshot_path: Path | None = field(default=None, init=True, repr=False)
+    scene_memory: Any | None = field(default=None, init=True, repr=False)
     _export_lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _history_status_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _history_write_errors: int = field(default=0, init=False, repr=False)
@@ -1245,7 +1246,15 @@ class PerceptionFusion:
         clean = str(caption or "").replace("\x00", "").strip()[:240]
         if not clean:
             return False
-        moment = time.monotonic() if now is None else float(now)
+        if now is not None:
+            moment = float(now)
+        elif getattr(self, "scene_memory", None) is not None and hasattr(self.scene_memory, "_clock") and callable(self.scene_memory._clock):
+            try:
+                moment = float(self.scene_memory._clock())
+            except Exception:
+                moment = time.monotonic()
+        else:
+            moment = time.monotonic()
         captured = float(captured_at_monotonic)
         if moment - captured > _VISUAL_EVENT_TTL_SECONDS:
             return False
@@ -1294,6 +1303,33 @@ class PerceptionFusion:
                 verified=False,
                 metadata={"history_only": True, "roi": list(roi) if roi is not None else None},
             )
+        if getattr(self, "scene_memory", None) is not None:
+            try:
+                from .scene_memory import BoundingBox, MultimodalSceneFrame, VisualDetection
+
+                det_bbox = None
+                if roi is not None and len(roi) == 4:
+                    det_bbox = BoundingBox.from_xywh(
+                        float(roi[0]), float(roi[1]), float(roi[2]), float(roi[3])
+                    )
+                detection = VisualDetection(
+                    label=clean[:64],
+                    bbox=det_bbox,
+                    attributes={"caption": clean, "source": str(source)[:120], "scene_id": str(scene_id)[:64]},
+                    confidence=1.0,
+                )
+                captured_ts = float(captured_at_wall) if float(captured_at_wall) > 0 else captured
+                frame = MultimodalSceneFrame(
+                    frame_id=str(frame_id)[:64] if frame_id else f"frame-{captured_ts:.3f}",
+                    timestamp=captured_ts,
+                    visual_detections=[detection],
+                )
+                if hasattr(self.scene_memory, "ingest_frame"):
+                    self.scene_memory.ingest_frame(frame)
+                elif hasattr(self.scene_memory, "add_frame"):
+                    self.scene_memory.add_frame(frame)
+            except Exception:  # noqa: BLE001 - scene memory must not block perception
+                pass
         return True
 
     def observe_screen(self, caption: str) -> str:
@@ -1305,6 +1341,34 @@ class PerceptionFusion:
             "provenance": {"source": "vlm_screen"},
         }
         self.note("screen", caption, metadata=metadata)
+        if getattr(self, "scene_memory", None) is not None:
+            try:
+                from .scene_memory import MultimodalSceneFrame, VisualDetection
+
+                clean_cap = str(caption or "").strip()
+                if clean_cap:
+                    now_ts = (
+                        float(self.scene_memory._clock())
+                        if hasattr(self.scene_memory, "_clock") and callable(self.scene_memory._clock)
+                        else time.time()
+                    )
+                    frame = MultimodalSceneFrame(
+                        frame_id=f"screen-{now_ts:.3f}",
+                        timestamp=now_ts,
+                        visual_detections=[
+                            VisualDetection(
+                                label="screen",
+                                attributes={"caption": clean_cap, "source": "vlm_screen"},
+                                confidence=1.0,
+                            )
+                        ],
+                    )
+                    if hasattr(self.scene_memory, "ingest_frame"):
+                        self.scene_memory.ingest_frame(frame)
+                    elif hasattr(self.scene_memory, "add_frame"):
+                        self.scene_memory.add_frame(frame)
+            except Exception:  # noqa: BLE001 - scene memory must not block perception
+                pass
         return self.compose()
 
     def current_state(self, kind: str, *, now: float | None = None) -> dict[str, Any]:

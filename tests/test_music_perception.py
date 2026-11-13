@@ -21,8 +21,14 @@ from jawl_voicecompanion.audio_understanding import (
     validate_audio_description,
 )
 from jawl_voicecompanion.music_perception import (
+    DynamicMusicFlowTracker,
+    MusicCritique,
+    MusicCritiqueEngine,
+    MusicDropEvent,
     MusicPerceptionAnalyzer,
     MusicPerceptionResult,
+    MusicSectionKind,
+    MusicTrajectoryPoint,
 )
 
 
@@ -265,3 +271,85 @@ def test_zero_gpu_allocation_invariant() -> None:
         gpu1_after = torch_mod.cuda.memory_allocated(1) if torch_mod.cuda.device_count() > 1 else 0
         assert gpu0_after == gpu0_before, f"GPU 0 memory changed: {gpu0_before} -> {gpu0_after}"
         assert gpu1_after == gpu1_before, f"GPU 1 memory changed: {gpu1_before} -> {gpu1_after}"
+
+
+def test_dynamic_music_flow_tracker_and_drops() -> None:
+    tracker = DynamicMusicFlowTracker(max_history_seconds=60.0)
+    assert tracker.stats()["point_count"] == 0
+    assert tracker.current_section() == MusicSectionKind.AMBIENT
+
+    t0 = 1000.0
+    # Simulate buildup: rising RMS and arousal
+    for i in range(10):
+        pt = MusicTrajectoryPoint(
+            timestamp=t0 + i * 0.5,
+            rms_dbfs=-28.0 + i * 1.5,
+            spectral_centroid_hz=1200.0 + i * 50.0,
+            valence=0.2,
+            arousal=0.3 + i * 0.04,
+            harmonicity=0.6,
+            key="C major",
+            bpm=128.0,
+        )
+        tracker.record_point(pt)
+
+    assert tracker.energy_trend() > 0
+    assert tracker.current_section() in {MusicSectionKind.BUILDUP, MusicSectionKind.CHORUS}
+
+    # Now simulate drop: big RMS surge (+5dB), sudden bass surge
+    drop_pt = MusicTrajectoryPoint(
+        timestamp=t0 + 5.5,
+        rms_dbfs=-10.0,
+        spectral_centroid_hz=800.0,
+        valence=0.4,
+        arousal=0.85,
+        harmonicity=0.7,
+        key="C major",
+        bpm=128.0,
+    )
+    tracker.record_point(drop_pt)
+
+    drops = tracker.detect_drops(lookback_seconds=10.0)
+    assert len(drops) >= 1
+    assert drops[0].intensity >= 0.5
+    assert tracker.current_section() == MusicSectionKind.DROP
+
+    stats = tracker.stats()
+    assert stats["point_count"] == 11
+    assert stats["drops_detected_total"] >= 1
+    assert stats["harmonic_progression"] == ["C major"]
+
+
+def test_harmonic_progression_and_critique_engine() -> None:
+    tracker = DynamicMusicFlowTracker(max_history_seconds=120.0)
+    chords = ["Am", "F", "C", "G"]
+    t0 = 100.0
+    for idx, chord in enumerate(chords):
+        for step in range(3):
+            tracker.record_point(
+                MusicTrajectoryPoint(
+                    timestamp=t0 + (idx * 3 + step) * 1.0,
+                    rms_dbfs=-20.0,
+                    spectral_centroid_hz=1600.0,
+                    valence=-0.2 if "m" in chord else 0.3,
+                    arousal=0.55,
+                    harmonicity=0.68,
+                    key=f"{chord} chord",
+                    bpm=120.0,
+                )
+            )
+
+    progression = tracker.harmonic_progression()
+    assert progression == ["Am chord", "F chord", "C chord", "G chord"]
+
+    engine = MusicCritiqueEngine(default_language="ru")
+    critique_ru = engine.evaluate(tracker=tracker)
+    assert 1.0 <= critique_ru.overall_score <= 10.0
+    assert critique_ru.harmonic_depth_score >= 7.0
+    assert len(critique_ru.highlights) > 0
+    assert len(critique_ru.conversational_remark) > 5
+    assert critique_ru.language == "ru"
+
+    critique_en = engine.evaluate(tracker=tracker, language="en")
+    assert critique_en.language == "en"
+    assert len(critique_en.conversational_remark) > 5

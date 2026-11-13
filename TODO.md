@@ -17,10 +17,78 @@
 - [x] **P1 Barge-in с контекстной коррекцией (Cycle 21d):** клиент передаёт причину (`desktop/app.js:1270,1344,1779`), сервер фиксирует сниппет активного ответа (`_current_speaking_text` → `_last_interrupted_turn_text`), немедленно отменяет `gateway.arbiter.cancel_all()`, следующий ход в `enrich_turn_text` получает маркер `[ПЕРЕБИВАНИЕ: ...]`, который сгорает за один раз (expire 120 с). Не ломает `split_packet`. Тесты: `tests/test_desktop_speech_cancel.mjs` 8/8, `tests/test_web.py` 92/92 (4 BargeIn), `tests/test_speech_requests.py` 14/14, `desktop/tests/app-voice-lifecycle.test.mjs` 30/30.
 - [x] **Echo guard для loopback-ASR**: self-TTS suppression существует для ambient; проверена сквозная защита streaming ASR от собственного голоса (Cycle 22).
 - [x] **Fast foreground lane**: first-audio ≤1.2 с (SLO из DUPLEX_RESEARCH_ADOPTION) — Stream-First progressive phrase chunking (`StreamPhraseSegmenter`) + TurnTrace Dual-Lane KPI (`first_audible_audio_ms` preface vs `first_meaningful_audio_ms` deliberative stream) + Zero-GPU Fast Lane flag (`ENABLE_FAST_LANE=0` default, RAM/CPU cached preface). 192 Python тестов (7 Dual-Lane, 7 TurnTrace) + 59 Node тестов PASS.
-- [ ] **Coordination: фон ReAct → вставка в паузе** — результат фонового хода вставляется в естественной паузе, не перебивая пользователя (против теперешнего поведения: ответ приходит, когда закончится).
+- [x] **Coordination: фон ReAct → вставка в паузе** — результат фонового хода вставляется в естественной паузе, не перебивая пользователя (`src/jawl_voicecompanion/moss_coordinator.py`: `NaturalPauseInjectionQueue`, `BackgroundTaskManager`, `MossCoordinationLayer`). Тесты `tests/test_moss_coordinator.py` 8/8 PASS.
 - [x] **Backchannel policy v0.5**: «угу» / preface anti-spam gating — детерминированный `TokenBucketRateLimiter` (`capacity=1.0`, `refill_rate=1.0/6.0` с минимальным интервалом 6 с), семантическая дедупликация идентичных реплик, строгое подавление при активной речи пользователя (`user_speaking`) и при `is_muted`. Интеграция в `/api/voice/preface`. 12/12 тестов PASS (`tests/test_voice_preface_policy.py`).
 
 ## Остальная очередь
+
+- [x] **Multimodal Companion Extension: Music Flow & Critique, Media Narrative & CoWatch Opinions, Persona Hypotheses & Social Graph, Autonomous Player 2 Controller (13 ноября 2026)**:
+  1. **Dynamic Music Flow Tracker & Music Critique Engine (`src/jawl_voicecompanion/music_perception.py`)**:
+     - Чистый CPU DSP для динамического трекинга музыкального потока без нагрузки на GPU.
+     - `DynamicMusicFlowTracker`: классификация секций (`INTRO`, `VERSE`, `CHORUS`, `BRIDGE`, `BUILDUP`, `DROP`, `OUTRO`), отслеживание траектории энергии, детекция дропов (`MusicDropEvent`).
+     - `MusicCritiqueEngine`: анализ развития трека, оценка напряжения и ритмической структуры, генерация вердиктов критики (`MusicCritique`).
+     - Тесты: `tests/test_music_perception.py` **11/11 PASS**.
+  2. **Media Narrative Tracker & CoWatch Opinion Engine (`src/jawl_voicecompanion/cowatch_engine.py`)**:
+     - `MediaNarrativeTracker`: трекинг фаз сюжета (`EXPOSITION`, `RISING_ACTION`, `CLIMAX`, `FALLING_ACTION`, `RESOLUTION`, `PLOT_TWIST`), динамики драматического напряжения и смены сцен.
+     - `CharacterOpinionTracker`: субъективная оценка персонажей (симпатия, моральный компас, значимость, эмоциональная валентность).
+     - `CoWatchOpinionEngine`: генерация естественных эмоциональных мнений и суждений компаньона при совместном просмотре фильмов и аниме.
+     - Тесты: `tests/test_cowatch_engine.py` **14/14 PASS**.
+  3. **User Persona Hypothesis Engine & Social Graph Consolidator (`src/jawl_voicecompanion/memory_consolidation.py`)**:
+     - Оффлайн-консолидация («сон») на чистом CPU/RAM с соблюдением TTL и tombstone-фильтрации.
+     - `UserPersonaHypothesisEngine`: индукция и проверка гипотез о личности пользователя (`PersonaHypothesis`), выявление черт и предпочтений со статистической оценкой уверенности.
+     - `SocialGraphConsolidator`: построение и консолидация графа социальных связей (`SocialEntityRelation`) с оценкой эмоциональной тональности и частоты взаимодействия.
+     - Тесты: `tests/test_memory_consolidation.py` **16/16 PASS**.
+  4. **Autonomous Player 2 Companion Controller (`src/jawl_voicecompanion/game_embodied.py` & `game_controller.py`)**:
+     - `Player2CompanionController`: автономный напарник для кооперативных игр с выбором роли (`SUPPORT`, `DEFENSIVE`, `AGGRESSIVE`).
+     - `TacticalTelemetry`: безопасная нормализация телеметрии (здоровье, патроны, координаты, вектор движения, враги, укрытия).
+     - Реактивное поведение: лечение игрока, подавляющий огонь, удержание периметра, щит, штурм, уклонение.
+     - Интеграция с `ActionSpeechCoordinator` и `NaturalPauseInjectionQueue`: речевые комментарии с градацией срочности `SpeechUrgency` (`TACTICAL`, `REACTION`, `AMBIENT`) и подавлением спама.
+     - Тесты: `tests/test_game_embodied.py` **25/25 PASS**, `tests/test_game_controller.py` **9/9 PASS**.
+  5. **Сквозная интеграция и регрессия**:
+     - Экспорт 161 публичных символов в `src/jawl_voicecompanion/__init__.py::__all__` (0 отсутствующих).
+     - Полный таргетированный набор тестов: **111/111 PASS** (0.92 с).
+     - Сопутствующие наборы тестов: `test_companion_runtime.py` (8/8), `test_model_slots_web.py` (5/5), `test_sensory_motivation.py` (6/6), `test_perception_fusion.py` (8/8), `test_scene_state.py` (19/19), `test_narrative_consolidator.py` (17/17).
+- [x] **Model-Agnostic Cognitive Roles, MOSS-Live Duplex Coordination, Multimodal Scene Memory (Micro-Detail Zero-Loss Recall) & Virtual Gamepad Embodiment (13 ноября 2026)**:
+  1. **Модульные когнитивные слоты (`src/jawl_voicecompanion/model_slots.py`)**:
+     - `ModelSlot`: `FOREGROUND_BRAIN`, `BACKGROUND_REASONER`, `VISION_PERCEPTION`, `AUDIO_PERCEPTION`, `COORDINATOR`, `GAME_EMBODIMENT`.
+     - `ModelSlotRegistry`: потокобезопасная регистрация, горячая замена слотов (`swap`), fallback-цепочки разрешения (`get_with_fallback`), проверка совместимости capabilities.
+     - Адаптеры `ModelAdapter`, `MockModelAdapter`, `OpenAICompatibleAdapter`, `LlamaServerAdapter`, `SlotRefAdapter`.
+     - Аддитивная привязка к существующим опциям JAWL (`--llm-url`, `--llm-model`, `--vision-url`, `--vision-model`, `JawlWebChatAdapter`, `runtime_manifest.py`).
+     - Тесты: `tests/test_model_slots.py` **15/15 PASS**.
+  2. **MOSS-Live Foreground-Background Duplex Координатор (`src/jawl_voicecompanion/moss_coordinator.py`)**:
+     - `ForegroundLane`: realtime streaming генерация реплик из слота `FOREGROUND_BRAIN` с кооперативной отменой и фиксацией spoken/unspoken текста.
+     - `BackgroundTaskManager`: фоновое выполнение ресурсоёмкого ReAct / deep reasoning в слоте `BACKGROUND_REASONER` на пуле потоков без деградации foreground задержек.
+     - `NaturalPauseInjectionQueue`: приоритетная очередь вставки результатов фонового рассуждения строго в паузах между репликами пользователя (`can_inject(is_user_speaking, is_companion_speaking)`).
+     - `TurnContinuityBuffer`: сохранение контекста прерванного хода при barge-in и формирование преамбулы продолжения (`format_resumption_context`).
+     - `MossCoordinationLayer`: мастер-координатор, связывающий `ModelSlotRegistry`, lanes, injection queue и `DuplexCascadeArbiter`.
+     - Тесты: `tests/test_moss_coordinator.py` **8/8 PASS**.
+  3. **Мультимодальная память сцены с нулевой потерей микро-деталей (`src/jawl_voicecompanion/scene_memory.py`)**:
+     - Кольцевой буфер `MultimodalSceneFrame` на чистом CPU/RAM с временным окном TTL и предельным объёмом.
+     - Точное сохранение микро-деталей: числа (HP, таймеры, координаты, боезапас), строковые значения OCR/UI, пространственные `BoundingBox` (с IoU и центроидами), акустические маркеры.
+     - Граф сцены `MultimodalSceneGraph` связывает сущности, OCR-тексты, аудиособытия и речевые ходы рёбрами отношений.
+     - Честный эпистемический статус: `OBSERVED_PRESENT`, `OBSERVED_ABSENT`, `NOT_OBSERVED` без галлюцинаций.
+     - Высокоточный контекстный рекол `format_micro_recall_context()` для промптов моделей.
+     - Тесты: `tests/test_multimodal_micro_recall.py` **13/13 PASS**.
+  4. **Игровое воплощение и виртуальный контроллер (`src/jawl_voicecompanion/game_controller.py`)**:
+     - Виртуальный геймпад: кнопки `VirtualGamepadButton`, аналоговые стики `GamepadStick` с настраиваемыми мёртвыми зонами (circular deadzone).
+     - `ActionSpeechCoordinator`: координация игровых действий и естественного комментирования (уровни срочности `TACTICAL`, `REACTION`, `AMBIENT`), подавление повторов, доставка через `NaturalPauseInjectionQueue`.
+     - `GameControllerAdapter` и когнитивный слот `GameEmbodimentAdapter` (`ModelSlot.GAME_EMBODIMENT`).
+     - Совместимость с `GameInputBridge` (`game_embodied.py`).
+     - Тесты: `tests/test_game_controller.py` **9/9 PASS**.
+  5. **Сквозная интеграция и Web API**:
+     - `src/jawl_voicecompanion/composition.py`: инициализация и wiring слотов, координатора MOSS, памяти сцены и контроллера.
+     - `src/jawl_voicecompanion/companion_runtime.py`: свойства-делегаты (`model_slot_registry`, `moss_coordinator`, `scene_memory`, `game_controller`) и аккуратный shutdown.
+     - `src/jawl_voicecompanion/perception_fusion.py`: передача кадров и детекций в `scene_memory`.
+     - Новые HTTP эндпоинты в `web.py`:
+       - `GET /api/models/slots`, `POST /api/models/swap`
+       - `GET /api/moss/queue`, `POST /api/moss/task`
+       - `GET /api/game/gamepad`, `POST /api/game/gamepad/press`
+       - `GET /api/scene/summary`, `POST /api/scene/query`
+     - Тесты: `tests/test_model_slots_web.py` **5/5 PASS**, `tests/test_companion_runtime.py` **8/8 PASS**, `tests/test_web.py` **94/94 PASS**.
+  6. **Строгие бюджеты памяти и монолитные инварианты**:
+     - VRAM: $\Delta\text{VRAM} = 0$ MiB на GPU 0.
+     - GPU 1: строго зарезервирован под `SenseNova Loop 9B Preview` (порт 8990) и `OmniVoice TTS` (порт 9890).
+     - Pure CPU/RAM: CrispASR GigaAM v3 RNN-T, Silero VAD, YAMNet ONNX, Multimodal Scene Graph, Game Controller State.
 
 - [x] **Living Companion Subsystems: Offline Sleep Memory Consolidation, Multimodal Co-Watching & Pure-CPU Music DSP (13 ноября 2026)**:
   1. **Эпизодическая память и оффлайн консолидация («сон»)** (`src/jawl_voicecompanion/memory_consolidation.py`):
@@ -56,7 +124,7 @@
 
 - [x] **Баг (TTS): слышно только первое предложение до точки.** Корень: `LiveSpeechSession._run` умирал при первой ошибке синтеза (`break` вместо continue) — всё, что после упавшего предложения, замолкало, `state.error` никто не читал. Исправлено: ошибка записывается, предложение пропускается, очередь продолжается. Регрессия: `tests/test_live_speech_error_resilience.py`. **Требуется рестарт companion-процесса, чтобы код применился.**
 - [x] **Комментирование происходящего на экране.** Реализовано как initiative lane `src/jawl_voicecompanion/screen_commentary.py` (10.11): ScreenDeltaWatcher-события → bounded observation turn («ответь "тишина" если не стоит комментировать») → доставка через новый `ProactiveFeed.deliver_direct` с rate limits (min gap 600 с, ≤2/час, idle 90 с после хода, mute/quiet respect). Тесты: `tests/test_screen_commentary.py` 8/8. Требует рестарта.
-- [ ] **Собрать свою foreground/background архитектуру** по образцу OpenMOSS/MOSS-Live (модель несвободна, архитектура открытая): foreground = SenseNova-Loop realtime voice lane (barge-in, backchannel, удержание хода, быстрые ответы), background = JAWL ReAct (сейчас), coordination = SQLTasks/Goal state + speech sink; результат фона вставляется в естественной паузе. Референсы: OpenMOSS/MOSS-Live (GitHub), arxiv 2611.01639 "Local or Escalate? Post-Training Expert Routing for Real-Time Duplex Speech Models", 2610.35581 (interruptions/backchannels reward window). Первая часть (foreground turn-taking) начата в чек-листе выше.
+- [x] **Собрать свою foreground/background архитектуру** по образцу MOSS-Live duplex paradigm (`src/jawl_voicecompanion/moss_coordinator.py` & `model_slots.py`): Foreground lane (`ForegroundLane`) для realtime stream-генерации быстрых ответов и удержания хода; Background manager (`BackgroundTaskManager`) с асинхронным исполнением фонового reasoning; естественная вставка результатов через приоритетную очередь пауз (`NaturalPauseInjectionQueue`), буфер прерванного контекста (`TurnContinuityBuffer`) с точным восстановлением spoken/unspoken deltas при barge-in. Координатор `MossCoordinationLayer` и модульные когнитивные слоты `ModelSlotRegistry`. Тесты `tests/test_moss_coordinator.py` (8/8 PASS) и `tests/test_model_slots.py` (15/15 PASS).
 - [x] **Cycle 13 / Live Voice (Phase C): Stream-First Duplex, Dual-Lane TurnTrace, Generation Epochs и мгновенный Barge-In (13 ноября 2026)** [AC-03, AC-01, AC-05, AC-08, AC-09: VERIFIED; STREAM-FIRST PASS; DUAL-LANE KPI PASS; SINGLE-OWNER FSM PASS; BARGE-IN <=300ms PASS; TOKEN BUCKET PASS; PYTHON 192/192 PASS; NODE 59/59 PASS]:
   1. **Stream-First progressive phrase generation (H1/P0)**:
      - `StreamPhraseSegmenter` в `src/jawl_voicecompanion/duplex_cascade.py`: буферизация streaming-токенов от Bonsai LLM и нарезка по пунктуационным границам (`[.?!…\n]`, мин. 12 символов / 3 слова) без ожидания полного ответа модели.

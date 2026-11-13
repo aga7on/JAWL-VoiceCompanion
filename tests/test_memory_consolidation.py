@@ -17,6 +17,10 @@ from jawl_voicecompanion.memory_consolidation import (
     EpisodicObservation,
     MemoryProposal,
     OfflineConsolidator,
+    PersonaHypothesis,
+    SocialEntityRelation,
+    SocialGraphConsolidator,
+    UserPersonaHypothesisEngine,
 )
 
 
@@ -352,3 +356,213 @@ def test_cancel_check_cooperation() -> None:
     # Cancel check returns True immediately
     props = consolidator.run_consolidation(cancel_check=lambda: True)
     assert len(props) == 0
+
+
+def test_persona_hypothesis_engine_accumulation_and_falsify() -> None:
+    clock_val = [1000.0]
+    engine = UserPersonaHypothesisEngine(clock=lambda: clock_val[0])
+
+    obs1 = EpisodicObservation(
+        observation_id="p1",
+        episode_id="ep1",
+        category="preference",
+        key="user.preference.tea",
+        subject="user",
+        predicate="tea",
+        value="oolong",
+        confidence=0.7,
+    )
+    engine.synthesize_from_observations([obs1], now=1000.0)
+    hyp = engine.get_hypothesis("user.preference.tea")
+    assert hyp is not None
+    assert hyp.value == "oolong"
+    assert hyp.confidence == 0.7
+    assert not hyp.is_falsified
+
+    # Add second consistent observation
+    obs2 = EpisodicObservation(
+        observation_id="p2",
+        episode_id="ep2",
+        category="preference",
+        key="user.preference.tea",
+        subject="user",
+        predicate="tea",
+        value="oolong",
+        confidence=0.8,
+    )
+    engine.synthesize_from_observations([obs2], now=1010.0)
+    hyp2 = engine.get_hypothesis("user.preference.tea")
+    assert hyp2 is not None
+    assert hyp2.observation_count == 2
+    assert hyp2.confidence > 0.7
+
+    # Falsify hypothesis
+    engine.falsify("user.preference.tea", reason="user said they stopped drinking tea")
+    hyp_falsified = engine.get_hypothesis("user.preference.tea")
+    assert hyp_falsified is not None
+    assert hyp_falsified.is_falsified
+    assert hyp_falsified.falsified_reason == "user said they stopped drinking tea"
+
+
+def test_persona_hypothesis_contradiction_resolution() -> None:
+    engine = UserPersonaHypothesisEngine()
+    # First preference observation
+    obs1 = EpisodicObservation(
+        observation_id="c1",
+        episode_id="ep1",
+        category="preference",
+        key="user.preference.editor",
+        subject="user",
+        predicate="editor",
+        value="vscode",
+        confidence=0.6,
+    )
+    engine.synthesize_from_observations([obs1], now=1000.0)
+
+    # Contradicting observation with higher confidence replaces/overrules
+    obs2 = EpisodicObservation(
+        observation_id="c2",
+        episode_id="ep2",
+        category="preference",
+        key="user.preference.editor",
+        subject="user",
+        predicate="editor",
+        value="neovim",
+        confidence=0.95,
+    )
+    engine.synthesize_from_observations([obs2], now=1020.0)
+    hyp = engine.get_hypothesis("user.preference.editor")
+    assert hyp is not None
+    assert hyp.value == "neovim"
+    assert hyp.confidence >= 0.8
+
+
+def test_social_graph_consolidator_relations_and_cascade() -> None:
+    sg = SocialGraphConsolidator()
+    obs = EpisodicObservation(
+        observation_id="s1",
+        episode_id="ep1",
+        category="social",
+        key="social.alice.colleague",
+        subject="alice",
+        predicate="colleague",
+        value={"relation": "colleague", "affinity_delta": 0.2, "trust_delta": 0.1},
+    )
+    sg.consolidate_observations([obs], current_time=1000.0)
+    rel = sg.get_relation("alice", "user")
+    assert rel is not None
+    assert rel.affinity > 0.0
+    assert rel.trust > 0.0
+
+    # Multi-entity relation
+    obs_bob = EpisodicObservation(
+        observation_id="s2",
+        episode_id="ep1",
+        category="social",
+        key="social.alice.bob",
+        subject="alice",
+        predicate="knows",
+        value={"target": "bob", "relation": "friend", "affinity_delta": 0.3},
+    )
+    sg.consolidate_observations([obs_bob], current_time=1010.0)
+    assert sg.get_relation("alice", "bob") is not None
+
+    # Export graph
+    graph_data = sg.export_graph()
+    assert "alice" in graph_data["nodes"]
+    assert "bob" in graph_data["nodes"]
+    assert len(graph_data["edges"]) >= 2
+
+    # Remove entity cascades and drops relations
+    sg.remove_entity("alice")
+    assert sg.get_relation("alice", "bob") is None
+    assert "alice" not in sg.export_graph()["nodes"]
+
+
+def test_offline_consolidator_persona_social_integration() -> None:
+    consolidator = OfflineConsolidator()
+    # Add persona observation
+    consolidator.record_observation(
+        EpisodicObservation(
+            observation_id="obs_p",
+            episode_id="ep1",
+            category="preference",
+            key="user.preference.beverage",
+            subject="user",
+            predicate="beverage",
+            value="matcha",
+            confidence=0.85,
+        )
+    )
+    # Add social observation
+    consolidator.record_observation(
+        EpisodicObservation(
+            observation_id="obs_s",
+            episode_id="ep1",
+            category="social",
+            key="social.clara.friend",
+            subject="clara",
+            predicate="friend",
+            value={"relation": "friend", "affinity_delta": 0.4},
+            confidence=0.9,
+        )
+    )
+
+    # Run consolidation cycle
+    props = consolidator.run_consolidation()
+    assert len(props) >= 1
+
+    # Check engines updated
+    hyp = consolidator.persona_engine.get_hypothesis("user.preference.beverage")
+    assert hyp is not None
+    assert hyp.value == "matcha"
+
+    rel = consolidator.social_graph.get_relation("clara", "user")
+    assert rel is not None
+    assert rel.affinity > 0.0
+
+    stats = consolidator.stats()
+    assert stats["active_persona_hypotheses"] >= 1
+    assert stats["social_relations_count"] >= 1
+
+
+def test_offline_consolidator_tombstone_cascades_to_persona_and_social() -> None:
+    consolidator = OfflineConsolidator()
+    consolidator.record_observation(
+        EpisodicObservation(
+            observation_id="obs_p",
+            episode_id="ep1",
+            category="preference",
+            key="user.preference.color",
+            subject="user",
+            predicate="color",
+            value="purple",
+            confidence=0.8,
+        )
+    )
+    consolidator.record_observation(
+        EpisodicObservation(
+            observation_id="obs_s",
+            episode_id="ep1",
+            category="social",
+            key="social.dave.user",
+            subject="dave",
+            predicate="user",
+            value={"relation": "acquaintance"},
+        )
+    )
+    consolidator.run_consolidation()
+
+    # Verify hypothesis and social relation exist
+    assert consolidator.persona_engine.get_hypothesis("user.preference.color") is not None
+    assert not consolidator.persona_engine.get_hypothesis("user.preference.color").is_falsified
+
+    # Record tombstone for persona key
+    consolidator.record_tombstone("user.preference.color")
+    hyp = consolidator.persona_engine.get_hypothesis("user.preference.color")
+    assert hyp is not None
+    assert hyp.is_falsified
+
+    # Record tombstone for social entity
+    consolidator.record_tombstone("social.dave")
+    assert consolidator.social_graph.get_relation("dave", "user") is None

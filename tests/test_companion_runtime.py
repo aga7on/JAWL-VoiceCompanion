@@ -123,11 +123,52 @@ class CompanionRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.offline_consolidator, "fake_consolidator")
         self.assertEqual(runtime.cowatch_engine, "fake_engine")
         self.assertEqual(runtime.music_analyzer, "fake_analyzer")
+        control.model_slot_registry = "fake_registry"
+        control.moss_coordinator = "fake_coordinator"
+        control.scene_memory = "fake_memory"
+        control.game_controller = "fake_controller"
+        self.assertEqual(runtime.model_slot_registry, "fake_registry")
+        self.assertEqual(runtime.moss_coordinator, "fake_coordinator")
+        self.assertEqual(runtime.scene_memory, "fake_memory")
+        self.assertEqual(runtime.game_controller, "fake_controller")
+
+        # Local override takes precedence over control
+        runtime.model_slot_registry = "override_registry"
+        runtime.moss_coordinator = "override_coordinator"
+        runtime.scene_memory = "override_memory"
+        runtime.game_controller = "override_controller"
+        self.assertEqual(runtime.model_slot_registry, "override_registry")
+        self.assertEqual(runtime.moss_coordinator, "override_coordinator")
+        self.assertEqual(runtime.scene_memory, "override_memory")
+        self.assertEqual(runtime.game_controller, "override_controller")
+
         empty_runtime = CompanionRuntime(object())
         self.assertIsNone(empty_runtime.offline_consolidator)
         self.assertIsNone(empty_runtime.cowatch_engine)
         self.assertIsNone(empty_runtime.music_analyzer)
+        self.assertIsNone(empty_runtime.model_slot_registry)
+        self.assertIsNone(empty_runtime.moss_coordinator)
+        self.assertIsNone(empty_runtime.scene_memory)
+        self.assertIsNone(empty_runtime.game_controller)
 
+    def test_close_shuts_down_moss_coordinator(self):
+        class _MockCoordinator:
+            def __init__(self):
+                self.shutdown_called = False
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        coord = _MockCoordinator()
+        control = _Closable()
+        runtime = CompanionRuntime(control)
+        runtime.moss_coordinator = coord
+        runtime.close()
+        self.assertTrue(coord.shutdown_called)
+        self.assertEqual(control.calls, ["close"])
+        # Idempotent second close
+        runtime.close()
+        self.assertEqual(control.calls, ["close"])
 
 if __name__ == "__main__":
     unittest.main()

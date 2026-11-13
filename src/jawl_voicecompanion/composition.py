@@ -303,6 +303,9 @@ def build_companion_runtime(
     from .eg2_sensory import DEFAULT_EG2_ONNX_ROOT, EmbeddingGemmaSensoryCortex, RollingMediaBuffer
     from .perception_fusion import PerceptionFusion
     perception_fusion = PerceptionFusion(media_buffer=RollingMediaBuffer(window_seconds=300.0, max_items=1800))
+    from .scene_memory import SceneMemoryManager
+    scene_memory = SceneMemoryManager()
+    perception_fusion.scene_memory = scene_memory
     if getattr(args, "jawl_log_dir", None):
         perception_fusion.prompt_snapshot_path = Path(args.jawl_log_dir).resolve().parent / "data" / "sensory" / "current-perception.json"
     from .sensory_history import SensoryHistoryStore
@@ -685,6 +688,90 @@ def build_companion_runtime(
         dnd=False,
         quiet_hours=getattr(args, "quiet_hours", None),
     )
+    from .model_slots import (
+        ModelSlot,
+        ModelSlotRegistry,
+        MockModelAdapter,
+        OpenAICompatibleAdapter,
+        LlamaServerAdapter,
+        SlotRefAdapter,
+    )
+    from .moss_coordinator import MossCoordinationLayer
+    from .game_controller import GameControllerAdapter, GameEmbodimentAdapter
+
+    model_slot_registry = ModelSlotRegistry()
+    game_controller = GameControllerAdapter()
+
+    # Wire cognitive slots to existing JAWL engine configurations
+    if getattr(args, "llm_url", None) and getattr(args, "llm_model", None):
+        if "8990" in args.llm_url or "sensenova" in str(args.llm_model).lower():
+            llm_adapter = LlamaServerAdapter(
+                name="sensenova_loop_adapter",
+                endpoint=args.llm_url,
+                model=args.llm_model,
+                timeout_seconds=getattr(args, "llm_timeout", 60.0),
+            )
+        else:
+            llm_adapter = OpenAICompatibleAdapter(
+                name="llm_primary_adapter",
+                endpoint=args.llm_url,
+                model=args.llm_model,
+                api_key=os.environ.get(getattr(args, "llm_api_key_env", "OPENAI_API_KEY") or "", ""),
+                timeout_seconds=getattr(args, "llm_timeout", 60.0),
+            )
+        model_slot_registry.register(ModelSlot.FOREGROUND_BRAIN, llm_adapter)
+        model_slot_registry.register(
+            ModelSlot.BACKGROUND_REASONER,
+            SlotRefAdapter("background_reasoner_ref", registry=model_slot_registry, target_slot=ModelSlot.FOREGROUND_BRAIN),
+            fallback=ModelSlot.FOREGROUND_BRAIN,
+        )
+    else:
+        mock_brain = MockModelAdapter(name="mock_foreground_brain", responses=["Mock brain response"])
+        model_slot_registry.register(ModelSlot.FOREGROUND_BRAIN, mock_brain)
+        model_slot_registry.register(
+            ModelSlot.BACKGROUND_REASONER,
+            MockModelAdapter(name="mock_background_reasoner", responses=["Mock background response"]),
+            fallback=ModelSlot.FOREGROUND_BRAIN,
+        )
+
+    # Vision perception slot
+    vis_url = getattr(args, "visual_describer_url", None) or getattr(args, "vision_url", None)
+    vis_model = getattr(args, "visual_describer_model", None) or getattr(args, "vision_model", None)
+    if vis_url and vis_model:
+        vis_adapter = OpenAICompatibleAdapter(
+            name="vision_perception_adapter",
+            endpoint=vis_url,
+            model=vis_model,
+            api_key=os.environ.get(getattr(args, "vision_api_key_env", "OPENAI_API_KEY") or "", ""),
+            timeout_seconds=getattr(args, "vision_timeout", 60.0),
+        )
+        model_slot_registry.register(ModelSlot.VISION_PERCEPTION, vis_adapter)
+    else:
+        model_slot_registry.register(
+            ModelSlot.VISION_PERCEPTION,
+            MockModelAdapter(name="mock_vision_perception"),
+        )
+
+    # Audio perception slot (monolithic CrispASR / YAMNet exception: cognitive slot is mock/ref)
+    model_slot_registry.register(
+        ModelSlot.AUDIO_PERCEPTION,
+        MockModelAdapter(name="mock_audio_perception"),
+    )
+
+    # Coordinator slot
+    model_slot_registry.register(
+        ModelSlot.COORDINATOR,
+        SlotRefAdapter("coordinator_ref", registry=model_slot_registry, target_slot=ModelSlot.FOREGROUND_BRAIN),
+        fallback=ModelSlot.FOREGROUND_BRAIN,
+    )
+
+    # Game embodiment slot
+    model_slot_registry.register(
+        ModelSlot.GAME_EMBODIMENT,
+        GameEmbodimentAdapter(controller=game_controller),
+    )
+
+    moss_coordinator = MossCoordinationLayer(slot_registry=model_slot_registry)
 
     server = create_server(
         args.host,
@@ -733,10 +820,18 @@ def build_companion_runtime(
         offline_consolidator=offline_consolidator,
         cowatch_engine=cowatch_engine,
         music_analyzer=music_perception_analyzer,
+        model_slot_registry=model_slot_registry,
+        moss_coordinator=moss_coordinator,
+        scene_memory=scene_memory,
+        game_controller=game_controller,
     )
     server.offline_consolidator = offline_consolidator
     server.cowatch_engine = cowatch_engine
     server.music_analyzer = music_perception_analyzer
+    server.model_slot_registry = model_slot_registry
+    server.moss_coordinator = moss_coordinator
+    server.scene_memory = scene_memory
+    server.game_controller = game_controller
     if qwen_visual_sensor is not None:
         from .arbiter import TurnPriority
 

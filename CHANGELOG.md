@@ -1,3 +1,88 @@
+## 2026-11-13 — Multimodal Companion Extension: Music Flow & Critique, Media Narrative & CoWatch Opinions, Persona Hypotheses & Social Graph, Autonomous Player 2 Controller
+- **Чистый CPU DSP динамического анализа музыки и критики (`src/jawl_voicecompanion/music_perception.py`)**:
+  - `MusicSectionKind`: типизированные секции музыкальной композиции (`INTRO`, `VERSE`, `CHORUS`, `BRIDGE`, `BUILDUP`, `DROP`, `OUTRO`, `TRANSITION`, `UNKNOWN`).
+  - `DynamicMusicFlowTracker`: динамический трекинг потока музыки, скользящее окно кадров, фиксация перехода между секциями и энергетических пиков.
+  - `MusicDropEvent`: обнаружение дропов с вычислением амплитуды, длительности нарастания и глубины спада энергии.
+  - `MusicCritiqueEngine` и `MusicCritique`: генерация многоаспектной аналитической критики (напряжение, ритмический поток, динамический контраст, развитие формы) с краткими и подробными вердиктами.
+  - Тесты: `tests/test_music_perception.py` — **11/11 PASS**.
+- **Движок субъективного восприятия нарратива и ко-вотчинга (`src/jawl_voicecompanion/cowatch_engine.py`)**:
+  - `NarrativeArcKind`: структурированные сюжетные арки (`EXPOSITION`, `RISING_ACTION`, `CLIMAX`, `FALLING_ACTION`, `RESOLUTION`, `PLOT_TWIST`).
+  - `CharacterOpinionTracker` и `CharacterOpinion`: трекинг персонажей во времени (симпатия, моральный компас, значимость, эмоциональная валентность) на базе наблюдаемых действий.
+  - `MediaNarrativeTracker` и `NarrativeSnapshot`: мониторинг динамики сюжета, драматического напряжения, частоты событий и сюжетных поворотов.
+  - `CoWatchOpinionEngine`: генерация субъективных мнений компаньона, эмпатических реакций на сюжетные твисты и развитие отношений персонажей.
+  - Тесты: `tests/test_cowatch_engine.py` — **14/14 PASS**.
+- **Гипотезы о личности пользователя и консолидация соцграфа (`src/jawl_voicecompanion/memory_consolidation.py`)**:
+  - `PersonaHypothesis`: моделирование личностных черт и привычек пользователя со статусами (`CANDIDATE`, `ACTIVE`, `DISPROVEN`), списком подкреплений и опровержений.
+  - `UserPersonaHypothesisEngine`: инкрементальное выдвижение и валидация гипотез на основе эпизодических наблюдений с математической формулой уверенности.
+  - `SocialEntityRelation` и `SocialGraphConsolidator`: построение и консолидация графа социальных связей пользователя (семья, друзья, коллеги, менторы, питомцы, соперники) с сохранением валентности отношений и истории взаимодействия.
+  - Чистое исполнение на CPU/RAM во время ночной консолидации («сон») с соблюдением TTL и tombstone-фильтрации.
+  - Тесты: `tests/test_memory_consolidation.py` — **16/16 PASS**.
+- **Автономный напарник Player 2 для кооперативных игр (`src/jawl_voicecompanion/game_embodied.py` & `game_controller.py`)**:
+  - `CompanionRole`: тактические роли (`SUPPORT`, `DEFENSIVE`, `AGGRESSIVE`).
+  - `TacticalTelemetry`: безопасный адаптер и нормализатор игрового контекста (здоровье, боеприпасы, пространственные координаты, враги, укрытия, нахождение под обстрелом).
+  - `Player2Decision`: комплексное решение компаньона (комбинация кнопок геймпада, аналоговые стики с circular deadzone, эмоциональная реакция, реплика и срочность `SpeechUrgency`).
+  - `Player2CompanionController`: конечный автомат тактического поведения, интегрированный с `ActionSpeechCoordinator` и `NaturalPauseInjectionQueue` для естественной синхронизации действий и речи без перебивания игрока.
+  - Интеграция в `GameEmbodiedLayer`: `enable_player2()`, `tactical_tick()`, статус контроллера.
+  - Тесты: `tests/test_game_embodied.py` — **25/25 PASS**, `tests/test_game_controller.py` — **9/9 PASS**.
+- **Сквозная интеграция и регрессионная верификация**:
+  - Экспорт 161 публичного символа в `src/jawl_voicecompanion/__init__.py::__all__` (0 отсутствующих атрибутов).
+  - Полный таргетированный набор новых подсистем: **111/111 PASS** (0.92 с).
+  - Смежные регрессионные наборы: `test_companion_runtime.py` (8/8), `test_model_slots_web.py` (5/5), `test_sensory_motivation.py` (6/6), `test_perception_fusion.py` (8/8), `test_scene_state.py` (19/19), `test_narrative_consolidator.py` (17/17).
+  - VRAM: $\Delta\text{VRAM} = 0$ MiB на GPU 0; GPU 1 строго зарезервирован под SenseNova Loop 9B Preview и OmniVoice TTS; чистый CPU/RAM для аналитики, графов и контроллера.
+
+## 2026-11-13 — Model-Agnostic Cognitive Roles, MOSS-Live Duplex Coordination, Multimodal Scene Memory (Micro-Detail Zero-Loss Recall) & Virtual Gamepad Embodiment
+- **Модульные когнитивные слоты (`src/jawl_voicecompanion/model_slots.py`)**:
+  - `ModelSlot`: типизированные роли `FOREGROUND_BRAIN`, `BACKGROUND_REASONER`, `VISION_PERCEPTION`, `AUDIO_PERCEPTION`, `COORDINATOR`, `GAME_EMBODIMENT`.
+  - `ModelCapabilities`: структурированные метаданные возможностей модели (`streaming`, `tool_calling`, `vision`, `audio_in`, `system_prompt`, `concurrency`, `max_context_tokens`).
+  - Абстрактный интерфейс `ModelAdapter` с эмуляцией/дефолтами для `stream_generate`, `generate_with_tools`, `describe_vision`, `analyze_audio`.
+  - Адаптеры `MockModelAdapter`, `OpenAICompatibleAdapter` (OpenAI v1/chat/completions), `LlamaServerAdapter` (специализация под llama.cpp / SenseNova Loop 8990), `SlotRefAdapter` (ссылочный алиас между слотами).
+  - Потокобезопасный `ModelSlotRegistry`: регистрация, runtime hot-swapping (`swap`), fallback-цепочки разрешения (`get_with_fallback`), интроспекция `snapshot()`.
+  - Полная совместимость с оригинальными ключами JAWL (`--llm-url`, `--llm-model`, `--vision-url`, `--vision-model`, `JawlWebChatAdapter`, `runtime_manifest.py`).
+- **MOSS-Live Foreground-Background Duplex Координатор (`src/jawl_voicecompanion/moss_coordinator.py`)**:
+  - `ForegroundLane`: потоковая генерация реплик в реальном времени из слота `FOREGROUND_BRAIN` с поддержкой кооперативной отмены и точным подсчётом spoken/unspoken текста.
+  - `BackgroundTaskManager`: фоновое выполнение задач рассуждения ReAct / deep reasoning в слоте `BACKGROUND_REASONER` на пуле потоков без блокировки и деградации задержек речи.
+  - `NaturalPauseInjectionQueue`: потокобезопасная приоритетная очередь вставки результатов фонового рассуждения строго в паузах между репликами пользователя (`can_inject(is_user_speaking, is_companion_speaking)`), с TTL экспирацией.
+  - `TurnContinuityBuffer`: сохранение контекста прерванного хода при barge-in и формирование преамбулы продолжения (`format_resumption_context`).
+  - `MossCoordinationLayer`: мастер-координатор, связывающий `ModelSlotRegistry`, lanes, injection queue и `DuplexCascadeArbiter`.
+- **Мультимодальная память сцены с нулевой потерей микро-деталей (`src/jawl_voicecompanion/scene_memory.py`)**:
+  - `SceneMemoryManager`: кольцевой буфер кадров `MultimodalSceneFrame` на чистом CPU/RAM с временным окном TTL и предельным объёмом.
+  - Нулевая потеря точности (zero-loss): точные числа (HP, таймеры, координаты, ресурсы), строковые значения OCR/UI, пространственные `BoundingBox` (IoU, центроиды, включение точек), акустические маркеры.
+  - Граф сцены `MultimodalSceneGraph`: узлы (`SceneGraphNode`) и направленные рёбра (`SceneGraphEdge`) связывают сущности, OCR-тексты, аудиособытия и речевые ходы во времени.
+  - Честный эпистемический статус: `OBSERVED_PRESENT`, `OBSERVED_ABSENT`, `NOT_OBSERVED` без ложных домыслов.
+  - Высокоточный контекстный рекол `format_micro_recall_context()` для промптов моделей.
+- **Игровое воплощение и виртуальный контроллер (`src/jawl_voicecompanion/game_controller.py`)**:
+  - `VirtualGamepadButton`, `GamepadStick`: виртуальный геймпад с настраиваемыми мёртвыми зонами (circular deadzone).
+  - `ActionSpeechCoordinator`: координация игровых действий и естественного комментирования (уровни срочности `TACTICAL`, `REACTION`, `AMBIENT`), подавление повторов, доставка через `NaturalPauseInjectionQueue`.
+  - `GameControllerAdapter` и когнитивный слот `GameEmbodimentAdapter` (`ModelSlot.GAME_EMBODIMENT`).
+  - Совместимость с `GameInputBridge` (`game_embodied.py`).
+- **Сквозная интеграция и Web API**:
+  - `src/jawl_voicecompanion/composition.py`: инициализация и связывание реестра слотов, MOSS-координатора, памяти сцены и игрового контроллера.
+  - `src/jawl_voicecompanion/companion_runtime.py`: свойства-делегаты (`model_slot_registry`, `moss_coordinator`, `scene_memory`, `game_controller`) и аккуратный teardown.
+  - `src/jawl_voicecompanion/perception_fusion.py`: передача кадров и детекций в `scene_memory`.
+  - Эндпоинты в `web.py`:
+    - `GET /api/models/slots` — снимок всех слотов и адаптеров
+    - `POST /api/models/swap` — горячая замена адаптера слота
+    - `GET /api/moss/queue` — состояние очереди естественных пауз
+    - `POST /api/moss/task` — диспетчеризация фоновой задачи reasoning
+    - `GET /api/game/gamepad` — снимок состояния виртуального контроллера
+    - `POST /api/game/gamepad/press` — виртуальное нажатие кнопок геймпада
+    - `GET /api/scene/summary` — агрегированная сводка графа сцены и кадров
+    - `POST /api/scene/query` — эпистемический запрос к памяти микро-деталей
+- **Регрессия (числа/доказательства)**:
+  - `tests/test_model_slots.py`: **15/15 PASS** (контракты, возможности, Mock, OpenAI, LlamaServer, SlotRef, горячая замена, цепочки fallback, snapshot).
+  - `tests/test_moss_coordinator.py`: **8/8 PASS** (очередь пауз, непрерывность диалога при barge-in, background задачи, координатор MOSS, стриминг foreground lane).
+  - `tests/test_multimodal_micro_recall.py`: **13/13 PASS** (BoundingBox геометрия, эпистемические статусы, численные микро-детали, граф сцены, temporal co-occurrence, spatial region query, TTL прунинг).
+  - `tests/test_game_controller.py`: **9/9 PASS** (мертвые зоны геймпада, нажатия кнопок, координация речи и действий, интеграция с pause queue, GameEmbodimentAdapter).
+  - `tests/test_model_slots_web.py`: **5/5 PASS** (GET/POST /api/models, /api/moss, /api/game, /api/scene).
+  - `tests/test_companion_runtime.py`: **8/8 PASS** (делегирование свойств и жизненный цикл).
+  - `tests/test_game_embodied.py`: **17/17 PASS**.
+  - `tests/test_web.py`: **94/94 PASS**.
+  - Всего в наборе новых компонентов: **58/58 PASS** (3.67 с).
+- **Бюджет VRAM**:
+  - GPU 0: 0 MiB аллокаций ($\Delta\text{VRAM} = 0$).
+  - GPU 1: зарезервирован под SenseNova Loop 9B Preview (порт 8990) и OmniVoice TTS (порт 9890).
+  - Pure CPU/RAM: CrispASR GigaAM v3 RNN-T, Silero VAD, YAMNet ONNX, Multimodal Scene Graph, Game Controller State.
+
 ## 2026-11-13 — Living Companion Subsystems: Offline Sleep Memory Consolidation, Multimodal Co-Watching & Pure-CPU Music DSP
 - **Эпизодическая память и оффлайн консолидация («сон»)**:
   - `src/jawl_voicecompanion/memory_consolidation.py`: `OfflineConsolidator`, `EpisodicObservation`, `MemoryProposal`.

@@ -12,8 +12,11 @@ Strict adherence to JAWL resource invariants:
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
+import enum
 import math
+import time
 from typing import Any
 
 import numpy as np
@@ -535,3 +538,532 @@ class MusicPerceptionAnalyzer:
             "raw_audio_persisted": False,
             "candidate_hypotheses": [dict(h) for h in res.candidate_hypotheses],
         }
+
+
+class MusicSectionKind(str, enum.Enum):
+    """Structural section of a musical composition."""
+
+    INTRO = "intro"
+    VERSE = "verse"
+    BUILDUP = "buildup"
+    DROP = "drop"
+    CHORUS = "chorus"
+    BREAKDOWN = "breakdown"
+    OUTRO = "outro"
+    AMBIENT = "ambient"
+
+
+@dataclass(frozen=True)
+class MusicTrajectoryPoint:
+    """Instantaneous or windowed observation along musical time."""
+
+    timestamp: float
+    rms_dbfs: float
+    spectral_centroid_hz: float
+    valence: float
+    arousal: float
+    harmonicity: float
+    key: str = "unknown"
+    bpm: float = 0.0
+
+    @classmethod
+    def from_perception_result(
+        cls,
+        res: MusicPerceptionResult,
+        timestamp: float | None = None,
+    ) -> MusicTrajectoryPoint:
+        ts = time.time() if timestamp is None else float(timestamp)
+        return cls(
+            timestamp=ts,
+            rms_dbfs=float(res.rms_dbfs),
+            spectral_centroid_hz=float(res.spectral_centroid_hz),
+            valence=float(res.valence),
+            arousal=float(res.arousal),
+            harmonicity=float(res.harmonicity),
+            key=res.key if res.is_music else "unknown",
+            bpm=float(res.bpm) if res.is_music else 0.0,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timestamp": round(self.timestamp, 3),
+            "rms_dbfs": round(self.rms_dbfs, 2),
+            "spectral_centroid_hz": round(self.spectral_centroid_hz, 1),
+            "valence": round(self.valence, 3),
+            "arousal": round(self.arousal, 3),
+            "harmonicity": round(self.harmonicity, 3),
+            "key": self.key,
+            "bpm": round(self.bpm, 1),
+        }
+
+
+@dataclass(frozen=True)
+class MusicDropEvent:
+    """Detected electronic/cinematic drop or major dynamic release."""
+
+    timestamp: float
+    intensity: float
+    buildup_duration_s: float
+    description: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timestamp": round(self.timestamp, 3),
+            "intensity": round(self.intensity, 3),
+            "buildup_duration_s": round(self.buildup_duration_s, 2),
+            "description": self.description,
+        }
+
+
+@dataclass(frozen=True)
+class MusicCritique:
+    """Rich companion aesthetic evaluation, genre categorization, and voice remarks."""
+
+    overall_score: float
+    estimated_genre: str
+    harmonic_depth_score: float
+    rhythmic_energy_score: float
+    emotional_resonance_score: float
+    highlights: tuple[str, ...]
+    criticisms: tuple[str, ...]
+    conversational_remark: str
+    language: str = "ru"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "overall_score": round(self.overall_score, 1),
+            "estimated_genre": self.estimated_genre,
+            "harmonic_depth_score": round(self.harmonic_depth_score, 1),
+            "rhythmic_energy_score": round(self.rhythmic_energy_score, 1),
+            "emotional_resonance_score": round(self.emotional_resonance_score, 1),
+            "highlights": list(self.highlights),
+            "criticisms": list(self.criticisms),
+            "conversational_remark": self.conversational_remark,
+            "language": self.language,
+        }
+
+
+class DynamicMusicFlowTracker:
+    """CPU-only sliding-window tracker for music dynamics, drops, and harmonic progressions."""
+
+    def __init__(
+        self,
+        *,
+        max_history_seconds: float = 120.0,
+        max_points: int = 600,
+    ) -> None:
+        self.max_history_seconds = max(10.0, float(max_history_seconds))
+        self.max_points = max(10, int(max_points))
+        self._history: deque[MusicTrajectoryPoint] = deque(maxlen=self.max_points)
+        self._detected_drops: list[MusicDropEvent] = []
+
+    def record_point(self, point: MusicTrajectoryPoint) -> None:
+        """Append a trajectory point and prune points older than max_history_seconds."""
+        self._history.append(point)
+        self._prune(point.timestamp)
+
+    def record_result(
+        self,
+        res: MusicPerceptionResult,
+        timestamp: float | None = None,
+    ) -> MusicTrajectoryPoint:
+        """Convert a MusicPerceptionResult into a trajectory point and record it."""
+        pt = MusicTrajectoryPoint.from_perception_result(res, timestamp=timestamp)
+        self.record_point(pt)
+        return pt
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - self.max_history_seconds
+        while self._history and self._history[0].timestamp < cutoff:
+            self._history.popleft()
+
+    @property
+    def points(self) -> list[MusicTrajectoryPoint]:
+        return list(self._history)
+
+    def clear(self) -> None:
+        self._history.clear()
+        self._detected_drops.clear()
+
+    def detect_drops(self, lookback_seconds: float = 15.0) -> list[MusicDropEvent]:
+        """Detect buildup-to-drop transitions within the recent sliding window."""
+        if len(self._history) < 3:
+            return []
+
+        now = self._history[-1].timestamp
+        cutoff = now - max(2.0, float(lookback_seconds))
+        pts = [p for p in self._history if p.timestamp >= cutoff]
+        if len(pts) < 3:
+            return []
+
+        found_drops: list[MusicDropEvent] = []
+        last_drop_ts = -999.0
+
+        for i in range(1, len(pts)):
+            prev = pts[i - 1]
+            curr = pts[i]
+            ts = curr.timestamp
+
+            if ts - last_drop_ts < 3.0:
+                continue
+
+            rms_delta = curr.rms_dbfs - prev.rms_dbfs
+
+            # Buildup lookback: check points prior to curr within 0.5 to 8.0 seconds
+            buildup_pts = [p for p in pts if 0.5 <= (ts - p.timestamp) <= 8.0]
+            if not buildup_pts:
+                continue
+
+            min_prev_rms = min(p.rms_dbfs for p in buildup_pts)
+            total_rise = curr.rms_dbfs - min_prev_rms
+
+            bass_surge = (rms_delta >= 2.0) and (curr.spectral_centroid_hz < prev.spectral_centroid_hz * 0.90)
+            is_drop = (
+                (rms_delta >= 3.5 and curr.arousal >= 0.50)
+                or (rms_delta >= 2.0 and total_rise >= 4.0 and curr.arousal >= 0.55)
+                or bass_surge
+            )
+
+            if is_drop and curr.rms_dbfs > -38.0:
+                buildup_duration = max(1.0, ts - buildup_pts[0].timestamp)
+                raw_intensity = float(np.clip((rms_delta / 8.0) * 0.5 + curr.arousal * 0.5, 0.2, 1.0))
+                desc = (
+                    f"Powerful bass/energy drop (+{rms_delta:.1f} dB) after {buildup_duration:.1f}s buildup"
+                    if bass_surge
+                    else f"Dynamic drop release (+{rms_delta:.1f} dB) with arousal {curr.arousal:.2f}"
+                )
+                drop_evt = MusicDropEvent(
+                    timestamp=ts,
+                    intensity=raw_intensity,
+                    buildup_duration_s=buildup_duration,
+                    description=desc,
+                )
+                found_drops.append(drop_evt)
+                last_drop_ts = ts
+
+        for d in found_drops:
+            if not any(abs(d.timestamp - existing.timestamp) < 1.0 for existing in self._detected_drops):
+                self._detected_drops.append(d)
+        return found_drops
+
+    def current_section(self, lookback_seconds: float = 8.0) -> MusicSectionKind:
+        """Infer current compositional section from recent dynamics and trajectory."""
+        if not self._history:
+            return MusicSectionKind.AMBIENT
+
+        now = self._history[-1].timestamp
+        cutoff = now - max(2.0, float(lookback_seconds))
+        pts = [p for p in self._history if p.timestamp >= cutoff]
+        if not pts:
+            pts = list(self._history)[-3:]
+
+        avg_rms = sum(p.rms_dbfs for p in pts) / len(pts)
+        if avg_rms < -48.0 or all(p.key == "unknown" and p.bpm <= 0.0 for p in pts):
+            return MusicSectionKind.AMBIENT
+
+        recent_drops = self.detect_drops(lookback_seconds=4.0)
+        if recent_drops:
+            return MusicSectionKind.DROP
+
+        first_ts = self._history[0].timestamp
+        if (now - first_ts) <= 6.0 and avg_rms < -28.0:
+            return MusicSectionKind.INTRO
+
+        e_trend = self.energy_trend(lookback_seconds=lookback_seconds)
+        last_pt = pts[-1]
+
+        if e_trend > 0.03 and last_pt.arousal > 0.4:
+            return MusicSectionKind.BUILDUP
+
+        if e_trend < -0.04 and last_pt.rms_dbfs < -32.0:
+            return MusicSectionKind.OUTRO
+
+        if e_trend < -0.06 and last_pt.arousal < 0.35:
+            return MusicSectionKind.BREAKDOWN
+
+        if last_pt.arousal >= 0.58 and last_pt.rms_dbfs >= -24.0:
+            return MusicSectionKind.CHORUS
+
+        return MusicSectionKind.VERSE
+
+    def harmonic_progression(self, lookback_seconds: float = 60.0) -> list[str]:
+        """Sequence of consecutive distinct keys/chords detected over time."""
+        if not self._history:
+            return []
+
+        now = self._history[-1].timestamp
+        cutoff = now - max(5.0, float(lookback_seconds))
+        pts = [p for p in self._history if p.timestamp >= cutoff]
+
+        progression: list[str] = []
+        for p in pts:
+            k = p.key.strip()
+            if not k or k.lower() == "unknown":
+                continue
+            if not progression or progression[-1] != k:
+                progression.append(k)
+
+        return progression
+
+    def energy_trend(self, lookback_seconds: float = 10.0) -> float:
+        """Linear slope of arousal over time (rate of change per second)."""
+        if len(self._history) < 2:
+            return 0.0
+
+        now = self._history[-1].timestamp
+        cutoff = now - max(2.0, float(lookback_seconds))
+        pts = [p for p in self._history if p.timestamp >= cutoff]
+        if len(pts) < 2:
+            return 0.0
+
+        times = np.array([p.timestamp for p in pts], dtype=np.float64)
+        arousals = np.array([p.arousal for p in pts], dtype=np.float64)
+        t_span = times[-1] - times[0]
+        if t_span <= 0.01:
+            return 0.0
+
+        times = times - times[0]
+        cov = np.cov(times, arousals)
+        slope = float(cov[0, 1] / max(1e-6, cov[0, 0]))
+        return slope
+
+    def valence_trend(self, lookback_seconds: float = 10.0) -> float:
+        """Linear slope of valence over time (rate of emotional shift)."""
+        if len(self._history) < 2:
+            return 0.0
+
+        now = self._history[-1].timestamp
+        cutoff = now - max(2.0, float(lookback_seconds))
+        pts = [p for p in self._history if p.timestamp >= cutoff]
+        if len(pts) < 2:
+            return 0.0
+
+        times = np.array([p.timestamp for p in pts], dtype=np.float64)
+        valences = np.array([p.valence for p in pts], dtype=np.float64)
+        t_span = times[-1] - times[0]
+        if t_span <= 0.01:
+            return 0.0
+
+        times = times - times[0]
+        cov = np.cov(times, valences)
+        slope = float(cov[0, 1] / max(1e-6, cov[0, 0]))
+        return slope
+
+    def stats(self) -> dict[str, Any]:
+        """Telemetry snapshot of current musical flow."""
+        current_sec = self.current_section()
+        prog = self.harmonic_progression()
+        bpms = [p.bpm for p in self._history if p.bpm > 0.0]
+        mean_bpm = round(float(np.mean(bpms)), 1) if bpms else 0.0
+
+        return {
+            "point_count": len(self._history),
+            "current_section": current_sec.value,
+            "harmonic_progression": prog,
+            "energy_trend": round(self.energy_trend(), 4),
+            "valence_trend": round(self.valence_trend(), 4),
+            "mean_bpm": mean_bpm,
+            "drops_detected_total": len(self._detected_drops),
+        }
+
+
+class MusicCritiqueEngine:
+    """CPU-only companion aesthetic critic: evaluates track composition, harmony, and rhythm."""
+
+    def __init__(self, *, default_language: str = "ru") -> None:
+        self.default_language = "ru" if default_language.lower().startswith("ru") else "en"
+
+    def evaluate(
+        self,
+        *,
+        tracker: DynamicMusicFlowTracker | None = None,
+        latest_result: MusicPerceptionResult | None = None,
+        language: str | None = None,
+    ) -> MusicCritique:
+        lang = (language or self.default_language).lower()
+        is_ru = lang.startswith("ru")
+
+        progression: list[str] = tracker.harmonic_progression() if tracker else []
+        drops: list[MusicDropEvent] = tracker.detect_drops(lookback_seconds=30.0) if tracker else []
+        current_section = tracker.current_section() if tracker else MusicSectionKind.VERSE
+
+        bpm = latest_result.bpm if latest_result and latest_result.is_music else (
+            tracker.points[-1].bpm if (tracker and tracker.points) else 0.0
+        )
+        mode = latest_result.mode if latest_result and latest_result.is_music else ""
+        key = latest_result.key if latest_result and latest_result.is_music else (
+            tracker.points[-1].key if (tracker and tracker.points) else "unknown"
+        )
+        if not mode and key != "unknown":
+            mode = "minor" if "minor" in key.lower() else "major"
+
+        arousal = latest_result.arousal if latest_result else (
+            tracker.points[-1].arousal if (tracker and tracker.points) else 0.5
+        )
+        valence = latest_result.valence if latest_result else (
+            tracker.points[-1].valence if (tracker and tracker.points) else 0.0
+        )
+        centroid = latest_result.spectral_centroid_hz if latest_result else (
+            tracker.points[-1].spectral_centroid_hz if (tracker and tracker.points) else 1500.0
+        )
+        harmonicity = latest_result.harmonicity if latest_result else (
+            tracker.points[-1].harmonicity if (tracker and tracker.points) else 0.5
+        )
+
+        # 1. Genre estimation
+        if bpm >= 120 and arousal >= 0.48 and (drops or centroid > 1800):
+            genre = "EDM / Electronic"
+        elif centroid >= 2300 and arousal >= 0.55 and harmonicity < 0.65:
+            genre = "Rock / Metal"
+        elif 65 <= bpm <= 110 and mode == "minor" and arousal <= 0.5:
+            genre = "Lofi / Downtempo"
+        elif harmonicity >= 0.62 and bpm < 125:
+            genre = "Classical / Orchestral"
+        elif mode == "major" and bpm >= 105 and arousal >= 0.48:
+            genre = "Pop / Dance"
+        elif bpm < 85 and arousal < 0.4:
+            genre = "Ambient / Chillout"
+        else:
+            genre = "Modern Melodic / Indie"
+
+        # 2. Harmonic depth score (1.0 - 10.0)
+        unique_chords = len(set(progression))
+        base_h = 5.0
+        if unique_chords >= 4:
+            base_h += 3.5
+        elif unique_chords >= 2:
+            base_h += 2.0
+        elif unique_chords == 1:
+            base_h += 0.5
+        if harmonicity > 0.55:
+            base_h += 1.0
+        harmonic_depth = float(np.clip(base_h, 1.0, 10.0))
+
+        # 3. Rhythmic energy score (1.0 - 10.0)
+        base_r = 4.0
+        if bpm > 0:
+            bpm_contrib = np.clip((bpm - 60.0) / 80.0, 0.0, 1.0) * 3.0
+            base_r += bpm_contrib
+        base_r += float(arousal) * 3.0
+        if drops:
+            base_r += 1.0
+        rhythmic_energy = float(np.clip(base_r, 1.0, 10.0))
+
+        # 4. Emotional resonance score (1.0 - 10.0)
+        base_e = 5.0
+        base_e += abs(float(valence)) * 2.5
+        if abs(float(arousal) - 0.5) > 0.2:
+            base_e += 1.5
+        if mode == "minor" and valence < 0:
+            base_e += 1.0
+        emotional_resonance = float(np.clip(base_e, 1.0, 10.0))
+
+        # 5. Overall score
+        overall_score = float(np.clip(
+            0.35 * rhythmic_energy + 0.35 * harmonic_depth + 0.30 * emotional_resonance,
+            1.0,
+            10.0,
+        ))
+
+        # 6. Highlights & Criticisms
+        highlights: list[str] = []
+        criticisms: list[str] = []
+
+        if is_ru:
+            if drops:
+                highlights.append("Мощный динамический дроп с выверенным нарастанием")
+            if rhythmic_energy >= 7.0:
+                highlights.append("Отличный ритмический драйв и плотный грув")
+            if harmonic_depth >= 7.0:
+                highlights.append(f"Выразительная последовательность гармоний ({' -> '.join(progression[:4])})")
+            elif mode == "minor":
+                highlights.append("Глубокая минорная гармония с тёплым эмоциональным окрасом")
+            if emotional_resonance >= 7.0:
+                highlights.append("Яркая передача настроения и атмосферный звуковой дизайн")
+
+            if not highlights:
+                highlights.append("Сбалансированное фоновое звучание")
+
+            if unique_chords <= 1 and tracker and len(tracker.points) > 10:
+                criticisms.append("Ограниченное гармоническое развитие (минимальная смена аккордов)")
+            if rhythmic_energy < 4.5 and bpm > 0:
+                criticisms.append("Несколько сглаженная ритмическая секция")
+            if not criticisms:
+                criticisms.append("Стилистически выдержанная структура трека")
+        else:
+            if drops:
+                highlights.append("Powerful dynamic drop with strong tension release")
+            if rhythmic_energy >= 7.0:
+                highlights.append("Tight rhythmic drive and compelling groove")
+            if harmonic_depth >= 7.0:
+                highlights.append(f"Expressive harmonic progression ({' -> '.join(progression[:4])})")
+            elif mode == "minor":
+                highlights.append("Deep minor harmony with warm emotional texture")
+            if emotional_resonance >= 7.0:
+                highlights.append("Vivid emotional mood with immersive sound design")
+
+            if not highlights:
+                highlights.append("Balanced ambient soundscape")
+
+            if unique_chords <= 1 and tracker and len(tracker.points) > 10:
+                criticisms.append("Static harmonic movement (single chord vamp)")
+            if rhythmic_energy < 4.5 and bpm > 0:
+                criticisms.append("Subdued rhythmic definition")
+            if not criticisms:
+                criticisms.append("Stylistically cohesive structure")
+
+        # 7. Conversational remark
+        if is_ru:
+            if drops:
+                remark = "Ого, какой мощный дроп! Бас прямо пробивает, шикарный разгон получился."
+            elif current_section == MusicSectionKind.BUILDUP or (tracker and tracker.energy_trend() > 0.05):
+                remark = "О, вот это разгон! Сейчас точно будет кульминация..."
+            elif genre == "EDM / Electronic":
+                remark = "Какой бешеный ритм! Прямо заряжает энергией, отлично держит грув."
+            elif genre == "Lofi / Downtempo" or (mode == "minor" and arousal < 0.45):
+                remark = "Очень тёплый и атмосферный звук, ритм такой мягкий — идеальный вайб."
+            elif mode == "minor":
+                remark = "Такая глубокая и меланхоличная мелодия... Очень красивый переход в миноре."
+            elif genre == "Classical / Orchestral":
+                remark = "Потрясающая гармония! Звучит как масштабный саундтрек, очень кинематографично."
+            else:
+                remark = "Интересный трек, звучание цепляет и держит приятную атмосферу."
+        else:
+            if drops:
+                remark = "Whoa, that drop hit hard! The buildup created so much tension."
+            elif current_section == MusicSectionKind.BUILDUP or (tracker and tracker.energy_trend() > 0.05):
+                remark = "Here comes the buildup! We're definitely heading for a peak..."
+            elif genre == "EDM / Electronic":
+                remark = "Incredible rhythmic drive! This tempo keeps the energy super high."
+            elif genre == "Lofi / Downtempo" or (mode == "minor" and arousal < 0.45):
+                remark = "Super warm and atmospheric sound, the soft groove is such a nice vibe."
+            elif mode == "minor":
+                remark = "Such a deep and melancholic melody... really touching minor progression."
+            elif genre == "Classical / Orchestral":
+                remark = "Stunning harmonic depth! Feels like a cinematic orchestral score."
+            else:
+                remark = "Intriguing track, really liking the atmosphere and textures here."
+
+        return MusicCritique(
+            overall_score=overall_score,
+            estimated_genre=genre,
+            harmonic_depth_score=harmonic_depth,
+            rhythmic_energy_score=rhythmic_energy,
+            emotional_resonance_score=emotional_resonance,
+            highlights=tuple(highlights),
+            criticisms=tuple(criticisms),
+            conversational_remark=remark,
+            language="ru" if is_ru else "en",
+        )
+
+
+__all__ = [
+    "DynamicMusicFlowTracker",
+    "MusicCritique",
+    "MusicCritiqueEngine",
+    "MusicDropEvent",
+    "MusicPerceptionAnalyzer",
+    "MusicPerceptionResult",
+    "MusicSectionKind",
+    "MusicTrajectoryPoint",
+]

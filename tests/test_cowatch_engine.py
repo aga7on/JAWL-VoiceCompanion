@@ -19,9 +19,15 @@ import pytest
 
 from jawl_voicecompanion.cowatch_engine import (
     CharacterBinding,
+    CharacterOpinion,
+    CharacterOpinionTracker,
     CoWatchCommentaryBid,
     CoWatchEngine,
     CoWatchObservation,
+    CoWatchOpinionEngine,
+    MediaNarrativeTracker,
+    NarrativeArcKind,
+    NarrativeSnapshot,
     SceneCutEvent,
 )
 from jawl_voicecompanion.game_embodied import GameEmbodiedLayer, GameObservation
@@ -228,3 +234,127 @@ def test_observation_ttl_expiration() -> None:
     )
     assert not obs.is_expired(102.0)
     assert obs.is_expired(106.0)
+
+
+def test_character_opinion_tracker_evolution() -> None:
+    tracker = CharacterOpinionTracker()
+    # Initial query returns neutral baseline
+    op = tracker.get_opinion("Asuka")
+    assert op.character_name == "Asuka"
+    assert op.affinity == 0.0
+    assert op.morality_judgment == "neutral"
+
+    # Heroic act increases affinity and competence
+    op2 = tracker.record_act(
+        "Asuka",
+        "Saved Unit 01 against the Angel in tactical dive",
+        valence_delta=0.4,
+        morality_judgment="heroic",
+        competence_delta=0.3,
+        voice_acting_remark="fantastic emotional intensity from Yuko Miyamura",
+    )
+    assert op2.affinity == 0.4
+    assert op2.morality_judgment == "heroic"
+    assert op2.competence == 0.8
+    assert "tactical dive" in op2.notes[0]
+    assert "Yuko Miyamura" in op2.voice_acting_remark
+
+    all_ops = tracker.all_opinions()
+    assert "Asuka" in all_ops
+    assert all_ops["Asuka"].to_dict()["morality_judgment"] == "heroic"
+
+
+def test_media_narrative_tracker_and_snapshots() -> None:
+    narrative = MediaNarrativeTracker(max_history=50)
+    assert narrative.current_arc == NarrativeArcKind.EXPOSITION
+    assert narrative.tension == 0.3
+
+    snap = narrative.update_scene(
+        arc=NarrativeArcKind.CLIMAX,
+        tension=0.95,
+        summary="Final battle on the bridge against the alien commander",
+        music_mood="epic orchestral choir with heavy brass",
+        is_twist=True,
+    )
+    assert snap.arc == NarrativeArcKind.CLIMAX
+    assert snap.tension == 0.95
+    assert snap.is_twist is True
+    assert narrative.current_arc == NarrativeArcKind.CLIMAX
+    assert narrative.tension == 0.95
+
+    narrative.add_soundtrack_critique("Incredible brass crescendo accentuating the tension")
+    narrative.add_sound_design_critique("Spatial bullet impacts and dynamic low-frequency rumble")
+    narrative.add_plot_prediction("The commander might turn out to be the mentor")
+
+    ctx = narrative.get_narrative_context()
+    assert ctx["current_arc"] == "climax"
+    assert ctx["tension"] == 0.95
+    assert len(ctx["soundtrack_notes"]) == 1
+    assert len(ctx["sound_design_notes"]) == 1
+    assert len(ctx["predictions"]) == 1
+
+
+def test_cowatch_opinion_engine_bilingual() -> None:
+    engine = CoWatchOpinionEngine(default_language="ru")
+    char_tracker = CharacterOpinionTracker()
+    char_tracker.record_act(
+        "Shinji",
+        "Overcame trauma and piloted the mech",
+        valence_delta=0.6,
+        voice_acting_remark="powerful breakdown delivery",
+    )
+
+    char_op_ru = engine.opinion_on_character("Shinji", char_tracker, language="ru")
+    assert "Shinji" in char_op_ru
+    assert "любимых персонажей" in char_op_ru or "золото" in char_op_ru
+    assert "озвучка шикарная" in char_op_ru
+
+    char_op_en = engine.opinion_on_character("Shinji", char_tracker, language="en")
+    assert "Shinji" in char_op_en
+    assert "gold" in char_op_en or "favorites" in char_op_en
+    assert "voice performance" in char_op_en
+
+    narrative = MediaNarrativeTracker()
+    narrative.update_scene(arc=NarrativeArcKind.PLOT_TWIST, tension=0.9)
+    plot_op_ru = engine.opinion_on_plot(narrative, language="ru")
+    assert "поворот" in plot_op_ru
+
+    plot_op_en = engine.opinion_on_plot(narrative, language="en")
+    assert "twist" in plot_op_en.lower()
+
+    audio_op_ru = engine.opinion_on_soundtrack_and_sound(
+        soundtrack_mood="пронзительное скрипичное соло",
+        sound_design_note="глубокий эмбиент дождя",
+        language="ru",
+    )
+    assert "Саундтрек" in audio_op_ru
+    assert "звуковой дизайн" in audio_op_ru
+
+
+def test_cowatch_engine_opinion_integration_and_context() -> None:
+    engine = CoWatchEngine(scene_id="sc_anime_01", scene_type="anime")
+    engine.record_character_act(
+        "Gendo",
+        "Concealed true agenda behind SEELE backs",
+        valence_delta=-0.4,
+        morality_judgment="morally_grey",
+    )
+    engine.update_narrative_scene(
+        arc=NarrativeArcKind.RISING_ACTION,
+        tension=0.65,
+        summary="Sub-level conspiracy revealed",
+        music_mood="tense minimalist strings",
+    )
+
+    ctx = engine.get_scene_context()
+    assert "narrative" in ctx
+    assert ctx["narrative"]["current_arc"] == "rising_action"
+    assert "character_opinions" in ctx
+    assert "Gendo" in ctx["character_opinions"]
+    assert ctx["character_opinions"]["Gendo"]["morality_judgment"] == "morally_grey"
+
+    opinion_ru = engine.generate_cowatch_opinion(character_name="Gendo", language="ru")
+    assert "Gendo" in opinion_ru
+
+    opinion_plot = engine.generate_cowatch_opinion()
+    assert len(opinion_plot) > 5
