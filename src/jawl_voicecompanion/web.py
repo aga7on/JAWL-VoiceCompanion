@@ -354,6 +354,7 @@ class CompanionServer(ThreadingHTTPServer):
         moss_coordinator: Any | None = None,
         scene_memory: Any | None = None,
         game_controller: Any | None = None,
+        game_embodied: Any | None = None,
     ):
         bind_host = str(server_address[0])
         if not is_loopback_host(bind_host) and not lan_mode:
@@ -456,6 +457,7 @@ class CompanionServer(ThreadingHTTPServer):
             else getattr(perception_fusion, "scene_memory", None)
         )
         self.game_controller = game_controller
+        self.game_embodied = game_embodied
         self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
@@ -2081,6 +2083,13 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             "/api/moss/queue",
             "/api/game/gamepad",
             "/api/scene/summary",
+            "/api/music/status",
+            "/api/music/critique",
+            "/api/cowatch/narrative",
+            "/api/cowatch/opinion",
+            "/api/persona/hypotheses",
+            "/api/persona/social-graph",
+            "/api/game/player2",
         }:
             try:
                 self._require_browser_session()
@@ -2115,6 +2124,97 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json({"configured": False})
                 else:
                     self._json({"configured": True, "frame_count": len(sm.frames), "capacity": sm.capacity, "ttl": sm.ttl_seconds})
+                return
+            if path == "/api/music/status":
+                analyzer = getattr(self.server, "music_analyzer", None)
+                if analyzer is None:
+                    self._json({"configured": False, "active": False})
+                    return
+                tracker = getattr(analyzer, "flow_tracker", None)
+                if tracker is None and hasattr(analyzer, "stats"):
+                    tracker = analyzer
+                if tracker is not None and hasattr(tracker, "stats"):
+                    drops = [d.to_dict() for d in tracker.detect_drops()] if hasattr(tracker, "detect_drops") else []
+                    points = [p.to_dict() for p in getattr(tracker, "points", [])[-20:]]
+                    self._json({"configured": True, "active": True, "stats": tracker.stats(), "drops": drops, "trajectory": points})
+                else:
+                    self._json({"configured": True, "active": True, "type": type(analyzer).__name__})
+                return
+            if path == "/api/music/critique":
+                analyzer = getattr(self.server, "music_analyzer", None)
+                tracker = getattr(analyzer, "flow_tracker", None) if analyzer is not None else None
+                if tracker is None and hasattr(analyzer, "points"):
+                    tracker = analyzer
+                if tracker is None:
+                    self._json({"configured": False, "critique": None})
+                    return
+                from .music_perception import MusicCritiqueEngine
+                engine = getattr(analyzer, "critique_engine", None)
+                if engine is None or not hasattr(engine, "evaluate_flow"):
+                    engine = MusicCritiqueEngine()
+                critique = engine.evaluate_flow(tracker)
+                self._json({"configured": True, "critique": critique.to_dict()})
+                return
+            if path == "/api/cowatch/narrative":
+                cowatch = getattr(self.server, "cowatch_engine", None)
+                if cowatch is None:
+                    self._json({"configured": False})
+                    return
+                tracker = getattr(cowatch, "narrative_tracker", None)
+                if tracker is not None and hasattr(tracker, "get_narrative_context"):
+                    ctx = tracker.get_narrative_context()
+                elif hasattr(cowatch, "get_narrative_context"):
+                    ctx = cowatch.get_narrative_context()
+                else:
+                    ctx = {}
+                self._json({"configured": True, "context": ctx})
+                return
+            if path == "/api/cowatch/opinion":
+                cowatch = getattr(self.server, "cowatch_engine", None)
+                if cowatch is None:
+                    self._json({"configured": False, "opinions": {}})
+                    return
+                tracker = getattr(cowatch, "opinion_tracker", None)
+                if tracker is not None and hasattr(tracker, "all_opinions"):
+                    ops = {k: op.to_dict() for k, op in tracker.all_opinions().items()}
+                else:
+                    ops = {}
+                self._json({"configured": True, "opinions": ops})
+                return
+            if path == "/api/persona/hypotheses":
+                consolidator = getattr(self.server, "offline_consolidator", None)
+                if consolidator is None:
+                    self._json({"configured": False, "hypotheses": []})
+                    return
+                engine = getattr(consolidator, "persona_engine", None)
+                if engine is None or not hasattr(engine, "get_hypotheses"):
+                    self._json({"configured": False, "hypotheses": []})
+                    return
+                self._json({"configured": True, "hypotheses": [h.to_dict() for h in engine.get_hypotheses()]})
+                return
+            if path == "/api/persona/social-graph":
+                consolidator = getattr(self.server, "offline_consolidator", None)
+                if consolidator is None:
+                    self._json({"configured": False, "graph": {}})
+                    return
+                graph = getattr(consolidator, "social_graph", None)
+                if graph is None or not hasattr(graph, "export_graph"):
+                    self._json({"configured": False, "graph": {}})
+                    return
+                self._json({"configured": True, "graph": graph.export_graph()})
+                return
+            if path == "/api/game/player2":
+                embodied = getattr(self.server, "game_embodied", None)
+                p2 = getattr(embodied, "player2", None) if embodied is not None else None
+                if p2 is None:
+                    gc = getattr(self.server, "game_controller", None)
+                    p2 = getattr(gc, "player2_controller", None) if gc is not None else None
+                if p2 is None:
+                    self._json({"configured": False, "active": False})
+                    return
+                role_val = getattr(p2.role, "value", str(p2.role)) if hasattr(p2, "role") else "SUPPORT"
+                state = p2.state() if hasattr(p2, "state") else {}
+                self._json({"configured": True, "active": getattr(p2, "active", True), "role": role_val, "state": state})
                 return
         if path == "/mic-processor.js":
             # AudioWorklet modules are loaded as a separate browser request;
@@ -3268,6 +3368,143 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 else:
                     self._json({"error": f"unsupported query type: {query_type}"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            if self.path == "/api/music/feed":
+                analyzer = getattr(self.server, "music_analyzer", None)
+                if analyzer is None:
+                    self._json({"error": "music_analyzer_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                tracker = getattr(analyzer, "flow_tracker", None)
+                if tracker is None:
+                    if hasattr(analyzer, "record_point"):
+                        tracker = analyzer
+                    else:
+                        from .music_perception import DynamicMusicFlowTracker
+                        tracker = DynamicMusicFlowTracker()
+                        analyzer.flow_tracker = tracker
+                from .music_perception import MusicTrajectoryPoint
+                pt = MusicTrajectoryPoint(
+                    timestamp=float(payload.get("timestamp", time.time())),
+                    rms_dbfs=float(payload.get("rms_dbfs", -30.0)),
+                    spectral_centroid_hz=float(payload.get("spectral_centroid_hz", 1500.0)),
+                    valence=float(payload.get("valence", 0.0)),
+                    arousal=float(payload.get("arousal", 0.0)),
+                    harmonicity=float(payload.get("harmonicity", 0.5)),
+                    key=str(payload.get("key", "C")),
+                    bpm=float(payload.get("bpm", 120.0)),
+                )
+                tracker.record_point(pt)
+                self._json({"ok": True, "stats": tracker.stats() if hasattr(tracker, "stats") else {}})
+                return
+            if self.path == "/api/cowatch/opinion":
+                cowatch = getattr(self.server, "cowatch_engine", None)
+                if cowatch is None:
+                    self._json({"error": "cowatch_engine_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                tracker = getattr(cowatch, "opinion_tracker", None)
+                if tracker is None:
+                    self._json({"error": "opinion_tracker_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                char_name = str(payload.get("character", "") or "").strip()
+                act = str(payload.get("act", "") or "").strip()
+                if not char_name or not act:
+                    raise ValueError("character and act are required")
+                valence_delta = float(payload.get("valence_delta", 0.0))
+                morality_val = payload.get("morality_judgment") if "morality_judgment" in payload else payload.get("morality")
+                competence_delta = float(payload.get("competence_delta", 0.0))
+                voice_remark_val = payload.get("voice_acting_remark") if "voice_acting_remark" in payload else payload.get("voice_remark")
+                op = tracker.record_act(
+                    char_name,
+                    act,
+                    valence_delta=valence_delta,
+                    morality_judgment=str(morality_val) if morality_val is not None else None,
+                    competence_delta=competence_delta,
+                    voice_acting_remark=str(voice_remark_val) if voice_remark_val is not None else None,
+                )
+                self._json({"ok": True, "opinion": op.to_dict()})
+                return
+            if self.path == "/api/persona/hypotheses":
+                consolidator = getattr(self.server, "offline_consolidator", None)
+                if consolidator is None:
+                    self._json({"error": "offline_consolidator_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                engine = getattr(consolidator, "persona_engine", None)
+                if engine is None:
+                    self._json({"error": "persona_engine_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                trait_key = str(payload.get("trait_key", "") or "").strip()
+                inferred_value = str(payload.get("inferred_value", "") or "").strip()
+                if not trait_key or not inferred_value:
+                    raise ValueError("trait_key and inferred_value are required")
+                confidence = float(payload.get("confidence", 0.5))
+                evidence_count = int(payload.get("evidence_count", 1))
+                rationale = str(payload.get("rationale", "") or "")
+                hyp = engine.record_hypothesis(
+                    trait_key=trait_key,
+                    inferred_value=inferred_value,
+                    confidence=confidence,
+                    evidence_count=evidence_count,
+                    rationale=rationale,
+                )
+                self._json({"ok": True, "hypothesis": hyp.to_dict()})
+                return
+            if self.path == "/api/persona/social-graph":
+                consolidator = getattr(self.server, "offline_consolidator", None)
+                if consolidator is None:
+                    self._json({"error": "offline_consolidator_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                graph = getattr(consolidator, "social_graph", None)
+                if graph is None:
+                    self._json({"error": "social_graph_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                source = str(payload.get("source", "") or "").strip()
+                target = str(payload.get("target", "") or "").strip()
+                relation_type = str(payload.get("relation_type", "") or "").strip()
+                if not source or not target or not relation_type:
+                    raise ValueError("source, target, and relation_type are required")
+                affinity_delta = float(payload.get("affinity_delta", 0.0))
+                trust_delta = float(payload.get("trust_delta", 0.0))
+                note = str(payload.get("note", "") or "")
+                rel = graph.record_interaction(
+                    source=source,
+                    target=target,
+                    relation_type=relation_type,
+                    affinity_delta=affinity_delta,
+                    trust_delta=trust_delta,
+                    note=note,
+                )
+                self._json({"ok": True, "relation": rel.to_dict()})
+                return
+            if self.path == "/api/game/player2/role":
+                embodied = getattr(self.server, "game_embodied", None)
+                p2 = getattr(embodied, "player2", None) if embodied is not None else None
+                if p2 is None:
+                    gc = getattr(self.server, "game_controller", None)
+                    p2 = getattr(gc, "player2_controller", None) if gc is not None else None
+                if p2 is None:
+                    self._json({"error": "player2_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                role_raw = payload.get("role")
+                if not role_raw:
+                    raise ValueError("role is required")
+                from .game_embodied import CompanionRole
+                role = CompanionRole.normalize(role_raw)
+                p2.set_role(role)
+                self._json({"ok": True, "role": p2.role.value})
+                return
+            if self.path == "/api/game/player2/step":
+                embodied = getattr(self.server, "game_embodied", None)
+                p2 = getattr(embodied, "player2", None) if embodied is not None else None
+                if p2 is None:
+                    gc = getattr(self.server, "game_controller", None)
+                    p2 = getattr(gc, "player2_controller", None) if gc is not None else None
+                if p2 is None:
+                    self._json({"error": "player2_not_configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                from .game_embodied import TacticalTelemetry
+                telemetry = TacticalTelemetry.from_input(payload)
+                decision = p2.tactical_tick(telemetry)
+                self._json({"ok": True, "decision": decision.to_dict()})
+                return
             self.send_error(HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.FORBIDDEN)
@@ -4347,6 +4584,7 @@ def create_server(
     moss_coordinator: Any | None = None,
     scene_memory: Any | None = None,
     game_controller: Any | None = None,
+    game_embodied: Any | None = None,
 ) -> CompanionServer:
     if lan_mode:
         _validate_lan_access_token(lan_access_token)
@@ -4489,6 +4727,7 @@ def create_server(
         moss_coordinator=moss_coordinator,
         scene_memory=scene_memory,
         game_controller=game_controller,
+        game_embodied=game_embodied,
     )
     if watcher is not None:
         watcher.start()

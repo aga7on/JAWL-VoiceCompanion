@@ -1,5 +1,42 @@
 # Текущее состояние — 13 ноября 2026
 
+## Multimodal Companion Capabilities: REST API Endpoints & Desktop HUD Panels (2026-11-13)
+### Статус: **REST API & Desktop HUD PASS; 131/131 Python тестов PASS (100%); 30/30 JS тестов PASS (100%); VRAM GPU 0 = 0 MiB, Pure CPU/RAM**
+- **Архитектурные цели и инварианты**:
+  - Полный REST API слой в `src/jawl_voicecompanion/web.py` для внешнего взаимодействия с новыми подсистемами: динамический анализ музыки и критика (`/api/music/*`), нарратив и субъективные мнения совместного просмотра (`/api/cowatch/*`), гипотезы о личности пользователя и социальный граф (`/api/persona/*`), тактический контроллер Player 2 (`/api/game/player2/*`).
+  - Визуализация в реальном времени на Desktop HUD (`desktop/app.html`, `desktop/app.js`): виджеты `#card-music-perception` (секция, BPM, энергия, дропы, вердикт критики), `#card-cowatch-narrative` (сюжетная арка, персонажи, эмоциональная валентность, симпатия), `#card-persona-hypotheses` (черты характера, гипотезы, социальные связи), `#card-player2-embodied` (роль, здоровье напарника, тактическое состояние, последняя реплика).
+  - Сквозное подключение к `JawlCompanionRuntime` и `composition.py`: безопасное связывание `game_embodied`, `cowatch_engine`, `music_perception`, `memory_consolidation`.
+- **Реализовано (file:line)**:
+  1. **REST API Endpoints (`src/jawl_voicecompanion/web.py`)**:
+     - `GET /api/music/status`: текущая секция, темп, энергия, валидность потока.
+     - `GET /api/music/critique`: структурированная оценка динамики и формы трека (`MusicCritique`).
+     - `POST /api/music/feed`: подача аудио-среза или метрик для инкрементального трекинга потока.
+     - `GET /api/cowatch/narrative`: текущая фаза сюжета, напряжение, сцена и активные персонажи.
+     - `GET /api/cowatch/opinion`: субъективное мнение компаньона о событиях и персонажах.
+     - `POST /api/cowatch/opinion`: регистрация сюжетного действия персонажа (`record_act`).
+     - `GET /api/persona/hypotheses`: список активных гипотез о пользователе с оценкой уверенности.
+     - `POST /api/persona/hypotheses`: инкрементальное обновление гипотезы о персоне (`record_observation`).
+     - `GET /api/persona/social-graph`: сериализованный граф социальных отношений (узлы и связи).
+     - `POST /api/persona/social-graph`: добавление или обновление социального отношения (`record_interaction`).
+     - `GET /api/game/player2`: текущий статус автономного компаньона Player 2 (роль, тактический статус, кнопки, реплика).
+     - `POST /api/game/player2/role`: динамическая смена тактической роли (`SUPPORT`, `DEFENSIVE`, `AGGRESSIVE`, `WINGMAN`, `GUARDIAN`, `CARRY`).
+     - `POST /api/game/player2/step`: выполнение тактического тика по входной телеметрии (`TacticalTelemetry`).
+  2. **Связывание рантайма и композиция (`src/jawl_voicecompanion/companion_runtime.py`, `composition.py`)**:
+     - Свойство `game_embodied` в `JawlCompanionRuntime` с безопасным геттером и сеттером.
+     - Инициализация и сквозной проброс `GameEmbodiedLayer` в `composition.py` с автоматической активацией двустороннего контроллера.
+  3. **Desktop HUD Виджеты (`desktop/app.html`, `desktop/app.js`)**:
+     - Разметка HUD: карточки `#card-music-perception`, `#card-cowatch-narrative`, `#card-persona-hypotheses`, `#card-player2-embodied` в информационном дашборде.
+     - Функции рендеринга: `renderMusicFlow()`, `renderCoWatch()`, `renderPersonaHypotheses()`, `renderPlayer2State()`.
+     - Интеграция в цикл опроса состояния `refreshMemoryLayers()`.
+- **Числа и доказательства (детерминированная верификация)**:
+  - `tests/test_companion_capabilities_web.py`: **9/9 PASS** (все GET/POST эндпоинты музыки, ко-вотчинга, персоны и Player 2).
+  - Полная регрессия 11 тестовых наборов: **131/131 PASS** в 6.10s (`test_model_slots.py`, `test_moss_coordinator.py`, `test_multimodal_micro_recall.py`, `test_game_controller.py`, `test_game_embodied.py`, `test_music_perception.py`, `test_cowatch_engine.py`, `test_memory_consolidation.py`, `test_companion_capabilities_web.py`, `test_companion_runtime.py`, `test_voicemem_runtime_isolation.py`).
+  - Desktop UI тесты жизненного цикла: `node desktop/tests/app-voice-lifecycle.test.mjs` — **30/30 PASS**.
+- **Бюджет ресурсов**:
+  - GPU 0: 0 MiB аллокаций ($\Delta\text{VRAM} = 0$).
+  - GPU 1: зарезервирован под SenseNova Loop 9B Preview и OmniVoice TTS.
+  - CPU/RAM: вся обработка HTTP эндпоинтов и вычислений исполняется на CPU.
+
 ## Multimodal Companion Extension: Music Flow & Critique, Media Narrative & CoWatch Opinions, Persona Hypotheses & Social Graph, Autonomous Player 2 Controller (2026-11-13)
 ### Статус: **Companion Extensions PASS; 111/111 тестов PASS (100%); 161/161 экспорт в __all__; VRAM GPU 0 = 0 MiB, Pure CPU/RAM**
 - **Архитектурные цели и инварианты**:

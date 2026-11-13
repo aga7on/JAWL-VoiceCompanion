@@ -25,6 +25,7 @@ class CompanionRuntime:
     _moss_coordinator: Any | None = None
     _scene_memory: Any | None = None
     _game_controller: Any | None = None
+    _game_embodied: Any | None = None
     _coordinator_closed: bool = False
 
     @property
@@ -78,6 +79,15 @@ class CompanionRuntime:
     @game_controller.setter
     def game_controller(self, value: Any | None) -> None:
         self._game_controller = value
+    @property
+    def game_embodied(self) -> Any | None:
+        if self._game_embodied is not None:
+            return self._game_embodied
+        return getattr(self.control, "game_embodied", None)
+
+    @game_embodied.setter
+    def game_embodied(self, value: Any | None) -> None:
+        self._game_embodied = value
     def serve_forever(self) -> None:
         """Run the control plane; all adapters remain owned by its server."""
         if self._closed:

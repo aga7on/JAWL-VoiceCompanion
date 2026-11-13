@@ -113,8 +113,10 @@ class CharacterOpinionTracker:
         *,
         valence_delta: float = 0.0,
         morality_judgment: str | None = None,
+        morality: str | float | None = None,
         competence_delta: float = 0.0,
         voice_acting_remark: str | None = None,
+        voice_remark: str | None = None,
     ) -> CharacterOpinion:
         with self._lock:
             key = character_name.strip()
@@ -125,7 +127,8 @@ class CharacterOpinionTracker:
             new_aff = max(-1.0, min(1.0, op.affinity + valence_delta))
             new_sym = max(0.0, min(1.0, op.sympathy + (valence_delta * 0.5)))
             new_comp = max(0.0, min(1.0, op.competence + competence_delta))
-            new_morality = morality_judgment or op.morality_judgment
+            moral_val = morality_judgment if morality_judgment is not None else (str(morality) if morality is not None else None)
+            new_morality = moral_val or op.morality_judgment
 
             notes = list(op.notes)
             if act_description:
@@ -133,7 +136,8 @@ class CharacterOpinionTracker:
                 if len(notes) > 20:
                     notes = notes[-20:]
 
-            updated_voice = voice_acting_remark if voice_acting_remark is not None else op.voice_acting_remark
+            voice_val = voice_acting_remark if voice_acting_remark is not None else voice_remark
+            updated_voice = voice_val if voice_val is not None else op.voice_acting_remark
 
             updated = CharacterOpinion(
                 character_name=key,

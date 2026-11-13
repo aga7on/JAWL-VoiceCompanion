@@ -21,7 +21,23 @@
 - [x] **Backchannel policy v0.5**: «угу» / preface anti-spam gating — детерминированный `TokenBucketRateLimiter` (`capacity=1.0`, `refill_rate=1.0/6.0` с минимальным интервалом 6 с), семантическая дедупликация идентичных реплик, строгое подавление при активной речи пользователя (`user_speaking`) и при `is_muted`. Интеграция в `/api/voice/preface`. 12/12 тестов PASS (`tests/test_voice_preface_policy.py`).
 
 ## Остальная очередь
-
+- [x] **Multimodal Companion Capabilities: REST API Endpoints & Desktop HUD Panels (13 ноября 2026)**:
+  1. **REST API Endpoints (`src/jawl_voicecompanion/web.py`)**:
+     - Музыка: `GET /api/music/status`, `GET /api/music/critique`, `POST /api/music/feed`.
+     - Совместный просмотр (CoWatch): `GET /api/cowatch/narrative`, `GET /api/cowatch/opinion`, `POST /api/cowatch/opinion`.
+     - Гипотезы о персоне и соцграф: `GET /api/persona/hypotheses`, `POST /api/persona/hypotheses`, `GET /api/persona/social-graph`, `POST /api/persona/social-graph`.
+     - Автономный Player 2: `GET /api/game/player2`, `POST /api/game/player2/role`, `POST /api/game/player2/step`.
+  2. **Интеграция рантайма и композиция (`src/jawl_voicecompanion/companion_runtime.py`, `composition.py`)**:
+     - `JawlCompanionRuntime.game_embodied` getter/setter.
+     - Интеграция `GameEmbodiedLayer` и двустороннего Player 2 контроллера в `composition.py`.
+  3. **Desktop HUD Виджеты (`desktop/app.html`, `desktop/app.js`)**:
+     - Карточки `#card-music-perception`, `#card-cowatch-narrative`, `#card-persona-hypotheses`, `#card-player2-embodied`.
+     - Функции отрисовки `renderMusicFlow()`, `renderCoWatch()`, `renderPersonaHypotheses()`, `renderPlayer2State()`, подключенные к `refreshMemoryLayers()`.
+  4. **Тесты и верификация**:
+     - `tests/test_companion_capabilities_web.py` — **9/9 PASS**.
+     - Таргетированная регрессия всех новых подсистем: **131/131 PASS** в 6.10s.
+     - Жизненный цикл Desktop UI: `node desktop/tests/app-voice-lifecycle.test.mjs` — **30/30 PASS**.
+     - VRAM GPU 0 = 0 MiB, CPU/RAM исполнение.
 - [x] **Multimodal Companion Extension: Music Flow & Critique, Media Narrative & CoWatch Opinions, Persona Hypotheses & Social Graph, Autonomous Player 2 Controller (13 ноября 2026)**:
   1. **Dynamic Music Flow Tracker & Music Critique Engine (`src/jawl_voicecompanion/music_perception.py`)**:
      - Чистый CPU DSP для динамического трекинга музыкального потока без нагрузки на GPU.

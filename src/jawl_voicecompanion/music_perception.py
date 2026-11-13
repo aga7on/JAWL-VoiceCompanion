@@ -873,6 +873,13 @@ class MusicCritiqueEngine:
     def __init__(self, *, default_language: str = "ru") -> None:
         self.default_language = "ru" if default_language.lower().startswith("ru") else "en"
 
+    def evaluate_flow(
+        self,
+        tracker: DynamicMusicFlowTracker,
+        *,
+        language: str | None = None,
+    ) -> MusicCritique:
+        return self.evaluate(tracker=tracker, language=language)
     def evaluate(
         self,
         *,

@@ -1,3 +1,37 @@
+## 2026-11-13 — Multimodal Companion Capabilities: REST API Endpoints & Desktop HUD Panels
+- **REST API эндпоинты новых подсистем (`src/jawl_voicecompanion/web.py`)**:
+  - Музыкальный анализ и критика:
+    - `GET /api/music/status`: текущая секция, темп, энергия, валидность потока.
+    - `GET /api/music/critique`: оценка динамики, формы и вердикты критики трека.
+    - `POST /api/music/feed`: инкрементальное обновление музыкального потока.
+  - Совместный просмотр (CoWatch):
+    - `GET /api/cowatch/narrative`: сюжетная арка, напряжение, сцена, активные персонажи.
+    - `GET /api/cowatch/opinion`: субъективное мнение компаньона о событиях и персонажах.
+    - `POST /api/cowatch/opinion`: регистрация сюжетного действия персонажа (`record_act`).
+  - Гипотезы о персоне и социальный граф:
+    - `GET /api/persona/hypotheses`: список активных и кандидатных гипотез о пользователе.
+    - `POST /api/persona/hypotheses`: добавление эпизодического наблюдения для проверки гипотезы.
+    - `GET /api/persona/social-graph`: граф социальных отношений с типами связей и валентностью.
+    - `POST /api/persona/social-graph`: добавление или обновление социального взаимодействия.
+  - Автономный напарник Player 2:
+    - `GET /api/game/player2`: текущее тактическое состояние, роль, ввод контроллера и реплики.
+    - `POST /api/game/player2/role`: динамическая смена роли (`SUPPORT`, `DEFENSIVE`, `AGGRESSIVE`, `WINGMAN`, `GUARDIAN`, `CARRY`).
+    - `POST /api/game/player2/step`: шаг тактического цикла по переданной телеметрии (`TacticalTelemetry`).
+- **Связывание рантайма и композиция (`src/jawl_voicecompanion/companion_runtime.py`, `composition.py`)**:
+  - Добавлено свойство `game_embodied` в `JawlCompanionRuntime` с безопасным геттером и сеттером.
+  - В `composition.py` проинициализирован и подключен `GameEmbodiedLayer` со сквозной привязкой к серверу.
+- **Desktop HUD панели реального времени (`desktop/app.html`, `desktop/app.js`)**:
+  - `#card-music-perception`: виджет восприятия музыки (секция, BPM, энергия, дропы, вердикт).
+  - `#card-cowatch-narrative`: виджет нарратива и мнений (арка, напряжение, симпатии персонажей).
+  - `#card-persona-hypotheses`: виджет гипотез о персоне и графа социальных связей.
+  - `#card-player2-embodied`: виджет статуса автономного напарника Player 2 (роль, HP, тактика, реплики).
+  - Функции рендеринга `renderMusicFlow()`, `renderCoWatch()`, `renderPersonaHypotheses()`, `renderPlayer2State()` интегрированы в цикл `refreshMemoryLayers()`.
+- **Тесты и верификация**:
+  - `tests/test_companion_capabilities_web.py` — **9/9 PASS**.
+  - Полный регрессионный сьют 11 подсистем: **131/131 PASS** в 6.10s.
+  - Жизненный цикл Desktop UI: `node desktop/tests/app-voice-lifecycle.test.mjs` — **30/30 PASS**.
+  - VRAM: $\Delta\text{VRAM} = 0$ MiB на GPU 0, CPU/RAM исполнение.
+
 ## 2026-11-13 — Multimodal Companion Extension: Music Flow & Critique, Media Narrative & CoWatch Opinions, Persona Hypotheses & Social Graph, Autonomous Player 2 Controller
 - **Чистый CPU DSP динамического анализа музыки и критики (`src/jawl_voicecompanion/music_perception.py`)**:
   - `MusicSectionKind`: типизированные секции музыкальной композиции (`INTRO`, `VERSE`, `CHORUS`, `BRIDGE`, `BUILDUP`, `DROP`, `OUTRO`, `TRANSITION`, `UNKNOWN`).

@@ -117,6 +117,9 @@ class PersonaHypothesis:
     def falsified_reason(self) -> str:
         return self.rationale.removeprefix("Falsified: ")
 
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
     def to_memory_proposal(self) -> MemoryProposal:
         """Convert hypothesis into canonical MemoryProposal."""
         is_fact = (
@@ -162,8 +165,32 @@ class UserPersonaHypothesisEngine:
         self._hypotheses: dict[str, PersonaHypothesis] = {}
         self._falsified_keys: set[str] = set()
 
-    def record_hypothesis(self, hypothesis: PersonaHypothesis) -> PersonaHypothesis:
+    def record_hypothesis(
+        self,
+        hypothesis: PersonaHypothesis | None = None,
+        *,
+        trait_key: str | None = None,
+        inferred_value: Any = None,
+        confidence: float = 0.5,
+        evidence_count: int = 1,
+        supporting_episodes: list[str] | None = None,
+        rationale: str = "",
+        falsified: bool = False,
+    ) -> PersonaHypothesis:
         """Ingest or merge a persona hypothesis."""
+        if hypothesis is None:
+            if not trait_key:
+                raise ValueError("trait_key is required when hypothesis object is not provided")
+            hypothesis = PersonaHypothesis(
+                trait_key=trait_key,
+                inferred_value=inferred_value,
+                confidence=confidence,
+                evidence_count=evidence_count,
+                supporting_episodes=supporting_episodes or [],
+                rationale=rationale,
+                falsified=falsified,
+                updated_at=_utc_iso(self._clock()),
+            )
         with self._lock:
             key = hypothesis.trait_key.strip().lower()
             if key in self._falsified_keys or hypothesis.falsified:
@@ -355,6 +382,14 @@ class SocialEntityRelation:
     @property
     def relation(self) -> str:
         return self.relation_type
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["source"] = self.source_entity
+        d["target"] = self.target_entity
+        d["relation"] = self.relation_type
+        d["trust"] = self.trust_score
+        return d
 
     def to_memory_proposal(self) -> MemoryProposal:
         """Convert social relationship to canonical MemoryProposal."""
@@ -602,12 +637,16 @@ class SocialGraphConsolidator:
         """Export serialized social graph structure."""
         with self._lock:
             nodes = sorted(list(self._entities))
+            edges = [r.to_dict() for r in self._relations.values()]
             return {
                 "nodes": nodes,
                 "entities": nodes,
-                "edges": [asdict(r) for r in self._relations.values()],
+                "edges": edges,
+                "relationships": edges,
             }
 
+    def to_dict(self) -> dict[str, Any]:
+        return self.export_graph()
     def synthesize_proposals(self) -> list[MemoryProposal]:
         """Convert all active social relations into canonical MemoryProposals."""
         with self._lock:

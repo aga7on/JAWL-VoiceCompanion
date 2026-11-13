@@ -300,6 +300,9 @@ class CompanionRole(str, enum.Enum):
     SUPPORT = "support"
     AGGRESSIVE = "aggressive"
     DEFENSIVE = "defensive"
+    WINGMAN = "wingman"
+    GUARDIAN = "guardian"
+    CARRY = "carry"
 
     @classmethod
     def normalize(cls, value: CompanionRole | str) -> CompanionRole:
@@ -311,7 +314,7 @@ class CompanionRole(str, enum.Enum):
                 if member.value == clean:
                     return member
         raise GameEmbodiedError(
-            f"Unsupported companion role: {value!r}. Valid roles: support, aggressive, defensive"
+            f"Unsupported companion role: {value!r}. Valid roles: support, aggressive, defensive, wingman, guardian, carry"
         )
 
 
@@ -359,16 +362,42 @@ class TacticalTelemetry:
                 timestamp=source.timestamp,
             )
         if isinstance(source, dict):
+            # Resolve health from health or companion_hp / companion_max_hp
+            raw_health = source.get("health")
+            companion_hp = source.get("companion_hp")
+            companion_max_hp = source.get("companion_max_hp")
+            if companion_hp is not None and companion_max_hp:
+                health_val = float(companion_hp) / float(companion_max_hp)
+            elif raw_health is not None:
+                health_val = float(raw_health)
+            else:
+                health_val = 1.0
+
+            # Resolve player_health from player_health, teammate_health, or player_hp / player_max_hp
+            raw_player_health = source.get("player_health", source.get("teammate_health"))
+            player_hp = source.get("player_hp")
+            player_max_hp = source.get("player_max_hp")
+            if player_hp is not None and player_max_hp:
+                player_health_val = float(player_hp) / float(player_max_hp)
+            elif raw_player_health is not None:
+                player_health_val = float(raw_player_health)
+            else:
+                player_health_val = 1.0
+
+            target_threat = float(source.get("target_threat", 0.0))
+            is_under_fire = bool(source.get("is_under_fire", target_threat > 0.5))
+            enemies = int(source.get("enemies", 1 if target_threat > 0.0 else 0))
+
             return cls(
                 game=str(source.get("game") or "game"),
                 scene=str(source.get("scene") or ""),
-                health=float(source.get("health", 1.0)),
-                player_health=float(source.get("player_health", source.get("teammate_health", 1.0))),
-                enemies=int(source.get("enemies", 0)),
+                health=health_val,
+                player_health=player_health_val,
+                enemies=enemies,
                 target_distance=float(source.get("target_distance", 10.0)),
                 target_x=float(source.get("target_x", 0.0)),
                 target_y=float(source.get("target_y", 0.0)),
-                is_under_fire=bool(source.get("is_under_fire", False)),
+                is_under_fire=is_under_fire,
                 ammo_ratio=float(source.get("ammo_ratio", 1.0)),
                 objective=str(source.get("objective") or ""),
                 timestamp=float(source.get("timestamp", 0.0)),
@@ -426,6 +455,7 @@ class Player2Decision:
             "triggers": {k: round(v, 3) for k, v in self.triggers.items()},
             "speech_text": self.speech_text,
             "speech_urgency": self.speech_urgency,
+            "speech_callout": self.speech_text,
             "action_type": self.action_type,
             "rationale": self.rationale,
             "timestamp": round(self.timestamp, 3),
@@ -552,7 +582,7 @@ class Player2CompanionController:
         elif telemetry.enemies == 0 and self._prev_enemies > 0:
             self._emotional_state = "triumphant"
         elif telemetry.enemies > 0:
-            self._emotional_state = "aggressive" if self._role == CompanionRole.AGGRESSIVE else "focused"
+            self._emotional_state = "aggressive" if self._role in (CompanionRole.AGGRESSIVE, CompanionRole.CARRY) else "focused"
         else:
             self._emotional_state = "calm"
 
@@ -568,7 +598,7 @@ class Player2CompanionController:
         action_type: str = "idle"
         rationale: str = ""
 
-        if self._role == CompanionRole.SUPPORT:
+        if self._role in (CompanionRole.SUPPORT, CompanionRole.WINGMAN):
             if telemetry.player_health <= 0.35:
                 action_type = "heal_player"
                 tapped_buttons.append(VirtualGamepadButton.Y.value)
@@ -610,7 +640,7 @@ class Player2CompanionController:
                 stick_move = (0.0, 0.2)
                 rationale = "Following player formation"
 
-        elif self._role == CompanionRole.AGGRESSIVE:
+        elif self._role in (CompanionRole.AGGRESSIVE, CompanionRole.CARRY):
             if telemetry.health <= 0.20:
                 action_type = "evade"
                 tapped_buttons.append(VirtualGamepadButton.B.value)
@@ -650,7 +680,7 @@ class Player2CompanionController:
                 stick_move = (0.0, 0.5)
                 rationale = "Scouting forward for targets"
 
-        elif self._role == CompanionRole.DEFENSIVE:
+        elif self._role in (CompanionRole.DEFENSIVE, CompanionRole.GUARDIAN):
             if telemetry.is_under_fire or telemetry.health <= 0.40:
                 action_type = "shield_and_retreat"
                 triggers["LT"] = 1.0

@@ -698,10 +698,14 @@ def build_companion_runtime(
     )
     from .moss_coordinator import MossCoordinationLayer
     from .game_controller import GameControllerAdapter, GameEmbodimentAdapter
+    from .game_embodied import CompanionRole, GameEmbodiedLayer
 
     model_slot_registry = ModelSlotRegistry()
     game_controller = GameControllerAdapter()
-
+    game_embodied = GameEmbodiedLayer()
+    player2 = game_embodied.enable_player2(role=CompanionRole.SUPPORT, controller=game_controller)
+    game_controller.player2_controller = player2
+    game_embodied.gamepad = game_controller
     # Wire cognitive slots to existing JAWL engine configurations
     if getattr(args, "llm_url", None) and getattr(args, "llm_model", None):
         if "8990" in args.llm_url or "sensenova" in str(args.llm_model).lower():
@@ -824,6 +828,7 @@ def build_companion_runtime(
         moss_coordinator=moss_coordinator,
         scene_memory=scene_memory,
         game_controller=game_controller,
+        game_embodied=game_embodied,
     )
     server.offline_consolidator = offline_consolidator
     server.cowatch_engine = cowatch_engine
@@ -832,6 +837,7 @@ def build_companion_runtime(
     server.moss_coordinator = moss_coordinator
     server.scene_memory = scene_memory
     server.game_controller = game_controller
+    server.game_embodied = game_embodied
     if qwen_visual_sensor is not None:
         from .arbiter import TurnPriority
 

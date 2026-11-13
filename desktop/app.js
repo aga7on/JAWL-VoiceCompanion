@@ -342,16 +342,94 @@ function renderAmbient(settled) {
 }
 
 
+function renderMusicFlow(settled) {
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  if (!data || data.configured === false) {
+    setVal('music-flow-state', 'не активно');
+    setVal('music-flow-tension', '—');
+    memoryLine('music-flow-log', [], 'Анализ музыкального потока не активен.');
+    return;
+  }
+  const stats = data.stats || {};
+  const currentSection = stats.current_section || 'ambient';
+  const dropsCount = Array.isArray(data.drops) ? data.drops.length : (stats.total_drops || 0);
+  setVal('music-flow-state', `${currentSection} · дропов: ${dropsCount}`);
+  setVal('music-flow-tension', `напряжение: ${Math.round((stats.current_tension || 0) * 100)}% · темп: ${Math.round(stats.current_tempo_bpm || 120)} BPM`);
+  const traj = Array.isArray(data.trajectory) ? data.trajectory : [];
+  const rows = traj.slice(-5).map(pt =>
+    `${memoryClock(pt.timestamp)} секция: ${pt.section || '—'} · rms: ${pt.rms_dbfs ?? '—'} dB · энергия: ${Math.round((pt.perceived_energy || 0) * 100)}%`
+  );
+  memoryLine('music-flow-log', rows, 'Ожидание аудиопотока для анализа темпа и дропов…');
+}
+
+function renderCoWatch(settled) {
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  if (!data || data.configured === false) {
+    setVal('cowatch-arc-state', 'не активно');
+    setVal('cowatch-tension-state', '—');
+    memoryLine('cowatch-opinion-log', [], 'Совместный просмотр не настроен.');
+    return;
+  }
+  setVal('cowatch-arc-state', `${data.arc || 'exposition'}`);
+  setVal('cowatch-tension-state', `напряжение: ${Math.round((data.tension || 0) * 100)}% · сцена: ${data.scene_index || 0}`);
+  const preds = Array.isArray(data.predictions) ? data.predictions : [];
+  const notes = preds.slice(-5).map(p => `Прогноз: ${memoryText(p, 80)}`);
+  memoryLine('cowatch-opinion-log', notes, 'Сюжетные прогнозы и оценки поступков персонажей…');
+}
+
+function renderPersonaHypotheses(settled) {
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  if (!data || data.configured === false) {
+    setVal('persona-hypotheses-meta', 'не активно');
+    memoryLine('persona-hypotheses-log', [], 'Консолидация личности не настроена.');
+    return;
+  }
+  const items = Array.isArray(data.hypotheses) ? data.hypotheses : [];
+  setVal('persona-hypotheses-meta', `гипотез: ${items.length}`);
+  const rows = items.slice(-5).map(h =>
+    `• ${h.trait_key}: "${h.inferred_value}" (${Math.round((h.confidence || 0) * 100)}% ув., ${h.evidence_count || 1} набл.)`
+  );
+  memoryLine('persona-hypotheses-log', rows, 'Гипотезы о предпочтениях пользователя пока формируются…');
+}
+
+function renderPlayer2State(settled) {
+  const data = settled.status === 'fulfilled' ? settled.value : null;
+  if (!data || data.configured === false) {
+    setVal('player2-role-state', 'не активно');
+    setVal('player2-emotion-state', '—');
+    memoryLine('player2-tactical-log', [], 'Player 2 контроллер не подключён.');
+    return;
+  }
+  setVal('player2-role-state', `${data.role || 'wingman'}`);
+  const state = data.state || {};
+  setVal('player2-emotion-state', `${state.emotional_state || 'calm'}`);
+  const lastDec = state.last_decision;
+  const rows = [];
+  if (lastDec) {
+    rows.push(`Действие: ${lastDec.action_type || 'idle'} · реплика: "${lastDec.speech_callout || lastDec.speech_text || '—'}"`);
+    if (lastDec.rationale) rows.push(`Причина: ${lastDec.rationale}`);
+  }
+  memoryLine('player2-tactical-log', rows, 'Player 2 ожидает игровых событий…');
+}
+
 async function refreshMemoryLayers() {
   if (!memoryActive()) return;
   const settled = await Promise.allSettled([
     memoryJson('/api/perception/stream'),
     memoryJson('/api/sensory-history'),
     memoryJson('/api/ambient-memory'),
+    memoryJson('/api/music/status'),
+    memoryJson('/api/cowatch/narrative'),
+    memoryJson('/api/persona/hypotheses'),
+    memoryJson('/api/game/player2'),
   ]);
   renderPerception(settled[0]);
   renderHistory(settled[1]);
   renderAmbient(settled[2]);
+  renderMusicFlow(settled[3]);
+  renderCoWatch(settled[4]);
+  renderPersonaHypotheses(settled[5]);
+  renderPlayer2State(settled[6]);
 }
 
 const memoryKinds = {fact: 'Факт', trait: 'Черта', preference: 'Предпочтение', summary: 'Сводка'};
