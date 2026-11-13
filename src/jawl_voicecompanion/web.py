@@ -48,18 +48,22 @@ from .resources import ResourceGovernor
 from .tts import TTSService, TTSUnavailable, TTSCancelled
 from .speech_requests import validate_speech_request_id
 from . import turn_policy
-from .duplex_cascade import is_user_backchannel
+from .duplex_cascade import DuplexCascadeArbiter, StreamPhraseSegmenter, is_user_backchannel
+from .affective_engine import TokenBucketRateLimiter
+from .echo_guard import EchoGuard
 from .vision import JawlNativeVisionExecutor, VisionLookService
 from .voicemem_client import VoiceMemAsyncIngest, VoiceMemProcessClient, VoiceMemUnavailable
 from .ws_server import WebSocketConnection, WebSocketError, is_websocket_upgrade, send_handshake_response
 from .system_audio import SystemAudioUnavailable
 from .stream_chat import StreamChatIngestor
+from . import turn_trace
 from .voice_capture import (
     CaptureLeaseError, VoiceCaptureLease, VoiceCaptureSettings, capture_config_error, read_config_hub_settings,
 )
 from .transcript_quality import is_meaningful_transcript
 
 
+ENABLE_FAST_LANE = os.getenv("ENABLE_FAST_LANE", "0").lower() in {"1", "true", "yes"}
 MAX_BODY_BYTES = 64 * 1024
 AVATAR_AUDIO_STALE_SECONDS = 0.75
 LAN_AUTH_MIN_TOKEN_LENGTH = 16
@@ -341,6 +345,8 @@ class CompanionServer(ThreadingHTTPServer):
         tls_context: ssl.SSLContext | None = None,
         voice_delivery_enabled: bool = False,
         app_audio_router: Any | None = None,
+        screen_commentary: Any | None = None,
+        enable_fast_lane: bool | None = None,
     ):
         bind_host = str(server_address[0])
         if not is_loopback_host(bind_host) and not lan_mode:
@@ -395,6 +401,7 @@ class CompanionServer(ThreadingHTTPServer):
         if self.ambient_scheduler is not None:
             self.ambient_scheduler.governor = self.resources
         self.playback_suppression = PlaybackSuppression()
+        self.echo_guard = EchoGuard()
         self.app_audio_router = app_audio_router
         if self.ambient_audio is not None:
             self.ambient_audio.bridge.set_playback_suppression(self.playback_suppression)
@@ -430,6 +437,7 @@ class CompanionServer(ThreadingHTTPServer):
             else getattr(perception_fusion, "visual_stream_worker", None)
         )
         self.config_hub = config_hub
+        self.screen_commentary = screen_commentary
         self.log_dir = log_dir
         self.jawl_hostos_control = jawl_hostos_control
         self.audit_log = audit_log
@@ -463,6 +471,15 @@ class CompanionServer(ThreadingHTTPServer):
         self.approvals = ApprovalStore(hostos_executor)
         self.session_token = secrets.token_urlsafe(24)
         self.csrf_token = secrets.token_urlsafe(24)
+        # Full-duplex interruption bookkeeping: the timestamp (wall clock) and
+        # spoken reason of the last barge-in are consumed exactly once by the
+        # next user turn's context, so the brain knows its reply was cut off
+        # and can correct course instead of answering "in fragments".
+        self._last_user_message_at: float | None = None
+        self._last_interruption_at: float | None = None
+        self._last_interruption_reason: str = ""
+        self._last_interrupted_turn_text: str | None = None
+        self._current_speaking_text: str | None = None
         self._turn_replay = _TurnReplayCache()
         self._avatar_audio_lock = threading.Lock()
         self._avatar_audio = {
@@ -472,6 +489,15 @@ class CompanionServer(ThreadingHTTPServer):
             "timestamp_ms": 0,
             "updated_at": 0.0,
         }
+        self.enable_fast_lane: bool = (
+            enable_fast_lane
+            if enable_fast_lane is not None
+            else getattr(gateway, "enable_fast_lane", None)
+            if getattr(gateway, "enable_fast_lane", None) is not None
+            else ENABLE_FAST_LANE
+        )
+        self.duplex_arbiter = getattr(self.gateway, "duplex_arbiter", None) or DuplexCascadeArbiter()
+        self.backchannel_limiter = TokenBucketRateLimiter(capacity=1.0, refill_rate=1.0 / 6.0, min_spacing=6.0)
         super().__init__(server_address, CompanionRequestHandler)
         self._fixed_origin_hosts = {
             ("127.0.0.1", self.server_port),
@@ -820,14 +846,101 @@ class CompanionServer(ThreadingHTTPServer):
     )
     PREFACE_MAX_SILENCE_MS = 4500.0
 
+    def note_speech_interruption(self, *, reason: str = "", request_id: Any = None) -> None:
+        """Record a user barge-in so the next turn can acknowledge it.
+
+        Only genuine interruptions (barge-in via the voice lane or an explicit
+        stop button) carry a ``reason``; a plain new chat turn must not be
+        mistaken for the user cutting the assistant off mid-speech.
+        """
+        try:
+            lock = getattr(self, "_avatar_audio_lock", None)
+            if lock is not None:
+                with lock:
+                    self._last_interruption_at = time.time()
+                    self._last_interruption_reason = str(reason or "barge_in")[:64]
+                    self._last_interrupted_turn_text = getattr(self, "_current_speaking_text", None)
+            else:
+                self._last_interruption_at = time.time()
+                self._last_interruption_reason = str(reason or "barge_in")[:64]
+                self._last_interrupted_turn_text = getattr(self, "_current_speaking_text", None)
+        except Exception:  # noqa: BLE001 - bookkeeping must never break a cancel
+            pass
+        if reason:
+            gateway = getattr(self, "gateway", None)
+            arbiter = getattr(gateway, "arbiter", None)
+            if arbiter is not None and hasattr(arbiter, "cancel_all"):
+                try:
+                    arbiter.cancel_all(reason=f"speech_interruption:{reason}")
+                except Exception:
+                    pass
+            duplex_arbiter = getattr(self, "duplex_arbiter", None) or getattr(gateway, "duplex_arbiter", None)
+            if duplex_arbiter is not None and hasattr(duplex_arbiter, "next_epoch"):
+                try:
+                    duplex_arbiter.next_epoch()
+                except Exception:
+                    pass
+
     def enrich_turn_text(self, text: str) -> str:
-        """Attach the ready AV observation once, outside the conversational text."""
         from .perception_packet import attach_packet, make_packet, render_packet
 
         clean = str(text or "").strip()
         if not clean:
             return clean
         user_message = clean
+        # Give the brain a sense of time: when the user speaks matters as much
+        # as what they say. Record the gap since the previous user message so
+        # the model can distinguish "almost immediately" from "after a long pause".
+        server = getattr(self, "server", self)
+        try:
+            now = time.time()
+            last = getattr(server, "_last_user_message_at", None)
+            server._last_user_message_at = now
+            if last is not None:
+                stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+                gap = max(0.0, now - float(last))
+                if gap < 5:
+                    time_note = f"[Время: {stamp}; предыдущее сообщение было почти сразу ({gap:.1f} с назад)]"
+                elif gap < 60:
+                    time_note = f"[Время: {stamp}; предыдущее сообщение {int(gap)} с назад]"
+                else:
+                    time_note = f"[Время: {stamp}; предыдущее сообщение {int(gap // 60)} мин {int(gap % 60)} с назад]"
+                clean = time_note + "\n" + clean
+                user_message = clean
+        except Exception:  # noqa: BLE001 - time annotation must never block a turn
+            pass
+        # Consume the pending barge-in marker exactly once: the next user
+        # message after an interruption carries the fact (and how far into
+        # the reply it happened) so the brain treats the follow-up as a
+        # correction of the interrupted answer, not as unrelated fragments.
+        try:
+            interrupted_at = getattr(server, "_last_interruption_at", None)
+            if interrupted_at is not None:
+                server._last_interruption_at = None
+                reason = str(getattr(server, "_last_interruption_reason", "") or "barge_in")
+                interrupted_text = getattr(server, "_last_interrupted_turn_text", None)
+                server._last_interrupted_turn_text = None
+                age = max(0.0, time.time() - float(interrupted_at))
+                if age <= 120.0:
+                    if age < 2:
+                        when = "почти сразу"
+                    elif age < 60:
+                        when = f"{int(age)} с назад"
+                    else:
+                        when = f"{int(age // 60)} мин {int(age % 60)} с назад"
+                    snippet = ""
+                    if interrupted_text and isinstance(interrupted_text, str):
+                        clean_snip = " ".join(interrupted_text.split())[:100]
+                        if clean_snip:
+                            snippet = f"; ответ прерван на: «{clean_snip}»"
+                    clean = (
+                        f"[ПЕРЕБИВАНИЕ: пользователь прервал мой предыдущий голосовой ответ "
+                        f"({reason}, {when}{snippet}). Ответ не был дослушан — воспринимай это сообщение "
+                        f"как продолжение/коррекцию прерванной реплики, учитывай недослушанный "
+                        f"контекст, не начинай ответ заново и не отвечай по отрывкам.]\n" + clean
+                    )
+        except Exception:  # noqa: BLE001 - marker must never block a turn
+            pass
         if (re.search(r"статус|состояни|подключ|работа|модул|настрой|расскажи|доложи|status|configured|module", clean, re.I)
                 and re.search(r"сенсор|зрен|аудио|микрофон|реч|памят|модул|мозг|процесс|jawl|companion|sensory|memory|speech|module|brain", clean, re.I)):
             facts = {}
@@ -1453,7 +1566,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if feed is None:
                 self._json({"configured": False, "status": "not_configured"})
                 return
-            self._json(feed.poll_state())
+            state = feed.poll_state()
+            commentary = getattr(self.server, "screen_commentary", None)
+            if commentary is not None:
+                try:
+                    commentary.tick()
+                    state["screen_commentary"] = commentary.state()
+                except Exception as exc:  # noqa: BLE001 - status must not break polls
+                    state["screen_commentary"] = {"enabled": False, "last_error": f"{type(exc).__name__}"[:80]}
+            self._json(state)
             return
         if path == "/api/config-hub":
             try:
@@ -2036,11 +2157,32 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
         if not self._authenticate_network_request():
             return
+        request_began = time.time()
         try:
             if self._proxy_jawl_console():
                 return
             self._require_browser_session()
             payload = self._read_json()
+            if self.path == "/api/trace":
+                # Browser-side stage marks for the per-turn latency trace.
+                # Observation only: this route never influences the turn.
+                trace_id = str(payload.get("trace_id") or "").strip()[:80]
+                stage = str(payload.get("stage") or "").strip()[:80]
+                if not trace_id or not stage:
+                    raise ValueError("trace_id and stage are required")
+                client_ts = payload.get("client_ts")
+                turn_trace.mark(
+                    trace_id,
+                    stage if stage.startswith("t_") else f"browser.{stage}",
+                    detail=payload.get("detail"),
+                    wall_ts=(
+                        (time.time() - (float(payload["client_age_ms"]) / 1000.0))
+                        if isinstance(payload.get("client_age_ms"), (int, float))
+                        else None
+                    ),
+                )
+                self._json({"ok": True})
+                return
             if self.path == "/api/profile/stop":
                 if payload:
                     raise ValueError("profile stop request body must be empty")
@@ -2180,7 +2322,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json({"error": "proactive feed is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 feed.update_settings(muted=payload.get("muted"), speak=payload.get("speak"))
-                self._json({"ok": True, "state": feed.state()})
+                commentary = getattr(self.server, "screen_commentary", None)
+                if commentary is not None:
+                    try:
+                        commentary.update_settings(enabled=payload.get("screen_commentary_enabled"))
+                    except ValueError:
+                        pass
+                state = feed.state()
+                if commentary is not None:
+                    try:
+                        state["screen_commentary"] = commentary.state()
+                    except Exception:
+                        pass
+                self._json({"ok": True, "state": state})
                 return
             if self.path == "/api/proactive/feedback":
                 feed = self.server.proactive_feed
@@ -2247,17 +2401,44 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 text = str(snapshot.get("text") or "").strip()
                 assistant_speaking = payload.get("assistant_speaking") is True
                 extended_used = payload.get("extended_used") is True
+                voiced_ms = payload.get("voiced_ms")
+                voiced_ms = (
+                    float(voiced_ms)
+                    if isinstance(voiced_ms, (int, float)) and not isinstance(voiced_ms, bool)
+                    and 0.0 <= float(voiced_ms) <= 600_000.0
+                    else 0.0
+                )
                 if snapshot.get("active") and text:
                     if not is_meaningful_transcript(text):
                         self._json({"ok": True, "draft": "", "mode": "streaming", "hold": False,
                                     "silence_ms": snapshot.get("silence_ms"), "required_ms": turn_policy.BASE_SILENCE_MS})
                         return
+                    ref_text = (
+                        self.server.echo_guard.get_reference_text()
+                        if hasattr(self.server, "echo_guard") and self.server.echo_guard
+                        else str(getattr(self.server, "_current_speaking_text", "") or "")
+                    )
                     decision = turn_policy.decide(
                         text,
                         float(snapshot.get("silence_ms") or 0.0),
                         extended_used,
                         assistant_speaking=assistant_speaking,
+                        voiced_ms=voiced_ms,
+                        reference_text=ref_text,
                     )
+                    if decision.get("echo_detected"):
+                        if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                            self.server.echo_guard.record_suppressed_draft()
+                        self._json({
+                            "ok": True, "draft": "", "mode": "streaming",
+                            "hold": False,
+                            "silence_ms": snapshot.get("silence_ms"),
+                            "required_ms": decision["required_ms"],
+                            "duplex_token": decision.get("duplex_token"),
+                            "duplex_action": decision.get("duplex_action"),
+                            "echo_detected": True,
+                        })
+                        return
                     self._json({
                         "ok": True, "draft": text, "mode": "streaming",
                         "hold": bool(decision["hold"]),
@@ -2274,6 +2455,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                 # A short provisional phrase (no LLM) that can be spoken while
                 # the JAWL turn is still thinking; the authoritative answer
                 # follows it. Explicit screen questions only, best-effort.
+                fast_lane_on = getattr(self.server, "enable_fast_lane", ENABLE_FAST_LANE)
+                if not fast_lane_on:
+                    self._json({"ok": True, "text": "", "status": "disabled"})
+                    return
+                request_epoch = payload.get("generation_epoch")
+                current_epoch = getattr(getattr(self.server, "duplex_arbiter", None), "generation_epoch", None)
+                if current_epoch is not None and request_epoch is not None:
+                    try:
+                        if int(request_epoch) != int(current_epoch):
+                            self._json({"ok": True, "text": "", "status": "stale_epoch"})
+                            return
+                    except (ValueError, TypeError):
+                        pass
                 capture_cancel = self.server.voice_capture.authorize_stream(payload)
                 snapshot: dict[str, Any] = {}
                 if self.server.streaming_asr is not None:
@@ -2300,7 +2494,10 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     self._json({"ok": True, "text": "", "status": "cancelled"})
                     return
                 if text:
-                    log_event("voice_preface", text=text, partial=partial[:160])
+                    limiter = getattr(self.server, "backchannel_limiter", None)
+                    if limiter is not None and not limiter.allow(text=text):
+                        self._json({"ok": True, "text": "", "status": "rate_limited"})
+                        return
                 self._json({"ok": True, "text": text})
                 return
             if self.path == "/api/reflection/note":
@@ -2336,6 +2533,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("speed must be a number")
                 if emotion is not None and not isinstance(emotion, dict):
                     raise ValueError("emotion must be an object or null")
+                if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                    self.server.echo_guard.set_speaking_text(text)
                 audio = self.server.tts.synthesize(
                     text, voice=voice, speed=float(speed), emotion=emotion,
                     **self._speech_request_kwargs(payload),
@@ -2356,13 +2555,29 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("speed must be a number")
                 if emotion is not None and not isinstance(emotion, dict):
                     raise ValueError("emotion must be an object or null")
-                self._stream_tts(text, voice=voice, speed=float(speed), emotion=emotion,
-                                 **self._speech_request_kwargs(payload))
+                self.server._current_speaking_text = text
+                if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                    self.server.echo_guard.set_speaking_text(text)
+                try:
+                    self._stream_tts(text, voice=voice, speed=float(speed), emotion=emotion,
+                                     **self._speech_request_kwargs(payload))
+                finally:
+                    if getattr(self.server, "_current_speaking_text", None) == text:
+                        self.server._current_speaking_text = None
                 return
             if self.path == "/api/tts/cancel":
                 request_kwargs = self._speech_request_kwargs(payload)
                 if self.server.tts is not None:
                     self.server.tts.cancel(**request_kwargs)
+                if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                    self.server.echo_guard.clear()
+                # A barge-in is a conversational event, not just audio
+                # teardown: remember when the user interrupted so the next
+                # turn's context tells the brain its reply was not heard.
+                self.server.note_speech_interruption(
+                    reason=str(payload.get("reason") or "").strip()[:64],
+                    request_id=payload.get("request_id"),
+                )
                 self._json({"ok": True, "status": "cancelled"})
                 return
             if self.path == "/api/hostos/execute":
@@ -2859,6 +3074,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     state = self.server.playback_suppression.begin(ttl_seconds)
                 else:
                     state = self.server.playback_suppression.end()
+                    if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                        self.server.echo_guard.clear()
                 self._json({"ok": True, "playback": state})
                 return
             if self.path == "/api/audio/router":
@@ -2915,6 +3132,16 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, status=HTTPStatus.SERVICE_UNAVAILABLE)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        finally:
+            # Request duration is part of the latency picture: a slow route shows
+            # up here even when the work inside it is opaque.
+            elapsed_ms = (time.time() - request_began) * 1000.0
+            route = urlsplit(getattr(self, "path", "") or "").path[:80]
+            turn_trace.mark(
+                "http",
+                f"http.POST {route}",
+                detail={"elapsed_ms": round(elapsed_ms, 1)},
+            )
 
     def do_PUT(self) -> None:  # noqa: N802 - stdlib handler API
         """Forward PUT requests to the JAWL console proxy (session-gated)."""
@@ -3159,6 +3386,8 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             if session is not None:
                 session.cancel()
                 self._live_speech = None
+            if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                self.server.echo_guard.clear()
             send({"type": "speech_cancelled"})
             return
         if self.server.tts is None:
@@ -3178,18 +3407,42 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             self._live_speech = session
         if action == "speak_delta":
             session.feed(str(payload.get("text") or ""))
+            if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                self.server.echo_guard.set_speaking_text(session._spoken_text or session._raw_text)
             chunks = session.poll_audio(timeout=0.05)
         else:
             session.finish(payload.get("text"))
+            if hasattr(self.server, "echo_guard") and self.server.echo_guard:
+                self.server.echo_guard.set_speaking_text(session._spoken_text or session._raw_text)
             chunks = session.drain_all()
             self._live_speech = None
         index = 0
+        trace_ref = str(payload.get("trace_id") or payload.get("correlation_id") or "").strip()[:80]
+        epoch = getattr(getattr(self.server, "duplex_arbiter", None), "generation_epoch", 0)
         for audio in chunks:
+            if index == 0 and trace_ref:
+                turn_trace.mark(
+                    trace_ref,
+                    "server.first_audio_chunk_ready",
+                    detail={"bytes": len(audio), "mode": mode},
+                )
+                turn_trace.mark(
+                    trace_ref,
+                    turn_trace.STAGE_TTS_FIRST_PCM,
+                    detail={"bytes": len(audio), "mode": mode},
+                )
+            if trace_ref:
+                turn_trace.mark(
+                    trace_ref,
+                    turn_trace.STAGE_AUDIO_ENQUEUED,
+                    detail={"index": index},
+                )
             send({
                 "type": "audio",
                 "index": index,
                 "media_type": "audio/wav",
                 "data_base64": base64.b64encode(audio).decode("ascii"),
+                "generation_epoch": epoch,
             })
             index += 1
         if action == "speak_finish":
@@ -3251,6 +3504,24 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         cache = getattr(self.server, "_turn_replay", None)
         replay_key: str | None = None
         raw_correlation = str(payload.get("correlation_id") or "").strip()
+        # Trace the utterance from the client's last audio packet to the answer.
+        trace_id = str(payload.get("trace_id") or raw_correlation or "").strip()[:80]
+        if trace_id:
+            turn_trace.mark(
+                trace_id,
+                "server.voice_end_received",
+                detail={
+                    "correlation_id": raw_correlation[:64],
+                    "buffered_bytes": payload.get("buffered_bytes"),
+                    "client_ts": payload.get("trace_ts"),
+                },
+                wall_ts=(payload.get("trace_ts") if isinstance(payload.get("trace_ts"), (int, float)) else None),
+            )
+            turn_trace.mark(
+                trace_id,
+                turn_trace.STAGE_VAD_ENDPOINT,
+                detail={"correlation_id": raw_correlation[:64]},
+            )
         if cache is not None and raw_correlation:
             session_id = str(payload.get("session_id") or self.server.session_token)[:200]
             replay_key = f"{session_id}|{raw_correlation[:128]}"
@@ -3276,6 +3547,9 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             # GigaAM (crispasr file mode) is the canonical and only ASR engine:
             # the buffered utterance goes straight to it, and a failure is
             # reported instead of being masked by a second engine.
+            asr_trace = str(payload.get("trace_id") or payload.get("correlation_id") or "").strip()[:80]
+            if asr_trace:
+                turn_trace.mark(asr_trace, "server.asr_start")
             try:
                 finish_microphone = (
                     getattr(self.server.asr, "finish_microphone", None)
@@ -3292,6 +3566,23 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001 - bounded failure report
                 return {"ok": False, "error": f"ASR unavailable: {type(exc).__name__}"}
             asr_source = "gigaam"
+            if asr_trace:
+                turn_trace.mark(
+                    asr_trace,
+                    "server.asr_done",
+                    detail={
+                        "status": transcription.get("status"),
+                        "chars": len(str(transcription.get("text") or "")),
+                    },
+                )
+                turn_trace.mark(
+                    asr_trace,
+                    turn_trace.STAGE_ASR_FINAL,
+                    detail={
+                        "status": transcription.get("status"),
+                        "chars": len(str(transcription.get("text") or "")),
+                    },
+                )
             if transcription.get("status") == "cancelled" or (capture_cancel is not None and capture_cancel.is_set()):
                 return {
                     "ok": True, "status": "cancelled", "mode": "external_final_utterance",
@@ -3328,6 +3619,15 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
                     "ok": True, "mode": "external_final_utterance",
                     "transcript": "", "events": [], "responses": [],
                     "filtered": "user_backchannel",
+                }
+            echo_guard = getattr(self.server, "echo_guard", None)
+            if echo_guard is not None and echo_guard.is_echo(text):
+                echo_guard.record_suppressed_turn()
+                log_event("asr_filtered", reason="self_tts_echo", text=text, source=asr_source)
+                return {
+                    "ok": True, "mode": "external_final_utterance",
+                    "transcript": "", "events": [], "responses": [],
+                    "filtered": "self_tts_echo",
                 }
             delivery = transcription.get("voice_delivery")
             fusion = self.server.perception_fusion
@@ -3612,6 +3912,19 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
         audio_index = 0
         completed = False
         stream_lock = threading.Lock()
+        trace_id = str(correlation_id or "").strip()[:80]
+        epoch = getattr(getattr(self.server, "duplex_arbiter", None), "generation_epoch", 0)
+        segmenter = StreamPhraseSegmenter(min_length=12, min_words=3)
+        has_native_speech = False
+        first_token_marked = False
+        first_sentence_marked = False
+
+        if trace_id:
+            turn_trace.mark(
+                trace_id,
+                turn_trace.STAGE_LLM_REQUEST,
+                detail={"text_chars": len(text)},
+            )
 
         def send_event(payload: dict[str, Any]) -> None:
             with stream_lock:
@@ -3622,39 +3935,90 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             # ready, so audio overtakes the still-running text stream.
             nonlocal audio_index
             with stream_lock:
+                if audio_index == 0 and trace_id:
+                    turn_trace.mark(
+                        trace_id,
+                        turn_trace.STAGE_TTS_FIRST_PCM,
+                        detail={"bytes": len(audio)},
+                    )
+                if trace_id:
+                    turn_trace.mark(
+                        trace_id,
+                        turn_trace.STAGE_AUDIO_ENQUEUED,
+                        detail={"index": audio_index},
+                    )
                 payload = {
                     "type": "audio",
                     "index": audio_index,
                     "media_type": "audio/wav",
                     "data_base64": base64.b64encode(audio).decode("ascii"),
+                    "generation_epoch": epoch,
+                    "turn_id": trace_id,
                 }
                 audio_index += 1
                 self._stream_event(payload)
+
+        def feed_speech_phrase(phrase: str) -> None:
+            nonlocal speech, first_sentence_marked
+            if not phrase or self.server.tts is None:
+                return
+            if not first_sentence_marked and trace_id:
+                turn_trace.mark(
+                    trace_id,
+                    turn_trace.STAGE_LLM_FIRST_SENTENCE,
+                    detail={"chars": len(phrase)},
+                )
+                first_sentence_marked = True
+            if trace_id:
+                turn_trace.mark(
+                    trace_id,
+                    turn_trace.STAGE_TTS_REQUEST,
+                    detail={"chars": len(phrase)},
+                )
+            if speech is None:
+                speech = LiveSpeechSession(
+                    self.server.tts, mode="text", on_audio=on_audio
+                )
+                speech.start()
+            speech.feed(phrase)
 
         try:
             for event in self.server.gateway.stream_text(
                 self.server.enrich_turn_text(text), session_id=self.server.session_token,
                 correlation_id=correlation_id, history_user_text=text,
             ):
-                if event.get("type") == "speech_delta":
-                    # Early reply sentence from the owned brain streaming hook.
-                    # Forward the text and synthesize it immediately; the worker
-                    # pushes the WAV through on_audio as soon as it exists.
+                event_type = event.get("type")
+                if event_type in {"delta", "speech_delta"} and not first_token_marked:
+                    first_token_marked = True
+                    if trace_id:
+                        turn_trace.mark(trace_id, turn_trace.STAGE_LLM_FIRST_TOKEN)
+
+                if event_type == "speech_delta":
+                    has_native_speech = True
+                    phrase_text = str(event.get("text") or "")
                     send_event({
                         "type": "speech_delta",
-                        "text": str(event.get("text") or ""),
+                        "text": phrase_text,
                     })
-                    if self.server.tts is not None:
-                        if speech is None:
-                            speech = LiveSpeechSession(
-                                self.server.tts, mode="text", on_audio=on_audio
-                            )
-                            speech.start()
-                        speech.feed(str(event.get("text") or ""))
+                    feed_speech_phrase(phrase_text)
                     continue
+
+                if event_type == "delta":
+                    delta_text = str(event.get("text") or "")
+                    send_event(event)
+                    if not has_native_speech and delta_text:
+                        for phrase in segmenter.feed(delta_text):
+                            send_event({"type": "speech_delta", "text": phrase})
+                            feed_speech_phrase(phrase)
+                    continue
+
                 send_event(event)
-                if event.get("type") == "final":
+                if event_type == "final":
                     completed = True
+                    if not has_native_speech:
+                        for phrase in segmenter.flush():
+                            send_event({"type": "speech_delta", "text": phrase})
+                            feed_speech_phrase(phrase)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError):
             return
         except Exception as exc:  # noqa: BLE001 - report provider failures in-band
@@ -3697,11 +4061,34 @@ class CompanionRequestHandler(BaseHTTPRequestHandler):
             enriched = self.server.enrich_turn_text(turn_text) + voice_memory_block(
                 payload.get("memory_context", "")
             )
-            responses.append(self.server.gateway.handle_text(
+            brain_trace = str(correlation_id or event.get("correlation_id") or "")[:80]
+            if brain_trace:
+                turn_trace.mark(
+                    brain_trace,
+                    "server.brain_dispatch",
+                    detail={"prompt_chars": len(enriched), "user_text_chars": len(str(turn_text or ""))},
+                )
+                turn_trace.mark(
+                    brain_trace,
+                    turn_trace.STAGE_LLM_REQUEST,
+                    detail={"prompt_chars": len(enriched)},
+                )
+            answer = self.server.gateway.handle_text(
                 enriched, session_id=session_id,
                 correlation_id=event.get("correlation_id") or correlation_id,
                 history_user_text=str(turn_text or ""),
-            ))
+            )
+            if brain_trace:
+                answer_text = answer.get("text") if isinstance(answer, dict) else ""
+                turn_trace.mark(
+                    brain_trace,
+                    "server.brain_returned",
+                    detail={
+                        "answer_chars": len(str(answer_text or "")),
+                        "speak": (answer.get("speak") if isinstance(answer, dict) else None),
+                    },
+                )
+            responses.append(answer)
         return responses
 
     @staticmethod
@@ -3793,8 +4180,9 @@ def create_server(
     tls_key_file: str | os.PathLike[str] | None = None,
     voice_delivery_enabled: bool = False,
     app_audio_router: Any | None = None,
+    sensory_motivation: Any | None = None,
+    enable_fast_lane: bool | None = None,
 ) -> CompanionServer:
-    host = require_bind_host(host, lan_mode=lan_mode)
     if lan_mode:
         _validate_lan_access_token(lan_access_token)
     if tls_context is not None and (tls_cert_file is not None or tls_key_file is not None):
@@ -3869,6 +4257,21 @@ def create_server(
         if screen_watch
         else None
     )
+
+    from .screen_commentary import ScreenCommentaryScheduler
+    from .sensory_motivation import SensoryMotivation
+
+    effective_motivation = sensory_motivation
+    if effective_motivation is None and screen_watch:
+        effective_motivation = SensoryMotivation()
+
+    screen_commentary_scheduler = ScreenCommentaryScheduler(
+        lambda: watcher,
+        active_gateway,
+        proactive_feed,
+        enabled=screen_watch,
+        sensory_motivation=effective_motivation,
+    )
     server = CompanionServer(
         (host, port),
         root,
@@ -3910,8 +4313,9 @@ def create_server(
         tls_context=tls_context,
         voice_delivery_enabled=voice_delivery_enabled,
         app_audio_router=app_audio_router,
+        screen_commentary=screen_commentary_scheduler,
+        enable_fast_lane=enable_fast_lane,
     )
     if watcher is not None:
         watcher.start()
-    server._start_timeline_tick()
     return server

@@ -112,5 +112,45 @@ class AttentionTests(unittest.TestCase):
             attention.configure(quiet_hours="25:00-07:00")
 
 
+class RoutineScreenChangeTests(unittest.TestCase):
+    """Regression: AC-05 measurement found 2 false interruptions on non-events.
+
+    "Уведомление: обновление доступно" matched the salient word "уведомлен" and
+    was escalated to maximum significance; navigation described with
+    significance 2 passed the threshold. Both interrupted the owner for nothing.
+    """
+
+    def test_routine_notification_is_not_an_event(self):
+        attention = AttentionPresence(cooldown_seconds=0)
+        result = attention.consume(_event("Уведомление: обновление доступно", significance=2))
+        self.assertEqual(result["status"], "ignored")
+        self.assertEqual(result["reason"], "below_salience_threshold")
+        self.assertEqual(attention.intents(), [])
+
+    def test_navigation_is_not_an_event(self):
+        attention = AttentionPresence(cooldown_seconds=0)
+        result = attention.consume(_event("Список файлов прокручен вниз", significance=2))
+        self.assertEqual(result["status"], "ignored")
+        self.assertEqual(attention.intents(), [])
+
+    def test_real_failures_still_escalate(self):
+        attention = AttentionPresence(cooldown_seconds=0)
+        for summary in (
+            "Появилась ошибка в редакторе кода",
+            "Сборка завершилась с ошибкой компиляции",
+            "Закончилось место на диске C:",
+            "Терминал: Permission denied при записи файла",
+        ):
+            result = attention.consume(_event(summary, significance=1, event_id=summary))
+            self.assertEqual(result["status"], "proposed", summary)
+
+    def test_routine_word_does_not_mask_a_real_failure(self):
+        attention = AttentionPresence(cooldown_seconds=0)
+        result = attention.consume(
+            _event("Ошибка при обновлении: сбой установки", significance=2)
+        )
+        self.assertEqual(result["status"], "proposed")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,8 +30,78 @@ BACKCHANNEL_CUES: Dict[str, List[str]] = {
     "relaxed": ["Хм...", "М-м...", "Понятно...", "Так-так..."],
     "neutral": ["Угу", "Хм", "Да", "Ясно"],
 }
+class TokenBucketRateLimiter:
+    """Token bucket rate limiter for backchannels and reflex cues."""
 
+    def __init__(
+        self,
+        capacity: float = 1.0,
+        refill_rate: float = 1.0 / 6.0,
+        min_spacing: float = 6.0,
+    ) -> None:
+        self.capacity = float(capacity)
+        self.refill_rate = float(refill_rate)
+        self.min_spacing = float(min_spacing)
+        self.tokens = float(capacity)
+        self.last_update = time.monotonic()
+        self.last_consumed = 0.0
+        self.last_text = ""
 
+    def can_allow(
+        self,
+        text: str = "",
+        now: float | None = None,
+        user_speaking: bool = False,
+        muted: bool = False,
+    ) -> bool:
+        if muted or user_speaking:
+            return False
+        if now is None:
+            now = time.monotonic()
+        clean = text.strip().lower()
+        if clean and clean == self.last_text:
+            return False
+        elapsed = max(0.0, now - self.last_update)
+        avail = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+        if (now - self.last_consumed) < self.min_spacing or avail < 1.0:
+            return False
+        return True
+
+    def allow(
+        self,
+        text: str = "",
+        now: float | None = None,
+        user_speaking: bool = False,
+        muted: bool = False,
+    ) -> bool:
+        if not self.can_allow(text=text, now=now, user_speaking=user_speaking, muted=muted):
+            return False
+        if now is None:
+            now = time.monotonic()
+        clean = text.strip().lower()
+        elapsed = max(0.0, now - self.last_update)
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate)
+        self.last_update = now
+        self.tokens -= 1.0
+        self.last_consumed = now
+        self.last_text = clean
+        return True
+
+    def consume(
+        self,
+        tokens: float = 1.0,
+        text: str = "",
+        now: float | None = None,
+        user_speaking: bool = False,
+        muted: bool = False,
+    ) -> bool:
+        return self.allow(text=text, now=now, user_speaking=user_speaking, muted=muted)
+
+    def reset(self) -> None:
+        self.tokens = self.capacity
+        self.last_update = time.monotonic()
+        self.last_consumed = 0.0
+        self.last_text = ""
 class AffectiveEngine:
     """Computes real-time emotional state and turn-taking opportunity from audio and scene cues."""
 
@@ -69,6 +139,7 @@ class AffectiveEngine:
         self._backchannel_cooldown: float = 0.0
         self._last_backchannel_time: float = 0.0
         self._last_taste_sample_time: float = 0.0
+        self.rate_limiter = TokenBucketRateLimiter(capacity=1.0, refill_rate=1.0 / 6.0, min_spacing=6.0)
 
     @property
     def valence(self) -> float:
@@ -90,6 +161,8 @@ class AffectiveEngine:
         pcm_bytes: bytes,
         sample_rate: int = 44100,
         channels: int = 2,
+        user_speaking: bool = False,
+        muted: bool = False,
     ) -> dict[str, Any]:
         """Process incoming raw PCM16 chunk, calculate acoustic arousal and silence gap."""
         if not pcm_bytes:
@@ -166,19 +239,19 @@ class AffectiveEngine:
             instant_arousal = max(self._arousal, target_arousal if spike_delta > 0.05 else self._arousal)
             dominant_expr, blend_weights = self._compute_expressions(self._valence, instant_arousal)
 
-            # Condition: high arousal / spike, active playback (not in silence gap), and cooldown passed (>= 4s)
+            # Condition: high arousal / spike, active playback (not in silence gap), and rate limiter allows
             if (
                 not is_dialogue_gap
                 and (spike_delta > 0.08 or self._arousal > 0.6)
-                and (now - self._last_backchannel_time >= 4.0)
             ):
-                backchannel_ready = True
-                self._last_backchannel_time = now
                 cues = BACKCHANNEL_CUES.get(dominant_expr, BACKCHANNEL_CUES["neutral"])
                 # Deterministic selection based on timestamp
                 idx = int(now * 10) % len(cues)
-                backchannel_cue = cues[idx]
-
+                candidate_cue = cues[idx]
+                if self.rate_limiter.allow(candidate_cue, now=now, user_speaking=user_speaking, muted=muted):
+                    backchannel_ready = True
+                    self._last_backchannel_time = now
+                    backchannel_cue = candidate_cue
             self._last_chunk_time = now
 
             return {
@@ -383,3 +456,4 @@ class AffectiveEngine:
                 "dominant_expression": dominant_expr,
                 "blend_weights": blend_weights,
             }
+__all__ = ["AffectiveEngine", "TokenBucketRateLimiter", "BACKCHANNEL_CUES"]

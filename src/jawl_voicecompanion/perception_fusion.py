@@ -811,15 +811,15 @@ class PerceptionFusion:
         vlm_lower = vlm_text.lower()
 
         UNCERTAIN_MARKERS = [
-            "не уверен", "не уверена", "не могу разобрать", "не разобрать",
-            "сложно сказать", "трудно сказать", "непонятно", "не разглядеть",
-            "не ясно", "размыто", "не видно четко", "затрудняюсь",
-            "не представляется возможным", "может быть", "кажется", "возможно",
-            "похоже на", "предположительно", "нельзя точно",
-            "not sure", "unclear", "cannot tell", "hard to say", "ambiguous",
-            "low confidence", "uncertain", "cannot determine", "blurry",
+            r"не уверен\w*", r"не могу разобрать", r"не разобрать",
+            r"сложно сказать", r"трудно сказать", r"непонятно", r"не разглядеть",
+            r"не ясно", r"размыто", r"не видно четко", r"затрудняюсь",
+            r"не представляется возможным", r"может быть", r"\bкажется\b", r"(?<!не)\bвозможно\b",
+            r"похоже на", r"предположительно", r"нельзя точно",
+            r"\bnot sure\b", r"\bunclear\b", r"\bcannot tell\b", r"\bhard to say\b", r"\bambiguous\b",
+            r"\blow confidence\b", r"\buncertain\b", r"\bcannot determine\b", r"\bblurry\b",
         ]
-        is_uncertain = any(m in vlm_lower for m in UNCERTAIN_MARKERS)
+        is_uncertain = any(re.search(m, vlm_lower) for m in UNCERTAIN_MARKERS)
 
         OPEN_TARGETS = {
             "экран", "кадр", "full_frame", "сцена", "детали на экране",

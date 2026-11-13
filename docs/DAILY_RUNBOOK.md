@@ -71,6 +71,27 @@ opt-in через `-EnableAmbientAudio` и `-StartAmbientAudio` либо упр�
 в полном desktop-профиле оба флага заданы явно. Ни этот документ, ни docs-only
 проверка не подтверждают фактический захват устройств.
 
+**Предусловие для системного звука (проверено 9 ноября 2026).** Захват привязан к
+конкретному render-endpoint; если он отключён, `SystemAudioLoopback` по дизайну
+падает с явной ошибкой и НЕ переключается молча на другое устройство. На момент
+проверки активные loopback-устройства были: `Динамики (fifine Microphone)`,
+`Интерфейс SPDIF (Realtek USB2.0 Audio)`, `DigitalOutput (NVIDIA High Definition
+Audio)`, `Динамики (Steam Streaming Speakers)` — Audeze Maxwell среди них не было.
+Перед запуском с ambient audio либо подключите Audeze (он станет активным
+endpoint), либо задайте фактически активное имя в манифесте. Проверить список:
+
+```powershell
+runtime\jawl-daily-venv\Scripts\python.exe -c "import pyaudiowpatch as p; a=p.PyAudio(); [print(d['index'], d['name']) for d in a.get_loopback_device_info_generator()]; a.terminate()"
+```
+
+Синтез речи (проверено 9 ноября 2026): worker `scripts/omnivoice_server.py`
+генерирует речь в режиме language-guided без клонирования по референсу. Любой
+режим с `ref_audio`/`ref_text` на этой сборке модели подмешивал референсную фразу
+в ответ (GigaAM слышал «Привет! Я твой голосовой компаньон…» вместо вопроса),
+поэтому референс принимается как аргумент, но не влияет на генерацию. Три
+канонические фразы в `runtime/synthetic-questions/` распознаются дословно;
+скрипт пересоздания — `scripts/make_synthetic_question_fixtures.py`.
+
 В едином окне `Ctrl+Shift+M` переключает Studio и компактный режим; настройки
 открываются из компактного дока. Speech Stop прекращает текущую озвучку,
 а emergency Stop и остановка задачи — отдельные операции.

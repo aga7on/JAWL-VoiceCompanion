@@ -23,6 +23,26 @@ test('turn heuristic distinguishes Russian overlap, finished questions, and boun
   assert.equal(decideMicTurn({overlap: true, voicedMs: 100, silenceMs: 600}).action, 'hold_turn');
 });
 
+test('long utterances hold through mid-thought pauses instead of committing the turn', () => {
+  // Owner complaint: a long spoken request pauses briefly and the companion
+  // answers the first half, then answers the second half as a separate turn.
+  const finished = 'Я разобрал конфиги и подготовил сервер.';
+  assert.equal(decideMicTurn({text: finished, voicedMs: 1200, silenceMs: 1200}).action, 'commit_turn');
+  const long = decideMicTurn({text: finished, voicedMs: 7000, silenceMs: 1200});
+  assert.equal(long.action, 'hold_turn');
+  assert.ok(long.requiredMs >= 1800);
+  assert.equal(decideMicTurn({text: finished, voicedMs: 7000, silenceMs: 2600}).action, 'commit_turn');
+  const medium = decideMicTurn({text: finished, voicedMs: 3500, silenceMs: 1200});
+  assert.equal(medium.action, 'hold_turn');
+  assert.equal(decideMicTurn({text: finished, voicedMs: 3500, silenceMs: 1900}).action, 'commit_turn');
+});
+
+test('questions and backchannels keep fast endpoints regardless of utterance length', () => {
+  assert.equal(decideMicTurn({text: 'Где ключи?', voicedMs: 9000, silenceMs: 400}).action, 'commit_turn');
+  assert.equal(decideMicTurn({text: 'Угу, понятно.', overlap: true, voicedMs: 9000, silenceMs: 400}).action, 'finish_backchannel');
+  assert.equal(decideMicTurn({text: 'Готово!', voicedMs: 9000, silenceMs: 400}).action, 'commit_turn');
+});
+
 const block = (value, length = 2048) => Float32Array.from({length}, () => value);
 const rate = 48000;
 

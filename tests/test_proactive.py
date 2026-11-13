@@ -206,5 +206,77 @@ class ProactiveFeedTests(unittest.TestCase):
             self.assertEqual(state["queued"][0]["text"], "переживу рестарт")
 
 
+class ProactiveLanguageGateTests(unittest.TestCase):
+    """Regression: mixed-language initiative reached the owner.
+
+    Live delivery state held replies like
+    "привет!一切正常, я в порядке и готов помочь тебе. что с тобой?"
+    The feed reads JAWL history directly and bypassed the adapter's CJK filter.
+    """
+
+    def test_ideographs_are_mapped_and_delivered(self):
+        from jawl_voicecompanion.proactive import _sanitize_delivery
+
+        result = _sanitize_delivery("привет!一切正常, я в порядке.")
+        self.assertIsNotNone(result)
+        self.assertEqual(result, "привет! всё в порядке, я в порядке.")
+        self.assertFalse(any("\u4e00" <= ch <= "\u9fff" for ch in result))
+
+    def test_message_that_is_mostly_foreign_is_dropped(self):
+        from jawl_voicecompanion.proactive import _sanitize_delivery
+
+        # Unknown ideographs with almost no surrounding text: nothing speakable
+        # survives the gate.
+        self.assertIsNone(_sanitize_delivery("健康状况良好мета"))
+
+    def test_clean_russian_text_is_untouched(self):
+        from jawl_voicecompanion.proactive import _sanitize_delivery
+
+        text = "Всё в норме, работаю в дежурном режиме."
+        self.assertEqual(_sanitize_delivery(text), text)
+
+    def test_poll_never_enqueues_unspeakable_initiative(self):
+        client = FakeClient()
+        feed = ProactiveFeed(client, history=FakeHistory(), poll_interval_s=1.0, min_gap_s=0.0)
+        feed.poll(now=1000.0)
+        # Unknown ideographs with no Russian body: dropped, not spoken.
+        client.rows.append(_row("健康状况良好мета", time="2026-09-12 09:20:00"))
+        feed.poll(now=1010.0)
+        self.assertEqual(feed.state(now=1010.0)["queued"], [])
+        self.assertEqual(feed.state(now=1010.0)["suppressed_unusable"], 1)
+
+    def test_mapped_ideographs_are_delivered_clean(self):
+        client = FakeClient()
+        feed = ProactiveFeed(client, history=FakeHistory(), poll_interval_s=1.0, min_gap_s=0.0)
+        feed.poll(now=1000.0)
+        client.rows.append(_row("привет!一切正常, я в порядке.", time="2026-09-12 09:25:00"))
+        delivered = feed.poll(now=1010.0)
+        self.assertEqual(len(delivered), 1)
+        text = delivered[0]["text"]
+        self.assertFalse(any("\u4e00" <= ch <= "\u9fff" for ch in text))
+        self.assertIn("всё в порядке", text)
+
+    def test_restored_queue_is_gated_again(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "proactive-state.json"
+            state_path.write_text(
+                json.dumps({
+                    "queue": [{"id": "x", "text": "привет!一切正常, я в порядке.", "queued_at": 1.0}],
+                    "delivered_texts": [],
+                }),
+                encoding="utf-8",
+            )
+            feed = ProactiveFeed(
+                FakeClient(), history=FakeHistory(), poll_interval_s=1.0,
+                min_gap_s=0.0, state_path=state_path,
+            )
+            queued = feed.state(now=1010.0)["queued"]
+            self.assertEqual(len(queued), 1)
+            self.assertFalse(any("\u4e00" <= ch <= "\u9fff" for ch in queued[0]["text"]))
+
+
 if __name__ == "__main__":
     unittest.main()

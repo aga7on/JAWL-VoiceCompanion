@@ -313,11 +313,13 @@ class LiveSpeechSession:
                     self._state.cancelled = True
                 break
             except Exception as exc:  # noqa: BLE001 - reported to the caller
+                # One failed sentence must not silence the rest of the reply:
+                # record the error, skip this sentence, keep serving the queue.
                 with self._lock:
                     if self._stopped:
                         break
                     self._state.error = f"{type(exc).__name__}: {exc}"[:200]
-                break
+                continue
             with self._lock:
                 if self._stopped:
                     break

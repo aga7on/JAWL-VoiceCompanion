@@ -498,7 +498,7 @@ class ManagedServers:
                 "-dev", "CUDA0",
                 "-fa", "on",
                 "--reasoning", "off",
-                "--temperature", "0.3",
+                "--temperature", "0.2",
                 "--seed", "42",
             ],
             env=env,
@@ -747,12 +747,22 @@ def run_acceptance() -> int:
         vlm_fact_ocr_canvas = any(w in details_1_lower for w in ["screen", "скрин"])
 
         # Negative controls (shapes & colors NOT present on screen)
-        unseen_shapes = ["круг", "квадрат", "звезда", "ромб", "овал", "шестиугольник", "circle", "square", "star", "diamond"]
+        unseen_shapes = ["круг", "квадрат", "звезд", "ромб", "овал", "шестиугольн", "circle", "square", "star", "diamond"]
         unseen_colors = ["красный", "красног", "зелёный", "зеленог", "жёлтый", "желтог", "оранжевый", "фиолетовый", "red", "green", "yellow", "purple"]
 
-        vlm_neg_shapes_passed = not any(w in details_1_lower for w in unseen_shapes)
+        def _has_unseen_token(text: str, word: str) -> bool:
+            import re
+            tokens = re.findall(r"[а-яёa-z0-9]+", text.lower())
+            for tok in tokens:
+                if tok == "вокруг" and word == "круг":
+                    continue
+                if tok.startswith(word):
+                    return True
+            return False
+
+        vlm_neg_shapes_passed = not any(_has_unseen_token(details_1_lower, w) for w in unseen_shapes)
         vlm_neg_colors_passed = not any(w in details_1_lower for w in unseen_colors)
-        resp_neg_shapes_passed = not any(w in resp_1_lower for w in unseen_shapes)
+        resp_neg_shapes_passed = not any(_has_unseen_token(resp_1_lower, w) for w in unseen_shapes)
         resp_neg_colors_passed = not any(w in resp_1_lower for w in unseen_colors)
 
         # Epistemic observation MUST be observed_present for positive ground truth
@@ -1163,7 +1173,7 @@ def run_acceptance() -> int:
             continue
         st = val.get("status", "UNKNOWN")
         tier = val.get("tier", "")
-        if "FAIL" in st or "UNKNOWN" in st:
+        if not st.startswith("PASS"):
             all_pass = False
         print(f"  {key:<42}: {st} [{tier}]")
     print("-" * 80)

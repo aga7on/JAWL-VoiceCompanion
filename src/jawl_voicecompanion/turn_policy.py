@@ -27,6 +27,9 @@ from .duplex_cascade import (
 
 BASE_SILENCE_MS = 800
 EXTENDED_SILENCE_MS = 2000
+# A sustained monologue at or beyond this length keeps the base endpoint
+# window scaling up (breath/word-choice pauses must not commit the turn).
+LONG_UTTERANCE_MS = 6000.0
 
 _DEFAULT_ARBITER = DuplexCascadeArbiter(
     eg2_model_root=None,
@@ -85,29 +88,38 @@ def decide(
     extended_used: bool = False,
     *,
     assistant_speaking: bool = False,
+    voiced_ms: float = 0.0,
+    reference_text: str = "",
 ) -> dict:
     """Return the endpoint decision for the open utterance.
 
     ``extended_used`` is True when this utterance already received one
     extension; only one extension is granted per utterance so a monologue
-    cannot hold the turn forever.
+    cannot hold the turn forever. ``voiced_ms`` is the measured voiced
+    duration of this utterance: long monologues statistically continue after
+    a pause (breath, word choice), so the commit threshold scales up instead
+    of cutting the user mid-thought. ``reference_text`` is the currently
+    active assistant spoken text used by the EchoGuard to suppress acoustic
+    self-TTS echo.
     """
     micro = _DEFAULT_ARBITER.evaluate_micro_turn(
         text,
         assistant_speaking=assistant_speaking,
         silence_elapsed_ms=silence_ms,
         rms_peak=0.05 if str(text or "").strip() else 0.0,
+        reference_text=reference_text,
     )
     # While the assistant speaks, a barge-in is an event, not an utterance to
-    # endpoint: backchannel must keep TTS alive and interruption must reset it,
+    # endpoint: backchannel/echo must keep TTS alive and interruption must reset it,
     # regardless of the text being a one-word "unfinished" draft.
-    if assistant_speaking and micro.action in {"ignore_backchannel", "cancel_tts"}:
+    if assistant_speaking and micro.action in {"ignore_backchannel", "cancel_tts", "ignore_echo"}:
         return {
             "action": "listen",
             "hold": False,
             "required_ms": micro.recommended_silence_ms,
             "duplex_token": micro.token,
             "duplex_action": micro.action,
+            "echo_detected": micro.action == "ignore_echo",
             "avatar_gesture": micro.avatar_gesture,
         }
     hold = looks_incomplete(text)
@@ -122,6 +134,14 @@ def decide(
             "avatar_gesture": micro.avatar_gesture,
         }
     required = BASE_SILENCE_MS if not hold else EXTENDED_SILENCE_MS
+    if not hold and voiced_ms >= LONG_UTTERANCE_MS:
+        # Long finished-sounding utterances still pause mid-thought: extend the
+        # base window proportionally (capped) so the brain does not answer the
+        # first half of the user's sentence.
+        required = min(
+            EXTENDED_SILENCE_MS,
+            BASE_SILENCE_MS + round(float(voiced_ms) * 0.15, 1),
+        )
     action = "end" if silence_ms >= required else "listen"
     token = (
         micro.token

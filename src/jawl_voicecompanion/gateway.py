@@ -178,6 +178,14 @@ class TextGateway:
             parameters = {}
         if "correlation_id" in parameters:
             kwargs["correlation_id"] = correlation_id
+        # Some responders (the JAWL terminal adapter) emit their own trace marks;
+        # hand them the current correlation without changing their signature.
+        owner = getattr(method, "__self__", None)
+        if owner is not None and hasattr(owner, "_trace_correlation"):
+            try:
+                owner._trace_correlation = correlation_id
+            except (AttributeError, TypeError):
+                pass
         return method(text, **kwargs)
 
     def _enrich_visual_context(
@@ -265,6 +273,13 @@ class TextGateway:
         correlation = str(correlation_id or f"turn-{uuid4().hex}")[:128]
         token = self.arbiter.begin(priority)
         turn_id = token.turn_id
+        from . import turn_trace
+
+        turn_trace.mark(
+            correlation,
+            "gateway.arbiter_acquired",
+            detail={"priority": getattr(priority, "name", str(priority))},
+        )
 
         if not self.arbiter.is_current(token):
             self.arbiter.cancel(token, "turn_deferred_for_higher_priority_work")
@@ -289,6 +304,11 @@ class TextGateway:
         else:
             clean, epistemic_obs = self._enrich_visual_context(
                 clean, history_user_text=original_user_text, cancel_event=token.cancel_event
+            )
+            turn_trace.mark(
+                correlation,
+                "gateway.responder_call_start",
+                detail={"prompt_chars": len(clean)},
             )
             try:
                 if self.responder:
@@ -333,6 +353,14 @@ class TextGateway:
             else:
                 speak = True
                 emotion = {"id": "attentive", "intensity": 0.45, "confidence": 0.8}
+            turn_trace.mark(
+                correlation,
+                "gateway.responder_call_end",
+                detail={
+                    "answer_chars": len(str(answer or "")),
+                    "brain_status": self._brain_status,
+                },
+            )
 
         try:
             is_proactive = (

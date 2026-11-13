@@ -1,5 +1,6 @@
 import json
 import inspect
+import os
 import sys
 import tempfile
 import threading
@@ -1122,6 +1123,98 @@ class _FakeFusion:
         return self.line
 
 
+class BargeInContextMarkerTests(unittest.TestCase):
+    """Full-duplex barge-in: the interrupted turn must reach the brain's context.
+
+    The owner's complaint: barge-in stopped the audio, but the next turn was
+    answered "in fragments" because the brain never learned its previous
+    reply was cut off. The marker is consumed exactly once and expires.
+    """
+
+    def _server(self):
+        class Arbiter:
+            @staticmethod
+            def state():
+                return {"active": None}
+
+        class Gateway:
+            arbiter = Arbiter()
+            manages_history = True
+
+            @staticmethod
+            def turn_history(limit=12):
+                return []
+
+        class ServerContext:
+            gateway = Gateway()
+            perception_fusion = None
+            _last_user_message_at = None
+            _last_interruption_at = None
+            _last_interruption_reason = ""
+            note_speech_interruption = CompanionServer.note_speech_interruption
+            enrich_turn_text = CompanionServer.enrich_turn_text
+
+        server = ServerContext()
+        # bind the unbound method to the fake context like the real instance
+        server.enrich_turn_text = lambda text: CompanionServer.enrich_turn_text(server, text)  # noqa: E731
+        server.note_speech_interruption = lambda **kw: CompanionServer.note_speech_interruption(server, **kw)  # noqa: E731
+        return server
+
+    def test_interruption_marker_reaches_next_turn_exactly_once(self):
+        server = self._server()
+        server.note_speech_interruption(reason="user_barge_in")
+        first = server.enrich_turn_text("Нет, стоять, вот что я имел в виду")
+        self.assertIn("ПЕРЕБИВАНИЕ", first)
+        self.assertIn("user_barge_in", first)
+        self.assertIn("не отвечай по отрывкам", first)
+        # Exactly once: the following turn must not repeat the marker.
+        second = server.enrich_turn_text("И ещё вот это проверь")
+        self.assertNotIn("ПЕРЕБИВАНИЕ", second)
+
+    def test_no_interruption_means_no_marker(self):
+        server = self._server()
+        text = server.enrich_turn_text("Привет, как дела?")
+        self.assertNotIn("ПЕРЕБИВАНИЕ", text)
+
+    def test_stale_interruption_expires(self):
+        server = self._server()
+        server.note_speech_interruption(reason="user_stop_button")
+        server._last_interruption_at = time.time() - 600.0
+        text = server.enrich_turn_text("Что дальше?")
+        self.assertNotIn("ПЕРЕБИВАНИЕ", text)
+        # The stale marker was consumed, not silently leaked into later turns.
+        again = server.enrich_turn_text("И что теперь?")
+        self.assertNotIn("ПЕРЕБИВАНИЕ", again)
+
+    def test_interruption_captures_interrupted_snippet_and_cancels_arbiter(self):
+        from jawl_voicecompanion.arbiter import TurnArbiter, TurnPriority
+
+        server = self._server()
+        server.gateway.arbiter = TurnArbiter()
+        token = server.gateway.arbiter.begin(TurnPriority.USER_FINAL)
+        self.assertTrue(token.active)
+        self.assertFalse(token.cancelled)
+
+        server._current_speaking_text = "Я сейчас подробно объясню как работает архитектура нашей системы..."
+        server.note_speech_interruption(reason="user_barge_in")
+
+        # Arbiter turn must be cancelled immediately
+        self.assertTrue(token.cancelled)
+        self.assertEqual(token.cancel_reason, "speech_interruption:user_barge_in")
+
+        # Next turn gets the interruption marker with the speech snippet
+        enriched = server.enrich_turn_text("Нет, давай лучше про базу данных")
+        self.assertIn("ПЕРЕБИВАНИЕ", enriched)
+        self.assertIn("user_barge_in", enriched)
+        self.assertIn("ответ прерван на: «Я сейчас подробно объясню", enriched)
+        self.assertIn("Нет, давай лучше про базу данных", enriched)
+
+        # Subsequent turn does not repeat it
+        following = server.enrich_turn_text("И как дела?")
+        self.assertNotIn("ПЕРЕБИВАНИЕ", following)
+
+
+
 class CurrentPerceptionEnrichmentTests(unittest.TestCase):
     def test_module_question_receives_bounded_runtime_facts(self):
         class ASR:
@@ -1476,6 +1569,16 @@ class SensoryHistoryEnrichmentTests(unittest.TestCase):
 
 
 class VoicePrefaceTests(unittest.TestCase):
+    def setUp(self):
+        self._old_fast_lane = os.environ.get("ENABLE_FAST_LANE")
+        os.environ["ENABLE_FAST_LANE"] = "1"
+
+    def tearDown(self):
+        if self._old_fast_lane is None:
+            os.environ.pop("ENABLE_FAST_LANE", None)
+        else:
+            os.environ["ENABLE_FAST_LANE"] = self._old_fast_lane
+
     def _start_server(self, *, partial, fusion, silence_ms=800.0):
         server = create_server(
             port=0,
@@ -1483,6 +1586,7 @@ class VoicePrefaceTests(unittest.TestCase):
             gateway=TextGateway(),
             streaming_asr=_FakeStreamingAsr(partial, silence_ms=silence_ms),
             perception_fusion=fusion,
+            enable_fast_lane=True,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()

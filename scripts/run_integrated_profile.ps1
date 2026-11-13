@@ -51,6 +51,14 @@
 [string]$VisionUrl,
 [string]$VisionModel,
 [int]$ScreenWatchInterval = 30,
+[ValidateRange(5,3600)]
+[int]$UserActivityIdleSeconds = 60,
+# AC-05 initiative on the JAWL side. On by default because the daily companion
+# is meant to speak unprompted; pass -EnableProactiveGuidance:$false to silence it.
+[switch]$EnableProactiveGuidance = $true,
+# Short spoken turns skip the ~20k-token native context (kernel fast lane).
+# On by default: it is the single largest win for conversational latency.
+[switch]$EnableFastConversation = $true,
 [ValidateSet('eg2', 'qwen')]
 [string]$VisualDescriber = 'eg2',
 [string]$VisualDescriberUrl = '',
@@ -280,6 +288,24 @@ if ($JawlRequestTimeoutSeconds -gt 0) {
     )
     [IO.File]::WriteAllText($settingsPath, $settingsText, [Text.UTF8Encoding]::new($false))
 }
+# Proactive guidance is a launcher-applied runtime switch, like the timeout
+# above. It has to be set here rather than hand-edited in the profile, because
+# prepare_daily_profile rewrites managed settings on every --sync launch.
+$enableProactive = if ($PSBoundParameters.ContainsKey('EnableProactiveGuidance')) {
+    [bool]$EnableProactiveGuidance
+} else { $true }
+$settingsPath = Join-Path $profileHome 'config\settings.yaml'
+$settingsText = [IO.File]::ReadAllText($settingsPath, [Text.UTF8Encoding]::new($false))
+$proactiveEnabled = if ($enableProactive) { 'true' } else { 'false' }
+$updatedSettingsText = [regex]::Replace(
+    $settingsText,
+    '(?m)^(\s+proactive_guidance:\s*)(?:true|false)(\s*)$',
+    ('${1}' + $proactiveEnabled + '${2}')
+)
+if ($updatedSettingsText -ne $settingsText) {
+    [IO.File]::WriteAllText($settingsPath, $updatedSettingsText, [Text.UTF8Encoding]::new($false))
+}
+Write-Host ("Proactive guidance: {0}" -f $proactiveEnabled)
 $dynamicContextBudgetChars = 0
 if (-not [string]::IsNullOrWhiteSpace($env:JAWL_DYNAMIC_CONTEXT_BUDGET_CHARS)) {
     if (-not [int]::TryParse($env:JAWL_DYNAMIC_CONTEXT_BUDGET_CHARS, [ref]$dynamicContextBudgetChars) -or
@@ -569,10 +595,13 @@ try {
                 $tera = New-RuntimeProcess $voxcpmPy $voxArgs $repo @{CUDA_VISIBLE_DEVICES = '1'} 'voxcpm-tts.log'
             } elseif ($TtsProvider -eq 'omnivoice') {
                 # The worker pins itself to cuda:1 (the free lane next to the
-                # Hikari brain, live-verified 13.9/16 GB coexistence). The
-                # reference sample fixes the voice (owner-selected); text is
-                # the only per-request input.
-                $omniArgs = "scripts\omnivoice_server.py --host 127.0.0.1 --port $OmniVoicePort --device cuda:1 --ref-audio `"$OmniVoiceRefWav`""
+                # Hikari brain, live-verified 13.9/16 GB coexistence). Text is
+                # the only per-request input: reference-based voice cloning was
+                # measured to speak the reference sentence instead of the
+                # answer, so the worker generates language-guided speech and
+                # --ref-audio is accepted but inert.
+                $omniArgs = "scripts\omnivoice_server.py --host 127.0.0.1 --port $OmniVoicePort --device cuda:1"
+                if ($OmniVoiceRefWav) { $omniArgs += " --ref-audio `"$OmniVoiceRefWav`"" }
                 if ($OmniVoiceRefText) { $omniArgs += " --ref-text `"$OmniVoiceRefText`"" }
                 $tera = New-RuntimeProcess $omniPy $omniArgs $repo @{} 'omnivoice-tts.log'
             } else {
@@ -621,6 +650,19 @@ $jawlEnv = @{}
     # The pinned source is hash-verified and must remain immutable while it is
     # running; Python bytecode caches would otherwise invalidate its manifest.
     $jawlEnv['LLM_REASONING_EFFORT'] = $env:LLM_REASONING_EFFORT
+    # Fast conversation lane: for a short spoken turn the kernel replaces the
+    # ~20k-token native context with a slim system prompt plus the utterance.
+    # Measured turn cost is dominated by reprocessing that context on every
+    # ReAct step, so this is the difference between ~40 s and a few seconds on
+    # ordinary chat. The mechanism already exists in the pinned kernel
+    # (envelope_policy._fast_lane_messages) and is gated on this variable.
+    if ($EnableFastConversation) {
+        $jawlEnv['JAWL_FAST_CONVERSATION'] = '1'
+        Write-Host 'Fast conversation lane: enabled'
+    } else {
+        $jawlEnv['JAWL_FAST_CONVERSATION'] = '0'
+        Write-Host 'Fast conversation lane: disabled'
+    }
     $jawlEnv['PYTHONDONTWRITEBYTECODE'] = '1'
     # Credentials cross the process boundary only through the environment;
     # they are never placed in command-line arguments or runtime logs.
@@ -756,6 +798,10 @@ $jawlEnv = @{}
         if (-not $Eg2Vision) { $screenArgs += " --vision-url $VisionUrl --vision-model $VisionModel" }
         if ($EnableScreenOcr) { $screenArgs += ' --screen-ocr' }
         $screenArgs += " --screen-watch --screen-watch-interval $ScreenWatchInterval --jawl-event-dir `"$JawlEventDir`""
+        # Suppress screen initiative while the owner is actively using the PC.
+        # Without this the attention gate reports activity status "disabled" and
+        # cannot honour the passive no-interruption criterion (AC-05).
+        $screenArgs += " --user-activity --user-activity-idle-seconds $UserActivityIdleSeconds"
         $companionArgs += $screenArgs
         if ($HostosLevel -ge 0) { $companionArgs += " --hostos-level $HostosLevel" }
         else { $companionArgs += " --hostos-level 1" }

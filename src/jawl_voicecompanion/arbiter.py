@@ -97,8 +97,32 @@ class TurnArbiter:
                 self._queued.remove(token)
             return self._active
 
+    @property
+    def generation_epoch(self) -> int:
+        """Current generation counter used for playback fencing."""
+        with self._lock:
+            return self._generation
+
+    @generation_epoch.setter
+    def generation_epoch(self, value: int) -> None:
+        with self._lock:
+            self._generation = int(value)
+
+    def next_epoch(self) -> int:
+        """Advance epoch on new turn or interruption to fence off stale TTS chunks."""
+        with self._lock:
+            self._generation += 1
+            return self._generation
+
+    def reset_epoch(self, epoch: int = 0) -> int:
+        """Reset generation epoch back to specified value."""
+        with self._lock:
+            self._generation = int(epoch)
+            return self._generation
+
     def cancel_all(self, reason: str = "cancelled_all") -> None:
         with self._lock:
+            self._generation += 1
             if self._active:
                 self._active.cancel(reason)
             for token in self._queued:

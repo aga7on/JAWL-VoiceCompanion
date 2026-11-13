@@ -252,6 +252,16 @@ class SpeechCancellationHTTPTests(unittest.TestCase):
         self.assertEqual(replay_outcome, [{"type": "cancelled"}])
         self.assertEqual(len(self.provider.tokens), 1)
 
+    def test_cancel_with_reason_records_interruption_and_carries_to_next_turn(self):
+        self.post("/api/tts/cancel", {"request_id": "barge", "reason": "user_barge_in"})
+        self.assertIsNotNone(self.server._last_interruption_at)
+        self.assertEqual(self.server._last_interruption_reason, "user_barge_in")
+        enriched = self.server.enrich_turn_text("Я перебил тебя")
+        self.assertIn("ПЕРЕБИВАНИЕ", enriched)
+        self.assertIn("user_barge_in", enriched)
+        self.assertIsNone(self.server._last_interruption_at)
+
+
 
 if __name__ == "__main__":
     unittest.main()

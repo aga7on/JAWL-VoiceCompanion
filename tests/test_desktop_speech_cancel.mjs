@@ -30,6 +30,9 @@ function speechHarness(fetchImpl) {
     createAnalyser() {
       return {frequencyBinCount: 4, connect() {}, disconnect() {}, getByteTimeDomainData(data) { data.fill(128); }};
     }
+    createGain() {
+      return {gain: {value: 1, setValueAtTime() {}}, connect() {}, disconnect() {}};
+    }
   }
   const context = {
     API: {headers: () => ({'Content-Type': 'application/json', 'X-Companion-CSRF': 'csrf-test'})},
@@ -41,6 +44,7 @@ function speechHarness(fetchImpl) {
     Uint8Array,
     setTimeout,
     clearTimeout,
+    traceMark: () => {},
     document: {querySelector: selector => selector === '#speech-stop' ? stopButton : null},
     fetch: (url, options) => {
       requests.push({url, options});
@@ -167,3 +171,17 @@ test('local stop aborts immediately without waiting for cancel fetch', async () 
   pendingStream.resolve(doneResponse());
   await playback;
 });
+
+test('barge-in cancel forwards user_barge_in reason to remote cancel', async () => {
+  const pendingStream = deferred();
+  const harness = speechHarness(url => url === '/api/tts/cancel' ? Promise.resolve({ok: true}) : pendingStream.promise);
+  const playback = harness.speech.speakFinal({text: 'answer in progress'});
+  await new Promise(resolve => setImmediate(resolve));
+  harness.speech.cancelSpeechPlayback(true, 'user_barge_in');
+  assert.equal(cancelRequests(harness.requests).length, 1);
+  const cancel = cancelRequests(harness.requests)[0];
+  assert.deepEqual(payload(cancel), {request_id: 'speech-1', reason: 'user_barge_in'});
+  pendingStream.resolve(doneResponse());
+  await playback;
+});
+

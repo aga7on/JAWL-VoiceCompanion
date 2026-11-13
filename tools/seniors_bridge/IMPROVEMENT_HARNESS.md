@@ -1,0 +1,20 @@
+# IMPROVEMENT HARNESS (накопительные уроки/решения) — JAWL full-duplex
+
+Формат записи: дата/цикл → факт/доказательство → решение/следующий шаг. Не удалять, только дополнять.
+
+## 2026-11-10
+- Cycle 20 (STATE): `live_speech._run` break-on-error убивал хвост TTS; фикс — ошибка в `state.error`, пропуск предложения, очередь продолжается; TTSCancelled останавливает. Регрессия `tests/test_live_speech_error_resilience.py` (PASS). Урок: синтез resilient per-sentence; apply в живом companion требует рестарта процесса.
+- Cycle 21 (DSH, STATE 02:04:20, проверено мной 02:06): adaptive turn hold по `voiced_ms` — `turn_policy.decide` + `web.py` draft + `desktop/voice-input.js::decideMicTurn`/`app.js`. Focused pytest PASS 40/40 на `test_turn_policy,test_screen_commentary,test_proactive` (мой прогон); desktop node-test 17/17 заявлен DSH, мной не прогнан. Урок: длинная речь ломалась фиксированным порогом тишины; эвристика, **REAL-MIC PENDING**. Не объявлять AC скорости/естественности закрытыми без mic E2E.
+- Инженерный P0 (FULLDUPLEX_MAP): `cancel_tts` распределён — draft возвращает действие, сервер сам не стопает playback; клиент/`speak_cancel` исполняет. Главный разрыв P1: сквозной barge-in инвариант (playback+TTS+очередь+state, готовность к следующему ходу) + детерминированный тест, учесть echo/`SpeechRequests`.
+- Направление владельца: проактив по сенсорике через слой мотиваций (drives). В ядре есть drives (`system.db.sql.drives`, curiosity/social/mastery; config_hub/jawl_web `/api/drives`; реализация CRUD/поведение в read-only snapshot). Описания экрана попадают в sensory/episodic visual/ambient memory (`composition.py`, `web.py`, `memory_policy.py:screen_description`, `screen_commentary.py`/proactive feed). Гипотеза: «sensory curiosity» — рост мотивации при интересном/новом описании изображения в памяти → проактивный ответ с turn-policy. Требует дизайна, совместимого с kernel drives (не патчить read-only snapshot вслепую) — сначала контракт/адаптер в companion + безопасный триггер.
+
+- Cycle 21b engineer (я): P-M0 реализован и верифицирован — `sensory_motivation.py` + хук `screen_commentary.py`, 6+32 тестов PASS. Урок: companion-side сигнал допустим без правок snapshot; зеркалирование в kernel drive требует живого owned контракта.
+- DSH auth failure (02:25): `This turn failed API key is invalid AUTH` на nudge — не транзиентный 503; оркестратор нуджит, но пока ключ/роутинг не восстановлен, DSH ненадёжен. Инженер продолжает выполнимые итерации сам; при восстановлении — вернуть DSH на P1 barge-in end-to-end.
+
+- Cycle 21c engineer (я, ~02:32-02:40 ПК): P1 contract Probe выполнен детерминированно — `tests/test_barge_in_p1.py` **8 passed**; регрессии затронутых областей **0** (live_speech resilience 4, sensory/commentary/proactive 32, speech_requests+turn_policy 27+12 subtests). Урок: session-level инварианты (cancel/drain/no-tail/next-turn/request-id tombstone) покрываемы симуляцией; distributed playback/echo-acoustic/E2E остаются отдельным evidence-классом — не поднимать до PASS без него. DSH idle+model/location fails (AUTH, 400 location gemini-3.8-flash-high) — воркер ненадёжен, инженер продолжает.
+
+## Открытые приоритеты (следующий Probe)
+1. **P1 barge-in end-to-end (PARTIAL→PASS):** нужен контракт «прерванный ход» в контексте следующего ответа (контекстная коррекция; маркер частично `web.py:833,2486-2497`) + детерминированный тест контекстной склейки; затем E2E при рестарте companion (desktop playback stop, echo/loopback, request_id scoping live). Если живой контур недоступен — следующий выполнимый Probe без него.
+2. **P-M1 sensory motivation:** проверить живой `/api/drives`/curiosity контракт в owned контуре → mirror или зафиксировать BLOCKED с причиной; не второй источник правды.
+3. **P2 streaming first-audio/устойчивость:** измеримый контракт/сим метрики turn→first WAV chunk/delta; backpressure/slot под баржином.
+4. Harness2 цикл: после каждого Probe — Compose урок; держать оркестратор до 11:00; при восстановлении DSH — узкий промпт на P1 контекстную коррекцию.

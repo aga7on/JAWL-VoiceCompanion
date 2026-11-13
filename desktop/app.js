@@ -21,6 +21,7 @@ const state = {
   voiceCorrelationId: null,
   voiceSequence: 0,
   speechGeneration: 0,
+  currentGenerationEpoch: 0,
   speechPlayback: null,
   speechErrorNoticeKey: null,
 };
@@ -1235,11 +1236,11 @@ function publishSpeechState(playback, eventState) {
   }}));
 }
 
-function releaseSpeechPlayback(playback, eventState = null) {
+function releaseSpeechPlayback(playback, eventState = null, reason = '') {
   if (!playback || state.speechPlayback !== playback) return;
   state.speechPlayback = null;
   setSpeechStopEnabled(false);
-  if (eventState === 'cancel' || eventState === 'error') cancelRemoteSpeech(playback);
+  if (eventState === 'cancel' || eventState === 'error') cancelRemoteSpeech(playback, reason);
   playback.abortController.abort();
   for (const source of playback.sources) {
     source.onended = null;
@@ -1257,7 +1258,7 @@ function releaseSpeechPlayback(playback, eventState = null) {
   if (eventState) publishSpeechState(playback, eventState);
 }
 
-function cancelRemoteSpeech(playback) {
+function cancelRemoteSpeech(playback, reason = '') {
   if (!playback?.requestDispatched || playback.remoteCancelSent) return;
   playback.remoteCancelSent = true;
   const controller = new AbortController();
@@ -1267,7 +1268,7 @@ function cancelRemoteSpeech(playback) {
       method: 'POST',
       credentials: 'include',
       headers: API.headers(),
-      body: JSON.stringify({request_id: playback.requestId}),
+      body: JSON.stringify({request_id: playback.requestId, ...(reason ? {reason} : {})}),
       keepalive: true,
       signal: controller.signal,
     }).catch(() => {}).finally(() => clearTimeout(timeout));
@@ -1276,22 +1277,29 @@ function cancelRemoteSpeech(playback) {
   }
 }
 
-function cancelSpeechPlayback(muted = false) {
+function cancelSpeechPlayback(muted = false, reason = '') {
   state.speechGeneration += 1;
+  state.currentGenerationEpoch += 1;
+  traceMark('t_barge_in_detected', {reason: reason || 'cancel'});
   stopEarlySpeech(muted);
-  releaseSpeechPlayback(state.speechPlayback, 'cancel');
+  releaseSpeechPlayback(state.speechPlayback, 'cancel', reason);
 }
 
 // Speech-first: the server may push sentence WAVs before the turn ends.
 // They are played immediately, and the full-text TTS call after `final` is
 // skipped so the reply is never spoken twice.
-const earlySpeech = {ctx: null, sources: new Set(), nextAt: 0, scheduled: 0, streamPending: false, muted: false};
+const earlySpeech = {ctx: null, gainNode: null, sources: new Set(), nextAt: 0, scheduled: 0, streamPending: false, muted: false};
 
 function assistantSpeechActive() {
   return Boolean(state.speechPlayback) || earlySpeech.sources.size > 0;
 }
 
 function stopEarlySpeech(mute = false) {
+  if (earlySpeech.gainNode && earlySpeech.ctx) {
+    try {
+      earlySpeech.gainNode.gain.setValueAtTime(0, earlySpeech.ctx.currentTime);
+    } catch {}
+  }
   for (const source of earlySpeech.sources) {
     source.onended = null;
     try { source.stop(); } catch {}
@@ -1303,23 +1311,43 @@ function stopEarlySpeech(mute = false) {
   earlySpeech.streamPending = false;
   earlySpeech.muted = mute;
   syncSelfTtsSuppression();
+  traceMark('t_audio_stopped', {muted: mute});
 }
 
 async function playEarlyAudioEvent(event) {
   if (earlySpeech.muted) return;
   if (!event || event.media_type !== 'audio/wav' || typeof event.data_base64 !== 'string') return;
+  if (typeof event.generation_epoch === 'number' && event.generation_epoch < state.currentGenerationEpoch) return;
   const binary = atob(event.data_base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  if (!earlySpeech.ctx) earlySpeech.ctx = new AudioContext();
+  if (!earlySpeech.ctx) {
+    earlySpeech.ctx = new AudioContext();
+    earlySpeech.gainNode = earlySpeech.ctx.createGain();
+    earlySpeech.gainNode.connect(earlySpeech.ctx.destination);
+  }
   if (earlySpeech.ctx.state === 'suspended') await earlySpeech.ctx.resume();
+  if (earlySpeech.gainNode) {
+    try {
+      earlySpeech.gainNode.gain.setValueAtTime(1.0, earlySpeech.ctx.currentTime);
+    } catch {}
+  }
   const buffer = await earlySpeech.ctx.decodeAudioData(bytes.buffer);
   if (!Number.isFinite(buffer?.duration) || buffer.duration <= 0 || buffer.duration > 30) return;
+  if (typeof event.generation_epoch === 'number' && event.generation_epoch < state.currentGenerationEpoch) return;
   const source = earlySpeech.ctx.createBufferSource();
   source.buffer = buffer;
-  source.connect(earlySpeech.ctx.destination);
+  if (earlySpeech.gainNode) {
+    source.connect(earlySpeech.gainNode);
+  } else {
+    source.connect(earlySpeech.ctx.destination);
+  }
   const startAt = Math.max(earlySpeech.ctx.currentTime + 0.05, earlySpeech.nextAt);
   source.start(startAt);
+  if (earlySpeech.scheduled === 0) {
+    traceMark('playback_scheduled', {duration_s: Number(buffer.duration.toFixed(2))});
+    traceMark('t_audio_playback_start', {duration_s: Number(buffer.duration.toFixed(2))});
+  }
   earlySpeech.nextAt = startAt + buffer.duration;
   earlySpeech.scheduled += 1;
   earlySpeech.sources.add(source);
@@ -1327,6 +1355,9 @@ async function playEarlyAudioEvent(event) {
   source.onended = () => {
     earlySpeech.sources.delete(source);
     syncSelfTtsSuppression();
+    if (earlySpeech.sources.size === 0 && !earlySpeech.streamPending) {
+      traceMark('t_audio_playback_end');
+    }
   };
   setSpeechStopEnabled(true);
 }
@@ -1338,8 +1369,8 @@ function setSpeechStopEnabled(enabled) {
   if (hudStop) hudStop.disabled = !enabled;
 }
 
-document.querySelector('#speech-stop')?.addEventListener('click', () => cancelSpeechPlayback(true));
-document.querySelector('#hud-stop')?.addEventListener('click', () => cancelSpeechPlayback(true));
+document.querySelector('#speech-stop')?.addEventListener('click', () => cancelSpeechPlayback(true, 'user_stop_button'));
+document.querySelector('#hud-stop')?.addEventListener('click', () => cancelSpeechPlayback(true, 'user_stop_button'));
 setSpeechStopEnabled(false);
 
 async function speakFinal(envelope) {
@@ -1545,6 +1576,8 @@ navigator.mediaDevices?.addEventListener?.('devicechange', refreshMicDevices);
 async function startMic() {
   if (micStarting || state.micActive) return;
   micStarting = true;
+  state.trace = { startedAt: performance.now(), id: '' };
+  traceMark('mic_button_pressed');
   setMicButtonState(Boolean(state.micActive), true);
   announceMicStatus('Запускаю микрофон.');
   const startGeneration = ++micStartGeneration;
@@ -1642,6 +1675,7 @@ async function startMic() {
           body: JSON.stringify({
             ...payload,
             assistant_speaking: Boolean(micCapture.overlapStarted && !micCapture.bargeInConfirmed),
+            voiced_ms: Math.max(0, Math.round(micCapture.voicedMs || 0)),
           }), signal,
         });
         micHelpers.requireVoiceResponseOk(response, 'voice/draft');
@@ -1654,6 +1688,7 @@ async function startMic() {
           micCapture.serverDecision = {
             required_ms: required,
             action: String(response?.duplex_action || ''),
+            echo_detected: Boolean(response?.echo_detected),
           };
         }
         const gesture = String(response?.avatar_gesture || '');
@@ -1762,15 +1797,21 @@ async function startMic() {
 
 function updateMicTurn(mic) {
   if (!mic.heard || mic.finalizing) return {action: 'hold_turn'};
+  if (mic.serverDecision?.echo_detected || mic.serverDecision?.action === 'ignore_echo') {
+    return {action: 'hold_turn', requiredMs: mic.serverDecision?.required_ms ?? mic.inputGate.config.silenceMs};
+  }
   const decision = mic.helpers.decideMicTurn({
     text: mic.draftText, overlap: mic.overlapStarted && !mic.bargeInConfirmed,
     voicedMs: mic.voicedMs, silenceMs: performance.now() - mic.inputGate.lastVoiceAt,
     normalSilenceMs: mic.serverDecision?.required_ms ?? mic.inputGate.config.silenceMs,
+    echoDetected: Boolean(mic.serverDecision?.echo_detected),
   });
   if (decision.action === 'cancel_tts' && !mic.bargeInConfirmed) {
     mic.bargeInConfirmed = true;
+    state.currentGenerationEpoch += 1;
+    traceMark('t_barge_in_detected', {reason: 'user_barge_in'});
     // A late draft from this utterance must not cancel a newer playback owner.
-    if (state.speechPlayback && state.speechPlayback === mic.overlapPlayback) cancelSpeechPlayback(true);
+    if (state.speechPlayback && state.speechPlayback === mic.overlapPlayback) cancelSpeechPlayback(true, 'user_barge_in');
     else if (mic.overlapEarlySpeech) stopEarlySpeech(true);
     mic.overlapEarlySpeech = false;
   }
@@ -1924,6 +1965,27 @@ function newVoiceUtterance() {
   return {sessionId: `app-mic-${id}`, correlationId: `turn-voice-${id}`};
 }
 
+// Per-turn latency trace. Marks are fire-and-forget: a failed trace must never
+// delay or interrupt a real conversation.
+state.trace = state.trace || { startedAt: 0, id: '' };
+function traceMark(stage, detail) {
+  const traceId = state.voiceCorrelationId || state.trace.id;
+  if (!traceId) return;
+  const now = performance.now();
+  const payload = {
+    trace_id: traceId,
+    stage,
+    client_age_ms: Math.round(now - state.trace.startedAt),
+    detail: detail || null,
+  };
+  try {
+    fetch('/api/trace', {
+      method: 'POST', credentials: 'include', headers: API.headers(),
+      body: JSON.stringify(payload), keepalive: true,
+    }).catch(() => {});
+  } catch { /* tracing must not break the turn */ }
+}
+
 async function finishUtterance() {
   const mic = state.mic;
   if (!mic || mic.finalizing || !mic.heard) return;
@@ -1934,22 +1996,28 @@ async function finishUtterance() {
   const turnGeneration = mic.turnGeneration;
   const suppressBackchannel = mic.overlapStarted && !mic.bargeInConfirmed;
   micState.textContent = 'Распознаю…';
+  traceMark('speech_end_detected', { had_speech: Boolean(mic.heard) });
+  traceMark('t_user_speech_end', { had_speech: Boolean(mic.heard) });
   try {
     await flushMicWorklet(mic);
     if (!micTurnIsCurrent(mic, turnGeneration)) return;
+    traceMark('mic_worklet_flushed');
     await drainPendingMicAudio(mic, mic.context.sampleRate);
     if (!micTurnIsCurrent(mic, turnGeneration)) return;
+    traceMark('mic_uploads_drained', { uploads: mic.uploadCount || 0 });
     const boundary = mic.helpers.completeMicFlushBoundary(mic, lastVoiceAt, newVoiceUtterance());
     if (boundary.resumed) return;
     const utterance = boundary.utterance;
     state.voiceSessionId = mic.utterance.sessionId;
     state.voiceCorrelationId = mic.utterance.correlationId;
+    traceMark('voice_end_requested');
     const data = await finalizeAfterMicUploads(mic, async () => {
       const response = await fetch('/api/voice/end', {
       method: 'POST', credentials: 'include', headers: API.headers(),
       body: JSON.stringify({
         session_id: utterance.sessionId,
         correlation_id: utterance.correlationId,
+        trace_id: utterance.correlationId,
         owner: 'desktop',
         capture_id: mic.lease.leaseId,
         suppress_backchannel: suppressBackchannel,
@@ -1959,6 +2027,7 @@ async function finishUtterance() {
       mic.helpers.requireVoiceResponseOk(response, 'voice/end');
       return response.json();
     });
+    traceMark('voice_end_answered', { has_transcript: Boolean(data && data.transcript) });
     if (!data || !micCaptureIsCurrent(mic)) return;
     if (data.filtered === 'user_backchannel') window.__jawlScene?.triggerMotion?.('nod');
     if (data.transcript) addMessage('user', data.transcript);

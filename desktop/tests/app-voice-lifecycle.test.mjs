@@ -37,6 +37,16 @@ function speechHarness(fetchImpl = async () => ndjsonResponse([audioEvent(0), do
         disconnect: () => { made.disconnected += 1; },
       };
     }
+    createGain() {
+      return {
+        gain: {
+          value: 1,
+          setValueAtTime: (val, at) => {},
+        },
+        connect: (node) => node,
+        disconnect: () => { made.disconnected += 1; },
+      };
+    }
   }
   const context = {
     API: {headers: () => ({})},
@@ -67,6 +77,7 @@ function speechHarness(fetchImpl = async () => ndjsonResponse([audioEvent(0), do
       dispatchEvent: event => made.diagnostics.push(event.detail),
       __jawlScene: {setLipLevel: (level) => made.lip.push(level), setMotionState: (mode) => made.motion.push(mode)},
     },
+    traceMark: () => {},
   };
   const start = appSource.indexOf('// speech: /api/tts/stream');
   const end = appSource.indexOf('// microphone: the panel', start);
@@ -263,6 +274,7 @@ function micHarness({fetchImpl, getUserMedia, closeContext} = {}) {
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
     window: {__jawlScene: {setMotionState() {}}, dispatchEvent: event => made.diagnostics.push(event.detail)},
     btoa: text => Buffer.from(text, 'binary').toString('base64'),
+    traceMark: () => {},
   };
   const names = ['startMic', 'getCaptureClientId', 'uploadChunk', 'voiceCaptureDiagnostic', 'enqueueMicOperation',
     'finalizeAfterMicUploads', 'drainPendingMicAudio', 'flushPendingMicAudio', 'micTurnIsCurrent', 'micCaptureIsCurrent', 'newVoiceUtterance', 'finishUtterance',

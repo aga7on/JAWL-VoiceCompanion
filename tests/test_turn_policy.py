@@ -68,6 +68,33 @@ class TurnPolicyTests(unittest.TestCase):
         self.assertEqual(second["action"], "listen")
         self.assertTrue(second["hold"])
 
+    def test_long_utterance_extends_base_window(self):
+        # The owner's complaint: a long monologue pauses mid-thought (breath,
+        # word choice) and the old fixed 800 ms window committed the turn,
+        # so the brain answered the first half of the sentence.
+        short = decide("Я разобрал конфиги и подготовил сервер.", silence_ms=800)
+        self.assertEqual(short["action"], "end")
+        long_utt = decide(
+            "Я разобрал конфиги и подготовил сервер.", silence_ms=800, voiced_ms=7000.0,
+        )
+        self.assertEqual(long_utt["action"], "listen")
+        self.assertGreater(long_utt["required_ms"], BASE_SILENCE_MS)
+
+    def test_long_utterance_window_is_capped(self):
+        decision = decide("Долгий монолог.", silence_ms=0, voiced_ms=600_000.0)
+        self.assertLessEqual(decision["required_ms"], EXTENDED_SILENCE_MS)
+
+    def test_long_utterance_still_commits_eventually(self):
+        decision = decide(
+            "Я разобрал конфиги и подготовил сервер.", silence_ms=1850.0, voiced_ms=7000.0,
+        )
+        self.assertEqual(decision["action"], "end")
+
+    def test_short_utterance_unchanged(self):
+        decision = decide("Коротко.", silence_ms=800, voiced_ms=900.0)
+        self.assertEqual(decision["action"], "end")
+        self.assertEqual(decision["required_ms"], BASE_SILENCE_MS)
+
 
 if __name__ == "__main__":
     unittest.main()

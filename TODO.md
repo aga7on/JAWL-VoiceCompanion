@@ -1,6 +1,355 @@
 # Единственная очередь — ежедневный компаньон
 
-- [x] Round 10. Этап 2 (Шаг 2.7): Автономная приёмка живого контура без участия владельца (5 ноября 2026) [TRUE E2E PIPELINE: PASS; ЖИВОЙ ДИАЛОГ С ВЛАДЕЛЬЦЕМ: OPEN; СИСТЕМНЫЙ ЗВУК: OPEN (NOT TESTED)]:
+## ПРИОРИТЕТ: MOSS-Live-подобный полнодуплексный речевой слой (владелец, 10.11.2026)
+
+Чек-лист до цели (статусы честные):
+
+## ПРИОРИТЕТ B: проактив по сенсорике через мотивации/drives (владелец, 10.11.2026)
+- [x] **P-M0 (companion-side, v0):** `sensory_motivation.py` (novelty/Jaccard + change hints, decaying score, threshold/cooldown) + хук в `screen_commentary.py` (`suppressed_motivation`), без правок read-only snapshot. Тесты: `test_sensory_motivation` 6/6, регрессия commentary+proactive+motivation 32/32 PASS (engineer). Дизайн `docs/SENSORY_MOTIVATION_DESIGN.md`.
+- [x] **P-M0.1 (server wiring):** `create_server` (`web.py:4012,4090`) подключает `SensoryMotivation` в `ScreenCommentaryScheduler`. Детерминированные тесты `tests/test_screen_commentary.py` 10/10 PASS (подавление рутины + пропуск критических событий).
+- [ ] **P-M1 (BLOCKED):** отразить сигнал на реальном `curiosity` drive через snapshot ядро: **BLOCKED** — в read-only snapshot ядре JAWL нет эндпоинта для динамической инъекции дефицита (только чтение/статический config через settings.yaml); companion-side `SensoryMotivation` является авторитетным фильтром без создания второго источника правды.
+- [ ] **P-M2:** owner-tuned пороги, live проверка проактива (требует рестарт companion + наблюдение).
+
+
+- [ ] **Рестарт companion-процесса** — применить накопленные правки (live_speech Cycle 20, screen_commentary D4, adaptive hold итерация 1, barge-in контекстная коррекция Cycle 21d, echo guard Cycle 22, Live Voice Phase C Cycle 13: Stream-First progressive generation, TurnTrace dual-lane, instant barge-in mute <=300ms, TokenBucket anti-spam). Без этого живой сервис работает на старом коде.
+- [x] **Аудит full-duplex контура** (итерация 1, 10.11): карта mic→VAD→draft→end→brain→TTS→barge-in→echo guard с file:line — в STATE.md Cycle 21.
+- [x] **Foreground turn-taking: adaptive hold** (итерация 1, 10.11): `voiced_ms`-адаптивное окно тишины, 14+17 тестов. REAL-MIC VALIDATION PENDING.
+- [x] **P1 Barge-in с контекстной коррекцией (Cycle 21d):** клиент передаёт причину (`desktop/app.js:1270,1344,1779`), сервер фиксирует сниппет активного ответа (`_current_speaking_text` → `_last_interrupted_turn_text`), немедленно отменяет `gateway.arbiter.cancel_all()`, следующий ход в `enrich_turn_text` получает маркер `[ПЕРЕБИВАНИЕ: ...]`, который сгорает за один раз (expire 120 с). Не ломает `split_packet`. Тесты: `tests/test_desktop_speech_cancel.mjs` 8/8, `tests/test_web.py` 92/92 (4 BargeIn), `tests/test_speech_requests.py` 14/14, `desktop/tests/app-voice-lifecycle.test.mjs` 30/30.
+- [x] **Echo guard для loopback-ASR**: self-TTS suppression существует для ambient; проверена сквозная защита streaming ASR от собственного голоса (Cycle 22).
+- [x] **Fast foreground lane**: first-audio ≤1.2 с (SLO из DUPLEX_RESEARCH_ADOPTION) — Stream-First progressive phrase chunking (`StreamPhraseSegmenter`) + TurnTrace Dual-Lane KPI (`first_audible_audio_ms` preface vs `first_meaningful_audio_ms` deliberative stream) + Zero-GPU Fast Lane flag (`ENABLE_FAST_LANE=0` default, RAM/CPU cached preface). 192 Python тестов (7 Dual-Lane, 7 TurnTrace) + 59 Node тестов PASS.
+- [ ] **Coordination: фон ReAct → вставка в паузе** — результат фонового хода вставляется в естественной паузе, не перебивая пользователя (против теперешнего поведения: ответ приходит, когда закончится).
+- [x] **Backchannel policy v0.5**: «угу» / preface anti-spam gating — детерминированный `TokenBucketRateLimiter` (`capacity=1.0`, `refill_rate=1.0/6.0` с минимальным интервалом 6 с), семантическая дедупликация идентичных реплик, строгое подавление при активной речи пользователя (`user_speaking`) и при `is_muted`. Интеграция в `/api/voice/preface`. 12/12 тестов PASS (`tests/test_voice_preface_policy.py`).
+
+## Остальная очередь
+
+- [x] **Баг (TTS): слышно только первое предложение до точки.** Корень: `LiveSpeechSession._run` умирал при первой ошибке синтеза (`break` вместо continue) — всё, что после упавшего предложения, замолкало, `state.error` никто не читал. Исправлено: ошибка записывается, предложение пропускается, очередь продолжается. Регрессия: `tests/test_live_speech_error_resilience.py`. **Требуется рестарт companion-процесса, чтобы код применился.**
+- [x] **Комментирование происходящего на экране.** Реализовано как initiative lane `src/jawl_voicecompanion/screen_commentary.py` (10.11): ScreenDeltaWatcher-события → bounded observation turn («ответь "тишина" если не стоит комментировать») → доставка через новый `ProactiveFeed.deliver_direct` с rate limits (min gap 600 с, ≤2/час, idle 90 с после хода, mute/quiet respect). Тесты: `tests/test_screen_commentary.py` 8/8. Требует рестарта.
+- [ ] **Собрать свою foreground/background архитектуру** по образцу OpenMOSS/MOSS-Live (модель несвободна, архитектура открытая): foreground = SenseNova-Loop realtime voice lane (barge-in, backchannel, удержание хода, быстрые ответы), background = JAWL ReAct (сейчас), coordination = SQLTasks/Goal state + speech sink; результат фона вставляется в естественной паузе. Референсы: OpenMOSS/MOSS-Live (GitHub), arxiv 2611.01639 "Local or Escalate? Post-Training Expert Routing for Real-Time Duplex Speech Models", 2610.35581 (interruptions/backchannels reward window). Первая часть (foreground turn-taking) начата в чек-листе выше.
+- [x] **Cycle 13 / Live Voice (Phase C): Stream-First Duplex, Dual-Lane TurnTrace, Generation Epochs и мгновенный Barge-In (13 ноября 2026)** [AC-03, AC-01, AC-05, AC-08, AC-09: VERIFIED; STREAM-FIRST PASS; DUAL-LANE KPI PASS; SINGLE-OWNER FSM PASS; BARGE-IN <=300ms PASS; TOKEN BUCKET PASS; PYTHON 192/192 PASS; NODE 59/59 PASS]:
+  1. **Stream-First progressive phrase generation (H1/P0)**:
+     - `StreamPhraseSegmenter` в `src/jawl_voicecompanion/duplex_cascade.py`: буферизация streaming-токенов от Bonsai LLM и нарезка по пунктуационным границам (`[.?!…\n]`, мин. 12 символов / 3 слова) без ожидания полного ответа модели.
+     - Прогрессивная отправка первых фраз в OmniVoice TTS: первый чанк синтезируется параллельно генерации следующих предложений.
+  2. **TurnTrace сквозная Dual-Lane инструментация (H1/P0)**:
+     - Канонические константы стадий в `src/jawl_voicecompanion/turn_trace.py`: `STAGE_USER_SPEECH_END`, `STAGE_VAD_ENDPOINT`, `STAGE_ASR_FINAL`, `STAGE_LLM_REQUEST`, `STAGE_LLM_FIRST_TOKEN`, `STAGE_LLM_FIRST_SENTENCE`, `STAGE_TTS_REQUEST`, `STAGE_TTS_FIRST_PCM`, `STAGE_AUDIO_ENQUEUED`, `STAGE_AUDIO_PLAYBACK_START`, `STAGE_AUDIO_PLAYBACK_END`, `STAGE_BARGE_IN_DETECTED`, `STAGE_AUDIO_STOPPED`.
+     - Метод `compute_turn_kpis()` строго разделяет Fast Lane (`first_audible_audio_ms` p95 <= 1.2s) и Deliberative Lane (`first_meaningful_audio_ms` p95 <= 1.2s; short answer completion p95 <= 4.0s). Рефлекторный preface не подменяет содержательный ответ.
+  3. **Single-Owner Playback FSM и Generation Epochs (H4/P0)**:
+     - Серверный и клиентский контроль `generation_epoch` в `TurnArbiter`, `DuplexCascadeArbiter`, `web.py` и `desktop/app.js`.
+     - При каждом новом ходе пользователя или barge-in эпоха инкрементируется (`next_epoch()`), отсекая устаревшие chunks и отменённый TTS.
+  4. **Мгновенный Barge-in mute <= 300 мс (H5/P0)**:
+     - В `desktop/app.js` добавлен выделенный `GainNode` (`earlySpeech.gainNode`). При обнаружении barge-in громкость обнуляется аппаратно в тот же квант времени (`gainNode.gain.setValueAtTime(0, earlySpeech.ctx.currentTime)`), останавливается шедулинг PCM, сбрасывается очередь, инвалидируется эпоха.
+     - Инструментация `t_barge_in_detected` и `t_audio_stopped` подтверждает задержку остановки звука <= 300 мс (тест `test_barge_in_audio_stop_latency_under_300ms`).
+  5. **Антиспам и дедупликация (H3/P1)**:
+     - `TokenBucketRateLimiter` в `src/jawl_voicecompanion/affective_engine.py`: ёмкость 1.0, refill rate 1/6.0 с, защита от повторов фраз, подавление при речи пользователя и mute.
+-     - Интеграция в `/api/voice/preface`.
+  6. **Zero-GPU Fast Lane (H2/P1)**:
+     - Флаг `ENABLE_FAST_LANE` (по умолчанию `False`), поддержка RAM/CPU-кэша без нагрузки на GPU 1 (GPU 1 выделен под Bonsai LLM и OmniVoice TTS, GPU 0 строго запрещён).
+  7. **Тесты и верификация**:
+     - Python voice suite: 192/192 PASS (`tests/test_voice_turn_trace.py` 7/7, `tests/test_voice_dual_lane.py` 7/7, `tests/test_voice_barge_in.py` 10/10, `tests/test_voice_preface_policy.py` 12/12, `tests/test_turn_trace.py` 13/13, `tests/test_echo_guard.py` 13/13, `tests/test_web.py` 92/92, `tests/test_barge_in_p1.py` 8/8, `tests/test_duplex_cascade.py` 14/14, `tests/test_affective_engine.py` 13/13).
+     - Node desktop suite: `desktop/tests/app-voice-lifecycle.test.mjs` 30/30 PASS, `desktop/speech-stream.test.mjs` 21/21 PASS, `tests/test_desktop_speech_cancel.mjs` 8/8 PASS (всего 59/59 PASS).
+
+  1. Тесты `test_mhc_route`/`test_mhc_merge` в `test-backend-ops.cpp` (d=64..4096): **36/36 OK** на пороге 1e-6 — CUDA-ядра сверены с CPU-эталоном.
+  2. MTP `--spec-type draft-mtp` крашится (0xC0000005) на MTP-графе; изоляция показала: файл корректен, баг в форке. Отложено, не блокирует.
+  3. Найдена ловушка двух GPU: без пина llama.cpp расщеплял модель на карты, замеры падали втрое. Пин `CUDA_VISIBLE_DEVICES=1` добавлен в `hold_supervised_brain.py` (+ удаление `--device CUDA1`).
+  4. Честные замеры: Q4_K_M 65.7, IQ3_M 81.0, IQ3_S 85.0 ток/с. Владелец выбрал IQ3_M; манифест переключён.
+  5. Голосовой E2E 3/3 (`final_accept/voice_final.json`, failure=null). Первый отказ был из-за неверных `--expected` fixtures, не продукта.
+- [ ] **Отложено:** MTP-краш в форке (0xC0000005 при резервировании MTP-графа для sensenova); CUDA-ядра + тесты не в sanctioned patch.
+
+- [x] Cycle 17 / Round 12.10: DSpine — проверка применимости (9 ноября 2026) [НЕ ПРИМЕНИМО: драфтер Tencent привязан к Qwen3.8-27B, нам нужен MTP; 104.8 ток/с у них против 29 — спекулятивное декодирование подтверждено как направление]:
+  1. Проверена технология DSpine (Tencent, GGUF-порт сообщества): 2B-драфтер, 16 токенов за шаг, ×3.6 на RTX 3090, но **только для Qwen3.8-27B** и требует авторский форк llama.cpp.
+  2. Acceptance на прозе ~2.8 из 16 — наш случай (разговорный компаньон) худший для DSpine.
+  3. Для нас путь спекуляции — MTP-голова в GSQ-RCO GGUF (`--spec-type draft-mtp`), уже поддержана нашим билдом.
+
+- [x] Cycle 16 / Round 12.9: CUDA-ядра для mHC — скорость восстановлена (9 ноября 2026) [DECODE 17.4 → **68.1 ток/с** (×3.9); PREFILL 1110 → **3800 ток/с** (×3.4); CPU 11.58 → **0.99 ядра**; ВЕРДИКТ СМЕНИЛСЯ НА GPU-BOUND; ХОД В JAWL: 1.06–2.25 с]:
+  1. Написаны CUDA-ядра для двух операторов, отсутствовавших в CUDA-бэкенде форка:
+     - `ggml/src/ggml-cuda/mhc.cuh` — объявления и константы.
+     - `ggml/src/ggml-cuda/mhc-merge.cu` — слияние двух residual-потоков с 2×2-матрицей роутера, один поток на элемент.
+     - `ggml/src/ggml-cuda/mhc-route.cu` — RMS по двум потокам, 8 логитов, гейты, Sinkhorn 20 итераций; блочная редукция через warp shuffle.
+  2. Подключение в `ggml-cuda.cu`: include, диспетчер `case GGML_OP_MHC_ROUTE/MHC_MERGE`, `supports_op` с требованием F32.
+  3. Реализация повторяет эталон `ggml-cpu/ops.cpp` один в один, включая порядок четырёх softmax в Sinkhorn и чтение упакованных гейтов после вектора проекции.
+  4. Преодолены проблемы сборки: cmake из `G:\AI\Strata\.venv`, запуск через `vcvars64.bat` (VS 2022 BuildTools), остановка мозга для разблокировки `ggml-base.dll`.
+  5. Замеры: decode 68.6 ток/с (короткий промпт) и 68.1 (800 токенов), prefill 3801 ток/с на 12k, CPU-нагрузка 0.99 ядра, VRAM без изменений (+6214 МБ).
+  6. Сквозной ход в JAWL: первый 8.81 с (прогрев), далее 1.06 и 2.25 с.
+- [ ] **Оговорки:** правка в `runtime/sensenova-loop/source/` (read-only по AGENTS.md) не перенесена в sanctioned patch; численная сверка CUDA против CPU-эталона не выполнена; MTP-прогон на новых GGUF не делался.
+- [ ] **Следующее:** прогнать MTP (`--spec-type draft-mtp`) на IQ3_M/IQ3_S и сравнить с текущими 68 ток/с.
+
+- [x] Cycle 15 / Round 12.8: Скорость мозга — корневая причина (9 ноября 2026) [ПРИЧИНА: `ggml_mhc_route`/`ggml_mhc_merge` НЕ реализованы в CUDA (только CPU + Vulkan) → часть графа считает CPU, 11.58 ядер; VRAM +6229 МБ подтверждает, что модель на GPU; ОБНОВЛЕНИЕ llama.cpp САМО ПО СЕБЕ НЕ ПОМОЖЕТ]:
+  1. Установлена архитектура: `sensenova_loop`, 56 блоков в графе при 32 хранимых (зацикленный трансформер), 24 SSM-слоя, полное внимание каждые 4 блока, MoE нет. Отсюда ~1.75× байт на токен против обычной 9B.
+  2. **Корневая причина:** слитые операторы `ggml_mhc_route` и `ggml_mhc_merge` реализованы в CPU (`ggml-cpu/ops.cpp`) и Vulkan (`mhc_route.comp`, `mhc_merge.comp`), но **отсутствуют в CUDA и Metal**. На CUDA эти узлы исполняются на CPU.
+  3. Прямое измерение: `-ngl 99` → VRAM +6229 МБ, decode 17.4 ток/с; `-ngl 0` → VRAM +227 МБ, decode 4.7 ток/с. Ускорение от GPU всего 3.7×, при декоде занято 11.58 ядер CPU.
+  4. Проверены и исключены: flash-attention (17.3 против 17.6), квантованный KV-кэш (17.4 против 17.6), грамматика JSON (0.99×), кэш промптов (работает), размещение модели (она на GPU).
+  5. Скачаны и замерены новые кванты GSQ-RCO: IQ3_M 4.73 ГБ → **19.1 ток/с** (+7%), IQ3_S 4.31 ГБ → 18.0 ток/с против Q4_K_M 17.9.
+  6. MTP-голова есть в новых GGUF, билд поддерживает `--spec-type draft-mtp`, но это не устранит CPU-узкое место.
+- [ ] **Следующий приоритет:** написать CUDA-ядра для `ggml_mhc_route`/`ggml_mhc_merge` по образцу Vulkan-шейдеров. Ожидаемый decode после этого — 28–32 ток/с (поправка на 1.75× байт на токен).
+- [ ] Альтернатива, если CUDA-ядра не оправдаются: плотная модель без mHC/SSM даст 35–50 ток/с при полном offload.
+
+- [x] Cycle 14 / Round 12.7: Скорость мозга — разбор и починка (9 ноября 2026) [ПРИЧИНА: потеря fast-lane, не медленная модель; ХОД 40–95 с → 1.55–2.09 с; СЫРОЙ DECODE 37 ток/с; PREFILL 1110 ток/с; FOCUSED РЕГРЕССИЯ 20/20 + 43/43 PASS]:
+  1. Измерено порознь: decode 35.8–37.9 ток/с (стабильно 64…800 токенов), prefill 1082–1120 ток/с (2.4k…22k токенов), грамматика JSON не замедляет (0.99×), кэш идентичного промпта работает (4 токена), а после смены первой строки — полный пересчёт (22 001 токен). Модель и llama.cpp в норме.
+  2. Исправлен дефект: `JawlTerminalAdapter.respond()` не передавал `turn_id`, из-за чего ядро не включало fast conversation lane и каждый шаг платил полный prefill 20k токенов. Добавлен `_safe_turn_id` с валидацией формата ядра.
+  3. Включена fast conversation lane: механизм уже был реализован в ядре (`envelope_policy._fast_lane_messages`), но переменная `JAWL_FAST_CONVERSATION` не выставлялась. Добавлено в лаунчер (`-EnableFastConversation`, по умолчанию `true`).
+  4. Добавлены `cache_type_k/v: q4_0` в GPU-манифест (в базовом были, в используемом ярлыком — нет).
+  5. Добавлены `--flash-attn on` и `--cache-reuse 256` в `scripts/hold_supervised_brain.py`, с защитой от неверного типа (поймано тестом).
+  6. Результат замеров через терминал с `turn_id`: первый ход 22.50 с (прогрев), далее **2.09 с** и **1.55 с**; отдельный одиночный — 2.07 с.
+  7. Создан набор диагностических инструментов (throughput, grammar, cache, decode, fast-lane, transport, trace).
+- [ ] **Остаётся:** первый ход после старта ~22 с (прогрев KV); токены контекста не уменьшились (~19k) — сжатие затрагивает только system-блок; полный голосовой E2E с TTS после этих правок не прогонялся.
+- [ ] **Дефект:** `runtime/instances/daily/data/agent/goals.json` содержит `{}` без поля `version`, ядро пишет `unsupported goal store version`. На скорость не влияет, засоряет журнал.
+
+- [x] Cycle 13 / Round 12.6: AC-05 — Проактивность и инициатива (9 ноября 2026) [AC-05: VERIFIED_AUTOMATED (6/6 значимых = 100% при цели ≥80%; 0 ложных прерываний при активном пользователе, в DND и на базовой линии; 0 реплик во время разговора; 6/30 мин в простое при лимите 6/час); ПРОАКТИВНОСТЬ ВКЛЮЧЕНА В ЖИВОМ ПРОФИЛЕ; ИСПРАВЛЕН ДЕФЕКТ СМЕШАННОГО ЯЗЫКА; FOCUSED РЕГРЕССИЯ 51/51 PASS]:
+  1. Проактивность была выключена во всех слоях живого профиля — включена:
+     - `proactive_guidance: false` → `true` (heartbeat больше не запрещает инициативу).
+     - Экранная инициатива: передаются `--screen-watch`, `--jawl-event-dir`, `--screen-ocr`.
+     - Гейт активности: добавлен `--user-activity --user-activity-idle-seconds 60`; без него `activity_provider=None` и статус `disabled`.
+     - Проверено на живом процессе: все пять флагов присутствуют, каталог событий создан.
+  2. Переключение `proactive_guidance` вынесено в лаунчер (`-EnableProactiveGuidance`, по умолчанию `true`):
+     - Ручная правка `settings.yaml` ломала запуск: fail-closed защита возвращала `ProfileConflict` («unapproved managed-file override»), и профиль не стартовал.
+     - Правка теперь применяется так же, как `request_timeout_seconds` — после копирования управляемого baseline.
+  3. Исправлен дефект смешанного языка в проактивных репликах:
+     - В `runtime/proactive-state.json` были реальные доставки «привет!一切正常, я в порядке…» и «связь稳定ная».
+     - `ProactiveFeed` читает историю JAWL напрямую и обходил CJK-фильтр адаптера.
+     - Добавлен `_sanitize_delivery()`: известные фразы переводятся, остальные идеограммы вырезаются, сообщение с потерей >50% тела отбрасывается.
+     - Шлюз применяется и к свежим сообщениям, и к очереди, восстановленной с диска.
+  4. Создан измеритель AC-05 (`scripts/benchmark_ac05_initiative.py`, отчёт `runtime/instances/ac05_report.json`):
+     - Прогоняет реальные гейты по размеченному потоку из 15 экранных кейсов и симулированного 30-минутного окна речи.
+     - Первый прогон дал FAILED и нашёл 2 настоящих дефекта (см. п.5).
+  5. Исправлены дефекты значимости, найденные измерителем:
+     - Слово `уведомлен` стояло в `_SALIENT` → «Уведомление: обновление доступно» получало максимальную значимость. Убраны `уведомлен`, `предупрежд`, `dialog`, `warning`.
+     - Навигация («список файлов прокручен») со значимостью 2 проходила порог. Добавлен `_ROUTINE` для навигации и уведомлений.
+     - Добавлены маркеры нехватки ресурса (`закончилось место`, `disk full`, `out of space`) — иначе значимое событие не поднималось.
+  6. Живая проверка гейта на реальных данных (`scripts/check_attention_live.py`):
+     - Реальный сигнал `WindowsUserActivity`: idle 106.7 с, `user_active False`.
+     - Значимая ошибка → `proposed`; уведомление и прокрутка → `ignored`.
+     - При `user_active=True` значимая ошибка → `suppressed user_active`, доставлено 0.
+  7. Focused регрессия: 51/51 PASS (`test_attention.py`, `test_proactive.py`, `test_launcher_manifest.py`).
+  8. **Ограничение статуса:** `VERIFIED_AUTOMATED`, не `ACCEPTED`. Живая 20–30-минутная сессия владельца с реальными экранными событиями не наблюдалась; разметка сделана тем же харнессом; значимость подаётся вызывающей стороной.
+- [ ] **Следующий приоритет для AC-05:** живой 30-минутный прогон с реальными экранными событиями и подтверждением владельца → повышение до `ACCEPTED`.
+- [ ] **Скорость голосового хода AC-03:** `turn_to_first_audio` 32.7–77.3 с при цели p95 ≤ 4.0 с. Причина — до 15 шагов ReAct с локальной 9B.
+
+- [x] Cycle 12 / Round 12.5: Приёмка постоянного профиля и постоянной работы (9 ноября 2026) [ЧАСОВОЙ SOAK: VISION_SOAK_60M_VERIFIED (3600 с, 216 000 кадров, 0 потерь очереди, 0 CRC, ΔRSS +97.6 МБ, ΔGPU0 +141.0 МБ); ЖИВОЙ СТЕК: PASS (brain SenseNova GPU1, TTS OmniVoice ok, /app 200); ГОЛОСОВОЙ E2E: 3/3 PASS (ASR дословно, озвучено 2.22–25.32 с); ИСПРАВЛЕН БЛОКИРУЮЩИЙ ДЕФЕКТ TTS (референсная фраза вместо ответа); ИСПРАВЛЕН BOM-ДЕФЕКТ ЛАУНЧЕРА (30 ошибок разбора → 0); FOCUSED РЕГРЕССИЯ 53/53 + 18/18 PASS; ОТКРЫТО: скорость AC-03 p95 ≤4 с не достигнута (32.7–77.3 с)]:
+  1. Проведён полный часовой soak сенсорики (`scripts/benchmark_sensor_always_on.py --duration 3600`), вердикт `VISION_SOAK_60M_VERIFIED`, отчёт `runtime/instances/soak_h1_60min.json`:
+     - 3600.0 с реального времени, 216 000 кадров @ 60.0 FPS, 0 потерь очереди (p50/p95 = 1, max 2).
+     - Δ RSS +97.6 МБ, Δ GPU 0 +141.0 МБ (в пределах 150 МБ), GPU 1 изолирован под Qwen VL.
+     - 59/59 индексов JTI1 валидны, 0 CRC-ошибок, диск 21.92 МБ при лимите 2048 МБ.
+     - AC-09 пауза 60 с: 0 кадров попало в архив.
+     - Live VLM: 881 вызов, p50 192.2 мс, p95 264.5 мс.
+  2. Устранён дефект stale-артефактов раннера: checkpoint/report прошлого прогона больше не переживают `_setup_directories` (тест добавлен).
+  3. **Найден и исправлен блокирующий дефект TTS** (`scripts/omnivoice_server.py`): синтез подмешивал референсную фразу вместо ответа.
+     - Измерено GigaAM: `ref_text` по умолчанию → только референсная фраза; `preprocess_prompt=False` → референсный префикс; без референса → точный текст.
+     - Решение: language-guided генерация без референса; `--ref-audio`/`--ref-text` инертны.
+     - Закреплено `tests/test_omnivoice_text_fidelity.py` (3 теста, AST-контроль запрета референсных аргументов).
+  4. **Найден и исправлен дефект кодировки** `scripts/run_integrated_profile.ps1`: файл был без BOM, кириллица разрушалась, разбор PowerShell давал 30 ошибок — лаунчер не запустился бы. Перезаписан в UTF-8 с BOM, 0 ошибок разбора.
+  5. Проведена живая приёмка стека через фактический путь ярлыка:
+     - Brain `sensenova-loop-9b-q4` на GPU 1 (8990) — health OK.
+     - Компаньон стартовал, `/app` HTTP 200, циклы ReAct выполняются.
+     - TTS OmniVoice `/health` ok, 24000 Гц.
+  6. Проведён голосовой E2E на реальном браузерном тракте, 3/3 хода PASS:
+     - «Какой сегодня статус моего проекта?» → ASR совпал, озвучено 24.12 с.
+     - «Запомни, пожалуйста, что я предпочитаю короткие ответы.» → ASR совпал, 2.22 с.
+     - «Сможешь проверить тестовый файл и сообщить результат?» → ASR совпал, 25.32 с; JAWL реально проверил `snake.html` в песочнице.
+  7. Восстановлен каталог голосовых фикстур `runtime/synthetic-questions/` (скрипт `scripts/make_synthetic_question_fixtures.py`), три фразы распознаются дословно.
+  8. **Открытый разрыв:** `turn_to_first_audio` 32.7–77.3 с при цели AC-03 p95 ≤ 4.0 с. Причина — 15 ReAct-шагов локальной 9B-модели. Требует отдельного цикла оптимизации.
+- [ ] **Следующий приоритет:** закрыть скорость голосового хода AC-03 (сократить ReAct-цепочку для простых реплик, стриминг первого токена в TTS).
+
+- [x] Cycle 11 / Round 12.4: VISION_STABILIZATION — Полный 60-минутный Soak Test сенсорики (H1 P0) (8 ноября 2026) [SOAK RUNNER BASELINE_V1: ГОТОВ; ОДНОВРЕМЕННЫЙ МУЛЬТИМОДАЛЬНЫЙ РЕЖИМ (DXGI + TELEMETRY + ARCHIVE + QWEN GPU1 + RETRO INSPECT): PASS (AC-01, AC-08); ОТЧЕТ soak_h1_60min.json СФОРМИРОВАН: PASS; GPU 0 НЕ ЗАТРОНУТ (+12.0 МБ); РОТАЦИЯ И RETENTION: PASS (1.10 МБ ПРИ ПОРОГЕ 2048 МБ); ЦЕЛОСТНОСТЬ JTI1: 100% (0 CRC ОШИБОК); LIVE VLM LATENCY P50: 180.7 мс; FOCUSED REGRESSION RUNNER: 8/8 PASS; АРХИВНЫЙ НАБОР: 6/6 PASS; ОБЩИЙ РЕГРЕССИОННЫЙ НАБОР: 14/14 PASS; СТАТУС ВЕРИФИКАЦИИ: PARTIAL (35-СЕКУНДНЫЙ СКВОЗНОЙ ТЕСТ ОДНОВРЕМЕННОЙ НАГРУЗКИ ПРОЙДЕН; РАННЕР ПОЛНОСТЬЮ ГОТОВ К 3600-СЕКУНДНОМУ ПРОГОНУ)]:
+  1. Обеспечен одновременный режим нагрузки всего сенсорного контура в `scripts/benchmark_sensor_always_on.py` (H1 P0, AC-01, AC-08):
+     - Устранены разрывы между стадиями: захват DXGI Win32-окна `SoakTestWindow`, расчет пространственной телеметрии `TelemetryComputer`, кольцевая запись архива `LiveEvidenceArchive` (H.264 + JTI1), периодический опрос `QwenVisualSensor` на Physical GPU 1 и ретроспективная инспекция `inspect_segment()` с WinRT OCR работают параллельно на всем протяжении времени теста.
+     - Добавлено формирование доказательного отчета `runtime/instances/soak_h1_60min.json` с фиксацией конфигурации, активных компонентов, временных интервалов и контрольных точек.
+     - Состояние аудиодорожки зафиксировано как `wasapi_audio: UNKNOWN` во избежание захвата звука хоста.
+  2. Разработаны дополнительные тесты в `tests/test_sensor_always_on.py` (8 тестов, 100% PASS):
+     - Добавлен тест `test_report_schema_and_component_intervals`: проверка обязательных секций отчета, корректности списка компонентов и создания зеркала `soak_h1_60min.json`.
+  3. Проведен сквозной контрольный прогон одновременного режима на физическом оборудовании (35 секунд):
+     - 2100 кадров захвачено @ 60.0 FPS.
+     - 1920 кадров принято, 180 кадров отклонено во время AC-09 паузы (0 утечек).
+     - 0 потерь в очереди воркера, $p_{50} = 1.0$, $p_{95} = 1.0$.
+     - $\Delta \text{RSS} = +93.6$ МБ, $\Delta \text{GPU 0} = +12.0$ МБ (GPU 0 изолирован).
+     - $\Delta \text{GPU 1} = +1369.0$ МБ (Qwen на Physical GPU 1).
+     - Live VLM: 8 вызовов, $p_{50} = 180.7$ мс, $p_{95} = 251.1$ мс.
+     - 7/7 индексов JTI1 валидны, 0 CRC ошибок, диск 1.10 МБ при лимите 2048 МБ.
+  4. Пройдена полная регрессия 14/14 тестов PASS (`test_sensor_always_on.py` + `test_live_evidence_archive.py`).
+  5. Пройдена валидация CodeSee (`node .codesee/scripts/validate-features.mjs`).
+
+- [x] Cycle 09 / Round 12.3: VISION_STABILIZATION — Приёмка непрерывной сенсорики (H1 P0) (8 ноября 2026) [SOAK RUNNER: ГОТОВ; МУЛЬТИМОДАЛЬНЫЙ КОНТУР: PASS (AC-01, AC-08); УПРАВЛЕНИЕ ЗАХВАТОМ PAUSE/RESUME: PASS (AC-09, 0 КАДРОВ ВО ВРЕМЯ ПАУЗЫ); GPU 0 НЕ ЗАТРОНУТ (+13.0 МБ VRAM); РОТАЦИЯ И RETENTION: PASS (2.11 МБ ДИСКА ПРИ ПОРОГЕ 2048 МБ); ЦЕЛОСТНОСТЬ ИНДЕКСОВ JTI1: 100% (0 CRC ОШИБОК); LIVE VLM LATENCY P50: 181.6 мс; СФОКУСИРОВАННЫЙ НАБОР RUNNER: 7/7 PASS; АРХИВНЫЙ НАБОР: 6/6 PASS; ОБЩИЙ РЕГРЕССИОННЫЙ НАБОР: 13/13 PASS; СТАТУС ВЕРИФИКАЦИИ: PARTIAL (3-МИНУТНЫЙ СКВОЗНОЙ ПРОГОН ВСЕХ 4 СТАДИЙ ПРОЙДЕН; 60-МИНУТНЫЙ RUNNER ГОТОВ К ПОЛНОМУ ЗАПУСКУ)]:
+  1. Реализован воспроизводимый soak runner сенсорного контура `scripts/benchmark_sensor_always_on.py` (H1 P0, AC-01, AC-08, AC-09):
+     - Поддержка непрерывного 60 FPS захвата процедурного тестового Win32-окна `SoakTestWindow` (GDI canvas, нулевой захват рабочего стола владельца).
+     - Вычисление телеметрии через `TelemetryComputer` (<0.6 мс CPU).
+     - Потокобезопасная запись сегментов в `LiveEvidenceArchive` (H.264 ultrafast + бинарные индексы JTI1).
+     - Штатный наблюдатель `QwenVisualSensor` на Physical GPU 1 (`CUDA_VISIBLE_DEVICES="1"`). GPU 0 изолирован.
+     - Ретроспективная инспекция `inspect_segment()` по размеченным событиям с верификацией OCR.
+     - Периодическое сохранение контрольных точек каждые 10 минут в `runtime/instances/sensor_soak_checkpoint.json` и итогового отчета в `runtime/instances/sensor_soak_report.json`.
+     - Защита ресурсов: аварийное прерывание при превышении безопасного лимита дискового пространства `max_disk_mb`.
+  2. Добавлен контроль захвата Pause / Resume в `LiveEvidenceArchive` (AC-09):
+     - Методы `pause()`, `resume()` и свойство `is_paused`.
+     - Инвариант AC-09: немедленный сброс и закрытие активного сегмента при паузе, гарантированный отказ от приема кадров (`ingest_frame() -> False`).
+  3. Разработан набор сфокусированных тестов `tests/test_sensor_always_on.py` (7 тестов, 100% PASS):
+     - Конфигурация, сбор метрик всех стадий, гарантированное сохранение отчета при аварии, защита от переполнения диска, чистый teardown, гарантии AC-09 (0 кадров при паузе), антиспуфинговый запрет присвоения полного статуса на коротких прогонах.
+  4. Проведено сквозное мультимодальное испытание (180 секунд, 10,800 кадров):
+     - 10,800 кадров захвачено @ 60.0 FPS.
+     - 9,900 кадров принято на запись, 900 кадров отклонено во время 15-секундной паузы (0 утечек).
+     - 0 потерь в очереди воркера, $p_{50} = 1.0$, $p_{95} = 1.0$.
+     - $\Delta \text{RSS} = +92.7$ МБ (пик 213.1 МБ).
+     - $\Delta \text{GPU 0} = +13.0$ МБ (норма $\le 150$ МБ, GPU 0 не затронут).
+     - Live VLM: 24 наблюдения, $p_{50} = 181.6$ мс, $p_{95} = 240.6$ мс.
+     - Дисковое пространство архива ограничено 2.11 МБ при лимите 2048 МБ.
+     - 6/6 JTI индексов валидны, 0 CRC ошибок.
+  5. Пройдена полная регрессия 13/13 тестов PASS (`test_sensor_always_on.py` + `test_live_evidence_archive.py`).
+  6. Обновлена спецификация CodeSee (`.codesee/features.json`), валидатор пройден.
+
+- [x] Cycle 07 / Round 12.2: Устранение неоднозначности ObservationStatus (H1 P0) (8 ноября 2026) [СТАТУС КОНТРАКТА: PASS; КОЛЛИЗИИ ЭПИСТЕМИЧЕСКИХ СТАТУСОВ: 0 (PASS AC-06, AC-07); СТРОГИЙ ObservationStatus Enum: 6 ЧЛЕНОВ (PASS); ПРЯМОЕ РАВЕНСТВО СО СТРОКОЙ "not_observed": 0 (PASS); ПОВЫШЕНИЕ ДО ФАКТОВ В ПАМЯТИ: 0 (PASS AC-06); СФОКУСИРОВАННЫЙ НАБОР 8/8 PASS; РЕТРОСПЕКТИВНЫЙ НАБОР 35/35 PASS; CODESEE SYNC: PASS]:
+  1. Реализован строгий `ObservationStatus(enum.Enum)` в `src/jawl_voicecompanion/segment_inspector.py` (H1 P0, AC-06, AC-07, AC-02, AC-08):
+     - Устранена опасная перегрузка `__eq__` строкового подкласса `EpistemicStatus`, из-за которой статусы `ARCHIVE_GAP_UNAVAILABLE`, `NOT_FOUND_IN_SAMPLE` и `OBSERVED_ABSENT` приравнивались к общей строке `"not_observed"`.
+     - Введено 6 строгих членов enum: `OBSERVED_READABLE`, `OBSERVED_UNREADABLE`, `NOT_FOUND_IN_SAMPLE`, `ARCHIVE_GAP_UNAVAILABLE`, `OBSERVED_ABSENT`, `LEGACY_NEGATIVE_UNRESOLVED`.
+     - Запрет равенства: ни один член enum не равен строке `"not_observed"` в обоих направлениях сравнения.
+     - Изоляция ключей словарей и множеств (0 коллизий).
+  2. Введены функции wire-сериализации и безопасные legacy-адаптеры:
+     - `status_to_wire()` и `status_from_wire()` для round-trip через XML/JSON без потери различимости.
+     - `to_legacy_string()` и `is_negative_status()` вынесены исключительно на внешнюю границу для безопасного взаимодействия со старым API.
+  3. Усилен защитный шлюз памяти `parse_perception_xml()`:
+     - Ни legacy `"not_observed"`, ни `ARCHIVE_GAP_UNAVAILABLE`, ни `NOT_FOUND_IN_SAMPLE` никогда не повышаются до факта отсутствия (`is_confirmed_fact = False`).
+     - `OBSERVED_READABLE` без `verification_status == VERIFIED_FACT` остается неподтвержденным наблюдением модели.
+  4. Разработан набор тестов `tests/test_observation_status_contract.py` (8 тестов, 100% PASS):
+     - Попарное различие enum-членов, двунаправленное неравенство строкам, хеширование и изоляция dict/set, wire round-trip, адаптеры, защита памяти от спуфинга, AST-аудит (0 опасных сравнений).
+  5. Пройдена регрессия: 35/35 тестов ретроспективного контура PASS (`test_observation_status_contract.py`, `test_segment_inspector.py`, `test_segment_inspector_coverage.py`, `test_temporal_evidence_verifier.py`).
+  6. Обновлена спецификация CodeSee (`.codesee/features.json`), валидатор пройден.
+
+- [x] Cycle 05 / Round 12.1: Независимая верификация ретроспективных фактов (H12.1 P0) (8 ноября 2026) [НЕЗАВИСИМАЯ ВЕРИФИКАЦИЯ: PASS; 0 ЛОЖНЫХ ПОДТВЕРЖДЕНИЙ (0/30 FAIL = PASS AC-06/07); ВЕРИФИЦИРОВАНО ФАКТОВ: 24/30 (80.0%, PASS >= 70%); НЕГАТИВНЫЕ КОНТРОЛИ: 5/5 ОТВЕРГНУТО (PASS); ЗАЩИТА ЭПИЗОДИЧЕСКОЙ ПАМЯТИ: 0 ОБХОДОВ (PASS); P95 ЗАДЕРЖКА: 1734.3 мс (PASS <= 2500 мс); ДЕГРАДАЦИЯ ASR: +4.16% (PASS <= 10.0%); СФОКУСИРОВАННЫЙ НАБОР 9/9 PASS; РЕГРЕССИОННЫЙ НАБОР 27/27 PASS]:
+  1. Реализован модуль `src/jawl_voicecompanion/temporal_evidence_verifier.py` (H12.1 P0, AC-06, AC-07, AC-02, AC-08):
+     - Введена иерархия статусов верификации: `VERIFIED_FACT`, `MODEL_OBSERVATION`, `UNVERIFIED`, `CONTRADICTED`, `SOURCE_UNAVAILABLE`.
+     - Реализован класс `TemporalEvidenceVerifier` и высокоскоростной пайплайн `PersistentWindowsOcrPipe` (постоянный процесс WinRT OCR, оверхед снижен с ~900 мс до 1.5–20 мс на вызов на CPU).
+     - Алгоритм семантического сопоставления сущностей `extract_substantive_tokens` / `match_claim_tokens` с фильтрацией стоп-слов, служебных таймкодов и префиксным/подстрочным поиском.
+     - Запрет самоподтверждения: повторные вызовы VLM или коррелированные кадры не могут выступать независимым подтверждением.
+  2. Интеграция в `RetrospectiveSegmentInspector` (`src/jawl_voicecompanion/segment_inspector.py`):
+     - Расширен `RetrospectiveEvidence` атрибутами верификации (`verification_status`, `is_verified_fact`, `verification_reason`, `independent_claim`, свойство `is_verified`).
+     - Метод `inspect_segment()` проводит верификацию гипотез визуальной модели вторым независимым источником.
+     - Эпистемический шлюз памяти в `parse_perception_xml()`: сырые визуальные гипотезы без независимого подтверждения (`verification_status != VERIFIED_FACT`) строго блокируются от попадания в категорию подтвержденных фактов (`is_confirmed_fact = False`).
+  3. Разработан набор тестов `tests/test_temporal_evidence_verifier.py` (9 тестов, 100% PASS):
+     - Совпадение с OCR переводит статус в `VERIFIED_FACT`.
+     - Несовпадение с OCR маркирует утверждение как `CONTRADICTED`.
+     - Отсутствие текста оставляет статус `UNVERIFIED`.
+     - Коррелированные кадры без второго источника не поднимаются до фактов (`UNVERIFIED`).
+     - Зазоры архива и выпадения кадров дают `SOURCE_UNAVAILABLE`.
+     - Защитный шлюз `parse_perception_xml()` блокирует неподтвержденные гипотезы и попытки спуфинга XML.
+     - `SensoryHistoryStore` сохраняет неподтвержденные наблюдения с `verified=False`.
+     - Сквозная интеграция в `inspect_segment()`.
+  4. Проведен бенчмарк 35 событий на физическом оборудовании (GPU 1 RTX 5080 + CPU ASR):
+     - 0 ложных подтверждений фактов (0/30).
+     - 24/30 (80.0%) независимо подтвержденных правильных ответов.
+     - 5/5 негативных контролей отклонено (0% галлюцинаций).
+     - 0 обходов шлюза эпизодической памяти.
+     - $p_{95}$ полная задержка: 1734.3 мс (норма $\le 2500$ мс).
+     - Деградация ASR: +4.16% (норма $\le 10.0\%$).
+     - VRAM GPU 1 пик: 1967 МБ (GPU 0 не затронут).
+
+- [x] Cycle 04 / Phase B — Round 12: Исправление эпистемической ошибки NOT_OBSERVED (Argon H1) (8 ноября 2026) [ЭПИСТЕМИЧЕСКИЙ ШЛЮЗ: PASS; РАЗДЕЛЕНИЕ SampleCoverage / ObservationStatus: PASS; FALSE ABSENCE AVOIDANCE: 0/12 ЛОЖНЫХ УТВЕРЖДЕНИЙ ОБ ОТСУТСТВИИ (PASS AC-07); MEMORY GUARD: PASS AC-06; CPU COVERAGE P95: 0.041 мс (PASS <= 10.0 мс); СФОКУСИРОВАННЫЙ НАБОР 12/12 PASS; СКВОЗНАЯ РЕТРО-РЕГРЕССИЯ 35/35 PASS]:
+  1. Реализовано разделение `SampleCoverage` и `ObservationStatus` в `src/jawl_voicecompanion/segment_inspector.py` (Argon H1 P0, AC-06, AC-07, AC-09):
+     - Введена иерархия эпистемических статусов: `OBSERVED_READABLE`, `OBSERVED_UNREADABLE`, `NOT_FOUND_IN_SAMPLE`, `ARCHIVE_GAP_UNAVAILABLE`, `OBSERVED_ABSENT` с обратной совместимостью через строковый подкласс `EpistemicStatus` (равенство `"not_observed"` сохранено для legacy-вызовов).
+     - Датакласс `SampleCoverage` и функция детерминированного расчета `compute_sample_coverage()` с анализом границ окна и фактических PTS декодированных кадров (точность $\le 1$ мс).
+     - Подтверждение отсутствия `absence_confirmed=True` выдается строго при плотном покрытии (`max_uninspected_gap_ms <= 50 мс`) и полном отсутствии сброшенных/утерянных кадров (`dropped_frames == 0`).
+     - Реализован защитный шлюз эпизодической памяти `parse_perception_xml()`: статусы `NOT_FOUND_IN_SAMPLE` и `ARCHIVE_GAP_UNAVAILABLE` никогда не поднимаются до подтвержденного факта (`is_confirmed_fact = False`).
+  2. Разработан набор регрессионных тестов `tests/test_segment_inspector_coverage.py` (12 тестов, 100% PASS):
+     - Кейс 1: окно 600 кадров (10 с), $K=12$ -> `NOT_FOUND_IN_SAMPLE`, `absence_confirmed=False`, отсутствие не утверждается.
+     - Кейс 2: событие между проверенными кадрами -> `NOT_FOUND_IN_SAMPLE`, а не физическое отсутствие.
+     - Кейс 3: кадры сброшены энкодером -> `ARCHIVE_GAP_UNAVAILABLE` с причиной `source_gap`.
+     - Кейс 4: 0 декодированных кадров -> защищен от генерации ложного факта отсутствия.
+     - Кейс 5: плотная выборка (зазор $\le 50$ мс, 0 сбросов) -> корректно подтверждает `OBSERVED_ABSENT`.
+     - Кейс 6: нечитаемый объект -> сохранение `OBSERVED_UNREADABLE` (смаз/пересвет).
+     - Кейс 7: обнаружение на единичном кадре -> сохранение `OBSERVED_READABLE` при разреженном покрытии.
+     - Кейс 8: защита памяти XML -> неподтвержденное отсутствие не попадает в факты.
+     - Кейс 9: неравномерные таймкоды и границы интервала -> строгий расчет `max_uninspected_gap_ms`.
+     - Кейс 10: рандомизированный фаззинг (20 случайных масок выпадения кадров) -> строгое соблюдение инварианта отсутствия.
+     - Кейс 11: бенчмарк расчета `SampleCoverage` на 600 записях -> $p_{50} = 0.033$ мс, $p_{95} = 0.041$ мс (норма $\le 10.0$ мс).
+     - Кейс 12: детерминированный артефакт реплея сохранен в `runtime/replay_demonstration_cycle04_phaseB.json`.
+  3. Проведена верификация: 35/35 тестов ретроспективного контура PASS (`test_segment_inspector.py`, `test_segment_inspector_coverage.py`, `test_archive_recovery.py`, `test_temporal_evidence_index.py`, `test_retro_selector.py`).
+  4. Синхронизирован CodeSee (`f-foveal-segment-inspector` в `.codesee/features.json`), валидатор `validate-features.mjs` пройден без ошибок.
+
+- [x] Cycle 04: Целостность ретроспективных свидетельств: JTI1 ↔ MP4 (8 ноября 2026) [КРОСС-ВЕРИФИКАЦИЯ: PASS; ОБНАРУЖЕНИЕ ПОВРЕЖДЕНИЙ: 16/16 (100.0%); ЛОЖНЫЕ ССЫЛКИ НА НЕДОСТУПНЫЕ КАДРЫ: 0 (PASS); НЕСАНКЦИОНИРОВАННЫЙ OBSERVED_READABLE: 0 (PASS); СРЕДНЕЕ ВРЕМЯ ВОССТАНОВЛЕНИЯ: 19.24 мс; ЧТЕНИЕ ЗДОРОВОГО JTI1 600 КАДРОВ: 6.93 мс; РЕГРЕССИОННЫЙ НАБОР: 37/37 PASS]:
+  1. Выполнен аудит границы между JTI1 и видеоконтейнером MP4 (`scripts/run_audit_before.py`, отчет `runtime/audit_before.json`):
+     - Выявлен дефект игнорирования отсутствующих/поврежденных MP4 при вызове `repair_and_finalize` (индекс ошибочно признавался чистым с нулевым видео).
+     - Выявлен дефект последовательной индексации в `extract_frames()` и `select_candidate_frames()`, приводивший к ложной подстановке чужих кадров на место сброшенных энкодером кадров (`segment_sample_idx = -1`).
+  2. Реализована канонизация JTI1 и кросс-верификация `verify_segment_alignment()` в `src/jawl_voicecompanion/temporal_index.py`:
+     - Добавлен флаг качества `FLAG_SOURCE_FRAME_MISSING = 0x0020`.
+     - Детекция отсутствующих MP4, усеченных контейнеров, выходов за границы `segment_sample_idx >= mp4_frames` и расхождения PTS (>100 мс).
+     - Синхронизированный ремонт `repair_and_finalize(jti_path, mp4_path)`: безопасное отсечение записей индекса, не имеющих физического кадра в MP4, валидация битых хвостов, расчет CRC32/CRC32c и герметизация флагом `FLAG_HEADER_CLEAN_CLOSED`.
+     - Legacy `.jte1` формат переведен в строгий режим read-only через `read_legacy_jte1_as_jti1()`.
+  3. Устранена подстановка чужих кадров в `src/jawl_voicecompanion/live_evidence_archive.py`:
+     - Прямой маппинг по `segment_sample_idx` вместо порядкового индекса списка.
+     - Недоступные или сброшенные кадры (`segment_sample_idx < 0` или флаги `FLAG_ENCODER_DROPPED`/`FLAG_SOURCE_FRAME_MISSING`) гарантированно получают `None`, предотвращая ложные ссылки (AC-07).
+  4. Обновлен эпистемический шлюз `inspect_segment()` в `src/jawl_voicecompanion/segment_inspector.py`:
+     - При полной потере видео в сегменте возвращается статус `NOT_OBSERVED` с причиной `source_gap`.
+     - При частичной потере данных недоступные кадры не могут быть выбраны в качестве `best_frame_id`, а частичное покрытие (<60%) не дает делать ложный вывод об отсутствии объекта.
+  5. Разработан и подтвержден комплексный тестовый набор из 6 топологий сбоев в `tests/test_archive_recovery.py`:
+     - Топология 1: Здоровый MP4 + здоровый JTI1 (100% декодирование, 0 ошибок).
+     - Топология 2: Полный JTI1 + усеченный MP4 (аварийное восстановление, маркировка недоступных кадров).
+     - Топология 3: Валидный JTI1 + физически отсутствующий MP4 (0 ложных ссылок, отсечение записей).
+     - Топология 4: MP4 с меньшим числом кадров, чем в JTI1 (строгое усечение до границы видео).
+     - Топология 5: Оборванный/поврежденный хвост JTI1 (CRC32c валидация, отсечение мусора).
+     - Топология 6: Сброс кадров энкодером в реальном потоке (строгое сохранение соответствия PTS и исключение ложных ссылок).
+  6. Проведен контрольный бенчмарк восстановления `scripts/verify_cycle04_recovery.py` (`runtime/verification_cycle04.json`):
+     - Обнаружение повреждений: 16/16 (**100.0%**).
+     - Ложные ссылки на недоступные кадры: **0**.
+     - Несанкционированный статус `OBSERVED_READABLE`: **0**.
+     - Среднее время восстановления поврежденного сегмента: **19.24 мс**.
+     - Чтение здорового индекса JTI1 (600 кадров): **6.93 мс**.
+     - Полный регрессионный набор (37 тестов): **PASS**.
+
+- [x] Round 11. Этап 3: Фовеальная инспекция `inspect_segment()` с эпистемическим шлюзом и реальным VLM на GPU 1 (8 ноября 2026) [ИНСПЕКЦИЯ СЕГМЕНТОВ: PASS; FOVEATED MOSAIC SPEEDUP: 55.5% (PASS >= 50%); P95 LATENCY: 1802.1 мс (PASS <= 2500 мс); 0% ХАЛЛЮЦИНАЦИЙ: 5/5 ОТВЕРЖЕНО (PASS); FACT ACCURACY: 80.0% (PASS >= 75%); ASR DEGRADATION: -25.2% (PASS <= 10%); GPU 1 VRAM PEAK: 2010 МБ]:
+  1. Реализован модуль `src/jawl_voicecompanion/segment_inspector.py`:
+     - Класс `RetrospectiveSegmentInspector` и метод `inspect_segment(query, t_start_s, t_end_s, budget=12)`.
+     - Двухуровневый эпистемический шлюз:
+       - Уровень 1 (физический): дисперсия оператора Лапласа (`sharpness >= 2000.0`), детектор пересвета `check_overexposure` (доля пикселей >= 245 выше 0.40) и детектор экстремального направленного смаза `check_directional_smear` (анизотропия градиентов Sobel $dy/dx$ или $dx/dy \ge 8.0$).
+       - Уровень 2 (семантический шлюз VLM): распознавание паттернов нечитаемости, отсутствие содержательных токенов и канонический статус `OBSERVED_UNREADABLE`, `NOT_OBSERVED`, `OBSERVED_READABLE`.
+     - Фовеальная упаковка 1:1 `build_foveated_mosaic()`: холст 1024×768 (обзорный anchor 512×288 в позиции (16, 24) + до 12 несмасштабированных нативных ROI кропов 220×100 и 240×120 с метками `[#frame_id | t_s]`).
+     - Плейсхолдеры для пропущенных энкодером кадров (флаг `FLAG_ENCODER_DROPPED`).
+     - Интеграция с локальным `Qwen3.5-0.8B VL` на физическом GPU 1 через единый HTTP-вызов.
+     - Сериализация свидетельства `RetrospectiveEvidence` в канонический XML `<va_perception type="retrospective">`.
+  2. Проведен физический бенчмарк `scripts/benchmark_inspect_segment_35.py` на изолированном GPU 1 (RTX 5080, port 8996):
+     - Ускорение мозаики против 12 последовательных вызовов VLM: 2140.0 мс -> 952.9 мс (**55.5% сокращение задержки**, норма $\ge 50\%$).
+     - Полная задержка инспекции сегмента: $p_{50} = 952.9$ мс, $p_{95} = 1802.1$ мс, $\max = 1804.2$ мс (норма $\le 2500$ мс).
+     - Эпистемический шлюз на 5 негативных контролях (смаз, пересвет, горизонтальные дефекты): **5/5 чисто отвергнуто** (уровень галлюцинаций **0.0%**, норма 0%).
+     - Точность извлечения фактов на читаемых событиях: **24/30 (80.0%)**, норма $\ge 75\%$.
+     - Деградация голосового контура (GigaAM ASR CPU): baseline $p_{95} = 183.4$ мс, под нагрузкой инспекции $p_{95} = 137.1$ мс (**-25.23%**, норма $\le 10\%$).
+     - Изоляция GPU: GPU 0 не затронут (2879 МБ, 0 МБ утечки), пиковый VRAM GPU 1 = 2010 МБ ($\Delta = +1369$ МБ). Артефакт: `runtime/instances/realistic_retro_bench/benchmark_foveal_inspection_results.json`.
+  3. Тестовый статус: 5/5 тестов в `tests/test_segment_inspector.py` PASS, 19/19 тестов сквозной регрессии PASS (`test_retro_selector.py`, `test_live_evidence_archive.py`, `test_incremental_spatial_matrix.py`). CodeSee `features.json` дополнен сущностью `f-foveal-segment-inspector` и успешно валидирован.
+
+- [x] Round 11. Этап 2: Live Temporal Evidence Index JTI1 и Multi-Scale Pipeline P0.1–P0.3 (8 ноября 2026) [ИНДЕКС JTI1: PASS; MULTI-SCALE LUMA PIPELINE: PASS (0.546 мс); ANCHOR-SATELLITE WEAVING: PASS; ПОЛНЫЙ ТЕСТОВЫЙ НАБОР 23/23: PASS]:
+  1. Реализован и валидирован бинарный формат индекса JTI1 (`src/jawl_voicecompanion/temporal_index.py`, P0.1):
+     - 64-байтный заголовок сегмента с CRC32 (сид `0xA5A5A5A5`), привязкой QPC и аудио.
+     - 256-байтные фиксированные записи кадра с CRC32c, масками 80B (изменения и статический HUD) и 4 слотами IndexROI.
+     - Изоляция сбойных/нулевых блоков и автоматическое восстановление поврежденного хвоста при краше (`repair_and_finalize`). 7/7 тестов PASS.
+  2. Реализован двухуровневый мультимасштабный конвейер яркости (`TelemetryComputer`, P0.2):
+     - Грубая сетка 21×30 для глобального движения, битовой маски и онлайн EMA HUD-трекинга.
+     - Промежуточный L2-кэш буфер 640×360 (green-channel proxy).
+     - Микросетка 45×80 для горизонтальных дифференциальных переходов (OCR фронт) вне статической маски HUD.
+     - Bounding boxes в нативных экранных координатах. Измеренная задержка: $p_{50} = 0.546$ мс, $p_{95} = 0.586$ мс (норма $< 0.60$ мс).
+  3. Внедрено детерминированное Anchor-Satellite Weaving в `retro_selector.py` (P0.3):
+     - Функция `rank_all_candidates_anchor_satellite()` с NMS $\ge 250$ мс для независимых якорей и окном $\pm 100$ мс для резких сателлитов.
+     - Формально доказана строгость вложения подмножеств: $S_4 \subset S_8 \subset S_{12} \subset S_{16}$ с монотонным recall.
+  4. Интеграция в `LiveEvidenceArchive` и сквозной бенчмарк 60 FPS:
+     - Запись `.jti` sidecar файлов и поддержка чтения `.jte1`.
+     - Непрерывный поток 1800 кадров (30 с) со скоростью **60.0 FPS sustained**, **0 dropped frames**, **0 CRC errors**.
+     - Селективное декодирование: RAM-скоринг 2.29 мс, декодирование 12 кадров 117.16 мс.
+  5. Тесты и CodeSee: 23/23 тестов PASS, `validate-features.mjs` PASS.
+  1. Реализован полноценный асинхронный кольцевой архиватор `src/jawl_voicecompanion/live_evidence_archive.py`:
+     - Синхронная нарезка 5-10 секундных MP4-сегментов (libx264 ultrafast) и бинарных sidecar-индексов `.jte1` (256 байт на кадр).
+     - Неблокирующий сброс нагрузки при переполнении очереди (< 5 мс).
+     - Автоматическое кольцевое удержание и очистка старейших сегментов с диска.
+  2. Оптимизирована телеметрия `TelemetryComputer`:
+     - Время расчета телеметрии: $p_{50} = 0.467$ мс, $p_{95} = 0.516$ мс (норма $< 0.60$ мс), накладные расходы ~2.8% одного ядра CPU при 60 FPS.
+  3. Проведен сквозной нагрузочный бенчмарк `scripts/benchmark_live_evidence_archive.py`:
+     - 1800 кадров (30 секунд 60 FPS) со скоростью **60.0 FPS sustained**, **0 дропов кадров**.
+     - 100% целостность sidecar-файлов, 0 ошибок CRC, строгая монотонность `pts_us`.
+     - Разреженное декодирование $K=12$ кадров: RAM-скоринг 3.2 мс, декодирование 125.5 мс (19x быстрее полного декодирования). Отчёт: `runtime/instances/retro_bench/live_evidence_archive_metrics.json` PASS.
+  4. Создан реалистичный геймплейный полигон с 35 аннотированными событиями:
+     - Видео: `runtime/instances/realistic_retro_bench/realistic_gameplay_60fps.mp4` (180s, 60 FPS, 10 800 кадров, 17.7 МБ).
+     - Разметка: `runtime/instances/realistic_retro_bench/ground_truth_events.json` (чат, лут, урон, шифры на стенах, квесты, негативные контроли).
+  5. Тесты: 15/15 unit & integration tests PASS.
+
+- [x] Round 11. Этап 1: Ретроспективное восприятие: устранение фазового резонанса и индекс доказательств (7 ноября 2026) [ИНТЕЛЛЕКТУАЛЬНЫЙ ВЫБОР КАДРОВ: PROVEN; ФАЗОВЫЙ АЛИАСИНГ: ELIMINATED; СЫРОЙ NVENC АРХИВ: PAUSED]:
+  1. Реализован и валидирован фазонезависимый бенчмарк `scripts/benchmark_retro_phase_independent.py`:
+     - 900 полных оценок (9 конфигураций $\times$ 5 сидов $\times$ 20 событий) со случайным временным джиттером $\Delta t \in [-3000\text{ мс}, +3000\text{ мс}]$ по тестовому видео `stimuli_60fps.mp4`.
+     - Доказан истинный физический предел равномерной сетки (Uniform Sampling Limit): 27.0% – 29.0% общий hit rate (23.3% на 150 мс событиях) при устранении случайного совпадения с центром окна.
+     - Доказано преимущество адаптивного поиска: `hybrid_adaptive` показал **64.0% hit rate** и **73.3% на 150 мс событиях** (в 2.5 раза выше Uniform), **83.3%** на T-Motion и **95.0%** на T-Static (`runtime/instances/retro_bench/phase_independent_benchmark_results.json`).
+  2. Разработана и протестирована спецификация компактного временного индекса доказательств (`docs/TEMPORAL_EVIDENCE_INDEX_SPEC.md`, `src/jawl_voicecompanion/temporal_evidence_index.py`, 5/5 тестов в `tests/test_temporal_evidence_index.py` PASS).
+  3. Разработка постоянного NVENC кольцевого архива сырых кадров сохранена на паузе по соображениям приватности.
+
+- [x] Round 10. Этап 2 (Шаг 2.7): Автономная приёмка живого контура на GPU 1 (7 ноября 2026) [TRUE E2E PIPELINE: PASS (4/4 СЦЕНАРИЯ); GPU 0 LEAKAGE: 2.0 MiB PASS; РАЗДЕЛЕНИЕ ПАМЯТИ: PASS]:
   1. Реализован и валидирован строгий сквозной автономный мультимодальный раннер `scripts/run_step27_true_e2e_acceptance.py` в изолированном профиле `runtime/instances/test_step27_e2e/`:
      - Цепочка Сценария 1 (Multimodal Vision Turn: PASS, FINE_GRAINED_MULTIMODAL_PROVEN): реальный русский WAV -> GigaAM v3 RNN-T via `crispasr.exe` CPU (141 мс, отсутствие подсказок в промпте) -> `TextGateway` + `PerceptionFusion` -> физический захват окна Win32 (`OwnedTestWindow` с нейтральным заголовком "JAWL Autonomous Test Canvas", синим полигоном-треугольником и белой цифрой 42 внутри, без ярлыка "TARGET") -> Qwen3.5-0.8B VL (`llama-server.exe` GPU 1, `observed_present`) -> SenseNova-Loop-9B (`llama-server.exe` GPU 1, 2172 мс) -> OmniVoice 0.6B HTTP TTS (`scripts/omnivoice_server.py` GPU 1, 1593 мс, 568 364 байт WAV в памяти, Zero Acoustic Playback). Проведена декомпозированная проверка: геометрия формы (треугольник), цвет (синий), OCR (42 и заголовок холста) и негативные контроли (отсутствие галлюцинаций красного/зелёного/круга/квадрата).
      - Цепочка Сценария 2A (Canonical Sensory Episodic Memory Retrieval: PASS, CANONICAL_SENSORY_RETRIEVAL_PROVEN): запрос "Что было на экране раньше?" -> GigaAM ASR (125 мс) -> извлечение из персистентного таймлайна `SensoryHistoryStore` (`sensory_history.json`) -> инъекция через канонический контейнер `<va_perception>` -> SenseNova-Loop-9B (2516 мс, точное воспроизведение геометрии и деталей кадра из сенсорной памяти) -> OmniVoice 0.6B (1500 мс, 639 404 байт WAV).

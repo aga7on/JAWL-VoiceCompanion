@@ -88,6 +88,23 @@ class EventPolicy:
         if not q:
             return False
 
+        # Exclude queries explicitly about retrospective memory / past timeline
+        # unless an explicit present command demands inspecting the live screen right now.
+        retrospective_patterns = [
+            r"было.*?(раньше|ранее|до этого)",
+            r"происходило.*?(до этого|ранее)",
+            r"(видел|видели).*?(раньше|ранее)",
+            r"только что видели",
+            r"показывали.*?(раньше|ранее)",
+            r"в памяти сенсоров",
+            r"сенсорной памяти",
+            r"в истории",
+            r"минуту назад",
+        ]
+        present_imperatives = ["посмотри сейчас", "взгляни сейчас", "глянь сейчас", "что прямо сейчас"]
+        if any(re.search(p, q, re.IGNORECASE) for p in retrospective_patterns) and not any(p in q for p in present_imperatives):
+            return False
+
         # Exclude queries explicitly about spoken dialogue / memory unless they demand looking at screen
         dialogue_markers = [
             "говорили", "сказал", "сказала", "речь в разговоре", "разговор", "спорили",

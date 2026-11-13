@@ -16,8 +16,15 @@ from .arbiter import TurnArbiter, TurnPriority
 
 
 _SALIENT = re.compile(
-    r"(?:error|exception|warning|failed|failure|critical|alert|dialog|confirm|"
-    r"ошиб|исключен|предупрежд|сбой|критичес|уведомлен|подтвержден|внимани)",
+    # Routine OS notifications are deliberately absent: "Уведомление: обновление
+    # доступно" matched "уведомлен" and was escalated to maximum significance,
+    # producing exactly the kind of interruption the passive criterion forbids.
+    # Only conditions that need the owner's attention belong here.
+    r"(?:error|exception|failed|failure|critical|alert|confirm|denied|"
+    r"ошиб|исключен|сбой|критичес|отказано|подтвержден|внимани|"
+    # Resource exhaustion blocks work even when it is phrased without "ошибка".
+    r"закончилось место|недостаточно места|диск заполнен|нет места|"
+    r"out of (?:disk|space|memory)|disk full|no space left)",
     re.IGNORECASE,
 )
 _PRIVATE = re.compile(
@@ -25,6 +32,14 @@ _PRIVATE = re.compile(
     re.IGNORECASE,
 )
 _UNSET = object()
+
+# A screen delta that only describes navigation or ordinary state change is not
+# an event worth the owner's attention, even when the sensor tags it 2.
+_ROUTINE = re.compile(
+    r"(?:прокруч|прокрут|переместил|прокрутк|вкладк[аи] браузера|уведомлен|оповещен|"
+    r"scrolled|scroll(?:ed)? down|tab opened|cursor moved|notification)",
+    re.IGNORECASE,
+)
 
 
 def _now() -> str:
@@ -217,6 +232,10 @@ class AttentionPresence:
     def _score(value: Any, summary: str) -> int:
         base = 0 if isinstance(value, bool) else int(value or 0)
         base = max(0, min(3, base))
+        if _ROUTINE.search(summary) and not _SALIENT.search(summary):
+            # Navigation and ordinary state changes are not events, regardless of
+            # the significance the sensor attached to them.
+            return 0
         return max(base, 3 if _SALIENT.search(summary) else 0)
 
     def _make_intent(self, event: dict[str, Any], summary: str, score: int) -> dict[str, Any]:

@@ -53,6 +53,22 @@ from omnivoice import OmniVoice  # noqa: E402
 _state = {"model": None, "lock": threading.Lock(), "ref": None, "ref_text": "", "started_at": 0.0}
 
 
+def _generation_config():
+    """Generation settings that keep the spoken text faithful to the request.
+
+    ``preprocess_prompt`` is disabled on purpose; see :func:`synthesize`.
+    """
+    global _GENERATION_CONFIG
+    if _GENERATION_CONFIG is None:
+        from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
+
+        _GENERATION_CONFIG = OmniVoiceGenerationConfig(preprocess_prompt=False)
+    return _GENERATION_CONFIG
+
+
+_GENERATION_CONFIG = None
+
+
 def load_model(device: str, model_dir: Path | None = None) -> None:
     import torch
 
@@ -71,7 +87,20 @@ def synthesize(text: str) -> bytes:
     model = _state["model"]
     if model is None:
         raise RuntimeError("model is not loaded")
-    audio = model.generate(text=text, ref_audio=str(_state["ref"]), ref_text=_state["ref_text"])
+    # Reference-based cloning is NOT usable for answers on this model build.
+    # Measured through GigaAM on "Какой сегодня статус моего проекта?" /
+    # "Проверка точности синтеза.":
+    #   default (preprocess_prompt=True) -> speaks only the reference sentence;
+    #   ref audio + ref text, preprocessing off -> reference prefix bleeds in
+    #     ("Привет. <request>" / "Компаньон, проверчи точности синт.");
+    #   no reference, language-guided -> exact request text.
+    # Answer fidelity outranks voice similarity, so generation runs in the
+    # language-guided auto-voice mode and never injects the reference sample.
+    audio = model.generate(
+        text=text,
+        language="ru",
+        generation_config=_generation_config(),
+    )
     samples = audio[0]
     # The diffusion output can exceed full scale (observed clipping at 0.95%
     # of samples with a reference-voiced generation); normalize to 0.9 before
@@ -158,6 +187,9 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=9890)
     parser.add_argument("--device", default="cuda:1")
     parser.add_argument("--model-dir", default=str(MODEL_DIR))
+    # Accepted for launcher compatibility. The reference sample no longer
+    # influences generation because every reference-based mode on this build
+    # corrupted the answer text; see synthesize().
     parser.add_argument("--ref-audio", default=str(DEFAULT_REF))
     parser.add_argument("--ref-text", default=DEFAULT_REF_TEXT)
     args = parser.parse_args()
@@ -168,9 +200,12 @@ def main() -> int:
     if not model_dir.exists():
         print(f"[omnivoice] model dir is missing: {model_dir}", file=sys.stderr)
         return 2
-    if not _state["ref"].exists():
-        print(f"[omnivoice] reference sample is missing: {_state['ref']}", file=sys.stderr)
-        return 2
+    if _state["ref"] != Path(args.ref_audio) or not _state["ref"].exists():
+        print(
+            "[omnivoice] reference sample is unavailable: "
+            f"{_state['ref']} (voice cloning is disabled, so this is not fatal)",
+            file=sys.stderr,
+        )
 
     # Load before serving so /health tells the truth from the first request.
     load_model(args.device, model_dir=model_dir)

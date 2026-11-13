@@ -100,6 +100,8 @@ class JawlTerminalAdapter:
 
     handshake = b"JAWL_HANDSHAKE\n"
     manages_history = True
+    # Set per turn by the gateway so adapter-side marks land in the same trace.
+    _trace_correlation = ""
 
     def __init__(self, port_file: Path, timeout: float = 30.0):
         self.port_file = Path(port_file)
@@ -122,7 +124,24 @@ class JawlTerminalAdapter:
 
     def respond(self, text: str, cancel_event: Event | None = None) -> str:
         port = self._read_port()
-        payload = (json.dumps({"text": text}, ensure_ascii=False) + "\n").encode("utf-8")
+        trace_ref = getattr(self, "_trace_correlation", "") or ""
+        # The kernel only takes its fast conversation lane when the turn carries a
+        # companion turn id: without it the ~20k-token native context is rebuilt
+        # for every ReAct step, which is what makes a short spoken reply take
+        # tens of seconds. The terminal accepts one safe id per message.
+        message: dict[str, str] = {"text": text}
+        turn_id = self._safe_turn_id(trace_ref)
+        if turn_id:
+            message["turn_id"] = turn_id
+        payload = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
+        if trace_ref:
+            from . import turn_trace
+
+            turn_trace.mark(
+                trace_ref,
+                "jawl_terminal.connect",
+                detail={"port": port, "prompt_chars": len(text), "turn_id": bool(turn_id)},
+            )
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=self.timeout) as connection:
                 connection.settimeout(0.2 if cancel_event is not None else self.timeout)
@@ -137,6 +156,14 @@ class JawlTerminalAdapter:
         if not raw:
             self.last_status = "empty_response"
             raise JawlUnavailable("JAWL terminal closed without a response")
+        if trace_ref:
+            from . import turn_trace
+
+            turn_trace.mark(
+                trace_ref,
+                "jawl_terminal.first_byte",
+                detail={"bytes": len(raw)},
+            )
         response = raw.decode("utf-8", errors="replace").strip()
         try:
             parsed = json.loads(response)
@@ -153,6 +180,21 @@ class JawlTerminalAdapter:
             raise JawlUnavailable("JAWL returned internal control markup") from exc
         self.last_status = "connected"
         return answer
+
+    @staticmethod
+    def _safe_turn_id(value: str) -> str:
+        """Return an id the kernel accepts, or ''.
+
+        The kernel validates companion turn ids with
+        ``^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$``; anything else is silently
+        dropped and the turn loses the fast lane.
+        """
+        candidate = str(value or "").strip()[:128]
+        if not candidate:
+            return ""
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", candidate):
+            return ""
+        return candidate
 
     def _read_response(self, connection: socket.socket, cancel_event: Event | None) -> bytes:
         deadline = time.monotonic() + self.timeout

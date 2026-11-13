@@ -27,8 +27,14 @@ export function normalizeMicConfig(input = {}) {
 
 // A bounded, deterministic turn heuristic. This is not a learned duplex
 // model: ASR drafts may be absent, so sustained voiced audio remains a fallback.
+// Long utterances statistically continue after a pause (breath, word choice):
+// the endpoint delay scales with voiced duration so a mid-thought pause never
+// cuts the user off, while questions and backchannels stay fast.
 export function decideMicTurn({text = '', overlap = false, voicedMs = 0,
-  silenceMs = 0, normalSilenceMs = DEFAULT_MIC_CONFIG.silenceMs} = {}) {
+  silenceMs = 0, normalSilenceMs = DEFAULT_MIC_CONFIG.silenceMs, echoDetected = false} = {}) {
+  if (echoDetected) {
+    return {action: 'hold_turn', requiredMs: normalSilenceMs};
+  }
   const raw = String(text).trim().toLowerCase().replaceAll('ё', 'е');
   const words = raw.match(/[а-яa-z0-9]+(?:-[а-яa-z0-9]+)*/gu) || [];
   const joined = words.join(' ');
@@ -36,6 +42,7 @@ export function decideMicTurn({text = '', overlap = false, voicedMs = 0,
     'хорошо', 'круто', 'ого', 'вау', 'классно', 'точно', 'верно', 'ладно', 'мгм', 'хм',
     'ах', 'ох', 'ха', 'хех', 'прикольно', 'ништяк', 'супер']);
   const question = /[?？]$/.test(raw);
+  const strongTerminal = question || /[!！]$/.test(raw);
   const backchannel = words.length > 0 && words.length <= 2 && !question &&
     (joined === 'ну да' || words.every(word => acknowledgements.has(word)));
   const interrupt = words.some(word => ['стоп', 'стой', 'подожди', 'погоди', 'хватит',
@@ -43,9 +50,12 @@ export function decideMicTurn({text = '', overlap = false, voicedMs = 0,
   const thinking = /^(э+|а+|м+|э-э(?:-э)?|а-а(?:-а)?|м-м|ну|вот|типа|короче|и|или|но|что|чтобы|потому|если|когда|который|которая|которые|как|где|в|на|с|для|хотел|хочу|давай)$/.test(words.at(-1) || '')
     || /(?:как бы|то есть|потому что|я хотел|я хочу)$/.test(joined)
     || /(?:\.\.\.|…|,|[-—])$/.test(raw);
+  const longUtteranceMs = voicedMs >= 6000 ? 2400 : voicedMs >= 3000 ? 1800 : 0;
   const requiredMs = thinking ? Math.max(normalSilenceMs, 2200)
     : backchannel ? Math.min(normalSilenceMs, 380)
-    : question ? Math.min(normalSilenceMs, 380) : normalSilenceMs;
+    : question ? Math.min(normalSilenceMs, 380)
+    : strongTerminal ? Math.max(Math.min(normalSilenceMs, 380), 0)
+    : Math.max(normalSilenceMs, longUtteranceMs);
   if (overlap && !backchannel && (question || interrupt || words.length >= 2 || voicedMs >= 550)) {
     return {action: 'cancel_tts', requiredMs};
   }

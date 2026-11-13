@@ -86,6 +86,15 @@ def build_companion_runtime(
     """
 
     project_root = Path(__file__).resolve().parents[2]
+    # Per-turn latency tracing. Enabled by default into a bounded ring of files;
+    # an owner can point it elsewhere or the diagnostics can be left untouched.
+    from . import turn_trace
+
+    trace_dir = os.environ.get("JAWL_TURN_TRACE_DIR", "").strip()
+    if os.environ.get("JAWL_TURN_TRACE", "1").strip() not in {"0", "false", "no"}:
+        turn_trace.configure(
+            Path(trace_dir) if trace_dir else project_root / "runtime" / "instances" / ".turn-trace"
+        )
     responder = None
     brain_name = "phase1_mock_brain"
     jawl_web = None

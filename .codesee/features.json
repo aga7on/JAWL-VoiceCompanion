@@ -5430,9 +5430,273 @@
       "confidence": 0.95,
       "provenance": "ai",
       "updated_at": "2026-11-05T03:00:00.000Z"
+    },
+    {
+      "id": "f-live-evidence-archive",
+      "name": "Архив доказательств JTI1",
+      "summary": "Асинхронный кольцевой A/V-архив и временной индекс доказательств JTI1 с anchor-satellite отбором для ретроспективного поиска",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "Непрерывный 60 FPS видеопоток из адаптера захвата экрана"
+        }
+      ],
+      "steps": [
+        {
+          "id": "ingest",
+          "name": "Принять",
+          "role": "input",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/live_evidence_archive.py"
+            }
+          ]
+        },
+        {
+          "id": "telemetry",
+          "name": "Телеметрия",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/live_evidence_archive.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/temporal_index.py"
+            }
+          ]
+        },
+        {
+          "id": "segment-write",
+          "name": "Записать",
+          "role": "data-write",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/live_evidence_archive.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/temporal_index.py"
+            }
+          ]
+        },
+        {
+          "id": "ring-rotate",
+          "name": "Ротация",
+          "role": "data-write",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/live_evidence_archive.py"
+            }
+          ]
+        },
+        {
+          "id": "retro-select",
+          "name": "Отобрать",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/live_evidence_archive.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/retro_selector.py"
+            }
+          ]
+        },
+        {
+          "id": "extract-frames",
+          "name": "Извлечь",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/live_evidence_archive.py"
+            }
+          ]
+        },
+        {
+          "id": "inspect-segment",
+          "name": "Инспектировать",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/segment_inspector.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "ingest",
+          "to": "telemetry",
+          "kind": "next"
+        },
+        {
+          "from": "telemetry",
+          "to": "segment-write",
+          "kind": "next"
+        },
+        {
+          "from": "segment-write",
+          "to": "ring-rotate",
+          "kind": "conditional",
+          "condition": "лимит времени"
+        },
+        {
+          "from": "segment-write",
+          "to": "retro-select",
+          "kind": "next"
+        },
+        {
+          "from": "retro-select",
+          "to": "extract-frames",
+          "kind": "next"
+        },
+        {
+          "from": "extract-frames",
+          "to": "inspect-segment",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.95,
+      "provenance": "ai",
+      "updated_at": "2026-11-08T03:15:00.000Z"
+    },
+    {
+      "id": "f-foveal-segment-inspector",
+      "name": "Фовеальная инспекция и эпистемический шлюз",
+      "summary": "1:1 ROI-мозаичная упаковка кадров в холст 1024x768 с одним VLM-вызовом на GPU 1, матрицей покрытия SampleCoverage, независимой верификацией фактов и строгим перечислением ObservationStatus (NOT_FOUND_IN_SAMPLE, ARCHIVE_GAP_UNAVAILABLE, OBSERVED_ABSENT, OBSERVED_READABLE, OBSERVED_UNREADABLE) без неоднозначного строкового равенства",
+      "epicId": "memory",
+      "triggers": [
+        {
+          "kind": "event",
+          "detail": "Ретроспективный запрос инспекции временного сегмента inspect_segment()"
+        }
+      ],
+      "steps": [
+        {
+          "id": "step-select",
+          "name": "Отбор",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/segment_inspector.py"
+            },
+            {
+              "file": "src/jawl_voicecompanion/retro_selector.py"
+            }
+          ]
+        },
+        {
+          "id": "step-gate1",
+          "name": "Физический фильтр",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/segment_inspector.py"
+            }
+          ]
+        },
+        {
+          "id": "step-mosaic",
+          "name": "Сборка мозаики",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/segment_inspector.py"
+            }
+          ]
+        },
+        {
+          "id": "step-vlm",
+          "name": "VLM вызов",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/segment_inspector.py"
+            }
+          ]
+        },
+        {
+          "id": "step-gate2",
+          "name": "Семантический шлюз",
+          "role": "compute",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/segment_inspector.py"
+            }
+          ]
+        },
+        {
+          "id": "step-evidence",
+          "name": "Свидетельство",
+          "role": "output",
+          "refs": [
+            {
+              "file": "src/jawl_voicecompanion/segment_inspector.py"
+            }
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "from": "step-select",
+          "to": "step-gate1",
+          "kind": "next"
+        },
+        {
+          "from": "step-gate1",
+          "to": "step-mosaic",
+          "kind": "conditional",
+          "condition": "прошел физический фильтр"
+        },
+        {
+          "from": "step-gate1",
+          "to": "step-evidence",
+          "kind": "conditional",
+          "condition": "размыто или пересвечено"
+        },
+        {
+          "from": "step-mosaic",
+          "to": "step-vlm",
+          "kind": "next"
+        },
+        {
+          "from": "step-vlm",
+          "to": "step-gate2",
+          "kind": "next"
+        },
+        {
+          "from": "step-gate2",
+          "to": "step-evidence",
+          "kind": "next"
+        }
+      ],
+      "confidence": 0.98,
+      "provenance": "ai",
+      "updated_at": "2026-11-08T13:10:00.000Z"
     }
   ],
   "cross_feature": [
+    {
+      "from": "f-live-evidence-archive",
+      "to": "f-foveal-segment-inspector",
+      "kind": "flow",
+      "mode": "sync",
+      "note": "Кандидатные кадры и JTI1-метаданные передаются в инспектор"
+    },
+    {
+      "from": "f-incremental-spatial-matrix",
+      "to": "f-live-evidence-archive",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Инкрементальная матрица питает быструю телеметрию sidecar-индекса JTE1"
+    },
+    {
+      "from": "f-live-evidence-archive",
+      "to": "f-perception-fusion",
+      "kind": "flow",
+      "mode": "async",
+      "note": "Отобранные ретроспективные кадры передаются в эпистемическую память"
+    },
     {
       "from": "f-profile-launch",
       "to": "f-voice-turn",

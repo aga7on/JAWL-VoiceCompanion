@@ -37,6 +37,42 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())[:1200]
 
 
+_CJK_SPAN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+")
+# Latin/Cyrillic words are the expected answer language; a stray ideograph between
+# them is a generation leak, not content.
+_KNOWN_CJK = (
+    ("一切正常", " всё в порядке"),
+    ("正常", " в норме"),
+    ("稳定", " стабиль"),
+    ("偏好", " предпочтение"),
+)
+
+
+def _sanitize_delivery(text: str) -> str | None:
+    """Return speakable text, or None when initiative cannot be delivered.
+
+    The proactive feed reads JAWL chat history directly, so it bypasses the
+    adapter's CJK filter. Live delivery state showed replies such as
+    "привет!一切正常, я в порядке…" reaching the owner. Initiative that arrives in
+    the wrong language is worse than no initiative, so a message that still
+    contains ideographs after the known-phrase map is dropped instead of spoken.
+    """
+    clean = str(text or "").replace("\x00", "").strip()
+    if not clean:
+        return None
+    for zh, ru in _KNOWN_CJK:
+        clean = clean.replace(zh, ru)
+    clean = _CJK_SPAN.sub("", clean)
+    clean = re.sub(r"\s{2,}", " ", clean)
+    clean = re.sub(r"\s+([,.;:!?])", r"\1", clean).strip()
+    if len(clean) < 2:
+        return None
+    # A message that lost most of its body was mostly foreign text.
+    if len(clean) < len(str(text or "").strip()) * 0.5:
+        return None
+    return clean
+
+
 def _timestamp(value: str) -> float:
     import datetime
 
@@ -101,6 +137,7 @@ class ProactiveFeed:
         self._quiet_until = 0.0
         self._noise_streak = 0
         self._suppressed_duplicates = 0
+        self._suppressed_unusable = 0
         self._activity_cache: tuple[float, set[int]] | None = None
         self._load_state()
 
@@ -128,6 +165,7 @@ class ProactiveFeed:
             "quiet_for_s": max(0.0, round(self._quiet_until - now, 1)) if self._quiet_until > now else 0.0,
             "noise_streak": self._noise_streak,
             "suppressed_duplicates": self._suppressed_duplicates,
+            "suppressed_unusable": self._suppressed_unusable,
             "active_hours": sorted(self._active_hours(now)) if self._activity_cache else [],
         }
 
@@ -156,6 +194,30 @@ class ProactiveFeed:
             self._quiet_until = 0.0
         self._save_state()
         return {"ok": True, "feedback": verdict, **self.state(now)}
+
+    def deliver_direct(self, text: str, *, now: float | None = None, source: str = "direct") -> dict[str, Any]:
+        """Queue one trusted initiative item, bypassing the chat-history scan.
+
+        Used by lanes that already own their content (e.g. screen commentary):
+        the same delivery gates (idle, min gap, hourly cap, active hours) and
+        the desktop's polite playback apply, without the echo logic, because
+        the text was produced by a real turn and would otherwise be filtered
+        as the echo of its own turn history row.
+        """
+        now = time.time() if now is None else float(now)
+        clean = _sanitize_delivery(text)
+        if clean is None:
+            self._suppressed_unusable += 1
+            return {"queued": False, "reason": "unusable_language"}
+        normalized = _normalize(clean)[:200]
+        if self._is_duplicate(normalized, now):
+            self._suppressed_duplicates += 1
+            return {"queued": False, "reason": "duplicate"}
+        key = hashlib.sha1(f"direct|{now:.6f}|{clean[:400]}".encode("utf-8", "replace")).hexdigest()[:16]
+        item = {"id": key, "time": "", "text": clean[:2000], "queued_at": now, "source": source}
+        self._enqueue(item)
+        delivered = self._drain(now)
+        return {"queued": True, "delivered": bool(delivered), "id": key}
 
     def poll(self, now: float | None = None) -> list[dict[str, Any]]:
         """Fetch new JAWL history rows, queue or deliver them, drain the queue."""
@@ -188,7 +250,14 @@ class ProactiveFeed:
             if self._is_duplicate(text, now):
                 self._suppressed_duplicates += 1
                 continue
-            self._enqueue({"id": key, "time": str(row.get("time", ""))[:40], "text": text[:2000], "queued_at": now})
+            clean = _sanitize_delivery(text)
+            if clean is None:
+                # Initiative that cannot be spoken in the user's language is
+                # worse than silence: a JAWL heartbeat produced mixed-language
+                # replies ("привет!一切正常") that reached the delivery log.
+                self._suppressed_unusable += 1
+                continue
+            self._enqueue({"id": key, "time": str(row.get("time", ""))[:40], "text": clean[:2000], "queued_at": now})
         self._seeded = True
         return self._drain(now)
 
@@ -333,10 +402,16 @@ class ProactiveFeed:
             text = str(item.get("text") or "").strip()[:2000]
             if not text:
                 continue
+            clean = _sanitize_delivery(text)
+            if clean is None:
+                # A queued message restored from disk gets the same language
+                # gate as a fresh one; otherwise a restart replays the defect.
+                self._suppressed_unusable += 1
+                continue
             self._queue.append({
-                "id": str(item.get("id") or "")[:64] or hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16],
+                "id": str(item.get("id") or "")[:64] or hashlib.sha1(clean.encode("utf-8", "replace")).hexdigest()[:16],
                 "time": str(item.get("time") or "")[:40],
-                "text": text,
+                "text": clean,
                 "queued_at": float(item.get("queued_at") or 0.0),
             })
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -53,6 +54,7 @@ def _manifest_defaults(manifest_path: Path | None = None) -> dict:
         "device": brain.get("device", "CUDA1"),
         "cache_type_k": brain.get("cache_type_k", ""),
         "cache_type_v": brain.get("cache_type_v", ""),
+        "flash_attn": brain.get("flash_attn", "on"),
         "url": brain.get("llm_url", "http://127.0.0.1:8990/v1"),
     }
 
@@ -96,13 +98,33 @@ def _worker_command(args: argparse.Namespace, *, mmproj: str = "") -> list[str]:
         cache_flags.extend(["--cache-type-k", args.cache_type_k])
     if getattr(args, "cache_type_v", ""):
         cache_flags.extend(["--cache-type-v", args.cache_type_v])
+    # Flash attention was previously left at llama.cpp's default ("auto"), and
+    # this build resolves that to disabled for this KV configuration. Measured
+    # effect on this machine: prefill roughly doubles with it on, and prefill is
+    # where a JAWL turn spends 15-20 s per ReAct step.
+    attn_flags = []
+    flash = str(getattr(args, "flash_attn", "") or "").strip().lower()
+    if flash in {"on", "off", "auto"}:
+        attn_flags = ["--flash-attn", flash]
+    # KV-shift reuse. llama.cpp disables this by default (--cache-reuse 0), so a
+    # prompt whose text shifts between calls reprocesses the whole context. JAWL
+    # rebuilds the context each ReAct step (new RAG anchors, tool output), which
+    # is exactly the shifting-prefix case this option exists for.
+    reuse_flags = []
+    try:
+        cache_reuse = int(getattr(args, "cache_reuse", 0) or 0)
+    except (TypeError, ValueError):
+        cache_reuse = 0
+    if cache_reuse > 0:
+        reuse_flags = ["--cache-reuse", str(cache_reuse)]
     return [
         args.llm_exe, "--model", args.model, "--alias", args.alias,
         "--host", "127.0.0.1", "--port", str(args.port),
         "--threads", str(args.threads), "--ctx-size", str(args.ctx_size),
         "--n-predict", str(args.max_tokens), "--parallel", "1",
         "--gpu-layers", str(args.gpu_layers), "--device", args.device,
-        *vision_flags, *cache_flags, "--reasoning", args.reasoning, "--no-webui",
+        *vision_flags, *cache_flags, *attn_flags, *reuse_flags,
+        "--reasoning", args.reasoning, "--no-webui",
     ]
 
 
@@ -137,6 +159,14 @@ def main() -> int:
                         help="KV cache quantization type for K (e.g. q4_0, q8_0)")
     parser.add_argument("--cache-type-v", default=defaults.get("cache_type_v", ""),
                         help="KV cache quantization type for V (e.g. q4_0, q8_0)")
+    parser.add_argument("--flash-attn", default="on",
+                        choices=("on", "off", "auto"),
+                        help="llama.cpp flash attention; this build maps 'auto' to off "
+                             "for a quantized KV cache, which halves prefill speed")
+    parser.add_argument("--cache-reuse", type=int, default=256,
+                        help="min chunk size for KV cache shifting reuse (0 disables); "
+                             "JAWL rebuilds context per ReAct step, so this reuses the "
+                             "unchanged part instead of reprocessing the whole prompt")
     parser.add_argument("--reasoning", choices=("on", "off", "auto"), default="off")
     parser.add_argument("--mmproj", default="",
                         help="optional multimodal projector GGUF; enables image input when the model ships a separate projector")
@@ -200,10 +230,29 @@ def main() -> int:
 
     require_free_ports([args.port])
 
+    # Pin the brain to one GPU. With two cards llama.cpp splits layers across
+    # both and the PCIe traffic dominates: measured decode dropped from 81 to
+    # 21 tok/s on this machine when the split happened.
+    # CUDA_VISIBLE_DEVICES renumbers the visible card to CUDA0, so an explicit
+    # --device CUDA1 would then fail ("could not find device"); the env pin
+    # replaces the device flag instead of combining with it.
+    worker_env = dict(os.environ)
+    gpu_pin = os.environ.get("BRAIN_GPU", "1")
+    worker_env["CUDA_VISIBLE_DEVICES"] = gpu_pin
+
+    def _worker_command_pinned(args, mmproj: str) -> list:
+        command = _worker_command(args, mmproj=mmproj)
+        if "--device" in command and gpu_pin:
+            # drop --device and its value; the env pin selects the card
+            index = command.index("--device")
+            return command[:index] + command[index + 2:]
+        return command
+
     spec = WorkerSpec(
         name="brain",
-        command=_worker_command(args, mmproj=mmproj),
+        command=_worker_command_pinned(args, mmproj=mmproj),
         probe=probe,
+        env=worker_env,
         startup_timeout_seconds=args.startup_timeout,
         max_restarts=1,
         order=0,

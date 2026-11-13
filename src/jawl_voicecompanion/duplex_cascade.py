@@ -34,6 +34,8 @@ import re
 import time
 from typing import Any
 
+from .echo_guard import is_self_tts_echo
+
 
 TOKEN_NO_VOICE = "<|no voice|>"
 TOKEN_USER_TALKING = "<|user is talking|>"
@@ -121,6 +123,62 @@ class MicroTurnDecision:
         }
 
 
+class StreamPhraseSegmenter:
+    """Progressive phrase segmenter for streaming LLM tokens to TTS.
+
+    Splits incoming text tokens at natural phrase/sentence boundaries
+    (periods, question/exclamation marks, ellipsis, newlines, semicolons)
+    once a minimum length (chars or words) is reached, enabling TTS chunking
+    to overlap with ongoing LLM generation.
+    """
+
+    def __init__(self, min_chars: int = 12, min_words: int = 3) -> None:
+        self.min_chars = int(min_chars)
+        self.min_words = int(min_words)
+        self.buffer = ""
+
+    def feed(self, delta: str) -> list[str]:
+        if not delta:
+            return []
+        self.buffer += delta
+        phrases: list[str] = []
+
+        while True:
+            # Look for boundary: [.?!…;\n] followed by whitespace or at end
+            match = None
+            for m in re.finditer(r"([.?!…;\n]+)(?:\s+|$)", self.buffer):
+                end_pos = m.end()
+                candidate = self.buffer[:end_pos].strip()
+                words = candidate.split()
+                has_nl = "\n" in m.group(1)
+                is_terminal_punct = any(candidate.endswith(p) for p in ("?", "!"))
+                if (
+                    (len(candidate) >= self.min_chars and len(words) >= self.min_words)
+                    or has_nl
+                    or (len(words) >= 1 and is_terminal_punct)
+                ):
+                    match = m
+                    break
+
+            if match is None:
+                break
+
+            phrase = self.buffer[:match.end()].strip()
+            self.buffer = self.buffer[match.end():]
+            if phrase:
+                phrases.append(phrase)
+
+        return phrases
+
+    def flush(self) -> list[str]:
+        rem = self.buffer.strip()
+        self.buffer = ""
+        if rem:
+            return [rem]
+        return []
+
+    def reset(self) -> None:
+        self.buffer = ""
 class EmbeddingGemmaTurnScorer:
     """Optional CPU ONNX scorer using EmbeddingGemma 2 (768d Matryoshka space)."""
 
@@ -197,6 +255,26 @@ class DuplexCascadeArbiter:
                 self._scorer = EmbeddingGemmaTurnScorer(eg2_model_root)
             except Exception:
                 self._scorer = None
+        self._generation_epoch: int = 0
+
+    @property
+    def generation_epoch(self) -> int:
+        """Current monotonically increasing generation epoch for playback fencing."""
+        return self._generation_epoch
+
+    @generation_epoch.setter
+    def generation_epoch(self, value: int) -> None:
+        self._generation_epoch = int(value)
+
+    def next_epoch(self) -> int:
+        """Advance epoch on new turn or interruption to fence off stale TTS chunks."""
+        self._generation_epoch += 1
+        return self._generation_epoch
+
+    def reset_epoch(self) -> int:
+        """Reset generation epoch back to zero."""
+        self._generation_epoch = 0
+        return self._generation_epoch
 
     @staticmethod
     def _normalize_words(text: str) -> list[str]:
@@ -211,6 +289,7 @@ class DuplexCascadeArbiter:
         silence_elapsed_ms: float = 0.0,
         speech_duration_ms: float = 0.0,
         rms_peak: float = 0.0,
+        reference_text: str = "",
     ) -> MicroTurnDecision:
         """Classify the current micro-turn state and return the control token."""
         raw = (transcript or "").strip()
@@ -229,8 +308,17 @@ class DuplexCascadeArbiter:
         # Optional EmbeddingGemma 2 semantic scores (~13 ms on CPU)
         eg2_scores = self._scorer.score(raw) if (self._scorer and raw) else {}
 
-        # 2. Assistant is currently speaking -> decide Backchannel vs Interruption!
+        # 2. Assistant is currently speaking -> decide Backchannel vs Echo vs Interruption!
         if assistant_speaking:
+            if reference_text and is_self_tts_echo(raw, reference_text):
+                return MicroTurnDecision(
+                    token=TOKEN_NO_VOICE,
+                    action="ignore_echo",
+                    recommended_silence_ms=self.normal_silence_ms,
+                    confidence=0.98,
+                    reason="self_tts_acoustic_echo",
+                    eg2_score=eg2_scores.get(TOKEN_NO_VOICE),
+                )
             has_interrupt_word = any(w in _RU_INTERRUPT_WORDS for w in words)
             is_short_backchannel = (
                 is_user_backchannel(raw)
@@ -345,4 +433,5 @@ __all__ = [
     "EmbeddingGemmaTurnScorer",
     "DuplexCascadeArbiter",
     "is_user_backchannel",
+    "StreamPhraseSegmenter",
 ]
