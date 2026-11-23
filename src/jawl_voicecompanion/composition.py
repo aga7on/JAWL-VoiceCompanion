@@ -678,7 +678,6 @@ def build_companion_runtime(
 
     offline_consolidator = OfflineConsolidator(
         idle_threshold_s=float(getattr(args, "user_activity_idle_seconds", 300.0)),
-        storage_path=Path(args.jawl_event_dir) / "offline_proposals.json" if getattr(args, "jawl_event_dir", None) else None,
     )
     if getattr(args, "user_activity", False):
         offline_consolidator.start()
@@ -730,11 +729,11 @@ def build_companion_runtime(
             fallback=ModelSlot.FOREGROUND_BRAIN,
         )
     else:
-        mock_brain = MockModelAdapter(name="mock_foreground_brain", responses=["Mock brain response"])
+        mock_brain = MockModelAdapter(name="mock_foreground_brain", canned_responses=["Mock brain response"])
         model_slot_registry.register(ModelSlot.FOREGROUND_BRAIN, mock_brain)
         model_slot_registry.register(
             ModelSlot.BACKGROUND_REASONER,
-            MockModelAdapter(name="mock_background_reasoner", responses=["Mock background response"]),
+            MockModelAdapter(name="mock_background_reasoner", canned_responses=["Mock background response"]),
             fallback=ModelSlot.FOREGROUND_BRAIN,
         )
 
